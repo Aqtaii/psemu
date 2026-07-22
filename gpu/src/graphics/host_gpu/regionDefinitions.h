@@ -9,7 +9,7 @@ namespace Libs::Graphics {
 
 constexpr uint64_t TRACKER_PAGE_SIZE    = 4ull * 1024ull;
 constexpr uint64_t TRACKER_REGION_SIZE  = 4ull * 1024ull * 1024ull;
-constexpr uint64_t TRACKER_ADDRESS_SIZE = 1ull << 40u;
+constexpr uint64_t TRACKER_ADDRESS_SIZE = 1ull << 47u;
 constexpr size_t   TRACKER_REGION_PAGES = TRACKER_REGION_SIZE / TRACKER_PAGE_SIZE;
 
 enum class DirtySource { Cpu, Gpu };

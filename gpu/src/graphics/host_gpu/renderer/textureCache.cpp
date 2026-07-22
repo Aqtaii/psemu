@@ -207,7 +207,12 @@ void TextureCache::RegisterImageLocked(CachedImage& image) {
 		ranges.push_back({image.Address(range), image.Size(range)});
 	}
 	if (!m_image_owner_index.Register(&image, ranges)) {
-		EXIT("TextureCache: invalid or duplicate image registration\n");
+		bool is_duplicate = (m_image_owner_index.Query(ranges[0].address, ranges[0].size).size() > 0);
+		bool empty = true;
+		for (const auto& r : ranges) if (r.size > 0) empty = false;
+		EXIT("TextureCache: invalid or duplicate image registration, kind=%u ranges=%u size0=0x%016" PRIx64 " is_empty=%d\n",
+		     static_cast<uint32_t>(image.kind), static_cast<uint32_t>(ranges.size()),
+		     ranges.empty() ? 0 : ranges[0].size, empty);
 	}
 	image.registered = true;
 }
@@ -2060,6 +2065,9 @@ void TextureCache::RefreshVideoOut(VideoOutVulkanImage* image, bool render_targe
 	}
 	auto& cached = **it;
 	if (cached.gpu_modified) {
+		{ static std::atomic<uint64_t> c = 0; auto n = c.fetch_add(1);
+		  if (n < 40) std::fprintf(stderr, "[VO-REFRESH] addr=0x%016llx KEEP-GPU (gpu_modified)\n",
+		                           static_cast<unsigned long long>(cached.video_out.address)); }
 		return;
 	}
 	const auto& info         = cached.video_out;
@@ -2067,6 +2075,11 @@ void TextureCache::RefreshVideoOut(VideoOutVulkanImage* image, bool render_targe
 	const bool  buffer_dirty = cached.buffer_modified ||
 	                           m_buffer_cache.IsRegionCpuModified(info.address, info.size) ||
 	                           m_buffer_cache.IsRegionGpuModified(info.address, info.size);
+	{ static std::atomic<uint64_t> c = 0; auto n = c.fetch_add(1);
+	  if (n < 40) std::fprintf(stderr, "[VO-REFRESH] addr=0x%016llx %s (image_dirty=%d buffer_dirty=%d)\n",
+	                           static_cast<unsigned long long>(info.address),
+	                           (image_dirty || buffer_dirty) ? "GUEST-REUPLOAD(siyah riski)" : "clean-keep",
+	                           image_dirty, buffer_dirty); }
 	if (!image_dirty && !buffer_dirty) {
 		if (info.compression == VideoOutCompression::Uncompressed ||
 		    CanUseVideoOutNativeWithoutUpload(info.compression, render_target, false, false)) {

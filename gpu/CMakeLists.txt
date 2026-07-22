@@ -80,6 +80,7 @@ list(APPEND GPU_ALL_SRC ${GPU_TP}/tracy/public/TracyClient.cpp)
 list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/stubs.cpp)
 list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/window_win32.cpp)
 list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/init.cpp)
+list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/agc_bridge.cpp)
 
 add_library(psemu_gpu STATIC ${GPU_ALL_SRC})
 target_include_directories(psemu_gpu PUBLIC ${GPU_INCLUDES})

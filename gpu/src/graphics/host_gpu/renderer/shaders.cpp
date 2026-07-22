@@ -94,6 +94,24 @@ static void GetInputFormat(const ShaderBufferResource& res, vk::Format* format, 
 	EXIT_IF(size == nullptr);
 
 	auto fmt = res.Format();
+	// psemu: bazi drawlarda ( or. splash sonrasi ilk sahne pipeline'i) bir
+	// vertex attribute'un V# formati kInvalid(0) geliyor — kullanilmayan / null
+	// bound bir attribute. Kyty'nin sabit EXIT'i oyunu dusuruyordu; yukaridaki
+	// 113/121 "temporary accepting" case'leriyle ayni desende gecerli bir
+	// placeholder verip pipeline'i canli tutuyoruz (NarrowInputFormat
+	// used_components'e gore daraltir).
+	if (fmt == 0) {
+		static std::atomic<uint64_t> logged_0 = 0;
+		if (logged_0.fetch_add(1) < 8) {
+			LOGF("InputFormat: temporary: accepting invalid vertex fmt=0 as "
+			     "R32G32B32A32 placeholder (used_components=%u)\n",
+			     used_components);
+		}
+		*format = vk::Format::eR32G32B32A32Sfloat;
+		*size   = 4;
+		NarrowInputFormat(format, size, used_components);
+		return;
+	}
 	if (fmt == Prospero::GpuEnumValue(Prospero::VertexAttribFormat::k16_16SInt)) {
 		static bool logged_113 = false;
 		if (!logged_113) {

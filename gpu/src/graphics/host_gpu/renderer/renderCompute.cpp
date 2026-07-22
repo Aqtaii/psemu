@@ -26,6 +26,7 @@
 #include "graphics/host_gpu/vulkanCommon.h"
 #include "graphics/shader/recompiler/ResourceMaterialization.h"
 #include "graphics/shader/recompiler/ShaderIR.h"
+#include "graphics/host_gpu/renderer/descriptorCache.h"
 #include "graphics/shader/shader.h"
 #include "kernel/eventQueue.h"
 #include "kernel/pthread.h"
@@ -534,6 +535,7 @@ void RenderDispatchDirect(uint64_t submit_id, CommandBuffer* buffer, HW::Context
 
 		vk_buffer.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->pipeline);
 
+		ClearBounceCopies();
 		BindDescriptors(submit_id, buffer, vk::PipelineBindPoint::eCompute,
 		                pipeline->pipeline_layout, input_info.stage,
 		                vk::ShaderStageFlagBits::eCompute, DescriptorCache::Stage::Compute);
@@ -541,7 +543,9 @@ void RenderDispatchDirect(uint64_t submit_id, CommandBuffer* buffer, HW::Context
 			continue;
 		}
 
+		FlushBounceCopies(vk_buffer, false);
 		vk_buffer.dispatch(thread_group_x, thread_group_y, thread_group_z);
+		FlushBounceCopies(vk_buffer, true);
 
 		bool has_storage_writes = HasShaderBufferWrites(input_info.stage);
 		has_storage_writes =

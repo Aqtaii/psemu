@@ -15,6 +15,12 @@
 // (subsystem'ler, window_win32 -> VulkanCreate -> renderer) ARTIMLI ceker.
 void PsemuInitKytyGraphics();
 
+// AGC/VideoOut/Graphics cagrisini Kyty implementasyonuna yonlendiren kopru
+// (gpu/adapter/agc_bridge.cpp). Suffix'siz NID ile Kyty fonksiyonunu bulup
+// SysV ABI ile cagirir; bulursa true.
+extern "C" bool PsemuKytyAgcCall(const char* nid, CONTEXT* ctx);
+extern "C" bool PsemuKytyHasNid(const char* nid);
+
 // ============================================================================
 // AGC HLE-GPU — M1: oyun-guduml flip + render-state yakalama
 // ----------------------------------------------------------------------------
@@ -23,16 +29,13 @@ void PsemuInitKytyGraphics();
 // hepsini 0 dondurur (ayni davranis) -> M1 hicbir seyi bozamaz. Tek eklenen
 // davranis: sceAgcDcbSetFlip artik Video::Flip'i cagirarak sunumu GERCEKTEN
 // oyun frame'lerine baglar. Ayrica cizim/shader/flip sayilarini loglayarak bir
-// sonraki adim (clear rengi + sprite raster) icin kaniti biriktiriyoruz.
+// profil cikarir; ilerideki donanim emulasyonlarina temel olusturur.
 // ============================================================================
 
 namespace Agc {
 
 namespace {
 
-// Guest bellegini C++ nesnesi icermeyen ayri bir fonksiyonda SEH ile guvenli
-// kopyalar (gecersiz pointer'da cokmek yerine false doner). /EHsc ile SEH
-// karisimi sorun cikarmasin diye burada hicbir yikilabilir nesne YOK.
 bool SafeCopy(void* dst, uint64_t guest, size_t n) {
     __try {
         memcpy(dst, reinterpret_cast<const void*>(guest), n);
@@ -142,14 +145,30 @@ void EnsureKytyGraphicsInit() {
     LOG_INFO("[KYTY-GFX] Vulkan HAZIR (instance/device/swapchain kuruldu).");
 }
 
-bool Dispatch(const std::string& name, CONTEXT* ctx) {
-    // Sadece AGC yuzeyini sahipleniyoruz: sceAgc* ve Graphics* (AGC yardimcilari).
-    const bool is_agc =
-        name.rfind("sceAgc", 0) == 0 || name.rfind("Graphics", 0) == 0;
-    if (!is_agc) return false;
+bool Dispatch(const std::string& nid, const std::string& name, CONTEXT* ctx) {
+    std::string kyty_nid = nid.substr(0, nid.find('#')); // "...#A#B" -> "..."
 
-    // Ilk AGC cagrisinda Kyty Vulkan'ini tetikle (bir kez).
+    // Render yuzeyini sahipleniyoruz: sceAgc* + Graphics* + sceVideoOut*.
+    bool is_render =
+        name.rfind("sceAgc", 0) == 0 || name.rfind("Graphics", 0) == 0 ||
+        name.rfind("sceVideoOut", 0) == 0;
+
+    if (!is_render && !kyty_nid.empty() && PsemuKytyHasNid(kyty_nid.c_str())) {
+        is_render = true; // Kyty tarafindan bilinen bir NID (or. PS5 NID'leri)!
+    }
+
+    if (!is_render) return false;
+
+    // Ilk render cagrisinda Kyty Vulkan'ini tetikle (bir kez).
     EnsureKytyGraphicsInit();
+
+    // KYTY'YE YONLENDIR: suffix'siz raw NID ile Kyty implementasyonunu cagir.
+    if (!kyty_nid.empty() && PsemuKytyAgcCall(kyty_nid.c_str(), ctx)) {
+        if (LogFirst("KYTY", 12))
+            LOG_INFO("[AGC->KYTY] " + (name == nid ? kyty_nid : name) + " -> Kyty (RAX=0x" +
+                     [](uint64_t v){ std::stringstream s; s<<std::hex<<v; return s.str(); }(ctx->Rax) + ")");
+        return true;
+    }
 
     if (name == "sceAgcDcbSetFlip") {
         // sceAgcDcbSetFlip(dcb, videoOutHandle, displayBufferIndex, flipMode, ...)

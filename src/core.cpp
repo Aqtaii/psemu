@@ -18,6 +18,7 @@
 #include <mutex>    // direct memory havuzu kilidi
 #include "nids.h"
 #include "video.h"
+#include "kernel/eventQueue.h"
 
 // ========================================================
 // SysV AMD64 va_list printf formatlayici
@@ -1192,7 +1193,23 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             // Sahte RAX=0 yerine artik gercek VirtualAlloc destekli bellek
             // donduruyoruz.
             bool special_return_set = false;
-            if (readable_name == "sceKernelGetDirectMemorySize") {
+            
+            // RENDER (sceAgc/Graphics/sceVideoOut) cagrilarini psemu'nun eski
+            // HLE handler'larindan ONCE Kyty'ye yonlendir. Kyty sahiplenirse
+            // (is_render) tum zincir atlanir; boylece render-state TAMAMEN
+            // Kyty'de tutarli kalir (yari-psemu/yari-Kyty karisimi olmaz).
+            if (Agc::Dispatch(func_name, readable_name, ctx)) {
+                special_return_set = true;
+            } else if (readable_name == "sceKernelCreateEqueue") {
+                ctx->Rax = Libs::LibKernel::EventQueue::KernelCreateEqueue((Libs::LibKernel::EventQueue::KernelEqueue*)ctx->Rdi, (const char*)ctx->Rsi);
+                special_return_set = true;
+            } else if (readable_name == "sceKernelDeleteEqueue") {
+                ctx->Rax = Libs::LibKernel::EventQueue::KernelDeleteEqueue((Libs::LibKernel::EventQueue::KernelEqueue)ctx->Rdi);
+                special_return_set = true;
+            } else if (readable_name == "sceKernelWaitEqueue") {
+                ctx->Rax = Libs::LibKernel::EventQueue::KernelWaitEqueue((Libs::LibKernel::EventQueue::KernelEqueue)ctx->Rdi, (Libs::LibKernel::EventQueue::KernelEvent*)ctx->Rsi, (int)ctx->Rdx, (int*)ctx->Rcx, (const Libs::LibKernel::KernelUseconds*)ctx->R8);
+                special_return_set = true;
+            } else if (readable_name == "sceKernelGetDirectMemorySize") {
                 // imza: size_t KernelGetDirectMemorySize()
                 // Gercek bir "direct memory" havuzumuz yok; oyunun
                 // search_end olarak kullanacagi makul bir ust sinir veriyoruz.
@@ -1349,7 +1366,9 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             else if (readable_name == "malloc") {
                 // malloc(size): RDI=size
                 size_t size = static_cast<size_t>(ctx->Rdi);
-                void* p = _aligned_malloc(size ? size : 1, 16);
+                size_t alloc_sz = size ? (size + 512) : 512;
+                void* p = _aligned_malloc(alloc_sz, 16);
+                if (p) memset(p, 0, alloc_sz);
                 ctx->Rax = reinterpret_cast<uint64_t>(p);
                 special_return_set = true;
             } else if (readable_name == "free") {
@@ -1363,23 +1382,27 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 size_t nmemb = static_cast<size_t>(ctx->Rdi);
                 size_t size = static_cast<size_t>(ctx->Rsi);
                 size_t total = nmemb * size;
-                void* p = _aligned_malloc(total ? total : 1, 16);
-                if (p) memset(p, 0, total);
+                size_t alloc_sz = total ? (total + 512) : 512;
+                void* p = _aligned_malloc(alloc_sz, 16);
+                if (p) memset(p, 0, alloc_sz);
                 ctx->Rax = reinterpret_cast<uint64_t>(p);
                 special_return_set = true;
             } else if (readable_name == "realloc") {
                 // realloc(ptr, size): RDI=ptr, RSI=size
                 void* old_p = reinterpret_cast<void*>(ctx->Rdi);
                 size_t size = static_cast<size_t>(ctx->Rsi);
-                void* p = _aligned_realloc(old_p, size ? size : 1, 16);
+                size_t alloc_sz = size ? (size + 512) : 512;
+                void* p = _aligned_realloc(old_p, alloc_sz, 16);
                 ctx->Rax = reinterpret_cast<uint64_t>(p);
                 special_return_set = true;
             } else if (readable_name == "memalign") {
                 // memalign(alignment, size): RDI=alignment, RSI=size
                 size_t align = static_cast<size_t>(ctx->Rdi);
                 size_t size = static_cast<size_t>(ctx->Rsi);
-                if (align < 16 || (align & (align - 1)) != 0) align = 16; // en az 16 ve 2'nin kuvveti
-                void* p = _aligned_malloc(size ? size : 1, align);
+                if (align < 16 || (align & (align - 1)) != 0) align = 16;
+                size_t alloc_sz = size ? (size + 512) : 512;
+                void* p = _aligned_malloc(alloc_sz, align);
+                if (p) memset(p, 0, alloc_sz);
                 ctx->Rax = reinterpret_cast<uint64_t>(p);
                 special_return_set = true;
             } else if (readable_name == "posix_memalign") {
@@ -1388,7 +1411,9 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 size_t align = static_cast<size_t>(ctx->Rsi);
                 size_t size = static_cast<size_t>(ctx->Rdx);
                 if (align < 16 || (align & (align - 1)) != 0) align = 16;
-                void* p = _aligned_malloc(size ? size : 1, align);
+                size_t alloc_sz = size ? (size + 512) : 512;
+                void* p = _aligned_malloc(alloc_sz, align);
+                if (p) memset(p, 0, alloc_sz);
                 if (memptr != nullptr && SafeWritable(memptr, sizeof(void*))) {
                     *memptr = p;
                 }
@@ -2247,6 +2272,63 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 }
                 ctx->Rax = found;
                 special_return_set = true;
+            } else if (func_name.find("fnUEjBCNRVU") != std::string::npos) {
+                // wmemchr (PS5 wchar_t is 32-bit or 16-bit?)
+                uint16_t* s16 = (uint16_t*)ctx->Rdi;
+                uint32_t* s32 = (uint32_t*)ctx->Rdi;
+                uint32_t c = (uint32_t)ctx->Rsi;
+                size_t n = (size_t)ctx->Rdx;
+                uint64_t res = 0;
+                
+                std::stringstream dump;
+                dump << "[wmemchr] RDI=0x" << std::hex << ctx->Rdi << " c=" << c << " n=" << std::dec << n << " | ";
+                if (s16 && SafeReadable(s16, n * 2)) {
+                    for(size_t i=0; i<min(n, (size_t)8); i++) dump << std::hex << s16[i] << " ";
+                }
+                LOG_INFO(dump.str());
+
+                if (s32 && n > 0 && SafeReadable(s32, n * 4)) {
+                    for (size_t i = 0; i < n; i++) {
+                        if (s32[i] == c) {
+                            res = (uint64_t)&s32[i];
+                            break;
+                        }
+                    }
+                }
+                // Try 16-bit fallback if 32-bit didn't find it
+                if (!res && s16 && n > 0 && SafeReadable(s16, n * 2)) {
+                    for (size_t i = 0; i < n; i++) {
+                        if (s16[i] == (uint16_t)c) {
+                            res = (uint64_t)&s16[i];
+                            LOG_INFO("[wmemchr] Found using 16-bit search!");
+                            break;
+                        }
+                    }
+                }
+                ctx->Rax = res;
+                special_return_set = true;
+            } else if (func_name.find("Noj9PsJrsa8") != std::string::npos) {
+                // wmemmove (PS5 wchar_t is 32-bit)
+                uint32_t* dest = (uint32_t*)ctx->Rdi;
+                const uint32_t* src = (const uint32_t*)ctx->Rsi;
+                size_t n = (size_t)ctx->Rdx;
+                if (dest && src && n > 0 && SafeReadable(src, n * 4) && SafeWritable(dest, n * 4)) {
+                    memmove(dest, src, n * 4);
+                }
+                ctx->Rax = (uint64_t)dest;
+                special_return_set = true;
+            } else if (func_name.find("kALvdgEv5ME") != std::string::npos || func_name.find("9nf8joUTSaQ") != std::string::npos || func_name.find("rcQCUr0EaRU") != std::string::npos || func_name.find("sUP1hBaouOw") != std::string::npos || func_name.find("p6LrHjIQMdk") != std::string::npos || func_name.find("hqi8yMOCmG0") != std::string::npos || func_name.find("QW2jL1J5rwY") != std::string::npos || func_name.find("P8F2oavZXtY") != std::string::npos || func_name.find("Q1BL70XVV0o") != std::string::npos) {
+                // _Locksyslock / _Unlocksyslock / locales / exceptions
+                ctx->Rax = 0;
+                special_return_set = true;
+            } else if (func_name.find("pKwslsMUmSk") != std::string::npos || func_name.find("9LCjpWyQ5Zc") != std::string::npos) {
+                // fmod / pow
+                // Float functions return in XMM0. Let's return 0 just to avoid bad values.
+                ctx->Xmm0.Low = 0;
+                ctx->Xmm0.High = 0;
+                ctx->ContextFlags |= CONTEXT_FLOATING_POINT;
+                ctx->Rax = 0;
+                special_return_set = true;
             } else if (readable_name == "clock_gettime" || readable_name == "sceKernelClockGettime") {
                 // int clock_gettime(clockid_t clk_id, struct timespec* tp)
                 //   RDI=clk_id, RSI=tp
@@ -2951,7 +3033,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             // Oyun render'i AGC ile yapiyor. Agc::Dispatch bu fonksiyonlari
             // sahiplenir (flip'i Video'ya baglar, render-state'i yakalar);
             // AGC disi isimlerde false donup zincirin devamina birakir.
-            else if (Agc::Dispatch(readable_name, ctx)) {
+            else if (Agc::Dispatch(func_name, readable_name, ctx)) {
                 special_return_set = true;
             }
             // ========================================================
@@ -3839,3 +3921,6 @@ void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t tex
 
     RemoveVectoredExceptionHandler(veh_handle);
 }
+
+extern "C" void PsemuNotifyKytyFlip() {}
+

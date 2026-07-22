@@ -36,6 +36,10 @@ LIB_NAME("VideoOut", "VideoOut");
 
 namespace EventQueue = LibKernel::EventQueue;
 
+// psemu: loader.exe core.cpp'de tanimli — sunum tamamlaninca oyunun
+// sceKernelWaitEqueue bekleyisini uyandirir (render loop'u vsync'e sync).
+extern "C" void PsemuNotifyKytyFlip();
+
 constexpr int      VIDEO_OUT_EVENT_FLIP                                 = 0;
 constexpr int      VIDEO_OUT_EVENT_VBLANK                               = 1;
 constexpr int      VIDEO_OUT_EVENT_PRE_VBLANK_START                     = 2;
@@ -926,6 +930,11 @@ bool FlipQueue::Flip(uint32_t micros) {
 
 	Graphics::WindowPresentFrame(r.frame);
 
+	// psemu: sunum tamamlandi -> oyunun sceKernelWaitEqueue bekleyisini uyandir
+	// (render loop'unu gercek sunum hizina/~60Hz'e sync eder). loader.exe'de
+	// core.cpp'de tanimli; gpu lib'e link edilince cozulur.
+	PsemuNotifyKytyFlip();
+
 	m_mutex.Lock();
 	if (m_requests.empty() || m_requests.front().id != r.id ||
 	    m_requests.front().state != RequestState::Presenting) {
@@ -1359,6 +1368,9 @@ namespace Libs::Presentation {
 
 int DisplayBufferSubmitFlipFromGpu(Graphics::CommandBuffer* buffer, int handle, int index,
                                    int flip_mode, int64_t flip_arg, uint64_t* request_id) {
+	{ static int s_sf = 0; if (s_sf < 5) { s_sf++;
+	  std::printf("[FLIP-MARK] DisplayBufferSubmitFlipFromGpu #%d handle=%d index=%d\n", s_sf, handle, index);
+	  std::fflush(stdout); } }
 	EXIT_IF(VideoOut::g_video_out_context == nullptr || Graphics::g_render_ctx == nullptr ||
 	        buffer == nullptr || request_id == nullptr);
 

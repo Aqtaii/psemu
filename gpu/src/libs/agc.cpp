@@ -29,6 +29,11 @@
 #include <mutex>
 #include <vector>
 
+#undef LOGF
+#define LOGF(...)
+#undef PRINT
+#define PRINT(...)
+
 #ifdef min
 #undef min
 #endif

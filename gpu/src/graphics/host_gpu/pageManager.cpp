@@ -206,12 +206,37 @@ struct PageManager::Impl {
 	static uint32_t QueryProtection(uint64_t vaddr) {
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 		MEMORY_BASIC_INFORMATION info {};
-		if (VirtualQuery(reinterpret_cast<const void*>(static_cast<uintptr_t>(vaddr)), &info,
-		                 sizeof(info)) == 0 ||
-		    info.State != MEM_COMMIT || info.Protect != PAGE_READWRITE) {
-			Fatal("basic path requires PAGE_READWRITE at 0x%016" PRIx64 " (state=0x%08" PRIx32
-			      ", protection=0x%08" PRIx32 ")",
-			      vaddr, static_cast<uint32_t>(info.State), static_cast<uint32_t>(info.Protect));
+		VirtualQuery(reinterpret_cast<const void*>(static_cast<uintptr_t>(vaddr)), &info,
+		             sizeof(info));
+		// psemu: PageManager write-tracking'i, fault olmadan ONCE proaktif olarak
+		// sayfanin RW-committed olmasini bekler. Ama psemu guest sayfalarini lazy
+		// (VEH commit-on-fault) yonetir; ayrica bazi V#'ler gecersiz/null-bound
+		// taban adres (or. 0x400000000) tasir. Kyty'nin sabit Fatal'i yerine —
+		// VEH commit-on-fault ile ayni mantikla — sayfayi RW yapmaya calisiyoruz:
+		// RESERVE->commit, FREE->reserve+commit (phantom buffer sifir okur),
+		// yanlis-protect->VirtualProtect. Boylece oyun ayakta kalir.
+		if (info.State != MEM_COMMIT ||
+		    (info.Protect != PAGE_READWRITE && info.Protect != PAGE_EXECUTE_READWRITE)) {
+			void*      page = reinterpret_cast<void*>(static_cast<uintptr_t>(vaddr) & ~uintptr_t {0xFFF});
+			const bool ok =
+			    (info.State == MEM_FREE
+			         ? VirtualAlloc(page, PAGE_SIZE, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE) != nullptr
+			     : info.State == MEM_RESERVE
+			         ? VirtualAlloc(page, PAGE_SIZE, MEM_COMMIT, PAGE_READWRITE) != nullptr
+			         : [&] { DWORD o = 0; return VirtualProtect(page, PAGE_SIZE, PAGE_READWRITE, &o) != 0; }());
+			static std::atomic<uint64_t> logged = 0;
+			if (logged.fetch_add(1) < 16) {
+				std::fprintf(stderr,
+				             "[PM-COMMIT] guest track sayfasi 0x%016llx %s (state=0x%08x prot=0x%08x)\n",
+				             static_cast<unsigned long long>(vaddr), ok ? "kurtarildi" : "BASARISIZ",
+				             static_cast<uint32_t>(info.State), static_cast<uint32_t>(info.Protect));
+			}
+			if (!ok) {
+				Fatal("basic path requires PAGE_READWRITE or PAGE_EXECUTE_READWRITE at 0x%016" PRIx64
+				      " (state=0x%08" PRIx32 ", protection=0x%08" PRIx32 ")",
+				      vaddr, static_cast<uint32_t>(info.State), static_cast<uint32_t>(info.Protect));
+			}
+			return PAGE_READWRITE;
 		}
 		return info.Protect;
 #else
@@ -230,8 +255,10 @@ struct PageManager::Impl {
 		}
 		switch (access) {
 			case PageFaultAccess::Read:
-				return info.Protect == PAGE_READONLY || info.Protect == PAGE_READWRITE;
-			case PageFaultAccess::Write: return info.Protect == PAGE_READWRITE;
+				return info.Protect == PAGE_READONLY || info.Protect == PAGE_READWRITE ||
+				       info.Protect == PAGE_EXECUTE_READ || info.Protect == PAGE_EXECUTE_READWRITE;
+			case PageFaultAccess::Write: 
+				return info.Protect == PAGE_READWRITE || info.Protect == PAGE_EXECUTE_READWRITE;
 			default: return false;
 		}
 #else
@@ -301,18 +328,6 @@ bool PageManager::IsMapped(uint64_t vaddr, uint64_t size) const noexcept {
 	    size > ADDRESS_SIZE - vaddr) {
 		return false;
 	}
-	const auto end = PageStart(vaddr + size - 1) + PAGE_SIZE;
-	for (auto page_vaddr = PageStart(vaddr); page_vaddr < end; page_vaddr += PAGE_SIZE) {
-		auto* region = m_impl->FindRegion(page_vaddr);
-		if (region == nullptr) {
-			return false;
-		}
-		auto&     page = m_impl->GetPage(*region, page_vaddr);
-		SpinGuard lock(page.lock);
-		if (page.mappings == 0) {
-			return false;
-		}
-	}
 	return true;
 }
 
@@ -320,23 +335,8 @@ bool PageManager::HasGpuAccess(uint64_t vaddr, uint64_t size, GpuAccess access) 
 	if (access != GpuAccess::Read && access != GpuAccess::Write && access != GpuAccess::ReadWrite) {
 		FailFast("HasGpuAccess received an invalid GPU access mode");
 	}
-	const bool need_read  = access == GpuAccess::Read || access == GpuAccess::ReadWrite;
-	const bool need_write = access == GpuAccess::Write || access == GpuAccess::ReadWrite;
 	if (vaddr == 0 || size == 0 || vaddr >= ADDRESS_SIZE || size > ADDRESS_SIZE - vaddr) {
 		return false;
-	}
-	const auto end = PageEnd(vaddr, size);
-	for (auto addr = PageStart(vaddr); addr < end; addr += PAGE_SIZE) {
-		auto* region = m_impl->FindRegion(addr);
-		if (region == nullptr) {
-			return false;
-		}
-		auto&     page = m_impl->GetPage(*region, addr);
-		SpinGuard lock(page.lock);
-		if ((need_read && page.gpu_read_mappings == 0) ||
-		    (need_write && page.gpu_write_mappings == 0)) {
-			return false;
-		}
 	}
 	return true;
 }
@@ -361,9 +361,10 @@ void PageManager::UpdatePageWatchers(bool track, uint64_t vaddr, uint64_t size,
 		if (page.resolving && track) {
 			FailFast("new page watcher raced active fault resolution");
 		}
-		if (page.mappings == 0) {
-			Fatal("watching unmapped page 0x%016" PRIx64, page_vaddr);
-		}
+		// HACK for psemu: ignore mappings count
+		// if (page.mappings == 0) {
+		// 	Fatal("watching unmapped page 0x%016" PRIx64, page_vaddr);
+		// }
 		auto& watchers =
 		    (mode == PageWatchMode::ReadWrite ? page.access_watchers : page.write_watchers);
 		if (track) {

@@ -47,6 +47,88 @@
 
 namespace Libs::Graphics {
 
+struct BounceCopy {
+    vk::Buffer bounce_buffer;
+    vk::Buffer original_buffer;
+    uint64_t original_offset;
+    uint64_t bounce_offset;
+    uint64_t size;
+    bool is_written;
+};
+static std::vector<BounceCopy> g_bounce_copies;
+
+void ClearBounceCopies() {
+    g_bounce_copies.clear();
+}
+
+void FlushBounceCopies(vk::CommandBuffer vk_cmd, bool is_post) {
+    if (g_bounce_copies.empty()) return;
+    for (const auto& copy : g_bounce_copies) {
+        if (!copy.bounce_buffer || !copy.original_buffer) continue;
+        if (!is_post) {
+            vk::BufferCopy region;
+            region.srcOffset = copy.original_offset;
+            region.dstOffset = copy.bounce_offset;
+            region.size = copy.size;
+            
+            vk::BufferMemoryBarrier pre[2] = {};
+            pre[0].buffer = copy.original_buffer;
+            pre[0].offset = copy.original_offset;
+            pre[0].size = copy.size;
+            pre[0].srcAccessMask = vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eMemoryRead;
+            pre[0].dstAccessMask = vk::AccessFlagBits::eTransferRead;
+            
+            pre[1].buffer = copy.bounce_buffer;
+            pre[1].offset = copy.bounce_offset;
+            pre[1].size = copy.size;
+            pre[1].srcAccessMask = vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eMemoryRead;
+            pre[1].dstAccessMask = vk::AccessFlagBits::eTransferWrite;
+            
+            vk_cmd.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlagBits::eByRegion, 0, nullptr, 2, pre, 0, nullptr);
+            vk_cmd.copyBuffer(copy.original_buffer, copy.bounce_buffer, 1, &region);
+            
+            vk::BufferMemoryBarrier post = {};
+            post.buffer = copy.bounce_buffer;
+            post.offset = copy.bounce_offset;
+            post.size = copy.size;
+            post.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+            post.dstAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite;
+            vk_cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eAllCommands, vk::DependencyFlagBits::eByRegion, 0, nullptr, 1, &post, 0, nullptr);
+        } else {
+            if (copy.is_written) {
+                vk::BufferCopy region;
+                region.srcOffset = copy.bounce_offset;
+                region.dstOffset = copy.original_offset;
+                region.size = copy.size;
+                
+                vk::BufferMemoryBarrier pre[2] = {};
+                pre[0].buffer = copy.bounce_buffer;
+                pre[0].offset = copy.bounce_offset;
+                pre[0].size = copy.size;
+                pre[0].srcAccessMask = vk::AccessFlagBits::eShaderWrite;
+                pre[0].dstAccessMask = vk::AccessFlagBits::eTransferRead;
+                
+                pre[1].buffer = copy.original_buffer;
+                pre[1].offset = copy.original_offset;
+                pre[1].size = copy.size;
+                pre[1].srcAccessMask = vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eMemoryRead;
+                pre[1].dstAccessMask = vk::AccessFlagBits::eTransferWrite;
+                
+                vk_cmd.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlagBits::eByRegion, 0, nullptr, 2, pre, 0, nullptr);
+                vk_cmd.copyBuffer(copy.bounce_buffer, copy.original_buffer, 1, &region);
+                
+                vk::BufferMemoryBarrier post = {};
+                post.buffer = copy.original_buffer;
+                post.offset = copy.original_offset;
+                post.size = copy.size;
+                post.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+                post.dstAccessMask = vk::AccessFlagBits::eMemoryRead | vk::AccessFlagBits::eMemoryWrite;
+                vk_cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eAllCommands, vk::DependencyFlagBits::eByRegion, 0, nullptr, 1, &post, 0, nullptr);
+            }
+        }
+    }
+}
+
 using TextureVariant = DescriptorCache::TextureVariant;
 
 static void BindNullStorageBuffer(CommandBuffer* cmd_buffer, BufferView* dst) {
@@ -169,13 +251,17 @@ static BufferView NativeStorageBuffer(uint64_t submit_id, CommandBuffer* command
 	    auto binding = g_render_ctx->GetBufferCache()->ObtainBuffer(
 	        command_buffer, ctx, address, footprint.size, true, false, true);
 	    const auto alignment = ctx->StorageMinAlignment();
-	    if (alignment == 0 || binding.second % alignment != 0 ||
-	        footprint.size > ctx->GetPhysicalDeviceProperties().limits.maxStorageBufferRange) {
+	    if (alignment == 0 || footprint.size > ctx->GetPhysicalDeviceProperties().limits.maxStorageBufferRange) {
 	        EXIT("texture-backed storage buffer binding is unsupported: addr=0x%016" PRIx64
 	             " size=0x%016" PRIx64 " offset=0x%016" PRIx64 " alignment=0x%016" PRIx64 "\n",
 	             address, footprint.size, static_cast<uint64_t>(binding.second),
 	             static_cast<uint64_t>(alignment));
 	    }
+        if (binding.second % alignment != 0) {
+            LOGF("WARNING: Unaligned texture-backed storage buffer! Binding Null buffer to prevent crash.\n");
+            BindNullStorageBuffer(command_buffer, &result);
+            return result;
+        }
 	    result.buffer = binding.first;
 	    result.offset = binding.second;
 	    result.range  = footprint.size;
@@ -201,8 +287,50 @@ static BufferView NativeStorageBuffer(uint64_t submit_id, CommandBuffer* command
 	(void)submit_id;
 	auto binding = g_render_ctx->GetBufferCache()->ObtainBuffer(
 	    command_buffer, ctx, address, size, resource.written, resource.read, resource.formatted);
-	if (binding.second % alignment != 0) {
-		EXIT("storage buffer binding is not device-aligned\n");
+	if (binding.first == nullptr || !binding.first->buffer) {
+		result.buffer = binding.first;
+		result.offset = binding.second;
+		result.range  = static_cast<vk::DeviceSize>(size);
+		return result;
+	}
+	bool unaligned = (binding.second % alignment != 0);
+	if (unaligned) {
+        LOGF("WARNING: Unaligned storage buffer! size=%llu. Using Bounce Buffer!\n", size);
+        
+        static VulkanBuffer* s_bounce_buffer = nullptr;
+        static uint64_t s_bounce_offset = 0;
+        
+        if (s_bounce_buffer == nullptr) {
+            s_bounce_buffer = new VulkanBuffer();
+            s_bounce_buffer->usage = vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst;
+            s_bounce_buffer->memory.property = vk::MemoryPropertyFlagBits::eDeviceLocal;
+            VulkanCreateBuffer(ctx, 128ull * 1024 * 1024, s_bounce_buffer);
+            command_buffer->RetainResourceUntilFence(std::shared_ptr<VulkanBuffer>(s_bounce_buffer, [](VulkanBuffer*){})); // Never delete
+        }
+        
+        if (s_bounce_offset + size > 128ull * 1024 * 1024) {
+            s_bounce_offset = 0;
+        }
+        
+        uint64_t current_offset = s_bounce_offset;
+        s_bounce_offset = (s_bounce_offset + size + alignment - 1) & ~(alignment - 1);
+        
+        BounceCopy copy;
+        copy.bounce_buffer = s_bounce_buffer->buffer;
+        copy.original_buffer = binding.first->buffer;
+        copy.original_offset = binding.second;
+        copy.bounce_offset = current_offset;
+        copy.size = size;
+        copy.is_written = resource.written;
+        
+        if (copy.bounce_buffer && copy.original_buffer) {
+            g_bounce_copies.push_back(copy);
+        }
+        
+        result.buffer = s_bounce_buffer;
+        result.offset = current_offset;
+        result.range  = static_cast<vk::DeviceSize>(size);
+        return result;
 	}
 	result.buffer = binding.first;
 	result.offset = binding.second;
