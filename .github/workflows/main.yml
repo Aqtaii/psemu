@@ -1,0 +1,25 @@
+name: Build C++ Loader
+
+on: 
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        
+      - name: Kodu Derle
+        run: cl /EHsc /std:c++17 loader.cpp /link /out:loader.exe
+        
+      - name: EXE dosyasini yukle
+        uses: actions/upload-artifact@v4
+        with:
+          name: PSEmu-Loader-Windows
+          path: loader.exe

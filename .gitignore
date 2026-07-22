@@ -1,0 +1,19 @@
+# CMake build output
+/build/
+
+# MSVC / derleme artiklari
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+# Calisma/analiz dosyalari (scratch)
+loader_log.txt
+build_out.txt
+disasm*.txt
+dump*.bin
+
+# Telifli oyun dosyalari (GitHub'a gitmemeli)
+PPSA02929-app0/
+loader.exe
