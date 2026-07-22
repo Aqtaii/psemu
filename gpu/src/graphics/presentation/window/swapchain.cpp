@@ -426,6 +426,9 @@ PreparedFrame* WindowPrepareBlankFrame(CommandBuffer* buffer, uint32_t width, ui
 
 void WindowPresentFrame(PreparedFrame* frame) {
 	KYTY_PROFILER_FUNCTION();
+	{ static int s_pf = 0; if (s_pf < 5) { s_pf++;
+	  std::printf("[PRESENT-MARK] WindowPresentFrame #%d frame=%p\n", s_pf, static_cast<void*>(frame));
+	  std::fflush(stdout); } }
 
 	EXIT_IF(frame == nullptr);
 	EXIT_IF(g_window_ctx == nullptr);

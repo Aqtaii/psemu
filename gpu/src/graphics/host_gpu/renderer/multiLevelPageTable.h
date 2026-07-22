@@ -127,8 +127,8 @@ public:
 		uint64_t size    = 0;
 	};
 
-	using CoarseTable   = MultiLevelPageTable<MembershipList, 20, 40, 10>;
-	using TrackingTable = MultiLevelPageTable<MembershipList, 12, 40, 18>;
+	using CoarseTable   = MultiLevelPageTable<MembershipList, 20, 48, 14>;
+	using TrackingTable = MultiLevelPageTable<MembershipList, 12, 48, 22>;
 
 	[[nodiscard]] bool Register(const OwnerT& owner, const std::vector<ByteRange>& ranges) {
 		if (FindRegistration(owner) != m_registrations.end()) {

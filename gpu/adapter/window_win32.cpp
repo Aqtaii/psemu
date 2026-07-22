@@ -13,6 +13,7 @@
 #include "graphics/host_gpu/graphicContext.h"
 #include "graphics/host_gpu/renderer/render.h"
 #include "graphics/host_gpu/vulkanCommon.h"
+#include "graphics/presentation/videoOut.h" // VideoOutFlipWindow / Begin/EndVblank
 #include "graphics/presentation/window.h"
 #include "graphics/presentation/window/windowInternal.h"
 
@@ -118,13 +119,24 @@ void WindowRun() {
 
 	GraphicsRenderCreateContext();
 
-	// psemu: Kyty'nin SDL GameMainLoop'u yerine minimal Win32 mesaj-pump.
-	// Gercek render/present guest'in AGC flip cagrilariyla (videoOut ->
-	// WindowPresentFrame) surulur; burasi pencereyi canli/duyarli tutar.
+	// psemu: Kyty'nin SDL GameMainLoop'unun render kismini replike ediyoruz.
+	// KRITIK: her frame VideoOutFlipWindow(0) cagrilmali — bu, flip queue'yu
+	// drain edip WaitForNextVblank + FlipQueue::Flip -> WindowPresentFrame
+	// (swapchain'e present) yapar. Onceki minimal GetMessage-only dongusu bunu
+	// yapmiyordu, o yuzden flip kuyruga giriyor ama HIC sunulmuyordu (beyaz
+	// pencere). Begin/EndVblank vblank event'lerini + sayacini yonetir.
 	MSG msg;
-	while (GetMessageW(&msg, nullptr, 0, 0) > 0) {
-		TranslateMessage(&msg);
-		DispatchMessageW(&msg);
+	for (;;) {
+		while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE) != 0) {
+			if (msg.message == WM_QUIT) {
+				return;
+			}
+			TranslateMessage(&msg);
+			DispatchMessageW(&msg);
+		}
+		VideoOut::VideoOutBeginVblank();
+		VideoOut::VideoOutFlipWindow(0); // present (WaitForNextVblank ile pace'li)
+		VideoOut::VideoOutEndVblank();
 	}
 }
 

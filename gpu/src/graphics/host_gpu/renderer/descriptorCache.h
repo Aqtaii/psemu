@@ -22,6 +22,9 @@ struct Program;
 class CommandBuffer;
 struct ShaderStageRuntime;
 
+void ClearBounceCopies();
+void FlushBounceCopies(vk::CommandBuffer vk_cmd, bool is_post);
+
 struct VulkanDescriptorSet {
 	vk::DescriptorSet       set     = nullptr;
 	vk::DescriptorSetLayout layout  = nullptr;

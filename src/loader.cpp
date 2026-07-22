@@ -364,7 +364,7 @@ bool LoadEboot(const std::string& filePath) {
                         // Sembolun kendisi icin gercek bellekte bir hucre ayir
                         // (bu hucrenin ADRESINI relocation hedefine yaziyoruz).
                         uint64_t* cell = reinterpret_cast<uint64_t*>(
-                            VirtualAlloc(nullptr, sizeof(uint64_t), MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+                            VirtualAlloc(nullptr, 0x10000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
 
                         if (cell) {
                             if (sym_name.rfind("f7uOxY9mM1U", 0) == 0) {
@@ -761,6 +761,8 @@ bool LoadEboot(const std::string& filePath) {
 }
 
 int main(int argc, char** argv) {
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
     Logger::Init();
 
     if (argc < 2) {

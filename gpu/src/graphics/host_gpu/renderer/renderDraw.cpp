@@ -28,6 +28,7 @@
 #include "graphics/host_gpu/vulkanCommon.h"
 #include "graphics/shader/recompiler/ResourceMaterialization.h"
 #include "graphics/shader/recompiler/ShaderIR.h"
+#include "graphics/host_gpu/renderer/descriptorCache.h"
 #include "graphics/shader/shader.h"
 #include "kernel/eventQueue.h"
 #include "kernel/pthread.h"
@@ -917,6 +918,7 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 		    *ctx, state->color_info, state->color_count, state->depth_info);
 		SetDynamicParams(state->vk_buffer, dynamic_params);
 
+		ClearBounceCopies();
 		// EXIT_NOT_IMPLEMENTED(vs_input_info.buffers_num > 1);
 		BindDrawVertexBuffers(submit_id, buffer, draw, state->vk_buffer, state->vs_input_info);
 
@@ -947,6 +949,8 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 			continue;
 		}
 
+		FlushBounceCopies(state->vk_buffer, false);
+
 		LogDrawPhase(draw.name, "BeginRenderPass");
 		if (set_auto_debug) {
 			SetDrawDebugPhase(buffer, submit_id, draw, 0x400u);
@@ -963,6 +967,7 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 			SetDrawDebugPhase(buffer, submit_id, draw, 0x600u);
 		}
 		buffer->EndRenderPass();
+		FlushBounceCopies(state->vk_buffer, true);
 		vk::PipelineStageFlags shader_write_stages = {};
 		if (HasShaderBufferWrites(state->vs_input_info.stage)) {
 			shader_write_stages |= vk::PipelineStageFlagBits::eVertexShader;

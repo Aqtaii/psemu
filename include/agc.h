@@ -22,6 +22,7 @@ namespace Agc {
 // `name` bu modulun ele aldigi bir AGC fonksiyonuysa: ctx'ten argumanlari okur,
 // HLE isini yapar, ctx->Rax'i ayarlar ve true doner. Degilse hicbir yan etki
 // birakmadan false doner (dispatch zinciri devam etsin diye).
-bool Dispatch(const std::string& name, CONTEXT* ctx);
+// nid: suffix'li raw NID (or. "B+aG9DUnTKA#A#B"). name: cozulmus okunabilir ad.
+bool Dispatch(const std::string& nid, const std::string& name, CONTEXT* ctx);
 
 } // namespace Agc
