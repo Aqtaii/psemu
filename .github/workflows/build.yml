@@ -1,0 +1,26 @@
+name: Build C++ Loader
+
+on: 
+  push:
+  workflow_dispatch: # Manuel tetikleme butonu ekler
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSVC (Visual Studio Compiler)
+        uses: ilammy/msvc-dev-cmd@v1
+        
+      - name: Build Loader
+        run: |
+          cl /EHsc /std:c++17 loader.cpp logger.cpp syscalls.cpp core.cpp scanner.cpp linker.cpp /link /out:loader.exe
+        
+      - name: Olusan EXE dosyasini yuke
+        uses: actions/upload-artifact@v4
+        with:
+          name: PSEmu-Loader-Windows
+          path: loader.exe
