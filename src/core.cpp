@@ -19,6 +19,7 @@
 #include "nids.h"
 #include "video.h"
 #include "kernel/eventQueue.h"
+#include <immintrin.h>
 
 // ========================================================
 // SysV AMD64 va_list printf formatlayici
@@ -576,6 +577,17 @@ static uint64_t CreateTlsBlockForCurrentThread() {
     return tp;
 }
 
+#if defined(__clang__) || defined(__GNUC__)
+__attribute__((target("fsgsbase")))
+static inline void SafeWriteFsBase(uint64_t val) {
+    _writefsbase_u64(val);
+}
+#else
+static inline void SafeWriteFsBase(uint64_t val) {
+    _writefsbase_u64(val);
+}
+#endif
+
 // Bu thread'in tp'si; ilk fs: erisiminde olusturulur.
 static uint64_t GetThreadTlsBase() {
     static thread_local uint64_t t_tp = 0;
@@ -583,10 +595,15 @@ static uint64_t GetThreadTlsBase() {
         t_tp = CreateTlsBlockForCurrentThread();
         if (t_tp != 0) {
             if (g_tls_base == 0) g_tls_base = t_tp; // ilk blok: geriye uyumluluk
+            __try {
+                SafeWriteFsBase(t_tp);
+            } __except (EXCEPTION_EXECUTE_HANDLER) {
+                // FSGSBASE donanim/IS tarafindan desteklenmiyorsa VEH handler devrede kalir
+            }
             static volatile LONG s_n = 0;
             LONG n = InterlockedIncrement(&s_n);
             if (n <= 8) {
-                printf("[TLS] Thread'e ozel TLS blogu #%ld: TID=%lu tp=0x%llx\n",
+                printf("[TLS] Thread'e ozel TLS blogu #%ld: TID=%lu tp=0x%llx (HW FS_BASE ayarlandi)\n",
                        n, GetCurrentThreadId(), t_tp);
                 fflush(stdout);
             }
@@ -729,12 +746,15 @@ static void* BuildSysVTramp(uint64_t target, uint64_t rdi_val, uint64_t rsi_val,
 // SysV fonksiyonu RSI/RDI'yi bozsa bile Win64 caller (bu fonksiyon) kendi
 // stack slotlarindan geri yukledigi icin sorun olmaz.
 static DWORD WINAPI GamePthreadProc(LPVOID lpParam) {
-    // Stack overflow durumunda VEH handler'inin CALISABILMESI icin stack
-    // rezerve et. Aksi halde stack tukendiginde handler'in kendisi de stack
-    // bulamayip process SESSIZCE olur (log yok). Bu garanti sayesinde
-    // "CRASH Kod: 0xC00000FD" + RIP loglanabilir.
     ULONG guarantee = 512 * 1024; // 512KB
     SetThreadStackGuarantee(&guarantee);
+
+    uint64_t tp = GetThreadTlsBase();
+    if (tp != 0) {
+        __try {
+            SafeWriteFsBase(tp);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {}
+    }
 
     typedef int(*Fn)();
     Fn fn = reinterpret_cast<Fn>(lpParam);
