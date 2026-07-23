@@ -379,6 +379,14 @@ static uint8_t* DmemBase() {
     if (g_dmem_base == nullptr) {
         g_dmem_base = reinterpret_cast<uint8_t*>(
             VirtualAlloc(nullptr, kDmemSize, MEM_RESERVE, PAGE_NOACCESS));
+        if (g_dmem_base) {
+            // Ilk 512 MB'yi hemen commit et. Oyunun dahili allocator'u
+            // sceKernelAllocateDirectMemory cagirlmadan da havuz icinde
+            // pointer aritmetigiyle ilerleyebiliyor; commit edilmemis
+            // sayfalara erisim PAGE_NOACCESS CRASH veriyor.
+            const size_t kInitCommit = 512ULL * 1024 * 1024;
+            VirtualAlloc(g_dmem_base, kInitCommit, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+        }
         g_dmem_base_addr = reinterpret_cast<uint64_t>(g_dmem_base);
     }
     return g_dmem_base;
@@ -1366,15 +1374,17 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             else if (readable_name == "malloc") {
                 // malloc(size): RDI=size
                 size_t size = static_cast<size_t>(ctx->Rdi);
-                size_t alloc_sz = size ? (size + 512) : 512;
+                size_t alloc_sz = size ? (size + 65536) : 65536;
                 void* p = _aligned_malloc(alloc_sz, 16);
                 if (p) memset(p, 0, alloc_sz);
                 ctx->Rax = reinterpret_cast<uint64_t>(p);
                 special_return_set = true;
             } else if (readable_name == "free") {
                 // free(ptr): RDI=ptr
-                void* p = reinterpret_cast<void*>(ctx->Rdi);
-                if (p) _aligned_free(p);
+                // Serbest birakmayi KASITLI olarak YAPMA. Oyunun dahili
+                // allocator'u serbest birakilan bellege hala stale pointer
+                // tutuyor olabilir; CRT heap o adresi baska bir tahsise verebilir
+                // ve use-after-free / pointer corruption'a yol acabilir.
                 ctx->Rax = 0;
                 special_return_set = true;
             } else if (readable_name == "calloc") {
@@ -1382,7 +1392,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 size_t nmemb = static_cast<size_t>(ctx->Rdi);
                 size_t size = static_cast<size_t>(ctx->Rsi);
                 size_t total = nmemb * size;
-                size_t alloc_sz = total ? (total + 512) : 512;
+                size_t alloc_sz = total ? (total + 65536) : 65536;
                 void* p = _aligned_malloc(alloc_sz, 16);
                 if (p) memset(p, 0, alloc_sz);
                 ctx->Rax = reinterpret_cast<uint64_t>(p);
@@ -1391,8 +1401,17 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 // realloc(ptr, size): RDI=ptr, RSI=size
                 void* old_p = reinterpret_cast<void*>(ctx->Rdi);
                 size_t size = static_cast<size_t>(ctx->Rsi);
-                size_t alloc_sz = size ? (size + 512) : 512;
-                void* p = _aligned_realloc(old_p, alloc_sz, 16);
+                size_t alloc_sz = size ? (size + 65536) : 65536;
+                void* p = _aligned_malloc(alloc_sz, 16);
+                if (p) {
+                    memset(p, 0, alloc_sz);
+                    if (old_p && SafeReadable(old_p, 1)) {
+                        size_t copy_len = (size > 0) ? size : 16;
+                        if (SafeReadable(old_p, copy_len)) {
+                            memcpy(p, old_p, copy_len);
+                        }
+                    }
+                }
                 ctx->Rax = reinterpret_cast<uint64_t>(p);
                 special_return_set = true;
             } else if (readable_name == "memalign") {
@@ -1400,7 +1419,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 size_t align = static_cast<size_t>(ctx->Rdi);
                 size_t size = static_cast<size_t>(ctx->Rsi);
                 if (align < 16 || (align & (align - 1)) != 0) align = 16;
-                size_t alloc_sz = size ? (size + 512) : 512;
+                size_t alloc_sz = size ? (size + 65536) : 65536;
                 void* p = _aligned_malloc(alloc_sz, align);
                 if (p) memset(p, 0, alloc_sz);
                 ctx->Rax = reinterpret_cast<uint64_t>(p);
@@ -1411,7 +1430,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 size_t align = static_cast<size_t>(ctx->Rsi);
                 size_t size = static_cast<size_t>(ctx->Rdx);
                 if (align < 16 || (align & (align - 1)) != 0) align = 16;
-                size_t alloc_sz = size ? (size + 512) : 512;
+                size_t alloc_sz = size ? (size + 65536) : 65536;
                 void* p = _aligned_malloc(alloc_sz, align);
                 if (p) memset(p, 0, alloc_sz);
                 if (memptr != nullptr && SafeWritable(memptr, sizeof(void*))) {
@@ -2414,7 +2433,81 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             // Oyun "/app0/~INDEX", "/app0/save_data_icon.png" gibi dosyalari
             // aciyor. fopen NULL dondugu icin "no VFS rom ~INDEX" diyordu.
             // Artik gercek host dosyalarina baglaniyoruz.
-            else if (readable_name == "fopen") {
+            else if (readable_name == "SaveDataMount3" || readable_name == "sceSaveDataMount" ||
+                     func_name.find("ZP4e7rlzOUk") != std::string::npos) {
+                // SaveDataMount3(mount, result): RDI=mount, RSI=result
+                void* res_ptr = reinterpret_cast<void*>(ctx->Rsi);
+                if (res_ptr && SafeWritable(res_ptr, 64)) {
+                    char* mount_str = reinterpret_cast<char*>(res_ptr);
+                    strncpy(mount_str, "/saveData0", 32);
+                }
+                ctx->Rax = 0;
+                special_return_set = true;
+                LOG_INFO("[SaveData] SaveDataMount3 -> SUCCESS (0) [/saveData0]");
+            } else if (readable_name == "SaveDataUmount2" || readable_name == "sceSaveDataUmount" ||
+                       func_name.find("uW4vfTwMQVo") != std::string::npos) {
+                ctx->Rax = 0;
+                special_return_set = true;
+                LOG_INFO("[SaveData] SaveDataUmount2 -> SUCCESS (0)");
+            } else if (readable_name == "sceKernelOpen" || readable_name == "libc_open" ||
+                       func_name.find("1G3lF1Gg1k8") != std::string::npos) {
+                // sceKernelOpen(path, flags, mode): RDI=path, RSI=flags, RDX=mode
+                std::string guest = SafeReadCString(reinterpret_cast<const char*>(ctx->Rdi));
+                // Gercek dosyayi VFS ile bulmaya calis
+                std::string host = TranslateGuestPath(guest);
+                FILE* f = nullptr;
+                if (!host.empty()) {
+                    f = fopen(host.c_str(), "rb");
+                }
+                if (f) {
+                    // Gercek dosya var: fd olarak FILE* saklayip dondur
+                    static int s_fd_counter = 100;
+                    int fd = s_fd_counter++;
+                    {
+                        std::lock_guard<std::mutex> vlk(g_vfs_mutex);
+                        // fd -> FILE* esleme tablosu
+                        static std::unordered_map<int, FILE*>& fd_map = *new std::unordered_map<int, FILE*>();
+                        fd_map[fd] = f;
+                    }
+                    ctx->Rax = static_cast<uint64_t>(fd);
+                    special_return_set = true;
+                    LOG_INFO("[KernelIO] sceKernelOpen(\"" + guest + "\") -> fd=" + std::to_string(fd) + " (gercek dosya)");
+                } else {
+                    // Dosya yok: -1 (ENOENT) dondur ki oyun "dosya bulunamadi" yoluna gitsin
+                    ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(-1));
+                    special_return_set = true;
+                    LOG_INFO("[KernelIO] sceKernelOpen(\"" + guest + "\") -> -1 (ENOENT: dosya bulunamadi)");
+                }
+            } else if (readable_name == "sceKernelRead" || readable_name == "libc_read" ||
+                       func_name.find("Cg4srZ6TKbU") != std::string::npos) {
+                // sceKernelRead(fd, buf, nbyte): RDI=fd, RSI=buf, RDX=nbyte
+                void* buf = reinterpret_cast<void*>(ctx->Rsi);
+                size_t nbyte = static_cast<size_t>(ctx->Rdx);
+                if (buf && nbyte > 0 && SafeWritable(buf, nbyte)) {
+                    memset(buf, 0, nbyte);
+                }
+                ctx->Rax = static_cast<uint64_t>(nbyte);
+                special_return_set = true;
+            } else if (readable_name == "sceKernelWrite" || readable_name == "libc_write") {
+                // sceKernelWrite(fd, buf, nbyte): RDI=fd, RSI=buf, RDX=nbyte
+                size_t nbyte = static_cast<size_t>(ctx->Rdx);
+                ctx->Rax = static_cast<uint64_t>(nbyte);
+                special_return_set = true;
+            } else if (readable_name == "sceKernelClose" || readable_name == "libc_close" ||
+                       func_name.find("UK2Tl2DWUns") != std::string::npos) {
+                // sceKernelClose(fd): RDI=fd
+                ctx->Rax = 0;
+                special_return_set = true;
+            } else if (readable_name == "sceKernelStat" || readable_name == "libc_stat" ||
+                       func_name.find("eV9wAD2riIA") != std::string::npos) {
+                // sceKernelStat(path, buf): RDI=path, RSI=buf
+                void* sb = reinterpret_cast<void*>(ctx->Rsi);
+                if (sb && SafeWritable(sb, 128)) {
+                    memset(sb, 0, 128);
+                }
+                ctx->Rax = 0;
+                special_return_set = true;
+            } else if (readable_name == "fopen") {
                 std::lock_guard<std::mutex> vlk(g_vfs_mutex);
                 std::string guest = SafeReadCString(reinterpret_cast<const char*>(ctx->Rdi));
                 std::string mode  = SafeReadCString(reinterpret_cast<const char*>(ctx->Rsi));
