@@ -412,6 +412,36 @@ bool LoadEboot(const std::string& filePath) {
 
                         std::cout << "[GLOB_DAT] " << sym_name << " -> hucre ayrildi @ 0x"
                                   << std::hex << reinterpret_cast<uint64_t>(cell) << std::dec << std::endl;
+                    } else if (r_type == 1 /* R_X86_64_64 */) {
+                        // R_X86_64_64: harici bir sembole mutlak referans.
+                        // Formul: S + A (sembol degeri + addend).
+                        // Harici kutuphane sembolleri (C++ RTTI typeinfo vb.)
+                        // icin gercek adresi saglayamiyoruz; sifirlanmis bir
+                        // hucre tahsis edip adresini yaziyoruz. Boylece oyunun
+                        // tip-kayit sistemi NULL pointer yerine gecerli (ama bos)
+                        // bir bellek alanina isaret eder.
+                        std::string sym_name = "<unknown>";
+                        if (sym_table && str_table && r_sym > 0) {
+                            Elf64_Sym* sym = &sym_table[r_sym];
+                            sym_name = &str_table[sym->st_name];
+                        }
+
+                        uint64_t* cell = reinterpret_cast<uint64_t*>(
+                            VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+                        if (cell) {
+                            memset(cell, 0, 0x1000);
+                            uint64_t* patch_target = reinterpret_cast<uint64_t*>(base_ptr + rela->r_offset);
+                            *patch_target = reinterpret_cast<uint64_t>(cell) + rela->r_addend;
+
+                            static int s_r64_count = 0;
+                            if (s_r64_count < 20) {
+                                std::cout << "[R_X86_64_64] " << sym_name << " -> hucre @ 0x"
+                                          << std::hex << reinterpret_cast<uint64_t>(cell)
+                                          << " (addend=0x" << rela->r_addend << ")"
+                                          << std::dec << std::endl;
+                            }
+                            s_r64_count++;
+                        }
                     }
                 }
                 std::cout << "[+] RELA islemi tamamlandi! Toplam " << patch_count << " adet pointer yamanip guncellendi." << std::endl;
