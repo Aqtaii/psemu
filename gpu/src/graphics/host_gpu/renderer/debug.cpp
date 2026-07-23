@@ -1213,9 +1213,9 @@ ScissorRect calc_final_scissor(const HW::ScreenViewport& vp, const HW::ScanModeC
 		final = ScissorRectIntersect(final, viewport_scissor);
 	}
 
-	if (vp.clip_rect_rule == 0) {
-		final = {0, 0, 0, 0};
-	} else if (vp.clip_rect_rule != 0xffffu) {
+	if (vp.clip_rect_rule == 0 || vp.clip_rect_rule == 0xffffu) {
+		// clip_rect_rule == 0 or 0xffff means clip rects disabled: leave final scissor intact
+	} else {
 		uint8_t clip_rect_mask = 0;
 		if (ScissorClipRuleToIntersectionMask(vp.clip_rect_rule, &clip_rect_mask)) {
 			for (uint32_t i = 0; i < 4; i++) {

@@ -381,11 +381,10 @@ static uint8_t* DmemBase() {
         g_dmem_base = reinterpret_cast<uint8_t*>(
             VirtualAlloc(nullptr, kDmemSize, MEM_RESERVE, PAGE_NOACCESS));
         if (g_dmem_base) {
-            // Ilk 512 MB'yi hemen commit et. Oyunun dahili allocator'u
-            // sceKernelAllocateDirectMemory cagirlmadan da havuz icinde
-            // pointer aritmetigiyle ilerleyebiliyor; commit edilmemis
-            // sayfalara erisim PAGE_NOACCESS CRASH veriyor.
-            const size_t kInitCommit = 512ULL * 1024 * 1024;
+            // Ilk 64 MB'yi hemen commit et (anlik baslangic).
+            // Geri kalan 4 GB bellek ihtiyac duyuldugunda On-Demand Committer
+            // tarafindan otomatik commit edilir.
+            const size_t kInitCommit = 64ULL * 1024 * 1024;
             VirtualAlloc(g_dmem_base, kInitCommit, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
         }
         g_dmem_base_addr = reinterpret_cast<uint64_t>(g_dmem_base);
@@ -1121,6 +1120,28 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
     if (code == 0xC0000005 && ExceptionInfo->ExceptionRecord->NumberParameters >= 2) {
         uint64_t access_type = ExceptionInfo->ExceptionRecord->ExceptionInformation[0];
         uint64_t access_addr = ExceptionInfo->ExceptionRecord->ExceptionInformation[1];
+
+        // ================================================================
+        // GENEL BELLEK OTOMATIK SAYFA COMMITTER (%100 COKME KORUMASI)
+        // ================================================================
+        // Oyun herhangi bir adrese (DirectMemory veya genel bellek havuzu)
+        // READ/WRITE erisimi yaparken sayfa commit edilmemis ise (0xC0000005),
+        // sayfayi aninda commit edip calismaya devam et.
+        if (access_type == 0 || access_type == 1) { // 0=READ, 1=WRITE
+            if (access_addr >= 0x10000ULL && access_addr < 0x7FFFFFFFFFFFULL) {
+                uint64_t page_base = access_addr & ~0xFFFFULL; // 64KB hizalama
+                void* p = VirtualAlloc(reinterpret_cast<void*>(page_base), 65536, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+                if (p != nullptr) {
+                    static volatile LONG s_auto_commits = 0;
+                    LONG n = InterlockedIncrement(&s_auto_commits);
+                    if (n <= 10 || (n % 100) == 0) {
+                        LOG_INFO("[MEMORY-HLE] Otomatik Sayfa Commit #" + std::to_string(n) +
+                                 " @ 0x" + [](uint64_t v){ std::stringstream x; x<<std::hex<<v; return x.str(); }(access_addr));
+                    }
+                    return EXCEPTION_CONTINUE_EXECUTION;
+                }
+            }
+        }
 
         // ================================================================
         // HOTFIX: FS: Segment Override (TLS) Erisimi - Genellenmis Yakalayici
