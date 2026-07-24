@@ -115,7 +115,7 @@ static std::unordered_map<ShaderStageProgramKey,
                   g_shader_program_cache;
 static std::mutex g_shader_program_cache_mutex;
 
-static constexpr uint32_t ShaderMaxPermutationsPerProgram = 64;
+static constexpr uint32_t ShaderMaxPermutationsPerProgram = 4096;
 
 static std::span<const uint32_t> MakeShaderSpirvView(const std::vector<uint32_t>& spirv) {
 	return {spirv.data(), spirv.size()};
@@ -613,7 +613,7 @@ static uint32_t VertexAttribFormatToBufferFormat(uint32_t format) {
 static void ShaderApplyAttribSemantics(ShaderVertexInputInfo* info,
                                        const ShaderSemantic*  input_semantics,
                                        uint32_t num_input_semantics, const uint32_t* attrib,
-                                       const uint32_t* buffer) {
+                                       const uint32_t* buffer, const HW::UserSgprInfo& user_sgpr) {
 	KYTY_PROFILER_FUNCTION();
 
 	EXIT_IF(info == nullptr || attrib == nullptr || buffer == nullptr);
@@ -646,6 +646,17 @@ static void ShaderApplyAttribSemantics(ShaderVertexInputInfo* info,
 		EXIT_NOT_IMPLEMENTED(index >= ShaderVertexInputInfo::RES_MAX);
 
 		const auto* sharp = &buffer[index * 4];
+
+		// psemu tani ve fix:
+		// Eger table'dan okunan V# tamamen sifir ise, ama oyun V#'yi dogrudan 
+		// user_sgpr[0..3] icine koymussa (bazi ozel shader'lar), onu kullan!
+		if (sharp[0] == 0 && sharp[1] == 0 && sharp[2] == 0 && sharp[3] == 0) {
+			uint32_t direct_fmt = (user_sgpr.value[3] >> 12u) & 0x7fu;
+			if (direct_fmt != 0 && direct_fmt != 0x7f) {
+				// Fallback to direct SGPR V# descriptor
+				sharp = &user_sgpr.value[0];
+			}
+		}
 
 		EXIT_NOT_IMPLEMENTED(info->resources_num >= ShaderVertexInputInfo::RES_MAX);
 
@@ -790,7 +801,7 @@ static bool ShaderGetStaticInputInfoVS(const HW::VertexShaderInfo* regs,
 			return false;
 		}
 		ShaderApplyAttribSemantics(info, metadata.input_semantics.data(),
-		                           metadata.input_semantics_count, attrib, buffer);
+		                           metadata.input_semantics_count, attrib, buffer, user_sgpr);
 		ShaderDetectBuffers(info);
 	}
 	return true;
@@ -1297,10 +1308,6 @@ static bool ShaderRecompilerTextDumpEnabled() {
 
 static void DumpShaderRecompilerSpirv(const char* type, uint64_t shader_hash,
                                       const std::vector<uint32_t>& bin) {
-	if (!Config::GraphicsDebugDumpEnabled()) {
-		return;
-	}
-
 	static std::atomic_int id = 0;
 
 	const auto base_name = Config::GetShaderLogFolder() /
@@ -1320,37 +1327,23 @@ static void DumpShaderRecompilerSpirv(const char* type, uint64_t shader_hash,
 		spv_file.Close();
 	}
 
-	return;
-
 	std::string text;
-	if (!SpirvDisassemble(bin.data(), bin.size(), &text)) {
-		auto spv_name_text = Common::PathToString(spv_name);
-		LOGF_COLOR(Log::Color::BrightRed, "SpirvDisassemble() failed for %s\n",
-		           spv_name_text.c_str());
-		return;
-	}
-
-	Common::File asm_file;
-	auto         asm_name = base_name;
-	asm_name += ".spvasm";
-	asm_file.Create(asm_name);
-	if (asm_file.IsInvalid()) {
-		auto asm_name_text = Common::PathToString(asm_name);
-		LOGF_COLOR(Log::Color::BrightRed, "Can't create file: %s\n", asm_name_text.c_str());
-	} else {
-		asm_file.Printf("%s", text.c_str());
-		asm_file.Close();
+	if (SpirvDisassemble(bin.data(), bin.size(), &text)) {
+		Common::File asm_file;
+		auto         asm_name = base_name;
+		asm_name += ".spvasm";
+		asm_file.Create(asm_name);
+		if (!asm_file.IsInvalid()) {
+			asm_file.Printf("%s", text.c_str());
+			asm_file.Close();
+		}
 	}
 }
 
 static void DumpShaderRecompilerOriginal(const char* type, uint64_t shader_hash,
                                          std::span<const uint32_t> code,
                                          const std::string&        decoded_dump) {
-	// if (!Config::GraphicsDebugDumpEnabled()) {
-	//	return;
-	// }
-	return;
-	EXIT_IF(code.empty());
+	if (code.empty()) return;
 
 	static std::atomic_int id = 0;
 
@@ -1405,13 +1398,13 @@ bool ShaderCompileSpirvVS(const HW::VertexShaderInfo* regs, const HW::ShaderRegi
 	options.shader_hash          = regs->gs_regs.chksum;
 	options.shader_base          = shader_addr;
 	options.user_data_base       = 8;
-	options.user_data_count      = regs->gs_regs.rsrc2.user_sgpr;
+	options.user_data_count      = std::max<uint32_t>(regs->gs_regs.rsrc2.user_sgpr, 16u);
 	options.user_data            = regs->gs_user_sgpr.value;
 	options.descriptor_set       = 0;
 	options.push_constant_offset = 0;
 	options.vertex_input_info    = input_info;
-	options.dump_ir              = ShaderRecompilerTextDumpEnabled();
-	options.early_dump           = options.dump_ir;
+	options.dump_ir              = true;
+	options.early_dump           = true;
 	options.dump_label           = "ShaderRecompiler VS";
 
 	ShaderRecompiler::CompileResult result;
@@ -1464,13 +1457,13 @@ bool ShaderCompileSpirvPS(const HW::PixelShaderInfo* regs, const HW::ShaderRegis
 	options.lane_mask_mode       = lane_mask_mode;
 	options.shader_hash          = shader_hash;
 	options.shader_base          = shader_addr;
-	options.user_data_count      = regs->ps_regs.rsrc2.user_sgpr;
+	options.user_data_count      = std::max<uint32_t>(regs->ps_regs.rsrc2.user_sgpr, 16u);
 	options.user_data            = regs->ps_user_sgpr.value;
 	options.descriptor_set       = input_info->descriptor_set;
 	options.push_constant_offset = 0;
 	options.pixel_input_info     = input_info;
-	options.dump_ir              = ShaderRecompilerTextDumpEnabled();
-	options.early_dump           = options.dump_ir;
+	options.dump_ir              = true;
+	options.early_dump           = true;
 	options.dump_label           = "ShaderRecompiler PS";
 
 	ShaderRecompiler::CompileResult result;

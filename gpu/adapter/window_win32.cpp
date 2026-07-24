@@ -16,6 +16,7 @@
 #include "graphics/presentation/videoOut.h" // VideoOutFlipWindow / Begin/EndVblank
 #include "graphics/presentation/window.h"
 #include "graphics/presentation/window/windowInternal.h"
+#include "libs/controller.h"
 
 namespace Libs::Graphics {
 
@@ -59,6 +60,28 @@ void WindowUpdateTitle() {}
 
 static LRESULT CALLBACK PsemuWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 	switch (msg) {
+		case WM_KEYDOWN:
+		case WM_KEYUP: {
+			bool down = (msg == WM_KEYDOWN);
+			uint32_t button = 0;
+			switch (wp) {
+				case VK_SPACE:
+				case VK_RETURN: button = ::Libs::Controller::PAD_BUTTON_CROSS; break;
+				case VK_ESCAPE: button = ::Libs::Controller::PAD_BUTTON_OPTIONS; break;
+				case VK_UP:     button = ::Libs::Controller::PAD_BUTTON_UP; break;
+				case VK_DOWN:   button = ::Libs::Controller::PAD_BUTTON_DOWN; break;
+				case VK_LEFT:   button = ::Libs::Controller::PAD_BUTTON_LEFT; break;
+				case VK_RIGHT:  button = ::Libs::Controller::PAD_BUTTON_RIGHT; break;
+				case 'Z':       button = ::Libs::Controller::PAD_BUTTON_SQUARE; break;
+				case 'X':       button = ::Libs::Controller::PAD_BUTTON_TRIANGLE; break;
+				case 'C':       button = ::Libs::Controller::PAD_BUTTON_CIRCLE; break;
+				default: break;
+			}
+			if (button != 0) {
+				::Libs::Controller::ControllerButton(1, button, down);
+			}
+			return 0;
+		}
 		case WM_CLOSE:   DestroyWindow(hwnd); return 0;
 		case WM_DESTROY: PostQuitMessage(0);  return 0;
 		default:         break;

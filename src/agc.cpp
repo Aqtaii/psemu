@@ -148,104 +148,23 @@ void EnsureKytyGraphicsInit() {
 bool Dispatch(const std::string& nid, const std::string& name, CONTEXT* ctx) {
     std::string kyty_nid = nid.substr(0, nid.find('#')); // "...#A#B" -> "..."
 
-    // Render yuzeyini sahipleniyoruz: sceAgc* + Graphics* + sceVideoOut*.
     bool is_render =
         name.rfind("sceAgc", 0) == 0 || name.rfind("Graphics", 0) == 0 ||
         name.rfind("sceVideoOut", 0) == 0;
 
     if (!is_render && !kyty_nid.empty() && PsemuKytyHasNid(kyty_nid.c_str())) {
-        is_render = true; // Kyty tarafindan bilinen bir NID (or. PS5 NID'leri)!
+        is_render = true;
     }
 
     if (!is_render) return false;
 
-    // Ilk render cagrisinda Kyty Vulkan'ini tetikle (bir kez).
     EnsureKytyGraphicsInit();
 
-    // KYTY'YE YONLENDIR: suffix'siz raw NID ile Kyty implementasyonunu cagir.
+    // Forward to Kyty's real graphics implementation (PM4 Command Buffer builder)
     if (!kyty_nid.empty() && PsemuKytyAgcCall(kyty_nid.c_str(), ctx)) {
-        if (LogFirst("KYTY", 12))
-            LOG_INFO("[AGC->KYTY] " + (name == nid ? kyty_nid : name) + " -> Kyty (RAX=0x" +
-                     [](uint64_t v){ std::stringstream s; s<<std::hex<<v; return s.str(); }(ctx->Rax) + ")");
         return true;
     }
 
-    if (name == "sceAgcDcbSetFlip") {
-        // sceAgcDcbSetFlip(dcb, videoOutHandle, displayBufferIndex, flipMode, ...)
-        //   RDI=dcb, RSI=handle, RDX=buffer_index (0/1 -> cift buffer), RCX=mode
-        // Frame sinirini burada aliyoruz: kayitli framebuffer'i pencereye sun.
-        int buf = static_cast<int>(ctx->Rdx);
-        uint64_t draws = g_draws_this_frame.exchange(0);
-        Video::Flip(buf);
-        if (LogFirst("FL", 12)) {
-            std::stringstream ss;
-            ss << "[AGC] SetFlip -> Video::Flip(buffer=" << buf
-               << ")  (bu frame'de " << draws << " cizim/quad)";
-            LOG_INFO(ss.str());
-        }
-        ctx->Rax = 0;
-        return true;
-    }
-
-    // Kaynak adreslerini yakala (M2: dokuyu/vertex'i bulmak icin).
-    // GraphicsSetShRegIndirectPatchSetAddress(dcb_slot, block_addr, size, ...)
-    //   RDI=slot, RSI=block adresi (shader kaynak tablosu -> doku T# sharp)
-    if (name == "GraphicsSetShRegIndirectPatchSetAddress") {
-        g_sh_block = ctx->Rsi;
-        ctx->Rax = 0;
-        return true;
-    }
-    if (name == "GraphicsSetUcRegIndirectPatchSetAddress") {
-        g_uc_block = ctx->Rsi;  // vertex/user-config blok (V# sharp)
-        ctx->Rax = 0;
-        return true;
-    }
-    if (name == "sceAgcDcbSetIndexBuffer") {
-        // sceAgcDcbSetIndexBuffer(dcb, indexAddr, ...) -> RSI=index buffer
-        g_index_buf = ctx->Rsi;
-        ctx->Rax = 0;
-        return true;
-    }
-
-    if (name == "sceAgcDcbDrawIndexOffset") {
-        // sceAgcDcbDrawIndexOffset(dcb, indexOffset, indexCount, ...)
-        //   RDI=dcb, RSI=index_offset, RDX=index_count (6 = 1 quad)
-        uint64_t idx_count = ctx->Rdx;
-        g_draws_this_frame.fetch_add(1);
-        uint64_t total = g_total_draws.fetch_add(1) + 1;
-        if (LogFirst("DR", 12)) {
-            std::stringstream ss;
-            ss << "[AGC] DrawIndexOffset #" << total
-               << "  index_count=" << idx_count
-               << (idx_count == 6 ? "  (1 quad/sprite)" : "");
-            LOG_INFO(ss.str());
-        }
-        // (M2 dump/ScanForTexture kaldirildi: dokuyu ELLE bulmak icindi; artik
-        //  Kyty'nin gercek GPU renderer'ini port ediyoruz. Ayrica SafeCopy'nin
-        //  __try/__except'i clang-cl /EHsc altinda donanim exception'lari
-        //  yakalamiyordu ve tarama crash ediyordu.)
-        ctx->Rax = 0;
-        return true;
-    }
-
-    if (name == "GraphicsCreateShader") {
-        // GraphicsCreateShader(...) — PSSL shader nesnesi olusturur. Simdilik
-        // sadece sayiyoruz; ileride shader ELF'ini cikarip SPIR-V'e cevirecegiz.
-        uint64_t n = g_shaders_created.fetch_add(1) + 1;
-        if (LogFirst("SH", 12)) {
-            std::stringstream ss;
-            ss << "[AGC] GraphicsCreateShader #" << n
-               << "  (RDI=0x" << std::hex << ctx->Rdi
-               << " RSI=0x" << ctx->Rsi << ")";
-            LOG_INFO(ss.str());
-        }
-        ctx->Rax = 0;
-        return true;
-    }
-
-    // Diger tum AGC/Graphics fonksiyonlari: no-op basari (0). Bu, onceki generic
-    // stub ile AYNI davranis — sadece artik isimle cozuluyor (temiz log) ve tek
-    // yerden yonetiliyor. Gercek implementasyonlar sonraki milestone'larda.
     ctx->Rax = 0;
     return true;
 }

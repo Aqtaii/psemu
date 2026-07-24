@@ -32,6 +32,7 @@
 #include "graphics/shader/shader.h"
 #include "kernel/eventQueue.h"
 #include "kernel/pthread.h"
+#include "kernel/memory.h"
 #include "libs/errno.h"
 
 #include <algorithm>
@@ -756,11 +757,32 @@ static void BindDrawVertexBuffers(uint64_t submit_id, CommandBuffer* buffer,
 			vertices = g_render_ctx->GetBufferCache()->ObtainNullBuffer(
 			    buffer, g_render_ctx->GetGraphicCtx());
 		} else {
-			auto binding = g_render_ctx->GetBufferCache()->ObtainBuffer(
-			    buffer, g_render_ctx->GetGraphicCtx(), addr, size);
-			vertices = binding.first;
-			offset   = binding.second;
+			vk::DeviceSize range = 0;
+			static thread_local std::vector<uint8_t> temp_buf;
+			if (temp_buf.size() < size) {
+				temp_buf.resize(size);
+			}
+			if (Libs::LibKernel::Memory::TryReadBacking(addr, temp_buf.data(), size)) {
+				if (!g_render_ctx->GetBufferCache()->UploadHostData(buffer, g_render_ctx->GetGraphicCtx(),
+				                                                    temp_buf.data(), size, 16,
+				                                                    &vertices, &offset, &range)) {
+					auto binding = g_render_ctx->GetBufferCache()->ObtainBuffer(
+					    buffer, g_render_ctx->GetGraphicCtx(), addr, size);
+					vertices = binding.first;
+					offset   = binding.second;
+				}
+			} else {
+				static std::atomic<int> s_log_fail = 0;
+				if (s_log_fail.fetch_add(1) < 50) {
+					LOGF("UploadHostData fallback: TryReadBacking failed for size=%llu addr=0x%016llx\n", size, addr);
+				}
+				auto binding = g_render_ctx->GetBufferCache()->ObtainBuffer(
+				    buffer, g_render_ctx->GetGraphicCtx(), addr, size);
+				vertices = binding.first;
+				offset   = binding.second;
+			}
 		}
+
 		EXIT_NOT_IMPLEMENTED(vertices == nullptr);
 
 		vk_buffer.bindVertexBuffers(i, 1, &vertices->buffer, &offset);
@@ -781,14 +803,34 @@ static void BindDrawIndexBuffer(CommandBuffer* buffer, vk::CommandBuffer vk_buff
 		if (!g_render_ctx->GetBufferCache()->UploadHostData(buffer, g_render_ctx->GetGraphicCtx(),
 		                                                    source.host_data, source.size, 16,
 		                                                    &index_buffer, &index_offset, &range)) {
-			EXIT("failed to upload host index buffer\n");
+			auto binding = g_render_ctx->GetBufferCache()->ObtainBuffer(
+			    buffer, g_render_ctx->GetGraphicCtx(), source.address, source.size);
+			index_buffer = binding.first;
+			index_offset = binding.second;
 		}
 	} else {
-		auto binding = g_render_ctx->GetBufferCache()->ObtainBuffer(
-		    buffer, g_render_ctx->GetGraphicCtx(), source.address, source.size);
-		index_buffer = binding.first;
-		index_offset = binding.second;
+		vk::DeviceSize range = 0;
+		static thread_local std::vector<uint8_t> temp_buf;
+		if (temp_buf.size() < source.size) {
+			temp_buf.resize(source.size);
+		}
+		if (Libs::LibKernel::Memory::TryReadBacking(source.address, temp_buf.data(), source.size)) {
+			if (!g_render_ctx->GetBufferCache()->UploadHostData(buffer, g_render_ctx->GetGraphicCtx(),
+			                                                    temp_buf.data(), source.size, 16,
+			                                                    &index_buffer, &index_offset, &range)) {
+				auto binding = g_render_ctx->GetBufferCache()->ObtainBuffer(
+				    buffer, g_render_ctx->GetGraphicCtx(), source.address, source.size);
+				index_buffer = binding.first;
+				index_offset = binding.second;
+			}
+		} else {
+			auto binding = g_render_ctx->GetBufferCache()->ObtainBuffer(
+			    buffer, g_render_ctx->GetGraphicCtx(), source.address, source.size);
+			index_buffer = binding.first;
+			index_offset = binding.second;
+		}
 	}
+
 	EXIT_IF(index_buffer == nullptr);
 	vk_buffer.bindIndexBuffer(index_buffer->buffer, index_offset, source.type);
 }
@@ -1081,10 +1123,11 @@ void RenderDrawIndex(uint64_t submit_id, CommandBuffer* buffer, HW::Context* ctx
 		instance_count = 1;
 	}
 
-	const DrawCallInfo    draw {"DrawIndex",    CommandBufferDebugOp::DrawIndex,
+	DrawCallInfo    draw {"DrawIndex",    CommandBufferDebugOp::DrawIndex,
 	                            index_count,    flags,
 	                            instance_count, first_instance};
 	std::vector<uint16_t> expanded_indices;
+	std::vector<uint32_t> expanded_indices_u32;
 	if (expand_index8_to_u16) {
 		EXIT_NOT_IMPLEMENTED(index_addr == nullptr);
 		const auto* src = static_cast<const uint8_t*>(index_addr);
@@ -1094,13 +1137,60 @@ void RenderDrawIndex(uint64_t submit_id, CommandBuffer* buffer, HW::Context* ctx
 		}
 	}
 
+	bool is_rect_list = (ucfg->GetPrimType() == Prospero::GpuEnumValue(Prospero::PrimitiveType::kRectList) ||
+	                     ucfg->GetPrimType() == Prospero::GpuEnumValue(Prospero::PrimitiveType::kRectListLegacy));
+	if (is_rect_list && topology == vk::PrimitiveTopology::eTriangleList && index_count % 3 == 0) {
+		EXIT_NOT_IMPLEMENTED(index_addr == nullptr);
+		const uint32_t quad_count = index_count / 3;
+		if (index_type == vk::IndexType::eUint16) {
+			const uint16_t* src = expand_index8_to_u16 ? expanded_indices.data() : static_cast<const uint16_t*>(index_addr);
+			std::vector<uint16_t> new_indices(quad_count * 6);
+			for (uint32_t i = 0; i < quad_count; i++) {
+				uint16_t i0 = src[i * 3 + 0];
+				uint16_t i1 = src[i * 3 + 1];
+				uint16_t i2 = src[i * 3 + 2];
+				uint16_t i3 = i0 + 3; // 4th vertex
+				new_indices[i * 6 + 0] = i0;
+				new_indices[i * 6 + 1] = i1;
+				new_indices[i * 6 + 2] = i2;
+				new_indices[i * 6 + 3] = i1;
+				new_indices[i * 6 + 4] = i3;
+				new_indices[i * 6 + 5] = i2;
+			}
+			expanded_indices = std::move(new_indices);
+		} else {
+			const uint32_t* src = static_cast<const uint32_t*>(index_addr);
+			expanded_indices_u32.resize(quad_count * 6);
+			for (uint32_t i = 0; i < quad_count; i++) {
+				uint32_t i0 = src[i * 3 + 0];
+				uint32_t i1 = src[i * 3 + 1];
+				uint32_t i2 = src[i * 3 + 2];
+				uint32_t i3 = i0 + 3; // 4th vertex
+				expanded_indices_u32[i * 6 + 0] = i0;
+				expanded_indices_u32[i * 6 + 1] = i1;
+				expanded_indices_u32[i * 6 + 2] = i2;
+				expanded_indices_u32[i * 6 + 3] = i1;
+				expanded_indices_u32[i * 6 + 4] = i3;
+				expanded_indices_u32[i * 6 + 5] = i2;
+			}
+		}
+		draw.index_count = quad_count * 6;
+		index_size = draw.index_count * (index_type == vk::IndexType::eUint16 ? 2 : 4);
+	}
+
 	DrawIndexBufferSource index_source {};
 	index_source.enabled = true;
 	index_source.address = reinterpret_cast<uint64_t>(index_addr);
-	index_source.host_data =
-	    expanded_indices.empty() ? nullptr : static_cast<const void*>(expanded_indices.data());
-	index_source.size =
-	    expanded_indices.empty() ? index_size : expanded_indices.size() * sizeof(uint16_t);
+	if (!expanded_indices_u32.empty()) {
+		index_source.host_data = expanded_indices_u32.data();
+		index_source.size      = expanded_indices_u32.size() * sizeof(uint32_t);
+	} else if (!expanded_indices.empty()) {
+		index_source.host_data = expanded_indices.data();
+		index_source.size      = expanded_indices.size() * sizeof(uint16_t);
+	} else {
+		index_source.host_data = nullptr;
+		index_source.size      = index_size;
+	}
 	index_source.type = index_type;
 
 	DrawRenderState state {};

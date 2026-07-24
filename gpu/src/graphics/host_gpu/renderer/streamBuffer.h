@@ -33,7 +33,7 @@ private:
 	// Interim fence-scoped backend: one command processor's eight live command buffers reserve up
 	// to 128 MiB lazily. Additional active processors scale that aggregate until this backend is
 	// replaced by a single 64 MiB scheduler-watched ring; the BufferCache seam stays fixed.
-	static constexpr uint64_t CAPACITY = 16ull * 1024ull * 1024ull;
+	static constexpr uint64_t CAPACITY = 128ull * 1024ull * 1024ull;
 
 	mutable std::mutex            m_mutex;
 	GraphicContext*               m_ctx = nullptr;

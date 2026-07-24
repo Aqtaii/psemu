@@ -273,7 +273,8 @@ struct PageManager::Impl {
 		DWORD old_protection = 0;
 		if (VirtualProtect(reinterpret_cast<void*>(static_cast<uintptr_t>(vaddr)), PAGE_SIZE,
 		                   protection, &old_protection) == 0 ||
-		    old_protection != expected_old) {
+		    (old_protection != expected_old && old_protection != PAGE_EXECUTE_READWRITE &&
+		     old_protection != PAGE_READWRITE)) {
 			if (fault_path) {
 				FailFast("VirtualProtect fault transition did not match expected protection");
 			}

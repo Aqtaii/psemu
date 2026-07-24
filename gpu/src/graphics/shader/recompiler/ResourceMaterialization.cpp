@@ -30,7 +30,7 @@ bool NullImageDescriptor(const DescriptorValue& descriptor) {
 }
 
 bool ValidImageDescriptor(const DescriptorValue& descriptor) {
-	return ((descriptor.dwords[3] >> 28u) & 0x8u) != 0;
+	return descriptor.dwords[0] != 0 || descriptor.dwords[1] != 0 || ((descriptor.dwords[3] >> 28u) & 0x8u) != 0;
 }
 
 uint32_t DescriptorImageSwizzle(const DescriptorValue& descriptor) {

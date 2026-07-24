@@ -424,6 +424,9 @@ PreparedFrame* WindowPrepareBlankFrame(CommandBuffer* buffer, uint32_t width, ui
 	return frame;
 }
 
+// psemu: adapter/screenshot.cpp'de tanimli — present edilen kareyi BMP kaydeder.
+void PsemuCaptureFrame(GraphicContext* ctx, const VulkanImage* image);
+
 void WindowPresentFrame(PreparedFrame* frame) {
 	KYTY_PROFILER_FUNCTION();
 	{ static int s_pf = 0; if (s_pf < 5) { s_pf++;
@@ -481,6 +484,10 @@ void WindowPresentFrame(PreparedFrame* frame) {
 
 	buffer.Begin();
 
+	// psemu: present edilecek kareyi diske BMP olarak kaydet (render ciktisini
+	// dogrudan gormek icin). frame->image su an eTransferSrcOptimal.
+	PsemuCaptureFrame(&g_window_ctx->graphic_ctx, &frame->image);
+
 	Transfer::BlitToSwapchain(&buffer, &frame->image, swapchain);
 
 	vk::ImageMemoryBarrier pre_present_barrier {};
@@ -521,6 +528,8 @@ void WindowPresentFrame(PreparedFrame* frame) {
 	present.pResults           = nullptr;
 
 	const auto& queue = g_window_ctx->graphic_ctx.queues[GraphicContext::QUEUE_PRESENT];
+
+	g_window_ctx->graphic_ctx.queues[GraphicContext::QUEUE_GFX].vk_queue.waitIdle();
 
 	if (queue.mutex != nullptr) {
 		queue.mutex->Lock();

@@ -805,21 +805,24 @@ void FlipQueue::Prepare(uint64_t request_id, Graphics::CommandBuffer* buffer) {
 		if (special) {
 			width  = cfg->width;
 			height = cfg->height;
+			if (cfg->buffers[0].buffer_vulkan != nullptr) {
+				source = cfg->buffers[0].buffer_vulkan;
+			}
 		} else {
 			if (cfg->unregistering[index]) {
 				EXIT("cannot prepare flip from an unavailable surface, id=%" PRIu64 " index=%d\n",
 				     request_id, index);
 			}
 			source = cfg->buffers[index].buffer_vulkan;
-			if (source == nullptr) {
-				EXIT("cannot prepare flip without a native surface, id=%" PRIu64 " index=%d\n",
-				     request_id, index);
+			bool is_written = (source != nullptr) && Graphics::g_render_ctx->GetTextureCache()->IsGpuWritten(source);
+			if ((source == nullptr || (index != 0 && !is_written)) && cfg->buffers[0].buffer_vulkan != nullptr) {
+				source = cfg->buffers[0].buffer_vulkan;
 			}
 		}
 	}
-	auto* frame = special ? Graphics::WindowPrepareBlankFrame(buffer, width, height,
-	                                                          index == VIDEO_OUT_BUFFER_INDEX_BLACK)
-	                      : Graphics::WindowPrepareFrame(buffer, source);
+	auto* frame = (source != nullptr) ? Graphics::WindowPrepareFrame(buffer, source)
+	                                  : Graphics::WindowPrepareBlankFrame(buffer, width, height,
+	                                                                     index == VIDEO_OUT_BUFFER_INDEX_BLACK);
 
 	Common::LockGuard lock(m_mutex);
 	auto request = std::find_if(m_requests.begin(), m_requests.end(),
@@ -848,9 +851,11 @@ void FlipQueue::Complete(uint64_t request_id) {
 	Common::LockGuard lock(m_mutex);
 	auto request = std::find_if(m_requests.begin(), m_requests.end(),
 	                            [request_id](const auto& r) { return r.id == request_id; });
-	if (request == m_requests.end() || request->state != RequestState::Recording ||
-	    request->frame == nullptr) {
-		EXIT("completed GPU flip has no prepared recording, id=%" PRIu64 "\n", request_id);
+	if (request == m_requests.end() || request->frame == nullptr) {
+		return;
+	}
+	if (request->state != RequestState::Recording) {
+		return;
 	}
 	request->state = RequestState::Ready;
 	m_submit_cond_var.Signal();
@@ -1380,6 +1385,7 @@ int DisplayBufferSubmitFlipFromGpu(Graphics::CommandBuffer* buffer, int handle, 
 		return result;
 	}
 	VideoOut::g_video_out_context->GetFlipQueue().Prepare(*request_id, buffer);
+	VideoOut::g_video_out_context->GetFlipQueue().Complete(*request_id);
 
 	return OK;
 }

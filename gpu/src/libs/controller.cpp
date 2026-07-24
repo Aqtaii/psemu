@@ -448,7 +448,7 @@ int KYTY_SYSV_ABI PadGetControllerInformation(int handle, PadControllerInformati
 int KYTY_SYSV_ABI PadReadState(int handle, PadData* data) {
 	PRINT_NAME();
 
-	if (handle != 1) {
+	if (handle <= 0) {
 		return PAD_ERROR_INVALID_HANDLE;
 	}
 	if (data == nullptr) {
@@ -472,7 +472,7 @@ int KYTY_SYSV_ABI PadRead(int handle, PadData* data, int num) {
 	PRINT_NAME();
 
 	EXIT_NOT_IMPLEMENTED(num < 1 || num > 64);
-	if (handle != 1) {
+	if (handle <= 0) {
 		return PAD_ERROR_INVALID_HANDLE;
 	}
 	if (data == nullptr) {

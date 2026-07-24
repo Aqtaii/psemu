@@ -1140,8 +1140,10 @@ static ScissorRect ScissorRectClamp(ScissorRect r, uint32_t width, uint32_t heig
 	r.bottom = (r.bottom < 0 ? 0 : (r.bottom > max_bottom ? max_bottom : r.bottom));
 
 	if (!ScissorRectValid(r)) {
-		r.right  = r.left;
-		r.bottom = r.top;
+		r.left   = 0;
+		r.top    = 0;
+		r.right  = max_right;
+		r.bottom = max_bottom;
 	}
 
 	return r;
@@ -1168,7 +1170,7 @@ static bool ScissorClipRuleToIntersectionMask(uint16_t rule, uint8_t* mask) {
 }
 
 ScissorRect calc_final_scissor(const HW::ScreenViewport& vp, const HW::ScanModeControl& smc,
-                               vk::Extent2D extent) {
+                              vk::Extent2D extent) {
 	ScissorRect screen {vp.screen_scissor_left, vp.screen_scissor_top, vp.screen_scissor_right,
 	                    vp.screen_scissor_bottom};
 	ScissorRect final = screen;
@@ -1225,10 +1227,12 @@ ScissorRect calc_final_scissor(const HW::ScreenViewport& vp, const HW::ScanModeC
 
 				ScissorRect clip {vp.clip_rect_left[i], vp.clip_rect_top[i], vp.clip_rect_right[i],
 				                  vp.clip_rect_bottom[i]};
-				if (vp.clip_rect_window_offset_enable[i]) {
-					clip = ScissorRectOffset(clip, vp.window_offset_x, vp.window_offset_y);
+				if (ScissorRectSet(clip)) {
+					if (vp.clip_rect_window_offset_enable[i]) {
+						clip = ScissorRectOffset(clip, vp.window_offset_x, vp.window_offset_y);
+					}
+					final = ScissorRectIntersect(final, clip);
 				}
-				final = ScissorRectIntersect(final, clip);
 			}
 		} else {
 			static std::atomic<uint32_t> log_count {0};

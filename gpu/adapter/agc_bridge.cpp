@@ -19,9 +19,12 @@
 #include "loader/symbolDatabase.h" // Loader::SymbolDatabase / FindByNid
 
 // Kyty'nin top-level kayit fonksiyonlari (namespace Libs).
+#include "libs/controller.h"
+
 namespace Libs {
 void InitGraphicsDriver_1(Loader::SymbolDatabase* s);
 void InitVideoOut_1(Loader::SymbolDatabase* s);
+void InitPad_1(Loader::SymbolDatabase* s);
 } // namespace Libs
 
 namespace {
@@ -34,6 +37,8 @@ void EnsureDb() {
 	auto* db = new Loader::SymbolDatabase;
 	Libs::InitGraphicsDriver_1(db); // AGC Dcb + Graphics + GraphicsDriver
 	Libs::InitVideoOut_1(db);       // sceVideoOut*
+	Libs::InitPad_1(db);            // scePad*
+	Libs::Controller::ControllerSubsystem::Instance()->Init(nullptr);
 	g_kyty_db = db;
 }
 } // namespace
@@ -71,4 +76,18 @@ extern "C" bool PsemuKytyAgcCall(const char* nid, CONTEXT* ctx) {
 	Fn fn    = reinterpret_cast<Fn>(rec->vaddr);
 	ctx->Rax = fn(ctx->Rdi, ctx->Rsi, ctx->Rdx, ctx->Rcx, ctx->R8, ctx->R9, a7, a8, a9, a10);
 	return true;
+}
+
+#include "graphics/host_gpu/graphicContext.h"
+#include "graphics/host_gpu/renderer/renderContext.h"
+#include "graphics/host_gpu/renderer/bufferCache.h"
+#include "graphics/host_gpu/renderer/textureCache.h"
+
+extern "C" void PsemuMarkCpuModified(uint64_t vaddr, uint64_t size) {
+	if (Libs::Graphics::g_render_ctx != nullptr) {
+		auto* bc = Libs::Graphics::g_render_ctx->GetBufferCache();
+		if (bc != nullptr) {
+			bc->PublishImageBacking(vaddr, size);
+		}
+	}
 }
