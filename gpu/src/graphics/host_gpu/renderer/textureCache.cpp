@@ -2056,7 +2056,6 @@ void TextureCache::RefreshVideoOut(VideoOutVulkanImage* image, bool render_targe
 		     static_cast<const void*>(image));
 	}
 	std::lock_guard      transaction(m_resource_mutex);
-	FaultSafeTextureLock lock(this, m_lock);
 	const auto it = std::find_if(m_images.begin(), m_images.end(),
 	                             [image](const auto& cached) { return cached->image == image; });
 	if (it == m_images.end() || (*it)->kind != CachedImage::Kind::VideoOut) {
@@ -2064,9 +2063,9 @@ void TextureCache::RefreshVideoOut(VideoOutVulkanImage* image, bool render_targe
 		     static_cast<const void*>(image));
 	}
 	auto& cached = **it;
-	if (cached.gpu_modified) {
+	if (cached.gpu_modified || cached.kind == CachedImage::Kind::VideoOut) {
 		{ static std::atomic<uint64_t> c = 0; auto n = c.fetch_add(1);
-		  if (n < 40) std::fprintf(stderr, "[VO-REFRESH] addr=0x%016llx KEEP-GPU (gpu_modified)\n",
+		  if (n < 40) std::fprintf(stderr, "[VO-REFRESH] addr=0x%016llx KEEP-GPU (VideoOut surface protected from black CPU reupload)\n",
 		                           static_cast<unsigned long long>(cached.video_out.address)); }
 		return;
 	}
@@ -2380,6 +2379,19 @@ void TextureCache::MarkGpuWritten(VulkanImage* image) {
 	}
 	EXIT("TextureCache: GPU-written image is not registered, image=%p\n",
 	     static_cast<const void*>(image));
+}
+
+bool TextureCache::IsGpuWritten(VulkanImage* image) {
+	if (image == nullptr) {
+		return false;
+	}
+	std::lock_guard transaction(m_resource_mutex);
+	for (const auto& cached: m_images) {
+		if (cached->image == image) {
+			return cached->gpu_modified;
+		}
+	}
+	return false;
 }
 
 void TextureCache::PrepareHostWrite(uint64_t vaddr, uint64_t size) {

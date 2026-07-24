@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstring>
+#include <cstdio>
 
 namespace Libs::Graphics {
 
@@ -50,6 +51,7 @@ bool ShaderReadVertexMetadata(const ShaderMappedData& data, uint32_t max_user_sg
 		if (reg == AGC_ILLEGAL_DIRECT_OFFSET) {
 			continue;
 		}
+		
 		switch (static_cast<AgcDirectResourceType>(type)) {
 			case AgcDirectResourceType::PtrVertexBufferTable: next.vertex_buffer_reg = reg; break;
 			case AgcDirectResourceType::PtrVertexAttribDescTable:

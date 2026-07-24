@@ -867,11 +867,47 @@ static void                     MemoryPoolSubtractCommitted(uint64_t len);
 static std::recursive_mutex g_memory_operation_mutex;
 
 bool TryWriteBacking(uint64_t vaddr, const void* data, uint64_t size) {
-	return g_direct_memory_backing->TryWriteBacking(vaddr, data, size);
+	if (g_direct_memory_backing->TryWriteBacking(vaddr, data, size)) {
+		return true;
+	}
+#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+	uint64_t current = vaddr;
+	uint64_t end = vaddr + size;
+	while (current < end) {
+		MEMORY_BASIC_INFORMATION mbi;
+		if (VirtualQuery(reinterpret_cast<LPCVOID>(current), &mbi, sizeof(mbi)) == 0) return false;
+		if (mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS | PAGE_READONLY | PAGE_EXECUTE_READ))) return false;
+		uint64_t region_end = reinterpret_cast<uint64_t>(mbi.BaseAddress) + mbi.RegionSize;
+		uint64_t bytes_to_write = std::min(end, region_end) - current;
+		std::memcpy(reinterpret_cast<void*>(current), static_cast<const uint8_t*>(data) + (current - vaddr), static_cast<size_t>(bytes_to_write));
+		current += bytes_to_write;
+	}
+	return true;
+#else
+	return false;
+#endif
 }
 
 bool TryReadBacking(uint64_t vaddr, void* data, uint64_t size) {
-	return g_direct_memory_backing->TryReadBacking(vaddr, data, size);
+	if (g_direct_memory_backing->TryReadBacking(vaddr, data, size)) {
+		return true;
+	}
+#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+	uint64_t current = vaddr;
+	uint64_t end = vaddr + size;
+	while (current < end) {
+		MEMORY_BASIC_INFORMATION mbi;
+		if (VirtualQuery(reinterpret_cast<LPCVOID>(current), &mbi, sizeof(mbi)) == 0) return false;
+		if (mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_GUARD | PAGE_NOACCESS))) return false;
+		uint64_t region_end = reinterpret_cast<uint64_t>(mbi.BaseAddress) + mbi.RegionSize;
+		uint64_t bytes_to_read = std::min(end, region_end) - current;
+		std::memcpy(static_cast<uint8_t*>(data) + (current - vaddr), reinterpret_cast<const void*>(current), static_cast<size_t>(bytes_to_read));
+		current += bytes_to_read;
+	}
+	return true;
+#else
+	return false;
+#endif
 }
 
 void WriteBacking(uint64_t vaddr, const void* data, uint64_t size) noexcept {

@@ -152,7 +152,7 @@ VulkanFramebuffer* FramebufferCache::CreateFramebuffer(RenderColorInfo* colors,
 	attachments[depth_attachment].samples = vk::SampleCountFlagBits::e1;
 	attachments[depth_attachment].loadOp =
 	    (depth->depth_load_clear_enable ? vk::AttachmentLoadOp::eClear
-	                                    : vk::AttachmentLoadOp::eLoad);
+	                                    : (depth->depth_test_enable && depth->depth_write_enable ? vk::AttachmentLoadOp::eLoad : vk::AttachmentLoadOp::eDontCare));
 	attachments[depth_attachment].storeOp = vk::AttachmentStoreOp::eStore;
 	attachments[depth_attachment].stencilLoadOp =
 	    (depth->stencil_clear_enable ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad);

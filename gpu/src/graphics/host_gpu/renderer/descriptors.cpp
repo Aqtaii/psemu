@@ -31,6 +31,7 @@
 #include "graphics/shader/recompiler/ResourceMaterialization.h"
 #include "graphics/shader/recompiler/ShaderIR.h"
 #include "graphics/shader/shader.h"
+#include "kernel/memory.h"
 
 #include <algorithm>
 #include <atomic>
@@ -54,6 +55,7 @@ struct BounceCopy {
     uint64_t bounce_offset;
     uint64_t size;
     bool is_written;
+    uint64_t cpu_address;
 };
 static std::vector<BounceCopy> g_bounce_copies;
 
@@ -66,11 +68,6 @@ void FlushBounceCopies(vk::CommandBuffer vk_cmd, bool is_post) {
     for (const auto& copy : g_bounce_copies) {
         if (!copy.bounce_buffer || !copy.original_buffer) continue;
         if (!is_post) {
-            vk::BufferCopy region;
-            region.srcOffset = copy.original_offset;
-            region.dstOffset = copy.bounce_offset;
-            region.size = copy.size;
-            
             vk::BufferMemoryBarrier pre[2] = {};
             pre[0].buffer = copy.original_buffer;
             pre[0].offset = copy.original_offset;
@@ -85,7 +82,36 @@ void FlushBounceCopies(vk::CommandBuffer vk_cmd, bool is_post) {
             pre[1].dstAccessMask = vk::AccessFlagBits::eTransferWrite;
             
             vk_cmd.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlagBits::eByRegion, 0, nullptr, 2, pre, 0, nullptr);
-            vk_cmd.copyBuffer(copy.original_buffer, copy.bounce_buffer, 1, &region);
+            
+            if (copy.cpu_address != 0 && copy.size > 0 && copy.size <= 65536 && (copy.bounce_offset % 4 == 0)) {
+                // Senkron kopyalama: CPU verisini komut tamponuna gom
+                // Boyut 4'un kati olmali, aksi halde padding yap
+                uint64_t update_size = (copy.size + 3) & ~3ull;
+                if (update_size <= 65536) {
+                    uint8_t temp[65536];
+                    if (Libs::LibKernel::Memory::TryReadBacking(copy.cpu_address, temp, copy.size)) {
+                        vk_cmd.updateBuffer(copy.bounce_buffer, copy.bounce_offset, update_size, temp);
+                    } else {
+                        vk::BufferCopy region;
+                        region.srcOffset = copy.original_offset;
+                        region.dstOffset = copy.bounce_offset;
+                        region.size = copy.size;
+                        vk_cmd.copyBuffer(copy.original_buffer, copy.bounce_buffer, 1, &region);
+                    }
+                } else {
+                    vk::BufferCopy region;
+                    region.srcOffset = copy.original_offset;
+                    region.dstOffset = copy.bounce_offset;
+                    region.size = copy.size;
+                    vk_cmd.copyBuffer(copy.original_buffer, copy.bounce_buffer, 1, &region);
+                }
+            } else {
+                vk::BufferCopy region;
+                region.srcOffset = copy.original_offset;
+                region.dstOffset = copy.bounce_offset;
+                region.size = copy.size;
+                vk_cmd.copyBuffer(copy.original_buffer, copy.bounce_buffer, 1, &region);
+            }
             
             vk::BufferMemoryBarrier post = {};
             post.buffer = copy.bounce_buffer;
@@ -322,6 +348,7 @@ static BufferView NativeStorageBuffer(uint64_t submit_id, CommandBuffer* command
         copy.bounce_offset = current_offset;
         copy.size = size;
         copy.is_written = resource.written;
+        copy.cpu_address = address;
         
         if (copy.bounce_buffer && copy.original_buffer) {
             g_bounce_copies.push_back(copy);

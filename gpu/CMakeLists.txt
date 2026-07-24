@@ -53,6 +53,8 @@ set(GPU_LIBS_SRC
     ${GPU_SRC}/libs/agc.cpp
     ${GPU_SRC}/libs/libGraphicsDriver.cpp
     ${GPU_SRC}/libs/libVideoOut.cpp
+    ${GPU_SRC}/libs/libPad.cpp
+    ${GPU_SRC}/libs/controller.cpp
 )
 
 # loader/'den yalnizca graphics/libs'in ihtiyac duydugu yardimcilar (timer,
@@ -81,6 +83,7 @@ list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/stubs.cpp)
 list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/window_win32.cpp)
 list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/init.cpp)
 list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/agc_bridge.cpp)
+list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/screenshot.cpp)
 
 add_library(psemu_gpu STATIC ${GPU_ALL_SRC})
 target_include_directories(psemu_gpu PUBLIC ${GPU_INCLUDES})

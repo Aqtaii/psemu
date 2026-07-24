@@ -27,7 +27,7 @@ uint32_t EmitExportVec4F32(EmitterState* state, const IR::Instruction& inst) {
 			                            state->glsl_std450, GlslUnpackHalf2x16, raw});
 			for (uint32_t lane = 0; lane < 2u; lane++) {
 				const auto component = pair_index * 2u + lane;
-				if (((inst.export_info.en >> component) & 1u) == 0) {
+				if (((inst.export_info.en >> pair_index) & 1u) == 0) {
 					continue;
 				}
 				components[component] = state->builder.AllocateId();

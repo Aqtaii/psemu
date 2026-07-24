@@ -19,7 +19,10 @@
 #include "nids.h"
 #include "video.h"
 #include "kernel/eventQueue.h"
+#include "graphics/presentation/videoOut.h"
 #include <immintrin.h>
+
+extern "C" void PsemuMarkCpuModified(uint64_t vaddr, uint64_t size);
 
 // ========================================================
 // SysV AMD64 va_list printf formatlayici
@@ -485,30 +488,35 @@ extern "C" void Utf16DiagValue(void* value) {
     };
     for (const C& c : cands) {
         if (c.d == nullptr || c.n == 0 || c.n > 65536) continue;
-        size_t scan = c.n < 96 ? static_cast<size_t>(c.n) : 96;
-        if (!Readable(c.d, scan * 2)) continue;
-        int hit = -1;
-        for (size_t i = 0; i + 1 < scan; i++)
-            if (c.d[i] >= 0xD800 && c.d[i] <= 0xDBFF &&
-                !(c.d[i + 1] >= 0xDC00 && c.d[i + 1] <= 0xDFFF)) { hit = (int)i; break; }
-        if (hit < 0) continue;
-        static volatile LONG s_n = 0;
-        if (InterlockedIncrement(&s_n) > 5) return;
-        uint8_t tag = *(reinterpret_cast<uint8_t*>(value) + 8) & 0xf;
-        std::stringstream hs;
-        hs << "[UTF16-DETOUR] BOZUK string: tag=" << (int)tag << " len=" << c.n
-           << " layout=" << c.how << " surrogate@" << hit << " data=0x" << std::hex
-           << reinterpret_cast<uint64_t>(c.d) << std::dec << "  u16:";
-        for (size_t i = 0; i < scan && i < 48; i++)
-            hs << " " << std::hex << std::setw(4) << std::setfill('0') << c.d[i];
-        LOG_ERROR(hs.str());
-        std::stringstream as; as << "[UTF16-DETOUR] ascii: ";
-        for (size_t i = 0; i < scan && i < 80; i++) {
-            uint16_t ch = c.d[i];
-            as << (char)((ch >= 32 && ch < 127) ? ch : '.');
+        if (!Readable(c.d, c.n * 2)) continue;
+
+        bool fixed = false;
+        // Fix the string in-place
+        for (size_t i = 0; i < c.n; i++) {
+            if (c.d[i] >= 0xD800 && c.d[i] <= 0xDBFF) {
+                // High surrogate, needs a low surrogate after it
+                if (i + 1 >= c.n || !(c.d[i + 1] >= 0xDC00 && c.d[i + 1] <= 0xDFFF)) {
+                    uint16_t* mutable_d = const_cast<uint16_t*>(c.d);
+                    mutable_d[i] = 0x003F; // Replace with '?'
+                    fixed = true;
+                }
+            } else if (c.d[i] >= 0xDC00 && c.d[i] <= 0xDFFF) {
+                // Low surrogate without preceding high surrogate
+                if (i == 0 || !(c.d[i - 1] >= 0xD800 && c.d[i - 1] <= 0xDBFF)) {
+                    uint16_t* mutable_d = const_cast<uint16_t*>(c.d);
+                    mutable_d[i] = 0x003F; // Replace with '?'
+                    fixed = true;
+                }
+            }
         }
-        LOG_ERROR(as.str());
-        return;
+
+        if (fixed) {
+            static volatile LONG s_n = 0;
+            if (InterlockedIncrement(&s_n) <= 50) {
+                std::cout << "[UTF16-FIX] Sabitlenmis bozuk UTF-16 dizisi: len=" << c.n << " layout=" << c.how << std::endl;
+            }
+            return; // Found and fixed the layout, stop checking other layouts
+        }
     }
 }
 
@@ -560,7 +568,9 @@ static uint64_t CreateTlsBlockForCurrentThread() {
     uint64_t aligned_size = (g_tls_memsz + (align - 1)) & ~(align - 1);
     constexpr uint64_t TCB_SIZE  = 0x40;
     constexpr uint64_t TCB_ALIGN = 0x20;
-    uint64_t tcb_offset = aligned_size;
+    // libc thread-local allocator negative offsets reach up to -0x1870 or more.
+    // Ensure tcb_offset is at least 0x10000 bytes so negative offsets stay inside blk.
+    uint64_t tcb_offset = std::max<uint64_t>(aligned_size, 0x10000);
     uint64_t total_size = ((tcb_offset + (TCB_ALIGN - 1)) & ~(TCB_ALIGN - 1)) + TCB_SIZE;
 
     uint8_t* blk = reinterpret_cast<uint8_t*>(
@@ -568,8 +578,9 @@ static uint64_t CreateTlsBlockForCurrentThread() {
     if (!blk) return 0;
 
     memset(blk, 0, total_size);
+    uint8_t* tls_data_start = blk + (tcb_offset - aligned_size);
     if (g_tls_filesz > 0 && g_tls_template_src != 0) {
-        memcpy(blk, reinterpret_cast<void*>(g_tls_template_src), g_tls_filesz);
+        memcpy(tls_data_start, reinterpret_cast<void*>(g_tls_template_src), g_tls_filesz);
     }
     uint64_t tp = reinterpret_cast<uint64_t>(blk) + tcb_offset;
     *reinterpret_cast<uint64_t*>(tp) = tp; // Variant II: *(tp) = tp
@@ -1085,24 +1096,27 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         uint64_t fault = ExceptionInfo->ExceptionRecord->NumberParameters >= 2 ?
                          ExceptionInfo->ExceptionRecord->ExceptionInformation[1] : ~0ull;
         if (fault < 0x1000) {
-            static volatile LONG64 s_dummy = 0;
-            if (s_dummy == 0) {
-                void* p = VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-                if (InterlockedCompareExchange64(&s_dummy, reinterpret_cast<LONG64>(p), 0) != 0)
-                    VirtualFree(p, 0, MEM_RELEASE);
+            static thread_local uint8_t* t_dummy_buf = nullptr;
+            if (t_dummy_buf == nullptr) {
+                t_dummy_buf = reinterpret_cast<uint8_t*>(
+                    VirtualAlloc(nullptr, 65536, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
             }
-            uint64_t dummy = static_cast<uint64_t>(s_dummy);
+            uint64_t dummy = reinterpret_cast<uint64_t>(t_dummy_buf);
             bool fixed = false;
             if (ctx->Rbx < 0x1000) { ctx->Rbx = dummy; fixed = true; }
             if (ctx->Rdx < 0x1000) { ctx->Rdx = dummy; fixed = true; }
             if (fixed) {
-                static volatile LONG s_n = 0;
-                if (InterlockedIncrement(&s_n) <= 3)
-                    LOG_INFO("[YARIS-TASMA] NULL-base -> dummy'ye yonlendirildi @RVA 0x" +
-                             [](uint64_t v){ std::stringstream x; x<<std::hex<<v; return x.str(); }(ctx->Rip - g_base_addr));
                 return EXCEPTION_CONTINUE_EXECUTION;
             }
         }
+    }
+
+    // Texture metadata read recovery at RVA 0x1654f8 (mov esi, [rcx + 0x120])
+    if (code == EXCEPTION_ACCESS_VIOLATION && ctx->Rip == g_base_addr + 0x1654f8) {
+        ctx->Rsi = 1;
+        ctx->Rip = g_base_addr + 0x165508; // Jump past jz check to force main menu scene transition!
+        LOG_INFO("[VEH-RECOVER] Force-completed texture load at RVA 0x1654f8 -> transitioning scene to main menu!");
+        return EXCEPTION_CONTINUE_EXECUTION;
     }
 
     // Eger Syscall disinda baska bir cokme yasandiysa detayli register dokumu yap
@@ -1129,15 +1143,49 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         // sayfayi aninda commit edip calismaya devam et.
         if (access_type == 0 || access_type == 1) { // 0=READ, 1=WRITE
             if (access_addr >= 0x10000ULL && access_addr < 0x7FFFFFFFFFFFULL) {
-                uint64_t page_base = access_addr & ~0xFFFFULL; // 64KB hizalama
-                void* p = VirtualAlloc(reinterpret_cast<void*>(page_base), 65536, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-                if (p != nullptr) {
-                    static volatile LONG s_auto_commits = 0;
-                    LONG n = InterlockedIncrement(&s_auto_commits);
-                    if (n <= 10 || (n % 100) == 0) {
-                        LOG_INFO("[MEMORY-HLE] Otomatik Sayfa Commit #" + std::to_string(n) +
-                                 " @ 0x" + [](uint64_t v){ std::stringstream x; x<<std::hex<<v; return x.str(); }(access_addr));
+                bool handled = false;
+                MEMORY_BASIC_INFORMATION mbi;
+                if (VirtualQuery(reinterpret_cast<void*>(access_addr), &mbi, sizeof(mbi)) != 0 &&
+                    mbi.State == MEM_COMMIT) {
+                    // Sayfa ZATEN committed ama yazilamiyor (or. Kyty PageManager
+                    // write-tracking icin PAGE_READONLY yapmis). VirtualAlloc(MEM_COMMIT)
+                    // zaten-committed sayfada protection'i guvenilir DEGISTIRMEZ, o yuzden
+                    // yaziyi dusurmek icin ACIKCA VirtualProtect ile RW yapiyoruz. Aksi
+                    // halde oyunun vertex-buffer descriptor (V#) yazisi dusmuyor, tablo
+                    // sifir kaliyor ve sprite/yazi render olmuyordu (fmt=0 bug'inin koku).
+                    const bool writable =
+                        (mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE |
+                                        PAGE_WRITECOPY | PAGE_EXECUTE_WRITECOPY)) != 0;
+                    if (access_type == 1 && !writable) {
+                        uint64_t pg = access_addr & ~0xFFFULL; // 4KB
+                        DWORD old_p = 0;
+                        if (VirtualProtect(reinterpret_cast<void*>(pg), 0x1000,
+                                           PAGE_EXECUTE_READWRITE, &old_p) != 0) {
+                            handled = true;
+                            PsemuMarkCpuModified(pg, 0x1000);
+                            static volatile LONG s_ro_fix = 0;
+                            LONG n = InterlockedIncrement(&s_ro_fix);
+                            if (n <= 12) LOG_INFO("[MEM-RO->RW] readonly guest sayfasi RW yapildi @ 0x" +
+                                [](uint64_t v){ std::stringstream x; x<<std::hex<<v; return x.str(); }(access_addr));
+                        }
+                    } else if (writable) {
+                        handled = true; // zaten yazilabilir; fault baska sebep degil, devam
                     }
+                }
+                if (!handled) {
+                    uint64_t page_base = access_addr & ~0xFFFFULL; // 64KB hizalama
+                    void* p = VirtualAlloc(reinterpret_cast<void*>(page_base), 65536, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+                    if (p != nullptr) {
+                        static volatile LONG s_auto_commits = 0;
+                        LONG n = InterlockedIncrement(&s_auto_commits);
+                        if (n <= 10 || (n % 100) == 0) {
+                            LOG_INFO("[MEMORY-HLE] Otomatik Sayfa Commit #" + std::to_string(n) +
+                                     " @ 0x" + [](uint64_t v){ std::stringstream x; x<<std::hex<<v; return x.str(); }(access_addr));
+                        }
+                        handled = true;
+                    }
+                }
+                if (handled) {
                     return EXCEPTION_CONTINUE_EXECUTION;
                 }
             }
@@ -2381,11 +2429,25 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 // _Locksyslock / _Unlocksyslock / locales / exceptions
                 ctx->Rax = 0;
                 special_return_set = true;
-            } else if (func_name.find("pKwslsMUmSk") != std::string::npos || func_name.find("9LCjpWyQ5Zc") != std::string::npos) {
-                // fmod / pow
-                // Float functions return in XMM0. Let's return 0 just to avoid bad values.
-                ctx->Xmm0.Low = 0;
-                ctx->Xmm0.High = 0;
+            } else if (func_name.find("pKwslsMUmSk") != std::string::npos) {
+                // fmod(double x, double y): XMM0=x, XMM1=y -> XMM0
+                double x = 0, y = 0;
+                std::memcpy(&x, &ctx->Xmm0.Low, sizeof(x));
+                std::memcpy(&y, &ctx->Xmm1.Low, sizeof(y));
+                double r = (y != 0.0) ? std::fmod(x, y) : 0.0;
+                uint64_t low = 0; std::memcpy(&low, &r, sizeof(r));
+                ctx->Xmm0.Low = low; ctx->Xmm0.High = 0;
+                ctx->ContextFlags |= CONTEXT_FLOATING_POINT;
+                ctx->Rax = 0;
+                special_return_set = true;
+            } else if (func_name.find("9LCjpWyQ5Zc") != std::string::npos) {
+                // pow(double x, double y): XMM0=x, XMM1=y -> XMM0
+                double x = 0, y = 0;
+                std::memcpy(&x, &ctx->Xmm0.Low, sizeof(x));
+                std::memcpy(&y, &ctx->Xmm1.Low, sizeof(y));
+                double r = std::pow(x, y);
+                uint64_t low = 0; std::memcpy(&low, &r, sizeof(r));
+                ctx->Xmm0.Low = low; ctx->Xmm0.High = 0;
                 ctx->ContextFlags |= CONTEXT_FLOATING_POINT;
                 ctx->Rax = 0;
                 special_return_set = true;
@@ -2424,12 +2486,25 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 ctx->Rax = static_cast<uint64_t>(secs);
                 special_return_set = true;
             } else if (readable_name == "sceKernelGetProcessTime") {
-                // Process baslangicindan beri MIKROSANIYE
-                ctx->Rax = MonotonicNs() / 1000ull;
+                // int sceKernelGetProcessTime(uint64_t* time_us): RDI=time_us pointer
+                uint64_t us = MonotonicNs() / 1000ull;
+                uint64_t* out = reinterpret_cast<uint64_t*>(ctx->Rdi);
+                if (out != nullptr && SafeWritable(out, 8)) {
+                    *out = us;
+                }
+                ctx->Rax = 0; // 0 = SUCCESS
                 special_return_set = true;
-            } else if (readable_name == "sceKernelGetProcessTimeCounter" ||
-                       readable_name == "sceKernelReadTsc") {
-                // Ham sayac (tick)
+            } else if (readable_name == "sceKernelGetProcessTimeCounter") {
+                // int sceKernelGetProcessTimeCounter(uint64_t* counter): RDI=counter pointer
+                LARGE_INTEGER now; QueryPerformanceCounter(&now);
+                uint64_t* out = reinterpret_cast<uint64_t*>(ctx->Rdi);
+                if (out != nullptr && SafeWritable(out, 8)) {
+                    *out = static_cast<uint64_t>(now.QuadPart);
+                }
+                ctx->Rax = 0; // 0 = SUCCESS
+                special_return_set = true;
+            } else if (readable_name == "sceKernelReadTsc") {
+                // uint64_t sceKernelReadTsc(void) -> returns tick count in RAX
                 LARGE_INTEGER now; QueryPerformanceCounter(&now);
                 ctx->Rax = static_cast<uint64_t>(now.QuadPart);
                 special_return_set = true;
@@ -2522,12 +2597,23 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             } else if (readable_name == "sceKernelRead" || readable_name == "libc_read" ||
                        func_name.find("Cg4srZ6TKbU") != std::string::npos) {
                 // sceKernelRead(fd, buf, nbyte): RDI=fd, RSI=buf, RDX=nbyte
+                int fd = static_cast<int>(ctx->Rdi);
                 void* buf = reinterpret_cast<void*>(ctx->Rsi);
                 size_t nbyte = static_cast<size_t>(ctx->Rdx);
-                if (buf && nbyte > 0 && SafeWritable(buf, nbyte)) {
-                    memset(buf, 0, nbyte);
+                FILE* f = nullptr;
+                {
+                    std::lock_guard<std::mutex> vlk(g_vfs_mutex);
+                    static std::unordered_map<int, FILE*>& fd_map = *new std::unordered_map<int, FILE*>();
+                    if (fd_map.count(fd)) f = fd_map[fd];
                 }
-                ctx->Rax = static_cast<uint64_t>(nbyte);
+                size_t bytes_read = 0;
+                if (f && buf && nbyte > 0 && SafeWritable(buf, nbyte)) {
+                    bytes_read = fread(buf, 1, nbyte, f);
+                } else if (buf && nbyte > 0 && SafeWritable(buf, nbyte)) {
+                    memset(buf, 0, nbyte);
+                    bytes_read = nbyte;
+                }
+                ctx->Rax = static_cast<uint64_t>(bytes_read);
                 special_return_set = true;
             } else if (readable_name == "sceKernelWrite" || readable_name == "libc_write") {
                 // sceKernelWrite(fd, buf, nbyte): RDI=fd, RSI=buf, RDX=nbyte
@@ -2537,6 +2623,15 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             } else if (readable_name == "sceKernelClose" || readable_name == "libc_close" ||
                        func_name.find("UK2Tl2DWUns") != std::string::npos) {
                 // sceKernelClose(fd): RDI=fd
+                int fd = static_cast<int>(ctx->Rdi);
+                {
+                    std::lock_guard<std::mutex> vlk(g_vfs_mutex);
+                    static std::unordered_map<int, FILE*>& fd_map = *new std::unordered_map<int, FILE*>();
+                    if (fd_map.count(fd)) {
+                        fclose(fd_map[fd]);
+                        fd_map.erase(fd);
+                    }
+                }
                 ctx->Rax = 0;
                 special_return_set = true;
             } else if (readable_name == "sceKernelStat" || readable_name == "libc_stat" ||
@@ -2771,30 +2866,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 }
                 ctx->Rax = 0;
                 special_return_set = true;
-            } else if (readable_name == "PadReadState") {
-                // (handle RDI, data RSI). PadData=120 byte, notr girdi + bagli.
-                uint8_t* d = reinterpret_cast<uint8_t*>(ctx->Rsi);
-                if (d && SafeWritable(d, 120)) {
-                    memset(d, 0, 120);
-                    d[1] = 128; d[2] = 128; // sol analog merkez
-                    d[3] = 128; d[4] = 128; // sag analog merkez
-                    d[0x4c] = 1;            // connected = true (offset ~0x4c)
-                    static uint64_t s_ts = 1;
-                    *reinterpret_cast<uint64_t*>(d + 0x50) = s_ts++; // timestamp
-                    d[0x58] = 1;            // connected_count (yaklasik)
-                }
-                ctx->Rax = 0;
-                special_return_set = true;
-            }
-            // ========================================================
-            // SAVE DATA (kayit verisi yok - launcher "temiz baslangic" yolu)
-            // ========================================================
-            // Bu fonksiyonlar implement edilmemisti (RAX=0 donup CIKTI
-            // struct'larini doldurmuyorlardi). Oyun DirNameSearch sonucundaki
-            // cop hit_num ile iterasyona girip NULL nesne uzerinden sanal
-            // cagri yapip cokuyordu (RVA 0x134aa6). ABI KytyPS5
-            // src/libs/libSaveData.cpp'den dogrulandi.
-            else if (readable_name == "SaveDataInitialize3" ||
+            } else if (readable_name == "SaveDataInitialize3" ||
                      readable_name == "SaveDataSetParam" ||
                      readable_name == "SaveDataSaveIcon" ||
                      readable_name == "SaveDataCommit" ||
@@ -3176,14 +3248,25 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             // Oyun kendi framebuffer'larini RegisterBuffers2 ile bize verir,
             // SubmitFlip ile "ekrana bas" der. Win32 penceresine blit ediyoruz.
             else if (readable_name == "sceVideoOutOpen") {
-                // VideoOutOpen(user_id, bus_type, index, param) -> handle
-                Video::Init(0, 0); // pencereyi ac (boyut sonra attribute'tan gelir)
-                ctx->Rax = 1;      // gecerli bir handle
+                int user_id  = static_cast<int>(ctx->Rdi);
+                int bus_type = static_cast<int>(ctx->Rsi);
+                int index    = static_cast<int>(ctx->Rdx);
+                const void* param = reinterpret_cast<const void*>(ctx->Rcx);
+                ctx->Rax = Libs::VideoOut::VideoOutOpen(user_id, bus_type, index, param);
                 special_return_set = true;
-                LOG_INFO("[VIDEO-HLE] sceVideoOutOpen -> handle=1");
+            } else if (readable_name == "sceVideoOutAddFlipEvent") {
+                Libs::LibKernel::EventQueue::KernelEqueue eq = reinterpret_cast<Libs::LibKernel::EventQueue::KernelEqueue>(ctx->Rdi);
+                int handle = static_cast<int>(ctx->Rsi);
+                void* udata = reinterpret_cast<void*>(ctx->Rdx);
+                ctx->Rax = Libs::VideoOut::VideoOutAddFlipEvent(eq, handle, udata);
+                special_return_set = true;
+            } else if (readable_name == "sceVideoOutAddVblankEvent") {
+                Libs::LibKernel::EventQueue::KernelEqueue eq = reinterpret_cast<Libs::LibKernel::EventQueue::KernelEqueue>(ctx->Rdi);
+                int handle = static_cast<int>(ctx->Rsi);
+                void* udata = reinterpret_cast<void*>(ctx->Rdx);
+                ctx->Rax = Libs::VideoOut::VideoOutAddVblankEvent(eq, handle, udata);
+                special_return_set = true;
             } else if (readable_name == "sceVideoOutSetBufferAttribute2") {
-                // (attr, pixel_format, tiling_mode, width, height, option, ...)
-                //  RDI=attr, RSI=pixel_format, RDX=tiling_mode, RCX=width, R8=height
                 uint32_t* attr = reinterpret_cast<uint32_t*>(ctx->Rdi);
                 uint64_t pixel_format = ctx->Rsi;
                 uint32_t tiling = static_cast<uint32_t>(ctx->Rdx);
@@ -3199,51 +3282,37 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     *reinterpret_cast<uint64_t*>(attr + 8) = pixel_format; // +0x20
                 }
                 Video::SetAttribute(width, height, width, pixel_format, tiling);
-                Video::Init(width, height);
                 ctx->Rax = 0;
                 special_return_set = true;
             } else if (readable_name == "sceVideoOutRegisterBuffers2") {
-                // (handle, set_index, buffer_index_start, buffers, buffer_num,
-                //  attribute, category, option)
-                //  RDI=handle, RSI=set_index, RDX=buffer_index_start,
-                //  RCX=buffers(VideoOutBuffers*), R8=buffer_num, R9=attribute
-                int start = static_cast<int>(ctx->Rdx);
-                int num   = static_cast<int>(ctx->R8);
-                // VideoOutBuffers = { const void* data; const void* metadata;
-                //                     const void* reserved[2]; }  -> 32 byte
-                uint8_t* bufs = reinterpret_cast<uint8_t*>(ctx->Rcx);
-                if (bufs && num > 0 && SafeReadable(bufs, 32)) {
-                    for (int i = 0; i < num && i < 16; i++) {
-                        uint8_t* e = bufs + static_cast<size_t>(i) * 32;
-                        if (!SafeReadable(e, 8)) break;
-                        void* data = *reinterpret_cast<void**>(e);
-                        Video::RegisterBuffer(start + i, data);
-                    }
-                }
-                ctx->Rax = 0;
+                int handle    = static_cast<int>(ctx->Rdi);
+                int set_index = static_cast<int>(ctx->Rsi);
+                int start     = static_cast<int>(ctx->Rdx);
+                const Libs::VideoOut::VideoOutBuffers* bufs = reinterpret_cast<const Libs::VideoOut::VideoOutBuffers*>(ctx->Rcx);
+                int num       = static_cast<int>(ctx->R8);
+                const Libs::VideoOut::VideoOutBufferAttribute2* attr = reinterpret_cast<const Libs::VideoOut::VideoOutBufferAttribute2*>(ctx->R9);
+                ctx->Rax = Libs::VideoOut::VideoOutRegisterBuffers2(handle, set_index, start, bufs, num, attr, 0, nullptr);
                 special_return_set = true;
             } else if (readable_name == "sceVideoOutSubmitFlip") {
-                // (handle, index, flip_mode, flip_arg): RDI=handle, RSI=index
-                Video::Flip(static_cast<int>(ctx->Rsi));
-                ctx->Rax = 0;
+                int handle    = static_cast<int>(ctx->Rdi);
+                int index     = static_cast<int>(ctx->Rsi);
+                int flip_mode = static_cast<int>(ctx->Rdx);
+                int64_t arg   = static_cast<int64_t>(ctx->Rcx);
+                Video::Flip(index);
+                ctx->Rax = Libs::VideoOut::VideoOutSubmitFlip(handle, index, flip_mode, arg);
                 special_return_set = true;
             } else if (readable_name == "sceVideoOutGetFlipStatus") {
-                // (handle, status*): status->count alanini dolduruyoruz
-                uint64_t* st = reinterpret_cast<uint64_t*>(ctx->Rsi);
-                if (st && SafeReadable(st, 48)) {
-                    memset(st, 0, 48);
-                    st[0] = Video::GetFlipCount(); // count
-                }
-                ctx->Rax = 0;
+                int handle = static_cast<int>(ctx->Rdi);
+                Libs::VideoOut::VideoOutFlipStatus* status = reinterpret_cast<Libs::VideoOut::VideoOutFlipStatus*>(ctx->Rsi);
+                ctx->Rax = Libs::VideoOut::VideoOutGetFlipStatus(handle, status);
                 special_return_set = true;
             } else if (readable_name == "sceVideoOutIsFlipPending") {
-                ctx->Rax = 0; // bekleyen flip yok
+                int handle = static_cast<int>(ctx->Rdi);
+                ctx->Rax = Libs::VideoOut::VideoOutIsFlipPending(handle);
                 special_return_set = true;
             } else if (readable_name == "sceVideoOutWaitVblank") {
-                // Gercek vblank yok; ~60Hz'e denk gelecek kadar bekle ki
-                // oyun dongusu CPU'yu doldurmasin.
-                Sleep(16);
-                ctx->Rax = 0;
+                int handle = static_cast<int>(ctx->Rdi);
+                ctx->Rax = Libs::VideoOut::VideoOutWaitVblank(handle);
                 special_return_set = true;
             } else if (readable_name == "sceVideoOutIsOutputSupported") {
                 ctx->Rax = 1; // destekleniyor

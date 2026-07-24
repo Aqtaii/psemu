@@ -738,15 +738,18 @@ void CreatePipelineInternal(PipelineCache::GraphicsPipeline* pipeline, vk::Rende
 	viewport_state.pScissors     = &scissor;
 
 	vk::CullModeFlags cull_mode = vk::CullModeFlagBits::eNone;
-	if (static_params.cull_back) {
-		cull_mode |= vk::CullModeFlagBits::eBack;
-	}
-	if (static_params.cull_front) {
-		cull_mode |= vk::CullModeFlagBits::eFront;
-	}
+	// TEMP DEBUG: Force disable culling entirely
+	// if (static_params.depth_write_enable) {
+	// 	if (static_params.cull_back) {
+	// 		cull_mode |= vk::CullModeFlagBits::eBack;
+	// 	}
+	// 	if (static_params.cull_front) {
+	// 		cull_mode |= vk::CullModeFlagBits::eFront;
+	// 	}
+	// }
 
 	vk::FrontFace front_face =
-	    (static_params.face ? vk::FrontFace::eClockwise : vk::FrontFace::eCounterClockwise);
+	    (static_params.face ? vk::FrontFace::eCounterClockwise : vk::FrontFace::eClockwise);
 
 	vk::PipelineRasterizationDepthClipStateCreateInfoEXT clip_ext {};
 	clip_ext.sType           = vk::StructureType::ePipelineRasterizationDepthClipStateCreateInfoEXT;
@@ -758,7 +761,7 @@ void CreatePipelineInternal(PipelineCache::GraphicsPipeline* pipeline, vk::Rende
 	rasterizer.sType                   = vk::StructureType::ePipelineRasterizationStateCreateInfo;
 	rasterizer.pNext                   = &clip_ext;
 	rasterizer.flags                   = {};
-	rasterizer.depthClampEnable        = VK_FALSE;
+	rasterizer.depthClampEnable        = VK_TRUE;
 	rasterizer.rasterizerDiscardEnable = VK_FALSE;
 	rasterizer.polygonMode             = vk::PolygonMode::eFill;
 	rasterizer.cullMode                = cull_mode;
@@ -888,15 +891,14 @@ void CreatePipelineInternal(PipelineCache::GraphicsPipeline* pipeline, vk::Rende
 	}
 	EXIT_NOT_IMPLEMENTED(result != vk::Result::eSuccess);
 
-	EXIT_NOT_IMPLEMENTED(pipeline->pipeline_layout == nullptr);
-
 	vk::PipelineDepthStencilStateCreateInfo depth_stencil_info {};
 	depth_stencil_info.sType            = vk::StructureType::ePipelineDepthStencilStateCreateInfo;
 	depth_stencil_info.pNext            = nullptr;
 	depth_stencil_info.flags            = {};
-	depth_stencil_info.depthTestEnable  = (static_params.depth_test_enable ? VK_TRUE : VK_FALSE);
-	depth_stencil_info.depthWriteEnable = (static_params.depth_write_enable ? VK_TRUE : VK_FALSE);
-	depth_stencil_info.depthCompareOp   = static_params.depth_compare_op;
+	bool depth_write = static_params.depth_write_enable;
+	depth_stencil_info.depthTestEnable  = (static_params.depth_test_enable && depth_write ? VK_TRUE : VK_FALSE);
+	depth_stencil_info.depthWriteEnable = (depth_write ? VK_TRUE : VK_FALSE);
+	depth_stencil_info.depthCompareOp   = depth_write ? static_params.depth_compare_op : vk::CompareOp::eAlways;
 	depth_stencil_info.depthBoundsTestEnable =
 	    (static_params.depth_bounds_test_enable ? VK_TRUE : VK_FALSE);
 	depth_stencil_info.stencilTestEnable = (static_params.stencil_test_enable ? VK_TRUE : VK_FALSE);
