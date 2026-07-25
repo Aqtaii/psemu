@@ -2695,10 +2695,27 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 const uint16_t* p = reinterpret_cast<const uint16_t*>(ctx->Rdi);
                 uint16_t        c = static_cast<uint16_t>(ctx->Rsi);
                 size_t          n = static_cast<size_t>(ctx->Rdx);
-                { static int s_d = 0; if (s_d < 4 && p != nullptr && SafeReadable(p, 16)) { s_d++;
-                  const uint8_t* b = reinterpret_cast<const uint8_t*>(p);
-                  printf("[U16FIND] ptr=%p c=0x%x n=%zu bytes=%02x %02x %02x %02x %02x %02x %02x %02x\n",
-                         (void*)p, c, n, b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7]); fflush(stdout); } }
+                // TANI: hangi string'ler '|' ile split ediliyor? Menu etiketleri
+                // data.js'te tek string olarak duruyor ("New Game|Continue|Options|
+                // ?????|Quit") ve bu fonksiyonla parcalaniyor. Icerigi ASCII'ye
+                // dokup menu string'inin buraya HIC gelip gelmedigini goruyoruz.
+                { static std::atomic<uint64_t> s_d{0};
+                  uint64_t cnt = s_d.fetch_add(1, std::memory_order_relaxed) + 1;
+                  // ilk 20'yi ve sonra her 200'de birini yaz -> TOPLAM ilerleme gorunur
+                  // (onceki hali 80 ile sinirliydi ve sayac doygun kaliyordu: farkli
+                  // kosulari karsilastirmak imkansizdi).
+                  if ((cnt <= 20 || cnt % 200 == 0) && p != nullptr &&
+                      n > 0 && SafeReadable(p, (n < 48 ? n : 48) * 2)) {
+                    char txt[52]; size_t m = (n < 48 ? n : 48), k = 0;
+                    for (size_t i = 0; i < m; i++) {
+                        uint16_t ch = p[i];
+                        txt[k++] = (ch >= 0x20 && ch < 0x7f) ? static_cast<char>(ch) : '.';
+                    }
+                    txt[k] = '\0';
+                    printf("[U16SPLIT] #%llu c=0x%x n=%zu \"%s\"\n",
+                           static_cast<unsigned long long>(cnt), c, n, txt);
+                    fflush(stdout);
+                  } }
                 uint64_t found = 0;
                 if (p != nullptr && n > 0 && SafeReadable(p, n * 2)) {
                     for (size_t i = 0; i < n; i++) {
@@ -2796,22 +2813,23 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 ctx->Rax = static_cast<uint64_t>(secs);
                 special_return_set = true;
             } else if (readable_name == "sceKernelGetProcessTime") {
-                // int sceKernelGetProcessTime(uint64_t* time_us): RDI=time_us pointer
-                uint64_t us = MonotonicNs() / 1000ull;
-                uint64_t* out = reinterpret_cast<uint64_t*>(ctx->Rdi);
-                if (out != nullptr && SafeWritable(out, 8)) {
-                    *out = us;
-                }
-                ctx->Rax = 0; // 0 = SUCCESS
+                // GERCEK API: uint64_t sceKernelGetProcessTime(void)
+                //   -> ARGUMAN ALMAZ, mikrosaniyeyi RAX'ta DONDURUR.
+                // Onceki hali degeri *RDI'ye yazip RAX=0 donuyordu. Iki sorun:
+                //  1) Oyun donus degerini okudugu icin her zaman 0 aliyordu ->
+                //     delta/elapsed = 0. Oyun yuklemeyi kare basina ZAMAN BUTCESI
+                //     ile yaptigi icin ilerleme neredeyse durmustu (185 saniyede
+                //     ~20 diyalog girdisi; lang0.json'da 636 girdi var). Menu
+                //     metinleri de bu yuzden hic olusmuyor: oyun hala yukluyor.
+                //  2) Fonksiyon argumansiz oldugundan RDI COPTUR; oraya 8 bayt
+                //     yazmak alakasiz bellegi bozabilir.
+                ctx->Rax = MonotonicNs() / 1000ull;
                 special_return_set = true;
             } else if (readable_name == "sceKernelGetProcessTimeCounter") {
-                // int sceKernelGetProcessTimeCounter(uint64_t* counter): RDI=counter pointer
+                // GERCEK API: uint64_t sceKernelGetProcessTimeCounter(void)
+                // (argumansiz, sayaci RAX'ta dondurur - yukaridaki ile ayni gerekce)
                 LARGE_INTEGER now; QueryPerformanceCounter(&now);
-                uint64_t* out = reinterpret_cast<uint64_t*>(ctx->Rdi);
-                if (out != nullptr && SafeWritable(out, 8)) {
-                    *out = static_cast<uint64_t>(now.QuadPart);
-                }
-                ctx->Rax = 0; // 0 = SUCCESS
+                ctx->Rax = static_cast<uint64_t>(now.QuadPart);
                 special_return_set = true;
             } else if (readable_name == "sceKernelReadTsc") {
                 // uint64_t sceKernelReadTsc(void) -> returns tick count in RAX
