@@ -626,7 +626,8 @@ static void ShaderApplyAttribSemantics(ShaderVertexInputInfo* info,
 		uint32_t reg  = in.hardware_mapping;
 		uint32_t size = in.size_in_elements;
 
-		LOGF("reg = %u, size = %u, va[%u] = 0x%08" PRIx32 "\n", reg, size, i, attrib[in.semantic]);
+		{ static std::atomic<uint64_t> lc = 0; if (lc.fetch_add(1) < 64)
+		  LOGF("reg = %u, size = %u, va[%u] = 0x%08" PRIx32 "\n", reg, size, i, attrib[in.semantic]); }
 
 		size_t   index       = attrib[in.semantic] & 0x1fu;
 		uint32_t format      = (attrib[in.semantic] >> 5u) & 0x1ffu;
@@ -665,6 +666,9 @@ static void ShaderApplyAttribSemantics(ShaderVertexInputInfo* info,
 			}
 		}
 
+		// psemu tani: V# hala sifir kaldiysa, buffer tablosunda gecerli-gorunen
+		// (numrec!=0 && format!=0) bir V# var mi tara. Varsa -> gercek V#'ler
+		// baska bir offset'te (stale/yanlis pointer), buradan offset'i cikaririz.
 		EXIT_NOT_IMPLEMENTED(info->resources_num >= ShaderVertexInputInfo::RES_MAX);
 
 		auto& r           = info->resources[info->resources_num];

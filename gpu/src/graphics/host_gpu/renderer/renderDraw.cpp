@@ -1197,12 +1197,14 @@ void RenderDrawIndex(uint64_t submit_id, CommandBuffer* buffer, HW::Context* ctx
 	emit.indexed       = true;
 	emit.vertex_offset = vertex_offset;
 
-	if (ucfg->GetPrimType() == Prospero::GpuEnumValue(Prospero::PrimitiveType::kRectListLegacy) || 
-	    ucfg->GetPrimType() == Prospero::GpuEnumValue(Prospero::PrimitiveType::kRectList)) {
+	{ static std::atomic<uint64_t> uc = 0;
+	  if (uc.fetch_add(1) < 32 &&
+	      (ucfg->GetPrimType() == Prospero::GpuEnumValue(Prospero::PrimitiveType::kRectListLegacy) ||
+	       ucfg->GetPrimType() == Prospero::GpuEnumValue(Prospero::PrimitiveType::kRectList))) {
 		printf("[UI-DRAW] RectList(Indexed): type=%u, index_count=%u, first_instance=%u, rt_slot0_base=0x%llx\n",
 		       ucfg->GetPrimType(), index_count, first_instance, state.color_info[0].base_addr);
 		fflush(stdout);
-	}
+	} }
 
 	static bool seen_prim[256] = {false};
 	uint8_t prim_type = ucfg->GetPrimType();
@@ -1318,12 +1320,14 @@ void RenderDrawIndexAuto(uint64_t submit_id, CommandBuffer* buffer, HW::Context*
 	emit.draw_vertex_count = draw_vertex_count;
 	emit.first_vertex      = static_cast<uint32_t>(vertex_offset);
 
-	if (ucfg->GetPrimType() == Prospero::GpuEnumValue(Prospero::PrimitiveType::kRectListLegacy) || 
-	    ucfg->GetPrimType() == Prospero::GpuEnumValue(Prospero::PrimitiveType::kRectList)) {
+	{ static std::atomic<uint64_t> uca = 0;
+	  if (uca.fetch_add(1) < 32 &&
+	      (ucfg->GetPrimType() == Prospero::GpuEnumValue(Prospero::PrimitiveType::kRectListLegacy) ||
+	       ucfg->GetPrimType() == Prospero::GpuEnumValue(Prospero::PrimitiveType::kRectList))) {
 		printf("[UI-DRAW] RectList(Auto): type=%u, index_count=%u, first_vertex=%u, rt_slot0_base=0x%llx\n",
 		       ucfg->GetPrimType(), index_count, first_vertex, state.color_info[0].base_addr);
 		fflush(stdout);
-	}
+	} }
 
 	DrawIndexBufferSource index_source {};
 	static bool seen_prim_auto[256] = {false};
