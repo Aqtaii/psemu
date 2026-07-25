@@ -1251,6 +1251,19 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
 			     cached->gpu_modified, cached->ctx == ctx);
 		}
 	}
+	// psemu tani: texture OLUSTURMA anini logla (bind aninda degil!).
+	// Amac: sprite-font atlasi hic OLUSTURULMUYOR mu, yoksa olusturuluyor ama
+	// hic cizimde kullanilmiyor mu? Ikisi tamamen farkli sorunlar.
+	{
+		static std::atomic<uint64_t> c = 0;
+		if (c.fetch_add(1) < 48) {
+			std::fprintf(stderr, "[TEXNEW] addr=0x%016llx %ux%u fmt=%u tile=%u levels=%u\n",
+			             static_cast<unsigned long long>(info.address), info.width, info.height,
+			             static_cast<uint32_t>(info.format), static_cast<uint32_t>(info.tile),
+			             static_cast<uint32_t>(info.levels));
+			std::fflush(stderr);
+		}
+	}
 	m_images.reserve(m_images.size() + 1);
 	auto cached  = std::make_shared<CachedImage>();
 	cached->kind = CachedImage::Kind::Texture;
