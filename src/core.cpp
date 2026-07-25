@@ -402,6 +402,37 @@ static const std::unordered_map<std::string, const std::string*>& NidPrefixIndex
     return idx;
 }
 
+// ========================================================
+// GUEST KARSILASTIRICI KOPRUSU (qsort/bsearch icin)
+// ========================================================
+// Guest kod System V AMD64 ABI kullanir (args RDI/RSI/...), host ise Windows
+// x64 ABI (RCX/RDX/...). clang-cl'in sysv_abi niteligi ile guest fonksiyon
+// isaretcisini dogru ABI'yle cagiriyoruz. thread_local: her thread kendi
+// karsilastiricisini tasir.
+using GuestCmpFn = int(__attribute__((sysv_abi)) *)(const void*, const void*);
+static thread_local GuestCmpFn t_guest_cmp = nullptr;
+static int HostCmpBridge(const void* a, const void* b) {
+    return (t_guest_cmp != nullptr) ? t_guest_cmp(a, b) : 0;
+}
+
+// Siralamayi VEH handler'inin ICINDE yapmak kilitlenmeye yol aciyor (guest
+// karsilastiricisi kendi PLT fault'larini uretir -> ic ice exception). Bu yuzden
+// isi AYRI BIR THREAD'e verip bekliyoruz: guest kodu normal bir thread baglaminda
+// calisir, faulting thread yalnizca sonucu bekler.
+struct GuestSortJob {
+    void*      base;
+    size_t     nmemb;
+    size_t     size;
+    GuestCmpFn cmp;
+};
+static DWORD WINAPI GuestSortThread(LPVOID param) {
+    auto* j     = static_cast<GuestSortJob*>(param);
+    t_guest_cmp = j->cmp;
+    std::qsort(j->base, j->nmemb, j->size, HostCmpBridge);
+    t_guest_cmp = nullptr;
+    return 0;
+}
+
 static thread_local int g_guest_errno = 0;
 static const int kGuestERANGE = 34; // FreeBSD ERANGE
 
@@ -1440,6 +1471,12 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 else if (readable_name == "scePthreadMutexUnlock" ||
                          readable_name == "pthread_mutex_unlock")   f = FOP_MTX_UNLOCK;
                 else if (readable_name == "__error")                f = FOP_ERRNO;
+                // Sik cagrilan ve davranisi "hicbir sey yap, 0 don" olan isimli
+                // fonksiyonlar: nids.h'e isim eklendiginde hizli yolu kaybetmesinler.
+                // (_Locksyslock/_Unlocksyslock MSVC STL locale kodunda cok sik cagrilir.)
+                else if (readable_name == "_Locksyslock" ||
+                         readable_name == "_Unlocksyslock" ||
+                         readable_name == "uncaught_exception") f = FOP_RET0;
                 s_fop[plt_index] = f;
                 fop = FOP_NONE; // ILK cagri normal yoldan gitsin (loglanabilsin)
             }
@@ -3130,6 +3167,49 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                      readable_name == "PadSetMotionSensorState") {
                 ctx->Rax = 0;
                 special_return_set = true;
+            } else if (readable_name == "qsort") {
+                // void qsort(void* base, size_t nmemb, size_t size,
+                //            int (*compar)(const void*, const void*))
+                // ONCEDEN: NID (AEJdIVZTEmo) tabloda yoktu -> isim cozulemiyor ->
+                // default stub RAX=0 donuyor ve dizi HIC SIRALANMIYORDU.
+                // C2 runtime sirali diziler uzerinde IKILI ARAMA yaptigi icin
+                // siralanmamis dizide anahtar aramalari basarisiz oluyor
+                // ("KEY NOT FOUND: music_atten/master_atten") ve lokalize
+                // metinler bos kaliyor -> menu etiketleri gorunmuyor.
+                // Karsilastirici GUEST kodudur: SysV ABI ile cagriliyor
+                // (bkz. HostCmpBridge / GuestCmpFn).
+                {
+                    void*  base  = reinterpret_cast<void*>(ctx->Rdi);
+                    size_t nmemb = static_cast<size_t>(ctx->Rsi);
+                    size_t size  = static_cast<size_t>(ctx->Rdx);
+                    auto   cmp   = reinterpret_cast<GuestCmpFn>(ctx->Rcx);
+                    // DIKKAT: karsilastirici GUEST kodudur ve onu VEH handler'inin
+                    // ICINDEN cagirmak (ic ice exception + ABI gecisi) grafik
+                    // init'inde KILITLENMEYE yol acti (log "[QSORT]" satirina hic
+                    // ulasmadan bitiyordu). Bu yuzden varsayilan KAPALI.
+                    // Denemek icin: PSEMU_QSORT=1
+                    static const bool s_qsort_on = (std::getenv("PSEMU_QSORT") != nullptr);
+                    bool   done  = false;
+                    if (s_qsort_on && base != nullptr && cmp != nullptr && size > 0 && nmemb > 1 &&
+                        nmemb < (1u << 24) && SafeWritable(base, nmemb * size)) {
+                        GuestSortJob job{base, nmemb, size, cmp};
+                        HANDLE th = CreateThread(nullptr, 0, GuestSortThread, &job, 0, nullptr);
+                        if (th != nullptr) {
+                            // Timeout: takilirsa oyunu sonsuza kilitlemeyelim.
+                            done = (WaitForSingleObject(th, 4000) == WAIT_OBJECT_0);
+                            if (!done) TerminateThread(th, 1);
+                            CloseHandle(th);
+                        }
+                    }
+                    static std::atomic<int> s_qs{0};
+                    if (s_qs.fetch_add(1, std::memory_order_relaxed) < 12) {
+                        printf("[QSORT] nmemb=%zu size=%zu cmp=%p -> %s\n", nmemb, size,
+                               reinterpret_cast<void*>(cmp), done ? "siralandi" : "ATLANDI");
+                        fflush(stdout);
+                    }
+                    ctx->Rax = 0; // qsort void
+                }
+                special_return_set = true;
             } else if (readable_name == "strlcpy") {
                 // size_t strlcpy(char* dst, const char* src, size_t size)
                 // BSD: src'yi dst'ye kopyalar (en fazla size-1 karakter), DAIMA
@@ -4006,6 +4086,12 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                         // string karsilastirmasi yok. (Or. QOQtbeDqsT4 =
                         // cagrilarin ~%25'i.) PLT#8'i haric tutuyoruz: onun
                         // zincir DISINDA ozel yakalamasi var.
+                        // DIKKAT: bunu "isimli olsun olmasin hepsi" haline getirmek
+                        // DENENDI ve GERI ALINDI - grafik init'inde takilmaya yol
+                        // acti (bazi fonksiyonlarin ilk cagrisi zincirden gecmeli).
+                        // Yalnizca ISIMSIZ NID'ler guvenli: onlarin hicbir handler'i
+                        // yok ve olamaz. Sik cagrilan isimli no-op'lar asagida
+                        // (fop cozumlemesinde) ACIKCA hizli yola alinir.
                         if (readable_name.empty() && plt_index != 8 &&
                             plt_index < kPltCacheMax && s_fop[plt_index] == FOP_NONE) {
                             s_fop[plt_index] = FOP_RET0;

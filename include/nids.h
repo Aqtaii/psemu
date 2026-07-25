@@ -8,6 +8,7 @@ inline std::unordered_map<std::string, std::string> g_nid_to_name = {
     // Algoritma: base64(sha1(isim + SALT)[:8] tersten), '/' -> '-', 11 karakter.
     // Son ek (#X#Y) oyuna gore degisir; core.cpp'deki onek indeksi bunu tolere eder.
     {"fnUEjBCNRVU#T#T", "wmemchr"},
+    {"AEJdIVZTEmo#T#T", "qsort"},
     {"QJ5xVfKkni0#T#T", "wmemcmp"},
     {"Noj9PsJrsa8#T#T", "wmemmove"},
     {"SfQIZcqvvms#T#T", "strlcpy"},
