@@ -243,11 +243,39 @@ static std::mutex g_vfs_mutex;
 
 // Guest yolunu host yoluna cevirir. PS4/PS5'te "/app0/" oyunun kendi
 // klasorudur; diger mutlak yollari da ayni koke baglariz.
+// Kayit verisi kok klasoru. Oyunun /saveDataN/... yollari BURAYA eslenir.
+// Oyun dizinini kirletmemek ve gercek kayit destegi verebilmek icin ayri tutulur.
+static const char* kSaveDataRoot = "savedata";
+
+// Verilen HOST yolunun ust dizinlerini olusturur (yoksa). fopen("wb") ancak
+// dizin varsa basarili olur; oyun kayit dosyasini olusturamayinca
+// "/saveData0/-saveindex" acilamiyor ve oyun o asamada takiliyordu.
+static void EnsureParentDirs(const std::string& host_path) {
+    std::string acc;
+    for (size_t i = 0; i < host_path.size(); i++) {
+        const char c = host_path[i];
+        if (c == '/' || c == '\\') {
+            if (!acc.empty() && acc.back() != ':') {
+                CreateDirectoryA(acc.c_str(), nullptr); // varsa hata vermez
+            }
+        }
+        acc.push_back(c);
+    }
+}
+
 static std::string TranslateGuestPath(const std::string& guest) {
     if (guest.empty()) return guest;
     if (guest.rfind("/app0/", 0) == 0)  return g_game_root + "/" + guest.substr(6);
     if (guest == "/app0")               return g_game_root;
     if (guest.rfind("/hostapp/", 0) == 0) return g_game_root + "/" + guest.substr(9);
+    // Kayit verisi mount'lari (/savedata0, /saveData0, ...) -> savedata/...
+    if (guest.size() > 9) {
+        std::string low = guest.substr(0, 9);
+        for (auto& ch : low) ch = static_cast<char>(tolower(static_cast<unsigned char>(ch)));
+        if (low == "/savedata") {
+            return std::string(kSaveDataRoot) + guest;
+        }
+    }
     if (guest[0] == '/')                return g_game_root + guest;  // diger mutlak yollar
     return guest;                                                     // goreli yol
 }
@@ -2752,7 +2780,45 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 }
                 ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(result));
                 special_return_set = true;
-            } else if (func_name.find("kALvdgEv5ME") != std::string::npos || func_name.find("9nf8joUTSaQ") != std::string::npos || func_name.find("rcQCUr0EaRU") != std::string::npos || func_name.find("sUP1hBaouOw") != std::string::npos || func_name.find("p6LrHjIQMdk") != std::string::npos || func_name.find("hqi8yMOCmG0") != std::string::npos || func_name.find("QW2jL1J5rwY") != std::string::npos || func_name.find("P8F2oavZXtY") != std::string::npos || func_name.find("Q1BL70XVV0o") != std::string::npos) {
+            } else if (func_name.find("sUP1hBaouOw") != std::string::npos) {
+                // _Getpctype(): CRT'nin KARAKTER TIPI TABLOSUNU dondurur.
+                // tolower/toupper/isalpha bu tabloyu kullanir:
+                //     tolower(c) ~ (table[c] & _UPPER) ? c+32 : c
+                // ONCEDEN "locales" dalinda RAX=0 (NULL) donuyordu. Tablo NULL
+                // olunca (VEH commit-on-fault sifir sayfa acar) tum siniflandirma
+                // bitleri 0 okunur -> tolower() karakteri DEGISTIRMEDEN dondurur
+                // -> Construct2'nin buyuk/kucuk harf duyarsiz fonksiyon adi
+                // eslemesi BOZULUR: Call("menuReload") tanimi "MenuReload" olan
+                // fonksiyonu bulamaz -> menu etiketleri hic yazilmaz.
+                // MSVC duzeni: dizi [-1..255], isaretci indeks 0'i gosterir.
+                {
+                    static uint16_t s_ctype[257];
+                    static bool     s_init = false;
+                    if (!s_init) {
+                        s_init = true;
+                        constexpr uint16_t U = 0x0001, L = 0x0002, D = 0x0004, S = 0x0008,
+                                           P = 0x0010, C = 0x0020, B = 0x0040, X = 0x0080,
+                                           A = 0x0100; // _ALPHA
+                        s_ctype[0] = 0; // EOF girdisi
+                        for (int ch = 0; ch < 256; ch++) {
+                            uint16_t v = 0;
+                            if (ch < 0x20 || ch == 0x7f)                 v |= C;
+                            if (ch == ' ')                               v |= S | B;
+                            if (ch == '\t')                              v |= S | B;
+                            if (ch=='\n'||ch=='\v'||ch=='\f'||ch=='\r')  v |= S;
+                            if (ch >= '0' && ch <= '9')                  v |= D | X;
+                            if (ch >= 'A' && ch <= 'Z')                  v |= U | A;
+                            if (ch >= 'a' && ch <= 'z')                  v |= L | A;
+                            if ((ch>='A'&&ch<='F')||(ch>='a'&&ch<='f'))  v |= X;
+                            if (ch > 0x20 && ch < 0x7f &&
+                                !(v & (D | U | L)))                      v |= P;
+                            s_ctype[ch + 1] = v;
+                        }
+                    }
+                    ctx->Rax = reinterpret_cast<uint64_t>(&s_ctype[1]); // indeks 0
+                }
+                special_return_set = true;
+            } else if (func_name.find("kALvdgEv5ME") != std::string::npos || func_name.find("9nf8joUTSaQ") != std::string::npos || func_name.find("rcQCUr0EaRU") != std::string::npos || func_name.find("p6LrHjIQMdk") != std::string::npos || func_name.find("hqi8yMOCmG0") != std::string::npos || func_name.find("QW2jL1J5rwY") != std::string::npos || func_name.find("P8F2oavZXtY") != std::string::npos || func_name.find("Q1BL70XVV0o") != std::string::npos) {
                 // _Locksyslock / _Unlocksyslock / locales / exceptions
                 ctx->Rax = 0;
                 special_return_set = true;
@@ -2828,13 +2894,32 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 //     metinleri de bu yuzden hic olusmuyor: oyun hala yukluyor.
                 //  2) Fonksiyon argumansiz oldugundan RDI COPTUR; oraya 8 bayt
                 //     yazmak alakasiz bellegi bozabilir.
-                ctx->Rax = MonotonicNs() / 1000ull;
+                // HER IKI SOZLESME: degeri RAX'ta dondur (gercek API) VE RDI
+                // gecerli/yazilabilir gorunuyorsa oraya da yaz. Bazi
+                // sarmalayicilar isaretci bicimini bekliyor olabilir; C2
+                // runtime'inin "Wait" zamanlayicisi bu saate bagli oldugu icin
+                // yanlis bicim beklemeleri sonsuza kilitler.
+                {
+                    uint64_t us = MonotonicNs() / 1000ull;
+                    ctx->Rax    = us;
+                    uint64_t* out = reinterpret_cast<uint64_t*>(ctx->Rdi);
+                    if (out != nullptr && ctx->Rdi > 0x10000ULL && SafeWritable(out, 8)) {
+                        *out = us;
+                    }
+                }
                 special_return_set = true;
             } else if (readable_name == "sceKernelGetProcessTimeCounter") {
                 // GERCEK API: uint64_t sceKernelGetProcessTimeCounter(void)
                 // (argumansiz, sayaci RAX'ta dondurur - yukaridaki ile ayni gerekce)
-                LARGE_INTEGER now; QueryPerformanceCounter(&now);
-                ctx->Rax = static_cast<uint64_t>(now.QuadPart);
+                {
+                    LARGE_INTEGER now; QueryPerformanceCounter(&now);
+                    uint64_t v = static_cast<uint64_t>(now.QuadPart);
+                    ctx->Rax   = v;
+                    uint64_t* out = reinterpret_cast<uint64_t*>(ctx->Rdi);
+                    if (out != nullptr && ctx->Rdi > 0x10000ULL && SafeWritable(out, 8)) {
+                        *out = v;
+                    }
+                }
                 special_return_set = true;
             } else if (readable_name == "sceKernelReadTsc") {
                 // uint64_t sceKernelReadTsc(void) -> returns tick count in RAX
@@ -2909,8 +2994,30 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 // Gercek dosyayi VFS ile bulmaya calis
                 std::string host = TranslateGuestPath(guest);
                 FILE* f = nullptr;
-                if (!host.empty()) {
-                    f = fopen(host.c_str(), "rb");
+                // ONCEDEN: bayraklar YOK SAYILIP her zaman "rb" ile aciliyordu.
+                // Oyun kayit dosyasini (O_CREAT|O_WRONLY) OLUSTURAMIYOR, surekli
+                // -1 aliyor ve "/saveData0/-saveindex" asamasinda takiliyordu.
+                // FreeBSD/PS bayraklari: O_WRONLY=1 O_RDWR=2 O_APPEND=0x8
+                //                        O_CREAT=0x200 O_TRUNC=0x400
+                {
+                    const uint32_t flags  = static_cast<uint32_t>(ctx->Rsi);
+                    const uint32_t acc    = flags & 3u;
+                    const bool     creat  = (flags & 0x200u) != 0;
+                    const bool     trunc  = (flags & 0x400u) != 0;
+                    const bool     append = (flags & 0x8u) != 0;
+                    const char*    m      = "rb";
+                    if (acc == 1u)      m = append ? "ab"  : (trunc || creat ? "wb"  : "r+b");
+                    else if (acc == 2u) m = append ? "a+b" : (trunc         ? "w+b" : "r+b");
+                    if (!host.empty()) {
+                        if (creat || acc != 0u) {
+                            EnsureParentDirs(host); // kayit klasoru yoksa olustur
+                        }
+                        f = fopen(host.c_str(), m);
+                        // r+b istendi ama dosya yoksa ve O_CREAT verilmisse olustur
+                        if (f == nullptr && creat && acc != 0u) {
+                            f = fopen(host.c_str(), acc == 2u ? "w+b" : "wb");
+                        }
+                    }
                 }
                 if (f) {
                     // Gercek dosya var: fd olarak FILE* saklayip dondur
@@ -2987,6 +3094,11 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 if (mode.empty()) mode = "rb";
                 if (mode.find('b') == std::string::npos) mode += "b"; // her zaman binary
                 std::string host = TranslateGuestPath(guest);
+                // Yazma/ekleme modunda hedef dizin yoksa olustur (kayit verisi).
+                if (mode.find('w') != std::string::npos || mode.find('a') != std::string::npos ||
+                    mode.find('+') != std::string::npos) {
+                    EnsureParentDirs(host);
+                }
                 FILE* f = fopen(host.c_str(), mode.c_str());
                 if (f) { g_open_files.insert(f); g_open_names[f] = guest; }
                 ctx->Rax = reinterpret_cast<uint64_t>(f);

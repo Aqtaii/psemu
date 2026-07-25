@@ -426,6 +426,8 @@ PreparedFrame* WindowPrepareBlankFrame(CommandBuffer* buffer, uint32_t width, ui
 
 // psemu: adapter/screenshot.cpp'de tanimli — present edilen kareyi BMP kaydeder.
 void PsemuCaptureFrame(GraphicContext* ctx, const VulkanImage* image);
+// psemu: adapter/metrics.cpp — canli performans metrikleri (pencere basligi).
+extern "C" void PsemuMetricAddPresent(uint64_t ticks);
 
 void WindowPresentFrame(PreparedFrame* frame) {
 	KYTY_PROFILER_FUNCTION();
@@ -484,9 +486,20 @@ void WindowPresentFrame(PreparedFrame* frame) {
 
 	buffer.Begin();
 
-	// psemu: present edilecek kareyi diske BMP olarak kaydet (render ciktisini
-	// dogrudan gormek icin). frame->image su an eTransferSrcOptimal.
-	PsemuCaptureFrame(&g_window_ctx->graphic_ctx, &frame->image);
+	// psemu: ekran goruntusu VARSAYILAN OLARAK KAPALI. Her yakalama 4K'lik bir
+	// GPU->CPU geri okumasi (33 MB) + BMP yazimi demek; oyun-ici FPS'i ciddi
+	// dusuruyordu. Gerekince: PSEMU_SHOTS=1
+	{
+		static const bool s_shots = (std::getenv("PSEMU_SHOTS") != nullptr);
+		if (s_shots) {
+			PsemuCaptureFrame(&g_window_ctx->graphic_ctx, &frame->image);
+		}
+	}
+
+	// Present suresi olcumu (submit ile karsilastirmak icin).
+	LARGE_INTEGER t_pres0, t_presfr;
+	QueryPerformanceFrequency(&t_presfr);
+	QueryPerformanceCounter(&t_pres0);
 
 	Transfer::BlitToSwapchain(&buffer, &frame->image, swapchain);
 
@@ -551,6 +564,14 @@ void WindowPresentFrame(PreparedFrame* frame) {
 	}
 
 	swapchain->present_frame = (present_frame + 1u) % swapchain->swapchain_images_count;
+
+	{
+		// Present suresini canli metriklere bildir (pencere basliginda gorunur).
+		LARGE_INTEGER t1;
+		QueryPerformanceCounter(&t1);
+		PsemuMetricAddPresent(static_cast<uint64_t>(t1.QuadPart - t_pres0.QuadPart));
+		(void)t_presfr;
+	}
 
 	RenderDocOnPresent();
 	WindowUpdateTitle();

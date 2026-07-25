@@ -55,9 +55,29 @@ vk::SurfaceCapabilitiesKHR* VulkanGetSurfaceCapabilities() {
 	return &g_window_ctx->surface_capabilities->capabilities;
 }
 
-// windowInternal.h bunlari bildiriyor; SDL icon/title -> no-op / basit Win32.
+// windowInternal.h bunlari bildiriyor; SDL icon -> no-op.
 void WindowUpdateIcon() {}
-void WindowUpdateTitle() {}
+
+// Pencere basligini CANLI PERFORMANS METRIKLERI ile gunceller (sol ustte
+// gorunur). Her present'te cagriliyor; metrics.cpp saniyede en fazla 2 kez
+// metin uretiyor, aksi halde hemen donuyor - yani maliyeti yok denecek kadar az.
+extern "C" bool PsemuMetricFormat(char* buf, size_t buf_size);
+
+void WindowUpdateTitle() {
+	if (g_window_ctx == nullptr || g_window_ctx->window == nullptr) {
+		return;
+	}
+	char text[256];
+	if (!PsemuMetricFormat(text, sizeof(text))) {
+		return;
+	}
+	wchar_t wide[256];
+	const int n = MultiByteToWideChar(CP_UTF8, 0, text, -1, wide,
+	                                  static_cast<int>(sizeof(wide) / sizeof(wide[0])));
+	if (n > 0) {
+		SetWindowTextW(g_window_ctx->window, wide);
+	}
+}
 
 static LRESULT CALLBACK PsemuWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 	switch (msg) {
@@ -175,7 +195,18 @@ void WindowRun() {
 			DispatchMessageW(&msg);
 		}
 		VideoOut::VideoOutBeginVblank();
-		VideoOut::VideoOutFlipWindow(0); // present (WaitForNextVblank ile pace'li)
+		// PERF: eskiden micros=0 idi. VideoOutFlipWindow once vblank'i bekler,
+		// SONRA flip kuyruguna bakar; timeout 0 ile kuyruk o an bossa hemen
+		// false doner ve bir sonraki vblank'e (16.6 ms) kayardik. Oyun karesini
+		// vblank'ten hemen sonra gonderdiginde bu, her karede bir periyot
+		// kaybettiriyordu -> 60 Hz yerine ~30 fps. Kisa bir bekleme vererek
+		// kare hazir olur olmaz sunuyoruz. (Olculdu: submit 0.011 ms, present
+		// 0.7 ms; yani kayip zaman burada bekleniyordu.)
+		// NOT: 15000 us denendi -> oyun COK ERKEN takildi (iki kosuda da ~536
+		// satirda durdu). Sebep muhtemelen flip-queue kilidinin bu dongude
+		// surekli mesgul edilip oyun thread'inin ac kalmasi. Bilinen calisan
+		// deger (0) geri alindi; vsync kaybi baska yoldan cozulmeli.
+		VideoOut::VideoOutFlipWindow(0);
 		VideoOut::VideoOutEndVblank();
 	}
 }

@@ -1,4 +1,4 @@
-#include "graphics/host_gpu/renderer/textureCache.h"
+﻿#include "graphics/host_gpu/renderer/textureCache.h"
 
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -30,6 +30,9 @@
 #include <optional>
 #include <thread>
 #include <xxhash.h>
+
+// psemu: adapter/metrics.cpp - canli performans metrikleri (pencere basligi).
+extern "C" void PsemuMetricAddTextureCount();
 
 namespace Libs::Graphics {
 
@@ -1255,6 +1258,7 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
 	// Amac: sprite-font atlasi hic OLUSTURULMUYOR mu, yoksa olusturuluyor ama
 	// hic cizimde kullanilmiyor mu? Ikisi tamamen farkli sorunlar.
 	{
+		PsemuMetricAddTextureCount(); // canli metrik (pencere basligi)
 		static std::atomic<uint64_t> c = 0;
 		if (c.fetch_add(1) < 48) {
 			std::fprintf(stderr, "[TEXNEW] addr=0x%016llx %ux%u fmt=%u tile=%u levels=%u\n",
@@ -3251,3 +3255,4 @@ VulkanImage* TextureCache::GetDummyStorageTexture(bool uint_format, bool image_3
 }
 
 } // namespace Libs::Graphics
+

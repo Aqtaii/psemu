@@ -1891,14 +1891,27 @@ void CommandProcessor::SynchronizeGpu() {
 	FinishCommandProcessors();
 }
 
+// psemu: adapter/metrics.cpp — canli performans metrikleri (pencere basligi).
+extern "C" void PsemuMetricAddSubmit(uint64_t ticks);
+
 void GraphicsRunSubmit(uint32_t* cmd_draw_buffer, uint32_t num_draw_dw, uint32_t* cmd_const_buffer,
                        uint32_t num_const_dw, bool trigger_agc_interrupt_on_done) {
 	EXIT_IF(cmd_draw_buffer == nullptr);
 	EXIT_IF(num_draw_dw == 0);
 	EXIT_IF(g_gpu == nullptr);
 
-	g_gpu->Submit(cmd_draw_buffer, num_draw_dw, cmd_const_buffer, num_const_dw,
-	              trigger_agc_interrupt_on_done);
+	// psemu perf olcumu: PM4 gonderiminde (komut isleme + Vulkan kayit) gecen
+	// sureyi topla. Present suresiyle karsilastirip darbogazi bulacagiz.
+	{
+		// PM4 gonderim suresini canli metriklere bildir.
+		LARGE_INTEGER t0, t1;
+		QueryPerformanceCounter(&t0);
+		g_gpu->Submit(cmd_draw_buffer, num_draw_dw, cmd_const_buffer, num_const_dw,
+		              trigger_agc_interrupt_on_done);
+		QueryPerformanceCounter(&t1);
+		PsemuMetricAddSubmit(static_cast<uint64_t>(t1.QuadPart - t0.QuadPart));
+	}
+	return;
 }
 
 void GraphicsRunSubmitCompute(uint32_t queue, uint32_t* cmd_buffer, uint32_t num_dw,

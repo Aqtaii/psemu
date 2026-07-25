@@ -684,6 +684,20 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 		ValidateStorageImageResource(resource);
 	}
 	if (descriptor.IsNull()) {
+		// psemu tani: NULL texture descriptor -> BOS (dummy) texture baglanir,
+		// yani cizim yapilir ama GORUNMEZ olur. Onceki [TEX] tanisi address!=0
+		// kosulundaydi ve bu yolu HIC gormuyordu. Menu yazilari boyle
+		// kayboluyor olabilir (SpriteFont atlasi hic olusturulmadi).
+		{
+			static std::atomic<uint64_t> c = 0;
+			uint64_t k = c.fetch_add(1) + 1;
+			if (k <= 8 || (k % 500) == 0) {
+				std::fprintf(stderr, "[TEXNULL] #%llu NULL descriptor -> dummy(bos) texture, kind=%u\n",
+				             static_cast<unsigned long long>(k),
+				             static_cast<uint32_t>(resource.kind));
+				std::fflush(stderr);
+			}
+		}
 		return storage ? DescriptorCache::TextureBinding {GetDummyStorageTexture(variant),
 		                                                  TextureVariantDefaultView(variant)}
 		               : DescriptorCache::TextureBinding {GetDummySampledTexture(variant),

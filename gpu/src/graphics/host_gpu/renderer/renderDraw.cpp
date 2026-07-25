@@ -45,6 +45,9 @@
 #include <unordered_map>
 #include <vector>
 
+// psemu: adapter/metrics.cpp — canli performans metrikleri (pencere basligi).
+extern "C" void PsemuMetricAddDraw();
+
 namespace Libs::Graphics {
 
 int32_t ResolveVertexOffset(uint32_t index_offset, const ShaderVertexInputInfo& vs_input_info) {
@@ -867,6 +870,8 @@ static void EmitDrawPrimitives(const HW::UserConfig* ucfg, vk::CommandBuffer vk_
                                const DrawEmitInfo& emit) {
 	EXIT_IF(ucfg == nullptr);
 	EXIT_IF(draw.name == nullptr);
+
+	PsemuMetricAddDraw(); // canli metrik: kare basina cizim sayisi
 
 	switch (static_cast<Prospero::PrimitiveType>(ucfg->GetPrimType())) {
 		case Prospero::PrimitiveType::kPointList:
