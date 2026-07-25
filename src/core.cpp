@@ -2391,6 +2391,28 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 }
                 ctx->Rax = (uint64_t)dest;
                 special_return_set = true;
+            } else if (func_name.find("fnUEjBCNRVU") != std::string::npos) {
+                // char_traits<char16_t>::find benzeri: (s=RDI, c=RSI, n=RDX), 2 byte.
+                // ONCEDEN handler YOKTU -> default stub RAX=0 (NULL) donuyordu;
+                // GameMaker '|'(0x7c) ayracini bulamayip menu string parse dongusunde
+                // DONUYORDU (birkac saniyelik freeze) + butonlar bos kaliyordu.
+                // n = ELEMAN sayisi (char16_t). Kardes fn Noj9PsJrsa8 char16_t oldugu
+                // + item aciklamalari u16string oldugu icin 2 byte.
+                const uint16_t* p = reinterpret_cast<const uint16_t*>(ctx->Rdi);
+                uint16_t        c = static_cast<uint16_t>(ctx->Rsi);
+                size_t          n = static_cast<size_t>(ctx->Rdx);
+                { static int s_d = 0; if (s_d < 4 && p != nullptr && SafeReadable(p, 16)) { s_d++;
+                  const uint8_t* b = reinterpret_cast<const uint8_t*>(p);
+                  printf("[U16FIND] ptr=%p c=0x%x n=%zu bytes=%02x %02x %02x %02x %02x %02x %02x %02x\n",
+                         (void*)p, c, n, b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7]); fflush(stdout); } }
+                uint64_t found = 0;
+                if (p != nullptr && n > 0 && SafeReadable(p, n * 2)) {
+                    for (size_t i = 0; i < n; i++) {
+                        if (p[i] == c) { found = reinterpret_cast<uint64_t>(&p[i]); break; }
+                    }
+                }
+                ctx->Rax = found;
+                special_return_set = true;
             } else if (func_name.find("kALvdgEv5ME") != std::string::npos || func_name.find("9nf8joUTSaQ") != std::string::npos || func_name.find("rcQCUr0EaRU") != std::string::npos || func_name.find("sUP1hBaouOw") != std::string::npos || func_name.find("p6LrHjIQMdk") != std::string::npos || func_name.find("hqi8yMOCmG0") != std::string::npos || func_name.find("QW2jL1J5rwY") != std::string::npos || func_name.find("P8F2oavZXtY") != std::string::npos || func_name.find("Q1BL70XVV0o") != std::string::npos) {
                 // _Locksyslock / _Unlocksyslock / locales / exceptions
                 ctx->Rax = 0;
