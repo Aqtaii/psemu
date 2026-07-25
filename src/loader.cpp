@@ -184,7 +184,8 @@ bool LoadEboot(const std::string& filePath) {
 
         if (phdr->p_type == PT_LOAD) {
             std::cout << "[Segment] PT_LOAD kopyalaniyor: vaddr=0x" << std::hex << phdr->p_vaddr 
-                      << ", memsz=0x" << phdr->p_memsz << std::dec << std::endl;
+                      << ", memsz=0x" << phdr->p_memsz 
+                      << ", offset=0x" << phdr->p_offset << std::dec << std::endl;
 
             // p_offset ham ELF'in baslangicina gore hesaplanmistir. SELF dosyalarinda 
             // gercek veriye ulasmak icin daima elf_offset eklenmelidir!

@@ -239,9 +239,10 @@ void ResolveRenderColorTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 	auto decision_log_id = g_render_color_log_count.fetch_add(1);
 	if (decision_log_id < 128 || !render_to_texture) {
 		LOGF("RenderColorTarget: slot=%" PRIu32 " addr=0x%010" PRIx64 " size=0x%016" PRIx64
-		     " extent=%ux%u view_mip=%u view_extent=%ux%u levels=%u pitch=%u"
-		     " fmt=0x%08" PRIx32 " nfmt=0x%08" PRIx32 " order=0x%08" PRIx32
-		     " tile=%s target=%s video_size=0x%016" PRIx64 " video_pitch=%" PRIu64 "\n",
+		     " extent=%" PRIu32 "x%" PRIu32 " view_mip=%" PRIu32 " view_extent=%" PRIu32 "x%" PRIu32
+		     " levels=%" PRIu32 " pitch=%" PRIu32 " fmt=0x%08" PRIx32 " nfmt=0x%08" PRIx32
+		     " order=0x%08" PRIx32 " tile=%s target=%s video_size=0x%016" PRIx64
+		     " video_pitch=%" PRIu32 "\n",
 		     rt_slot, rt.base.addr, backing_size, width, height, rt.view.current_mip_level,
 		     view_extent.width, view_extent.height, levels, pitch, rt.info.format,
 		     rt.info.channel_type, rt.info.channel_order, tile ? "tiled" : "linear",

@@ -103,8 +103,8 @@ PipelineCache::GraphicsPipeline* PipelineCache::CreateGraphicsPipeline(
 	for (uint32_t i = 0; i < RENDER_COLOR_ATTACHMENTS_MAX; i++) {
 		static_params.color_mask[i] = color_mask[i];
 	}
-	static_params.cull_back  = mc.cull_back;
-	static_params.cull_front = mc.cull_front;
+	static_params.cull_back  = false;
+	static_params.cull_front = false;
 	static_params.face       = mc.face;
 
 	for (uint32_t i = 0; i < color_count; i++) {

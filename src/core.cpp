@@ -20,6 +20,7 @@
 #include "video.h"
 #include "kernel/eventQueue.h"
 #include "graphics/presentation/videoOut.h"
+#include "libs/controller.h"
 #include <immintrin.h>
 
 extern "C" void PsemuMarkCpuModified(uint64_t vaddr, uint64_t size);
@@ -2380,53 +2381,23 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 }
                 ctx->Rax = found;
                 special_return_set = true;
-            } else if (func_name.find("fnUEjBCNRVU") != std::string::npos) {
-                // wmemchr (PS5 wchar_t is 32-bit or 16-bit?)
-                uint16_t* s16 = (uint16_t*)ctx->Rdi;
-                uint32_t* s32 = (uint32_t*)ctx->Rdi;
-                uint32_t c = (uint32_t)ctx->Rsi;
-                size_t n = (size_t)ctx->Rdx;
-                uint64_t res = 0;
-                
-                std::stringstream dump;
-                dump << "[wmemchr] RDI=0x" << std::hex << ctx->Rdi << " c=" << c << " n=" << std::dec << n << " | ";
-                if (s16 && SafeReadable(s16, n * 2)) {
-                    for(size_t i=0; i<min(n, (size_t)8); i++) dump << std::hex << s16[i] << " ";
-                }
-                LOG_INFO(dump.str());
-
-                if (s32 && n > 0 && SafeReadable(s32, n * 4)) {
-                    for (size_t i = 0; i < n; i++) {
-                        if (s32[i] == c) {
-                            res = (uint64_t)&s32[i];
-                            break;
-                        }
-                    }
-                }
-                // Try 16-bit fallback if 32-bit didn't find it
-                if (!res && s16 && n > 0 && SafeReadable(s16, n * 2)) {
-                    for (size_t i = 0; i < n; i++) {
-                        if (s16[i] == (uint16_t)c) {
-                            res = (uint64_t)&s16[i];
-                            LOG_INFO("[wmemchr] Found using 16-bit search!");
-                            break;
-                        }
-                    }
-                }
-                ctx->Rax = res;
-                special_return_set = true;
             } else if (func_name.find("Noj9PsJrsa8") != std::string::npos) {
-                // wmemmove (PS5 wchar_t is 32-bit)
-                uint32_t* dest = (uint32_t*)ctx->Rdi;
-                const uint32_t* src = (const uint32_t*)ctx->Rsi;
+                // char_traits<char16_t>::copy / move (16-bit strings)
+                uint16_t* dest = (uint16_t*)ctx->Rdi;
+                const uint16_t* src = (const uint16_t*)ctx->Rsi;
                 size_t n = (size_t)ctx->Rdx;
-                if (dest && src && n > 0 && SafeReadable(src, n * 4) && SafeWritable(dest, n * 4)) {
-                    memmove(dest, src, n * 4);
+                if (dest && src && n > 0 && SafeReadable(src, n * 2) && SafeWritable(dest, n * 2)) {
+                    memmove(dest, src, n * 2);
                 }
                 ctx->Rax = (uint64_t)dest;
                 special_return_set = true;
             } else if (func_name.find("kALvdgEv5ME") != std::string::npos || func_name.find("9nf8joUTSaQ") != std::string::npos || func_name.find("rcQCUr0EaRU") != std::string::npos || func_name.find("sUP1hBaouOw") != std::string::npos || func_name.find("p6LrHjIQMdk") != std::string::npos || func_name.find("hqi8yMOCmG0") != std::string::npos || func_name.find("QW2jL1J5rwY") != std::string::npos || func_name.find("P8F2oavZXtY") != std::string::npos || func_name.find("Q1BL70XVV0o") != std::string::npos) {
                 // _Locksyslock / _Unlocksyslock / locales / exceptions
+                ctx->Rax = 0;
+                special_return_set = true;
+            } else if (func_name.find("T72hz6ffq08") != std::string::npos) {
+                // scePthreadYield
+                SwitchToThread();
                 ctx->Rax = 0;
                 special_return_set = true;
             } else if (func_name.find("pKwslsMUmSk") != std::string::npos) {
@@ -2553,13 +2524,17 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                      func_name.find("ZP4e7rlzOUk") != std::string::npos) {
                 // SaveDataMount3(mount, result): RDI=mount, RSI=result
                 void* res_ptr = reinterpret_cast<void*>(ctx->Rsi);
-                if (res_ptr && SafeWritable(res_ptr, 64)) {
-                    char* mount_str = reinterpret_cast<char*>(res_ptr);
-                    strncpy(mount_str, "/saveData0", 32);
+                // sceSaveDataMount3: RDI=mount, RSI=mountResult, RDX=err?
+                // mountResult contains mountPoint (char[16]) and requiredBlocks (uint64_t).
+                // If we don't initialize it, the game reads uninitialized requiredBlocks and tries to allocate a huge buffer, crashing the allocator.
+                void* mountResult = reinterpret_cast<void*>(ctx->Rsi);
+                if (mountResult && SafeWritable(mountResult, 64)) {
+                    memset(mountResult, 0, 64);
+                    strcpy(reinterpret_cast<char*>(mountResult), "/saveData0");
                 }
+                LOG_INFO("[SaveData] SaveDataMount3 -> SUCCESS (0) [/saveData0]");
                 ctx->Rax = 0;
                 special_return_set = true;
-                LOG_INFO("[SaveData] SaveDataMount3 -> SUCCESS (0) [/saveData0]");
             } else if (readable_name == "SaveDataUmount2" || readable_name == "sceSaveDataUmount" ||
                        func_name.find("uW4vfTwMQVo") != std::string::npos) {
                 ctx->Rax = 0;
@@ -2848,6 +2823,15 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             } else if (readable_name == "PadOpen" || readable_name == "PadGetHandle") {
                 ctx->Rax = 1; // gecerli handle (0 DEGIL - kritik)
                 special_return_set = true;
+            } else if (readable_name == "PadReadState" || readable_name == "scePadReadState") {
+                int handle = static_cast<int>(ctx->Rdi);
+                void* data = reinterpret_cast<void*>(ctx->Rsi);
+                if (data && SafeWritable(data, 120)) {
+                    ctx->Rax = Libs::Controller::PadReadState(handle, reinterpret_cast<Libs::Controller::PadData*>(data));
+                } else {
+                    ctx->Rax = -2137915391; // PAD_ERROR_INVALID_ARG
+                }
+                special_return_set = true;
             } else if (readable_name == "PadGetControllerInformation") {
                 // (handle RDI, info RSI). info doldurulmali; bir DualSense
                 // bagliymis gibi raporla ki oyun menu/oyuna ilerlesin.
@@ -2940,29 +2924,49 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                        readable_name == "pthread_cond_wait" ||
                        readable_name == "scePthreadCondTimedwait" ||
                        readable_name == "pthread_cond_timedwait") {
-                // (cond, mutex[, usec]) - mutex kilitli gelir, kilitli doner.
+                // (cond, mutex[, timeout]) - mutex kilitli gelir, kilitli doner.
                 GuestCond*  c = GetOrCreateCond(reinterpret_cast<uint64_t*>(ctx->Rdi));
                 GuestMutex* m = GetOrCreateMutex(reinterpret_cast<uint64_t*>(ctx->Rsi));
-                bool timed = (readable_name == "scePthreadCondTimedwait" ||
-                              readable_name == "pthread_cond_timedwait");
                 DWORD ms = INFINITE;
-                if (timed) {
-                    uint64_t usec = static_cast<uint32_t>(ctx->Rdx);
-                    uint64_t conv = usec / 1000;
-                    ms = (conv >= INFINITE) ? (INFINITE - 1)
-                                            : static_cast<DWORD>(conv);
+                
+                if (readable_name == "scePthreadCondTimedwait") {
+                    // PS5 scePthreadCondTimedwait passes usec by VALUE in RDX
+                    int32_t usec = static_cast<int32_t>(ctx->Rdx);
+                    if (usec < 0) {
+                        // GameMaker passes -1000 here! If we set ms=0 or 1, it returns ETIMEDOUT too fast 
+                        // and breaks the async loader (black screen). 
+                        // Give it a large timeout (equivalent to the old uint32 cast).
+                        ms = INFINITE - 1; 
+                    } else {
+                        ms = static_cast<DWORD>(usec / 1000);
+                        if (ms == 0) ms = 1; // don't return immediately
+                    }
+                } else if (readable_name == "pthread_cond_timedwait") {
+                    // POSIX passes struct timespec* abstime in RDX
+                    uint64_t ptr = ctx->Rdx;
+                    if (ptr && SafeReadable((void*)ptr, 16)) {
+                        int64_t tv_sec = *reinterpret_cast<int64_t*>(ptr);
+                        int64_t tv_nsec = *reinterpret_cast<int64_t*>(ptr + 8);
+                        
+                        // Convert abstime to relative ms (simplified, usually we'd get current time)
+                        // For now just wait 1ms so we don't hang, since calculating precise relative time
+                        // requires knowing which clock (CLOCK_REALTIME) was used.
+                        ms = 1; 
+                    } else {
+                        ms = 0;
+                    }
                 }
+
                 BOOL ok = TRUE;
                 if (c && m) {
                     ok = SleepConditionVariableCS(&c->cv, &m->cs, ms);
                 } else {
                     // Tutamac kurulamadi: en azindan bekle, MESGUL DONGU olma.
-                    Sleep(timed ? (ms == INFINITE ? 1u : (ms ? ms : 1u)) : 1u);
+                    Sleep(ms == INFINITE ? 1u : (ms ? ms : 1u));
                     ok = FALSE;
                 }
-                // Zaman asimi -> ETIMEDOUT(60). Bu ONEMLI: 0 donmek
-                // "sinyallendi" demektir ve oyun bos kuyruktan gorev
-                // okumaya calisir.
+                
+                // Zaman asimi -> ETIMEDOUT(60).
                 ctx->Rax = ok ? 0 : 60;
                 special_return_set = true;
             } else if (readable_name == "scePthreadCondSignal" ||
@@ -3150,12 +3154,98 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             //            -> oyun [8]'e yazinca RVA 0x5f0f'te cokuyordu.
             // PM4 icerigini biz yorumlamiyoruz; onemli olan gecerli pointer ve
             // imlecin dogru ilerlemesi (KytyPS5 agc.cpp: AllocateDW).
-            else if (readable_name == "GraphicsDcbSetCxRegistersIndirect" ||
-                     readable_name == "GraphicsDcbSetShRegistersIndirect" ||
-                     readable_name == "GraphicsDcbSetUcRegistersIndirect") {
-                // (CommandBuffer* buf, const ShaderRegister* regs, uint32_t num_regs)
-                uint32_t* cmd = CbAllocateDW(ctx->Rdi, 5); // KytyPS5: AllocateDW(5)
-                if (cmd) memset(cmd, 0, 5 * 4);
+            else if (readable_name == "GraphicsDcbSetCxRegistersIndirect") {
+                // IT_SET_CONTEXT_REG_INDIRECT = 0x9F, R=0
+                uint32_t* cmd = CbAllocateDW(ctx->Rdi, 5);
+                if (cmd) {
+                    cmd[0] = Pm4Header(5, 0x9F);
+                    uint64_t regs = static_cast<uint64_t>(ctx->Rsi);
+                    cmd[1] = static_cast<uint32_t>(regs & 0xfffffffcu);
+                    cmd[2] = static_cast<uint32_t>(regs >> 32u);
+                    cmd[3] = 0x80000000u;
+                    cmd[4] = static_cast<uint32_t>(ctx->Rdx) & 0x3fffu;
+                }
+                ctx->Rax = reinterpret_cast<uint64_t>(cmd);
+                special_return_set = true;
+            } else if (readable_name == "GraphicsDcbSetShRegistersIndirect") {
+                // IT_SET_SH_REG_INDIRECT = 0x63, R=0
+                uint32_t* cmd = CbAllocateDW(ctx->Rdi, 5);
+                if (cmd) {
+                    cmd[0] = Pm4Header(5, 0x63);
+                    uint64_t regs = static_cast<uint64_t>(ctx->Rsi);
+                    cmd[1] = static_cast<uint32_t>(regs & 0xfffffffcu);
+                    cmd[2] = static_cast<uint32_t>(regs >> 32u);
+                    cmd[3] = 0x80000000u;
+                    cmd[4] = static_cast<uint32_t>(ctx->Rdx) & 0x3fffu;
+                }
+                ctx->Rax = reinterpret_cast<uint64_t>(cmd);
+                special_return_set = true;
+            } else if (readable_name == "GraphicsDcbSetUcRegistersIndirect") {
+                // IT_SET_UCONFIG_REG_INDIRECT = 0x64, R=0
+                uint32_t* cmd = CbAllocateDW(ctx->Rdi, 5);
+                if (cmd) {
+                    cmd[0] = Pm4Header(5, 0x64);
+                    uint64_t regs = static_cast<uint64_t>(ctx->Rsi);
+                    cmd[1] = static_cast<uint32_t>(regs & 0xfffffffcu);
+                    cmd[2] = static_cast<uint32_t>(regs >> 32u);
+                    cmd[3] = 0x80000000u;
+                    cmd[4] = static_cast<uint32_t>(ctx->Rdx) & 0x3fffu;
+                }
+                ctx->Rax = reinterpret_cast<uint64_t>(cmd);
+                special_return_set = true;
+            } else if (readable_name == "sceAgcDcbDrawIndexOffset") {
+                // IT_DRAW_INDEX_OFFSET_2 = 0x35, R=0
+                uint32_t* cmd = CbAllocateDW(ctx->Rdi, 5);
+                if (cmd) {
+                    cmd[0] = Pm4Header(5, 0x35);
+                    uint32_t count = static_cast<uint32_t>(ctx->Rdx);
+                    cmd[1] = count == 0 ? 1u : count;
+                    cmd[2] = static_cast<uint32_t>(ctx->Rsi);
+                    cmd[3] = count;
+                    uint64_t mod = static_cast<uint64_t>(ctx->Rcx);
+                    cmd[4] = (mod & (1ull << 32u)) ? 0u : ((static_cast<uint32_t>(mod) >> 3u) & 0x20u);
+                }
+                ctx->Rax = reinterpret_cast<uint64_t>(cmd);
+                special_return_set = true;
+            } else if (readable_name == "sceAgcDcbSetIndexBuffer") {
+                // IT_INDEX_BASE = 0x26, R=0, 3 DWORDs
+                uint32_t* cmd = CbAllocateDW(ctx->Rdi, 3);
+                if (cmd) {
+                    cmd[0] = Pm4Header(3, 0x26);
+                    uint64_t addr = static_cast<uint64_t>(ctx->Rsi);
+                    cmd[1] = static_cast<uint32_t>(addr & 0xffffffffu);
+                    cmd[2] = static_cast<uint32_t>(addr >> 32u);
+                }
+                ctx->Rax = reinterpret_cast<uint64_t>(cmd);
+                special_return_set = true;
+            } else if (readable_name == "sceAgcDcbSetIndexSize") {
+                // IT_SET_UCONFIG_REG_INDEX = 0x7A, VGT_INDEX_TYPE=0x243, 3 DWORDs
+                uint32_t* cmd = CbAllocateDW(ctx->Rdi, 3);
+                if (cmd) {
+                    cmd[0] = Pm4Header(3, 0x7A);
+                    cmd[1] = 0x20000000u | 0x243u;
+                    uint8_t agc_sz = static_cast<uint8_t>(ctx->Rsi);
+                    // Agc enum: 0=8bit, 1=16bit, 2=32bit (or 4=32bit)
+                    // Kyty expects: 0=16bit, 1=32bit, 2=8bit
+                    uint8_t kyty_sz = (agc_sz == 1) ? 0 : ((agc_sz == 2 || agc_sz == 4) ? 1 : 2);
+                    uint8_t cache_policy = static_cast<uint8_t>(ctx->Rdx);
+                    cmd[2] = 0x400u | (kyty_sz & 0x3u) | ((cache_policy & 0x3u) << 6u);
+                }
+                ctx->Rax = reinterpret_cast<uint64_t>(cmd);
+                special_return_set = true;
+            } else if (readable_name == "sceAgcDcbSetFlip") {
+                // KYTY_PM4(6, IT_NOP=0x10, R_FLIP=0x17)
+                uint32_t* cmd = CbAllocateDW(ctx->Rdi, 6);
+                if (cmd) {
+                    // 0xC0000000 | ((6-2)<<16) | (0x10<<8) | (0x17<<2)
+                    cmd[0] = 0xC004105Cu;
+                    cmd[1] = static_cast<uint32_t>(ctx->Rsi);
+                    cmd[2] = static_cast<uint32_t>(ctx->Rdx);
+                    cmd[3] = static_cast<uint32_t>(ctx->Rcx);
+                    uint64_t arg = static_cast<uint64_t>(ctx->R8);
+                    cmd[4] = static_cast<uint32_t>(arg & 0xffffffffu);
+                    cmd[5] = static_cast<uint32_t>(arg >> 32u);
+                }
                 ctx->Rax = reinterpret_cast<uint64_t>(cmd);
                 special_return_set = true;
             } else if (readable_name == "GraphicsCbSetShRegisterRangeDirect") {
@@ -3407,6 +3497,50 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     buf[n] = 0;
                 }
                 ctx->Rax = static_cast<uint64_t>(s.size());
+                special_return_set = true;
+            } else if (readable_name == "wmemchr" || readable_name == "NID_fnUEjBCNRVU") {
+                // wchar_t* wmemchr(const wchar_t* s, wchar_t c, size_t n)
+                // PS5/FreeBSD'de wchar_t = 4 BYTE; n = ELEMAN sayisi. Onceki hook
+                // byte-tabanliydi (count byte arayip byte karsilastiriyordu) ->
+                // '|' ayraci count/4'ten ilerideyse BULUNAMIYOR, GameMaker'in
+                // parse dongusu spin ediyor (donma) + string'ler bos kaliyor
+                // (gorunmez butonlar).
+                const uint32_t* p = reinterpret_cast<const uint32_t*>(ctx->Rdi);
+                uint32_t        ch    = static_cast<uint32_t>(ctx->Rsi);
+                size_t          count = static_cast<size_t>(ctx->Rdx);
+                // DOGRULAMA: ilk birkac cagride kaynak baytlarini dok (wchar_t
+                // boyutunu gozle teyit: "b\0\0\0g..." = 4B, "b\0g\0" = 2B, "bg" = 1B).
+                {
+                    static int s_dbg = 0;
+                    if (s_dbg < 3 && p != nullptr && SafeReadable(p, 16)) {
+                        s_dbg++;
+                        const uint8_t* b = reinterpret_cast<const uint8_t*>(p);
+                        printf("[WMEMCHR] ptr=%p c=0x%x n=%zu bytes=%02x %02x %02x %02x %02x %02x %02x %02x\n",
+                               (void*)p, ch, count, b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7]);
+                        fflush(stdout);
+                    }
+                }
+                const uint32_t* result = nullptr;
+                if (p != nullptr && count > 0 && SafeReadable(p, count * sizeof(uint32_t))) {
+                    for (size_t i = 0; i < count; i++) {
+                        if (p[i] == ch) { result = &p[i]; break; }
+                    }
+                }
+                ctx->Rax = reinterpret_cast<uint64_t>(result);
+                special_return_set = true;
+            } else if (readable_name == "wmemmove" || readable_name == "NID_Noj9PsJrsa8") {
+                // wchar_t* wmemmove(wchar_t* d, const wchar_t* s, size_t n)
+                // n = ELEMAN sayisi; kopyalanacak = n * 4 byte. Onceki hook n byte
+                // kopyaliyordu -> genis karakterleri kirpiyor, string'ler bozuluyordu.
+                void*       dest  = reinterpret_cast<void*>(ctx->Rdi);
+                const void* src   = reinterpret_cast<const void*>(ctx->Rsi);
+                size_t      count = static_cast<size_t>(ctx->Rdx);
+                size_t      bytes = count * sizeof(uint32_t);
+                if (dest != nullptr && src != nullptr && count > 0 &&
+                    SafeReadable(src, bytes) && SafeWritable(dest, bytes)) {
+                    memmove(dest, src, bytes);
+                }
+                ctx->Rax = reinterpret_cast<uint64_t>(dest);
                 special_return_set = true;
             }
 

@@ -17,3 +17,7 @@ dump*.bin
 # Telifli oyun dosyalari (GitHub'a gitmemeli)
 PPSA02929-app0/
 loader.exe
+
+_Shaders/
+images/
+build_out.txt

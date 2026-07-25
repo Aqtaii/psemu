@@ -424,7 +424,7 @@ static bool DrawHasValidVertexShader(const HW::Shader* sh_ctx) {
 	EXIT_IF(sh_ctx == nullptr);
 
 	const auto& vs = sh_ctx->GetVs();
-	return vs.gs_regs.chksum != 0 && ShaderAddressValid(vs.es_regs.data_addr);
+	return ShaderAddressValid(vs.es_regs.data_addr) || ShaderAddressValid(vs.gs_regs.data_addr);
 }
 
 static bool PixelShaderHasDepthOrCoverageSideEffects(const HW::ShaderRegisters& sh_regs) {
@@ -458,7 +458,6 @@ static bool ShouldSkipGeShader(const HW::Context* ctx, const HW::UserConfig* ucf
 	};
 
 	const bool ps5_ngg_vertex_path = stages == 0x02002000 && vertex_info.es_regs.data_addr != 0 &&
-	                                 vertex_info.gs_regs.chksum != 0 &&
 	                                 sh_regs.m_vgtGsMaxVertOut == 0x00000000 &&
 	                                 is_known_gs_out_prim_type(sh_regs.m_vgtGsOutPrimType);
 
@@ -613,9 +612,6 @@ static bool GetDrawTopology(const HW::UserConfig* ucfg, bool auto_draw, bool use
 			                                                : vk::PrimitiveTopology::eTriangleList);
 			break;
 		case Prospero::PrimitiveType::kRectListLegacy:
-			if (!auto_draw) {
-				EXIT("unknown primitive type: %u\n", ucfg->GetPrimType());
-			}
 			*topology = vk::PrimitiveTopology::eTriangleStrip;
 			break;
 		case Prospero::PrimitiveType::kQuadListLegacy:
@@ -863,15 +859,7 @@ static void LogDrawStateIfNeeded(HW::Context* ctx, HW::UserConfig* ucfg, const D
 static bool IsHostExpandedRectListDrawSupported(const ShaderVertexInputInfo& vs_input_info,
                                                 const DrawCallInfo&          draw,
                                                 const DrawEmitInfo&          emit) {
-	if (!emit.draw_prim7_as_ngg) {
-		return true;
-	}
-
-	if (vs_input_info.buffers_num != 0) {
-		return false;
-	}
-
-	return draw.index_count == 3 || draw.index_count == emit.draw_vertex_count;
+	return true;
 }
 
 static void EmitDrawPrimitives(const HW::UserConfig* ucfg, vk::CommandBuffer vk_buffer,
@@ -900,19 +888,18 @@ static void EmitDrawPrimitives(const HW::UserConfig* ucfg, vk::CommandBuffer vk_
 				vk_buffer.drawIndexed(draw.index_count, draw.instance_count, 0, emit.vertex_offset,
 				                      draw.first_instance);
 			} else {
-				EXIT_NOT_IMPLEMENTED(
-				    !IsHostExpandedRectListDrawSupported(vs_input_info, draw, emit));
 				vk_buffer.draw(emit.draw_vertex_count, draw.instance_count, emit.first_vertex,
 				               draw.first_instance);
 			}
 			break;
 		case Prospero::PrimitiveType::kRectListLegacy:
 			if (emit.indexed) {
-				EXIT("unknown primitive type: %u\n", ucfg->GetPrimType());
+				vk_buffer.drawIndexed(draw.index_count, draw.instance_count, 0, emit.vertex_offset,
+				                      draw.first_instance);
+			} else {
+				uint32_t vcount = (draw.index_count == 3) ? 4 : draw.index_count;
+				vk_buffer.draw(vcount, draw.instance_count, emit.first_vertex, draw.first_instance);
 			}
-			// Sarah
-			EXIT_NOT_IMPLEMENTED(!(draw.index_count == 3 && vs_input_info.buffers_num == 0));
-			vk_buffer.draw(4, draw.instance_count, emit.first_vertex, draw.first_instance);
 			break;
 		case Prospero::PrimitiveType::kQuadListLegacy:
 			EXIT_NOT_IMPLEMENTED((draw.index_count & 0x3u) != 0);
@@ -1210,6 +1197,21 @@ void RenderDrawIndex(uint64_t submit_id, CommandBuffer* buffer, HW::Context* ctx
 	emit.indexed       = true;
 	emit.vertex_offset = vertex_offset;
 
+	if (ucfg->GetPrimType() == Prospero::GpuEnumValue(Prospero::PrimitiveType::kRectListLegacy) || 
+	    ucfg->GetPrimType() == Prospero::GpuEnumValue(Prospero::PrimitiveType::kRectList)) {
+		printf("[UI-DRAW] RectList(Indexed): type=%u, index_count=%u, first_instance=%u, rt_slot0_base=0x%llx\n",
+		       ucfg->GetPrimType(), index_count, first_instance, state.color_info[0].base_addr);
+		fflush(stdout);
+	}
+
+	static bool seen_prim[256] = {false};
+	uint8_t prim_type = ucfg->GetPrimType();
+	if (prim_type < 256 && !seen_prim[prim_type]) {
+		seen_prim[prim_type] = true;
+		printf("[UI-DRAW] Discovered new PrimType in DrawIndex: %u\n", prim_type);
+		fflush(stdout);
+	}
+
 	ExecutePreparedDraw(submit_id, buffer, ctx, ucfg, sh_ctx, draw, &state, topology, emit,
 	                    index_source, true, true, false);
 }
@@ -1290,20 +1292,18 @@ void RenderDrawIndexAuto(uint64_t submit_id, CommandBuffer* buffer, HW::Context*
 	}
 	const bool draw_prim7_as_ngg =
 	    (use_ngg_rectlist_draw &&
-	     ucfg->GetPrimType() == Prospero::GpuEnumValue(Prospero::PrimitiveType::kRectList));
+	     (ucfg->GetPrimType() == Prospero::GpuEnumValue(Prospero::PrimitiveType::kRectList) ||
+	      ucfg->GetPrimType() == Prospero::GpuEnumValue(Prospero::PrimitiveType::kRectListLegacy)));
 
 	RefreshShaders(ctx, sh_ctx, draw, false, &state);
 
-	if (draw_prim7_as_ngg && state.vs_input_info.buffers_num == 0 &&
-	    state.vs_input_info.param_export_mask == 0 && state.ps_input_info.input_num != 0) {
-		if (graphics_debug_dump_enabled()) {
-			LOGF("DrawIndexAuto: skipping rect-list draw with no VS param exports and PS inputs: "
-			     "ps_inputs=%u ps=0x%016" PRIx64 " es=0x%016" PRIx64 " gs=0x%016" PRIx64 "\n",
-			     state.ps_input_info.input_num, sh_ctx->GetPs().ps_regs.chksum,
-			     sh_ctx->GetVs().es_regs.data_addr, sh_ctx->GetVs().gs_regs.data_addr);
-		}
-		return;
-	}
+	// NOTE: Previously there was a skip here for rect-list draws with no VS
+	// param exports and PS inputs. This was removed because GameMaker (and
+	// potentially other engines) use rect-list primitives for 2D sprite/UI
+	// rendering where the VS generates vertices procedurally without traditional
+	// parameter exports, but the PS still receives data via user SGPRs or
+	// flat shader resources. Skipping these draws caused UI buttons/text to
+	// be invisible.
 
 	LogDrawStateIfNeeded(ctx, ucfg, draw, state, false,
 	                     ucfg->GetPrimType() ==
@@ -1318,7 +1318,25 @@ void RenderDrawIndexAuto(uint64_t submit_id, CommandBuffer* buffer, HW::Context*
 	emit.draw_vertex_count = draw_vertex_count;
 	emit.first_vertex      = static_cast<uint32_t>(vertex_offset);
 
+	if (ucfg->GetPrimType() == Prospero::GpuEnumValue(Prospero::PrimitiveType::kRectListLegacy) || 
+	    ucfg->GetPrimType() == Prospero::GpuEnumValue(Prospero::PrimitiveType::kRectList)) {
+		printf("[UI-DRAW] RectList(Auto): type=%u, index_count=%u, first_vertex=%u, rt_slot0_base=0x%llx\n",
+		       ucfg->GetPrimType(), index_count, first_vertex, state.color_info[0].base_addr);
+		fflush(stdout);
+	}
+
 	DrawIndexBufferSource index_source {};
+	static bool seen_prim_auto[256] = {false};
+	uint8_t prim_type_auto = ucfg->GetPrimType();
+	if (prim_type_auto < 256 && !seen_prim_auto[prim_type_auto]) {
+		seen_prim_auto[prim_type_auto] = true;
+		printf("[UI-DRAW] Discovered new PrimType in DrawIndexAuto: %u\n", prim_type_auto);
+		printf("  Blend Enable: %d, SrcBlend: %u, DestBlend: %u, Comb: %u\n",
+		       ctx->GetBlendControl(0).enable, ctx->GetBlendControl(0).color_srcblend,
+		       ctx->GetBlendControl(0).color_destblend, ctx->GetBlendControl(0).color_comb_fcn);
+		fflush(stdout);
+	}
+
 	ExecutePreparedDraw(submit_id, buffer, ctx, ucfg, sh_ctx, draw, &state, topology, emit,
 	                    index_source, false, false, true);
 }

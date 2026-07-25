@@ -685,6 +685,13 @@ KYTY_HW_CTX_PARSER(HwCtxSetDepthRenderTarget) {
 			z.z_write_base_addr       = static_cast<uint64_t>(buffer[4]) << 8u;
 			z.stencil_write_base_addr = static_cast<uint64_t>(buffer[5]) << 8u;
 
+			if (z.stencil_info.format != 0 && z.stencil_write_base_addr == 0 && z.z_write_base_addr != 0) {
+				z.stencil_write_base_addr = z.z_write_base_addr;
+			}
+			if (z.stencil_info.format != 0 && z.stencil_read_base_addr == 0 && z.z_read_base_addr != 0) {
+				z.stencil_read_base_addr = z.z_read_base_addr;
+			}
+
 			// DB_DEPTH_SIZE
 			z.pitch_div8_minus1  = (buffer[6] >> Pm4::DB_DEPTH_SIZE_PITCH_TILE_MAX_SHIFT) &
 			                       Pm4::DB_DEPTH_SIZE_PITCH_TILE_MAX_MASK;

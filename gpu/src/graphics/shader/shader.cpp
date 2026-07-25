@@ -649,12 +649,19 @@ static void ShaderApplyAttribSemantics(ShaderVertexInputInfo* info,
 
 		// psemu tani ve fix:
 		// Eger table'dan okunan V# tamamen sifir ise, ama oyun V#'yi dogrudan 
-		// user_sgpr[0..3] icine koymussa (bazi ozel shader'lar), onu kullan!
+		// user_sgpr[index*4..index*4+3] icine koymussa, onu kullan!
 		if (sharp[0] == 0 && sharp[1] == 0 && sharp[2] == 0 && sharp[3] == 0) {
-			uint32_t direct_fmt = (user_sgpr.value[3] >> 12u) & 0x7fu;
-			if (direct_fmt != 0 && direct_fmt != 0x7f) {
-				// Fallback to direct SGPR V# descriptor
-				sharp = &user_sgpr.value[0];
+			if (index * 4 + 3 < user_sgpr.count) {
+				const uint32_t* sgpr_vsharp = &user_sgpr.value[index * 4];
+				if (sgpr_vsharp[0] != 0 || sgpr_vsharp[1] != 0 || sgpr_vsharp[2] != 0 || sgpr_vsharp[3] != 0) {
+					sharp = sgpr_vsharp;
+				}
+			}
+			if (sharp[0] == 0 && sharp[1] == 0 && sharp[2] == 0 && sharp[3] == 0) {
+				uint32_t direct_fmt = (user_sgpr.value[3] >> 12u) & 0x7fu;
+				if (direct_fmt != 0 && direct_fmt != 0x7f) {
+					sharp = &user_sgpr.value[0];
+				}
 			}
 		}
 
@@ -756,7 +763,8 @@ static bool ShaderGetStaticInputInfoVS(const HW::VertexShaderInfo* regs,
 
 	info->export_count = static_cast<int>(sh->GetExportCount());
 
-	EXIT_NOT_IMPLEMENTED(regs->es_regs.data_addr == 0 || regs->gs_regs.chksum == 0);
+	EXIT_NOT_IMPLEMENTED(regs->es_regs.data_addr == 0);
+	const uint64_t vs_chksum = (regs->gs_regs.chksum != 0) ? regs->gs_regs.chksum : regs->es_regs.data_addr;
 
 	uint64_t                shader_addr   = regs->es_regs.data_addr;
 	const HW::UserSgprInfo& user_sgpr     = regs->gs_user_sgpr;
@@ -771,7 +779,7 @@ static bool ShaderGetStaticInputInfoVS(const HW::VertexShaderInfo* regs,
 	if (data.user_data == nullptr) {
 		LOGF("ShaderGetInputInfoVS(): no AGC user data for shader=0x%016" PRIx64 " es=0x%016" PRIx64
 		     " gs=0x%016" PRIx64 " chksum=0x%016" PRIx64 " user_sgpr_num=%u\n",
-		     shader_addr, regs->es_regs.data_addr, regs->gs_regs.data_addr, regs->gs_regs.chksum,
+		     shader_addr, regs->es_regs.data_addr, regs->gs_regs.data_addr, vs_chksum,
 		     static_cast<uint32_t>(user_sgpr_num));
 	}
 	ShaderVertexMetadata metadata;
@@ -936,7 +944,7 @@ static bool TryUseVertexPermutation(const ShaderProgramPermutation& permutation,
 	std::string error;
 	if (!ShaderMaterializeStageRuntime(
 	        permutation.program,
-	        std::span<const uint32_t>(regs->gs_user_sgpr.value, regs->gs_regs.rsrc2.user_sgpr),
+	        std::span<const uint32_t>(regs->gs_user_sgpr.value, std::max<uint32_t>(regs->gs_regs.rsrc2.user_sgpr, 16u)),
 	        regs->es_regs.data_addr, &info->stage, &error)) {
 		return LogPermutationMismatch(permutation, "VS", shader_hash, error);
 	}
@@ -951,7 +959,7 @@ static bool TryUsePixelPermutation(const ShaderProgramPermutation& permutation,
 	std::string error;
 	if (!ShaderMaterializeStageRuntime(
 	        permutation.program,
-	        std::span<const uint32_t>(regs->ps_user_sgpr.value, regs->ps_regs.rsrc2.user_sgpr),
+	        std::span<const uint32_t>(regs->ps_user_sgpr.value, std::max<uint32_t>(regs->ps_regs.rsrc2.user_sgpr, 16u)),
 	        regs->ps_regs.data_addr, &info->stage, &error)) {
 		return LogPermutationMismatch(permutation, "PS", shader_hash, error);
 	}
@@ -966,7 +974,7 @@ static bool TryUseComputePermutation(const ShaderProgramPermutation& permutation
 	std::string error;
 	if (!ShaderMaterializeStageRuntime(
 	        permutation.program,
-	        std::span<const uint32_t>(regs->cs_user_sgpr.value, regs->cs_regs.user_sgpr),
+	        std::span<const uint32_t>(regs->cs_user_sgpr.value, std::max<uint32_t>(regs->cs_regs.user_sgpr, 16u)),
 	        regs->cs_regs.data_addr, &info->stage, &error)) {
 		return LogPermutationMismatch(permutation, "CS", shader_hash, error);
 	}
@@ -1387,15 +1395,16 @@ bool ShaderCompileSpirvVS(const HW::VertexShaderInfo* regs, const HW::ShaderRegi
 	EXIT_IF(input_info == nullptr);
 	EXIT_IF(spirv == nullptr);
 
-	EXIT_NOT_IMPLEMENTED(regs->es_regs.data_addr == 0 || regs->gs_regs.chksum == 0);
+	EXIT_NOT_IMPLEMENTED(regs->es_regs.data_addr == 0);
+	const uint64_t vs_chksum = (regs->gs_regs.chksum != 0) ? regs->gs_regs.chksum : regs->es_regs.data_addr;
 
 	const uint64_t shader_addr = regs->es_regs.data_addr;
-	const auto code = ShaderGetMappedCode(shader_addr, "ShaderRecompiler VS", regs->gs_regs.chksum);
+	const auto code = ShaderGetMappedCode(shader_addr, "ShaderRecompiler VS", vs_chksum);
 
 	ShaderRecompiler::CompileOptions options;
 	options.stage                = ShaderType::Vertex;
 	options.lane_mask_mode       = lane_mask_mode;
-	options.shader_hash          = regs->gs_regs.chksum;
+	options.shader_hash          = vs_chksum;
 	options.shader_base          = shader_addr;
 	options.user_data_base       = 8;
 	options.user_data_count      = std::max<uint32_t>(regs->gs_regs.rsrc2.user_sgpr, 16u);
@@ -1559,10 +1568,11 @@ ShaderId ShaderGetIdVS(const HW::VertexShaderInfo* regs, const ShaderVertexInput
 
 	ret.ids.reserve(64);
 
-	EXIT_NOT_IMPLEMENTED(regs->es_regs.data_addr == 0 || regs->gs_regs.chksum == 0);
+	EXIT_NOT_IMPLEMENTED(regs->es_regs.data_addr == 0);
+	const uint64_t vs_chksum = (regs->gs_regs.chksum != 0) ? regs->gs_regs.chksum : regs->es_regs.data_addr;
 
-	ret.hash0 = (regs->gs_regs.chksum >> 32u) & 0xffffffffu;
-	ret.crc32 = regs->gs_regs.chksum & 0xffffffffu;
+	ret.hash0 = (vs_chksum >> 32u) & 0xffffffffu;
+	ret.crc32 = vs_chksum & 0xffffffffu;
 
 	ret.ids.push_back(static_cast<uint32_t>(input_info->fetch_external));
 	ret.ids.push_back(static_cast<uint32_t>(input_info->fetch_embedded));

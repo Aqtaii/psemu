@@ -355,12 +355,12 @@ int KYTY_SYSV_ABI KernelWaitEqueue(KernelEqueue eq, KernelEvent* ev, int num, in
 
 	EXIT_NOT_IMPLEMENTED(out == nullptr);
 
-	LOGF("\tEqueue wait: %s, caller = 0x%016" PRIx64 ", eq = 0x%016" PRIx64 ", ev = 0x%016" PRIx64
-	     ", num = %d, timo = %s, thread_id = %d\n",
-	     eq->GetName().c_str(), reinterpret_cast<uint64_t>(__builtin_return_address(0)),
-	     reinterpret_cast<uint64_t>(eq), reinterpret_cast<uint64_t>(ev), num,
-	     (timo == nullptr ? "inf" : fmt::format("{}", *timo).c_str()),
-	     Common::Thread::GetThreadIdUnique());
+	// LOGF("\tEqueue wait: %s, caller = 0x%016" PRIx64 ", eq = 0x%016" PRIx64 ", ev = 0x%016" PRIx64
+	//      ", num = %d, timo = %s, thread_id = %" PRIu64 "\n",
+	//      eq->GetName().c_str(), reinterpret_cast<uint64_t>(__builtin_return_address(0)),
+	//      reinterpret_cast<uint64_t>(eq), reinterpret_cast<uint64_t>(ev), num,
+	//      (timo == nullptr ? "inf" : fmt::format("{}", *timo).c_str()),
+	//      Common::Thread::GetThreadIdUnique());
 
 	if (timo == nullptr) {
 		*out = eq->WaitForEvents(ev, num, 0);
