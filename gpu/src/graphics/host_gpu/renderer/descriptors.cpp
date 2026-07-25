@@ -771,6 +771,12 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 					             static_cast<uint32_t>(tile),
 					             image != nullptr ? "BULUNDU(RT)" : "YOK->guest-upload",
 					             nz, sampled);
+					// Guest-upload edilen KUCUK texture'lari (sprite-font atlas'i
+					// dahil) diske dok: glyph var mi yok mu gozle gorulsun.
+					if (image == nullptr && tile == 0 && width <= 2048 && height <= 2048) {
+						extern void PsemuDumpGuestTexture(uint64_t, uint32_t, uint32_t);
+						PsemuDumpGuestTexture(address, width, height);
+					}
 					std::fflush(stderr);
 				}
 			}

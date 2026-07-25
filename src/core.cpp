@@ -353,6 +353,55 @@ static uint64_t RealtimeNs() {
 // Guest'in errno'su. BSD libc'de __error() bunun ADRESINI dondurur.
 // nlohmann'in sayi ayristiricisi cagri oncesi 0'a cekip sonrasinda
 // ERANGE kontrol ettigi icin strtoull/strtoll/strtod ile paylasilmali.
+// ========================================================
+// TAHSIS BOYUTU KAYDI (realloc'un dogru kopyalamasi icin)
+// ========================================================
+// realloc, eski bloktan YENI boyut kadar kopyalamaya calisiyordu; blok
+// buyutulurken SafeReadable(old, yeni_boyut) eski blogun sonunu asip
+// basarisiz olunca HIC kopyalamiyor ve sifirlanmis blok donduruyordu ->
+// tum eski icerik KAYBOLUYORDU. Gorulen sonuc: dil kodu "us" -> "" ,
+// ardindan "KEY NOT FOUND: music_atten/master_atten" ve ana menu
+// metinlerinin bos kalmasi. Cozum: istenen boyutu kaydet, realloc
+// min(eski, yeni) kadar kopyalasin.
+// NOT: free() kasitli olarak no-op oldugu icin kayitlar bayatlamaz.
+static std::mutex             g_alloc_size_mutex;
+static std::map<void*, size_t> g_alloc_sizes;
+
+static void RegisterAllocSize(void* p, size_t requested) {
+    if (p == nullptr) return;
+    std::lock_guard<std::mutex> lk(g_alloc_size_mutex);
+    g_alloc_sizes[p] = requested;
+}
+
+static size_t LookupAllocSize(void* p) {
+    if (p == nullptr) return 0;
+    std::lock_guard<std::mutex> lk(g_alloc_size_mutex);
+    auto it = g_alloc_sizes.find(p);
+    return (it == g_alloc_sizes.end()) ? 0 : it->second;
+}
+
+// ========================================================
+// NID ONEK INDEKSI (son ek farkliliklarini tolere eder)
+// ========================================================
+// nids.h tablosu NID'leri "<11 karakter NID>#<kutuphane>#<modul>" olarak
+// tutuyor. Son ek oyuna gore DEGISIR; fonksiyonu tekil belirleyen sey
+// 11 karakterlik NID'in kendisidir. Tam eslesme aranirsa son eki farkli
+// olan fonksiyonlar cozulemez ve default stub'a (RAX=0) duser.
+// Gercek ornek: QOQtbeDqsT4#N#O = sceAudioOutOutput (tabloda #T#T vardi).
+// Bu indeks bir kez kurulur, sonra O(1) onek aramasi saglar.
+static const std::unordered_map<std::string, const std::string*>& NidPrefixIndex() {
+    static const std::unordered_map<std::string, const std::string*> idx = [] {
+        std::unordered_map<std::string, const std::string*> m;
+        for (const auto& kv : g_nid_to_name) {
+            if (kv.first.size() >= 11) {
+                m.emplace(kv.first.substr(0, 11), &kv.second);
+            }
+        }
+        return m;
+    }();
+    return idx;
+}
+
 static thread_local int g_guest_errno = 0;
 static const int kGuestERANGE = 34; // FreeBSD ERANGE
 
@@ -488,36 +537,61 @@ extern "C" void Utf16DiagValue(void* value) {
         { reinterpret_cast<const uint16_t*>(p16), p8,  "std(ptr@16,len@8)" },  // standart layout
         { reinterpret_cast<const uint16_t*>(vs),  static_cast<uint64_t>((*vs) >> 1), "SSO(inline)" }, // kisa string
     };
+    // ============================================================
+    // ONEMLI: Bu fonksiyon artik VARSAYILAN OLARAK BELLEGE YAZMAZ.
+    // ------------------------------------------------------------
+    // Eski hali yukaridaki UC layout tahmininden hangisinde "eslesmemis
+    // surrogate" bulursa oraya '?' (0x003F) yaziyordu. Ama tahmin YANLIS
+    // oldugunda p0/p16 rastgele bir adres olarak yorumlanip ALAKASIZ
+    // bellegi bozuyordu.
+    // Kanit zinciri (loader_log.txt):
+    //   - 9 kez "len=2 layout=alt(ptr@0,len@8)" tetiklendi,
+    //   - dil kodu "us" (tam 2 karakter) bozuldu:
+    //     "ON SAVEGAME MISSING (langcode is us)" -> "(langcode is )",
+    //   - ardindan lokalizasyon anahtarlari bulunamadi
+    //     ("KEY NOT FOUND: music_atten / master_atten"),
+    //   - sonuc: ana menu metinleri bos.
+    // Ayrica loader invalid_utf16 throw dallarini zaten NOP'luyor
+    // ([UTF16-NONFATAL]), yani bozuk string CRASH uretmiyor -> bu yazma
+    // gereksiz. Burasi artik sadece TANI amacli.
+    // Eski (yazan) davranis gerekirse: PSEMU_UTF16_FIX=1
+    // ============================================================
+    static const bool s_write_fix = (std::getenv("PSEMU_UTF16_FIX") != nullptr);
+
     for (const C& c : cands) {
         if (c.d == nullptr || c.n == 0 || c.n > 65536) continue;
         if (!Readable(c.d, c.n * 2)) continue;
 
-        bool fixed = false;
-        // Fix the string in-place
+        bool found = false;
         for (size_t i = 0; i < c.n; i++) {
-            if (c.d[i] >= 0xD800 && c.d[i] <= 0xDBFF) {
-                // High surrogate, needs a low surrogate after it
-                if (i + 1 >= c.n || !(c.d[i + 1] >= 0xDC00 && c.d[i + 1] <= 0xDFFF)) {
-                    uint16_t* mutable_d = const_cast<uint16_t*>(c.d);
-                    mutable_d[i] = 0x003F; // Replace with '?'
-                    fixed = true;
-                }
-            } else if (c.d[i] >= 0xDC00 && c.d[i] <= 0xDFFF) {
-                // Low surrogate without preceding high surrogate
-                if (i == 0 || !(c.d[i - 1] >= 0xD800 && c.d[i - 1] <= 0xDBFF)) {
-                    uint16_t* mutable_d = const_cast<uint16_t*>(c.d);
-                    mutable_d[i] = 0x003F; // Replace with '?'
-                    fixed = true;
+            const uint16_t ch    = c.d[i];
+            const bool     lead  = (ch >= 0xD800 && ch <= 0xDBFF);
+            const bool     trail = (ch >= 0xDC00 && ch <= 0xDFFF);
+            bool           unpaired = false;
+            if (lead) {
+                unpaired = (i + 1 >= c.n) ||
+                           !(c.d[i + 1] >= 0xDC00 && c.d[i + 1] <= 0xDFFF);
+            } else if (trail) {
+                unpaired = (i == 0) ||
+                           !(c.d[i - 1] >= 0xD800 && c.d[i - 1] <= 0xDBFF);
+            }
+            if (unpaired) {
+                found = true;
+                if (s_write_fix) {
+                    const_cast<uint16_t*>(c.d)[i] = 0x003F; // '?'
                 }
             }
         }
 
-        if (fixed) {
+        if (found) {
             static volatile LONG s_n = 0;
-            if (InterlockedIncrement(&s_n) <= 50) {
-                std::cout << "[UTF16-FIX] Sabitlenmis bozuk UTF-16 dizisi: len=" << c.n << " layout=" << c.how << std::endl;
+            if (InterlockedIncrement(&s_n) <= 16) { // rate-limit (bkz. DEVELOPER_GUIDE)
+                std::cout << "[UTF16] eslesmemis surrogate goruldu: len=" << c.n
+                          << " layout=" << c.how
+                          << (s_write_fix ? " (YAZILDI - PSEMU_UTF16_FIX)" : " (sadece tani, yazilmadi)")
+                          << std::endl;
             }
-            return; // Found and fixed the layout, stop checking other layouts
+            return;
         }
     }
 }
@@ -1296,7 +1370,30 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 if (it != g_plt_names.end()) {
                     f = &it->second;
                     auto it2 = g_nid_to_name.find(it->second);
-                    if (it2 != g_nid_to_name.end()) r = &it2->second;
+                    if (it2 == g_nid_to_name.end() && it->second.size() >= 11) {
+                        // NID son eki (#X#Y) KUTUPHANE/MODUL indeksidir ve oyuna
+                        // gore degisir; fonksiyonu tekil belirleyen sey 11
+                        // karakterlik NID'in kendisidir. Tam eslesme yoksa onekle
+                        // ara. Aksi halde isim cozulmuyor ve fonksiyon default
+                        // stub'a (RAX=0) dusuyordu.
+                        // Gercek ornek: QOQtbeDqsT4#N#O = sceAudioOutOutput;
+                        // tabloda yalnizca #T#T/#S#N/... varyantlari vardi, bu
+                        // yuzden ses cikisi stub'lanip audio thread'i bosa
+                        // donuyordu (tum PLT cagrilarinin ~%25'i).
+                        const auto& pidx = NidPrefixIndex();
+                        auto pit = pidx.find(it->second.substr(0, 11));
+                        if (pit != pidx.end() && pit->second != nullptr) {
+                            r = pit->second; // onekle cozuldu
+                            static std::atomic<int> s_pfx{0};
+                            if (s_pfx.fetch_add(1, std::memory_order_relaxed) < 24) {
+                                printf("[NID-PREFIX] %s -> %s (son ek farkli, onekle cozuldu)\n",
+                                       it->second.c_str(), r->c_str());
+                                fflush(stdout);
+                            }
+                        }
+                    } else if (it2 != g_nid_to_name.end()) {
+                        r = &it2->second;
+                    }
                 } else {
                     std::lock_guard<std::mutex> lk(s_intern_mutex);
                     s_interned.push_back("UNKNOWN_PLT_" + std::to_string(plt_index));
@@ -1400,20 +1497,12 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
 
             if (log_this) {
                 std::stringstream hle_ss;
-                hle_ss << "[PRX-HLE] " << func_name;
-                if (!readable_name.empty()) {
-                    hle_ss << " (" << readable_name << ")";
+                hle_ss << "[PLT-HLE] " << (readable_name.empty() ? func_name : readable_name)
+                       << " [PLT#" << plt_index << "]";
+                if (readable_name.empty()) {
+                    hle_ss << " (NID: " << func_name << ") RDI=0x" << std::hex << ctx->Rdi
+                           << " RSI=0x" << ctx->Rsi << " RDX=0x" << ctx->Rdx << std::dec;
                 }
-                hle_ss << " (PLT#" << plt_index << ")"
-                       << " | TID=" << std::dec << GetCurrentThreadId() << std::hex
-                       << " RDI=0x" << ctx->Rdi
-                       << " RSI=0x" << ctx->Rsi
-                       << " RDX=0x" << ctx->Rdx
-                       << " RCX=0x" << ctx->Rcx
-                       << " R8=0x"  << ctx->R8
-                       << " R9=0x"  << ctx->R9
-                       << " RSP=0x" << ctx->Rsp
-                       << std::dec;
                 LOG_INFO(hle_ss.str());
             }
 
@@ -1621,6 +1710,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 size_t alloc_sz = size ? (size + 65536) : 65536;
                 void* p = _aligned_malloc(alloc_sz, 16);
                 if (p) memset(p, 0, alloc_sz);
+                RegisterAllocSize(p, size); // realloc dogru kopyalayabilsin
                 ctx->Rax = reinterpret_cast<uint64_t>(p);
                 special_return_set = true;
             } else if (readable_name == "free") {
@@ -1639,6 +1729,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 size_t alloc_sz = total ? (total + 65536) : 65536;
                 void* p = _aligned_malloc(alloc_sz, 16);
                 if (p) memset(p, 0, alloc_sz);
+                RegisterAllocSize(p, total);
                 ctx->Rax = reinterpret_cast<uint64_t>(p);
                 special_return_set = true;
             } else if (readable_name == "realloc") {
@@ -1649,12 +1740,23 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 void* p = _aligned_malloc(alloc_sz, 16);
                 if (p) {
                     memset(p, 0, alloc_sz);
-                    if (old_p && SafeReadable(old_p, 1)) {
-                        size_t copy_len = (size > 0) ? size : 16;
-                        if (SafeReadable(old_p, copy_len)) {
+                    if (old_p != nullptr && SafeReadable(old_p, 1)) {
+                        // ESKI HATA: yeni boyut kadar kopyalamaya calisiyordu ve
+                        // SafeReadable basarisiz olunca HIC kopyalamiyordu ->
+                        // icerik tamamen kayboluyordu (bkz. RegisterAllocSize notu).
+                        // Simdi: min(eski_boyut, yeni_boyut); boyut bilinmiyorsa
+                        // okunabilen kadarini kopyala (asla "hic" degil).
+                        size_t old_sz   = LookupAllocSize(old_p);
+                        size_t copy_len = (old_sz != 0 && old_sz < size) ? old_sz : size;
+                        if (copy_len == 0) copy_len = 16;
+                        while (copy_len > 0 && !SafeReadable(old_p, copy_len)) {
+                            copy_len /= 2;
+                        }
+                        if (copy_len > 0) {
                             memcpy(p, old_p, copy_len);
                         }
                     }
+                    RegisterAllocSize(p, size);
                 }
                 ctx->Rax = reinterpret_cast<uint64_t>(p);
                 special_return_set = true;
@@ -1666,6 +1768,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 size_t alloc_sz = size ? (size + 65536) : 65536;
                 void* p = _aligned_malloc(alloc_sz, align);
                 if (p) memset(p, 0, alloc_sz);
+                RegisterAllocSize(p, size);
                 ctx->Rax = reinterpret_cast<uint64_t>(p);
                 special_return_set = true;
             } else if (readable_name == "posix_memalign") {
@@ -2863,7 +2966,15 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     size_t total = sz * cnt;
                     // Ilk 20'yi ve HER buyuk okumayi (>64KB) logla; data.js gibi
                     // buyuk dosyalar sinire takilip gorunmez olmasin.
-                    if (s_n < 20 || total > 65536) {
+                    // AYRICA: .json (lokalizasyon: lang0.json) okumalari HER ZAMAN
+                    // gorunsun - menu metinleri bu dosyadan geliyor ve dosya
+                    // kucuk oldugu icin yukaridaki iki kosula takilmiyordu.
+                    auto it_nm = g_open_names.find(f);
+                    const bool is_json = (it_nm != g_open_names.end() &&
+                                          it_nm->second.find(".json") != std::string::npos);
+                    static std::atomic<int> s_json_n{0};
+                    if (s_n < 20 || total > 65536 ||
+                        (is_json && s_json_n.fetch_add(1, std::memory_order_relaxed) < 16)) {
                         s_n++;
                         auto it = g_open_names.find(f);
                         std::stringstream fr;
@@ -3019,6 +3130,25 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                      readable_name == "PadSetMotionSensorState") {
                 ctx->Rax = 0;
                 special_return_set = true;
+            } else if (readable_name == "sceAudioOutOutput") {
+                // int sceAudioOutOutput(handle, ptr[, num])
+                // GERCEK donanimda bu cagri ses tamponu tuketilene kadar BLOKLAR
+                // ve audio thread'ini ornekleme hizina (~48 kHz) pace'ler.
+                // psemu'da isim cozulemedigi icin (NID son eki #N#O, tabloda
+                // #T#T vardi -> bkz. NID-PREFIX duzeltmesi) default stub RAX=0
+                // donuyordu: audio thread'i HIC beklemeden serbest doniyor,
+                // olculen TUM PLT cagrilarinin ~%25'ini uretip CPU'yu boguyor
+                // ve ana thread'i ac birakiyordu (yukleme bitmiyor, "donma").
+                // PS4/PS5 grain = 256 ornek @48 kHz -> ~5.33 ms.
+                {
+                    uint32_t num = static_cast<uint32_t>(ctx->Rdx);
+                    if (num == 0 || num > 4096) num = 256; // makul degilse grain varsay
+                    DWORD ms = static_cast<DWORD>((static_cast<uint64_t>(num) * 1000ull) / 48000ull);
+                    if (ms == 0) ms = 1;
+                    Sleep(ms);
+                    ctx->Rax = num; // yazilan ornek sayisi
+                }
+                special_return_set = true;
             } else if (readable_name == "PadOpen" || readable_name == "PadGetHandle") {
                 ctx->Rax = 1; // gecerli handle (0 DEGIL - kritik)
                 special_return_set = true;
@@ -3034,14 +3164,18 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     // Ayrica gercek pad sorgu sayisini olcuyoruz: oyun menude pad'i
                     // hic sorgulamiyorsa enjeksiyon ise yaramaz (baska yol gerekir).
                     // PadData: buttons = offset 0 (uint32) [gpu/src/libs/padData.h].
+                    // Varsayilan KAPALI; menuyu atlamak icin: PSEMU_AUTO_CONFIRM=1
+                    static const bool s_auto_confirm = (std::getenv("PSEMU_AUTO_CONFIRM") != nullptr);
                     static std::atomic<uint64_t> s_pad_calls{0};
                     uint64_t pc = s_pad_calls.fetch_add(1) + 1;
                     uint32_t phase = static_cast<uint32_t>(pc % 240ull);
                     uint32_t btn = 0;
-                    if (phase < 20)                       btn = 0x4000u; // CROSS
-                    else if (phase >= 120 && phase < 140) btn = 0x2000u; // CIRCLE
-                    if (btn != 0) {
-                        *reinterpret_cast<uint32_t*>(data) |= btn;
+                    if (s_auto_confirm) {
+                        if (phase < 20)                       btn = 0x4000u; // CROSS
+                        else if (phase >= 120 && phase < 140) btn = 0x2000u; // CIRCLE
+                        if (btn != 0) {
+                            *reinterpret_cast<uint32_t*>(data) |= btn;
+                        }
                     }
                     if (pc <= 3 || (pc % 300ull) == 0) {
                         printf("[PAD] okuma=%llu phase=%u btn=0x%04x (menu-atlama enjeksiyonu)\n",
@@ -3857,8 +3991,9 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     }
 
                     if (log_this) {
-                        printf("[PLT-HOOK] HLE Stub calisti -> Return RAX=0x%llx | RET to: 0x%llx\n", ctx->Rax, ret_addr);
-                        fflush(stdout);
+                        std::stringstream ret_ss;
+                        ret_ss << "[PLT-RET] RAX=0x" << std::hex << ctx->Rax << " (RET: 0x" << ret_addr << ")" << std::dec;
+                        LOG_INFO(ret_ss.str());
                     }
 
                     // RET komutu simulasyonu

@@ -87,6 +87,75 @@ static void WriteBmpDownscaled(const std::string& path, const uint8_t* bgra, uin
 	std::fclose(f);
 }
 
+// ============================================================================
+// psemu tani: guest bellekteki (lineer, RGBA8) bir texture'i BMP olarak dok.
+// Amac: sprite-font atlas'i (or. 320x512) gercekten glyph iceriyor mu, yoksa
+// bos/saydam mi? Bos ise metin gorunmez olur (PNG decode/upload sorunu);
+// dolu ise sorun UV/geometri/blend tarafindadir.
+// DEVELOPER_GUIDE geregi dokumler tools/dumps/ altina yazilir.
+// ============================================================================
+void PsemuDumpGuestTexture(uint64_t addr, uint32_t w, uint32_t h) {
+	if (addr == 0 || w == 0 || h == 0 || w > 4096 || h > 4096) return;
+	static std::atomic<int> s_dumped{0};
+	if (s_dumped.load() >= 10) return;
+
+	const auto* px = reinterpret_cast<const uint8_t*>(addr);
+	MEMORY_BASIC_INFORMATION mbi{};
+	const uint64_t need = static_cast<uint64_t>(w) * h * 4u;
+	if (VirtualQuery(px, &mbi, sizeof(mbi)) == 0 || mbi.State != MEM_COMMIT) return;
+	const auto* region_end = reinterpret_cast<const uint8_t*>(mbi.BaseAddress) + mbi.RegionSize;
+	if (px + need > region_end) return; // tek bolgede degil -> atla (guvenli taraf)
+
+	uint64_t nonzero = 0, opaque = 0;
+	for (uint64_t i = 0; i < need; i += 4) {
+		if (px[i] != 0 || px[i + 1] != 0 || px[i + 2] != 0) nonzero++;
+		if (px[i + 3] != 0) opaque++;
+	}
+
+	CreateDirectoryA("tools", nullptr);
+	CreateDirectoryA("tools\\dumps", nullptr);
+	char name[160];
+	std::snprintf(name, sizeof(name), "tools\\dumps\\tex_%llx_%ux%u.bmp",
+	              static_cast<unsigned long long>(addr), w, h);
+	// Kucuk texture'lari kucultmeden yaz (F=1 icin ayri yol): downscale 1x
+	// istedigimiz icin gecici olarak 24-bit BMP'yi burada uretiyoruz.
+	const uint32_t row_bytes = (w * 3u + 3u) & ~3u;
+	BITMAPFILEHEADER fh{};
+	BITMAPINFOHEADER ih{};
+	fh.bfType    = 0x4D42;
+	fh.bfOffBits = sizeof(fh) + sizeof(ih);
+	fh.bfSize    = fh.bfOffBits + row_bytes * h;
+	ih.biSize        = sizeof(ih);
+	ih.biWidth       = static_cast<LONG>(w);
+	ih.biHeight      = static_cast<LONG>(h);
+	ih.biPlanes      = 1;
+	ih.biBitCount    = 24;
+	ih.biCompression = BI_RGB;
+	ih.biSizeImage   = row_bytes * h;
+	FILE* f = std::fopen(name, "wb");
+	if (f == nullptr) return;
+	std::fwrite(&fh, sizeof(fh), 1, f);
+	std::fwrite(&ih, sizeof(ih), 1, f);
+	std::string row(row_bytes, '\0');
+	for (uint32_t y = 0; y < h; y++) {
+		const uint8_t* src = px + static_cast<size_t>(h - 1u - y) * w * 4u;
+		for (uint32_t x = 0; x < w; x++) {
+			// RGBA8 -> BGR (alfa'yi siyah zemine carp: glyph'ler gorunsun)
+			const uint8_t a = src[x * 4u + 3u];
+			row[x * 3u + 0u] = static_cast<char>(src[x * 4u + 2u] * a / 255);
+			row[x * 3u + 1u] = static_cast<char>(src[x * 4u + 1u] * a / 255);
+			row[x * 3u + 2u] = static_cast<char>(src[x * 4u + 0u] * a / 255);
+		}
+		std::fwrite(row.data(), row_bytes, 1, f);
+	}
+	std::fclose(f);
+	s_dumped.fetch_add(1);
+	std::fprintf(stderr, "[TEXDUMP] %s  rgb_nonzero=%llu/%llu  alpha_nonzero=%llu\n", name,
+	             static_cast<unsigned long long>(nonzero),
+	             static_cast<unsigned long long>(need / 4), static_cast<unsigned long long>(opaque));
+	std::fflush(stderr);
+}
+
 // swapchain.cpp WindowPresentFrame'den cagrilir. image present edilecek kare;
 // bu noktada eTransferSrcOptimal layout'unda (WindowPrepareFrame'in CopyImage'i
 // oraya birakti). Her N present'te bir yakalar, run basina ust sinir uygular.
