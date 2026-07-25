@@ -3130,6 +3130,28 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                      readable_name == "PadSetMotionSensorState") {
                 ctx->Rax = 0;
                 special_return_set = true;
+            } else if (readable_name == "strlcpy") {
+                // size_t strlcpy(char* dst, const char* src, size_t size)
+                // BSD: src'yi dst'ye kopyalar (en fazla size-1 karakter), DAIMA
+                // NUL ile bitirir, src'nin TAM uzunlugunu dondurur.
+                // ONCEDEN: NID (SfQIZcqvvms) tabloda yoktu -> isim cozulemiyor ->
+                // default stub RAX=0 donuyor ve HIC KOPYALAMA yapilmiyordu, yani
+                // hedef string BOS kaliyordu. Menu etiketleri gibi kopyalanan
+                // metinlerin bos gorunmesinin dogrudan sebebi bu olabilir.
+                {
+                    char*       dst  = reinterpret_cast<char*>(ctx->Rdi);
+                    const char* src  = reinterpret_cast<const char*>(ctx->Rsi);
+                    size_t      size = static_cast<size_t>(ctx->Rdx);
+                    size_t      slen = (src != nullptr) ? SafeStrlen(src) : 0;
+                    if (dst != nullptr && src != nullptr && size > 0 &&
+                        SafeWritable(dst, size)) {
+                        size_t n = (slen < size - 1) ? slen : (size - 1);
+                        if (n > 0 && SafeReadable(src, n)) memcpy(dst, src, n);
+                        dst[n] = '\0';
+                    }
+                    ctx->Rax = static_cast<uint64_t>(slen);
+                }
+                special_return_set = true;
             } else if (readable_name == "sceAudioOutOutput") {
                 // int sceAudioOutOutput(handle, ptr[, num])
                 // GERCEK donanimda bu cagri ses tamponu tuketilene kadar BLOKLAR

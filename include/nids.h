@@ -4,6 +4,17 @@
 
 inline std::unordered_map<std::string, std::string> g_nid_to_name = {
     // libSceGnmDriver (Gen5) - KytyPS5 referansiyla dogrulandi (src/libs/libGraphicsDriver.cpp, agc.cpp)
+    // psemu: NID brute-force ile cozuldu (tools/scripts/nid_resolve.py).
+    // Algoritma: base64(sha1(isim + SALT)[:8] tersten), '/' -> '-', 11 karakter.
+    // Son ek (#X#Y) oyuna gore degisir; core.cpp'deki onek indeksi bunu tolere eder.
+    {"fnUEjBCNRVU#T#T", "wmemchr"},
+    {"QJ5xVfKkni0#T#T", "wmemcmp"},
+    {"Noj9PsJrsa8#T#T", "wmemmove"},
+    {"SfQIZcqvvms#T#T", "strlcpy"},
+    {"kALvdgEv5ME#T#T", "_Locksyslock"},
+    {"9nf8joUTSaQ#T#T", "_Unlocksyslock"},
+    {"hMAe+TWS9mQ#T#T", "__dynamic_cast"},
+    {"Q1BL70XVV0o#T#T", "uncaught_exception"},
     {"w4-d0n60hdo#A#B", "sceGnmDriver::GraphicsDcbSetUcRegisterDirect"},
     {"23LRUSvYu1M#A#B", "GraphicsInit"},
     {"f3dg2CSgRKY#A#B", "GraphicsCreateShader"},
