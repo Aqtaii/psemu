@@ -639,6 +639,44 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
               const ShaderRecompiler::IR::DescriptorValue& value) {
 	ShaderTextureResource descriptor;
 	CopyNativeDescriptor(value, descriptor.fields);
+	{ // Her DISTINCT texture'i bir kez logla + KULLANIM SAYACI tut.
+	  // Amac: font atlas'i (320x512) gercekten cizimlerde kullaniliyor mu?
+	  // Kullanilmiyorsa text hic cizilmiyor (mantik/parse sorunu); yogun
+	  // kullaniliyorsa cizim var ama gorunmuyor (icerik/UV/blend sorunu).
+	  static uint64_t seen[64] = {0}; static uint32_t w_[64] = {0}; static uint32_t h_[64] = {0};
+	  static std::atomic<uint64_t> use_[64] = {}; static std::atomic<int> seen_n{0};
+	  uint64_t a = descriptor.Base40();
+	  if (a != 0) {
+	    int found = -1; int n = seen_n.load();
+	    for (int i = 0; i < n && i < 64; i++) if (seen[i] == a) { found = i; break; }
+	    if (found < 0) {
+	      int idx = seen_n.fetch_add(1);
+	      if (idx < 64) {
+	        seen[idx] = a;
+	        w_[idx] = static_cast<uint32_t>(descriptor.Width5()) + 1u;
+	        h_[idx] = static_cast<uint32_t>(descriptor.Height5()) + 1u;
+	        found = idx;
+	        std::fprintf(stderr, "[TEX] #%d null=%d addr=0x%llx %ux%u fmt=%u kind=%u raw=%08x %08x %08x %08x\n",
+	            idx, descriptor.IsNull() ? 1 : 0, static_cast<unsigned long long>(a), w_[idx], h_[idx],
+	            static_cast<uint32_t>(descriptor.Format()), static_cast<uint32_t>(resource.kind),
+	            descriptor.fields[0], descriptor.fields[1], descriptor.fields[2], descriptor.fields[3]);
+	        std::fflush(stderr);
+	      }
+	    }
+	    if (found >= 0 && found < 64) {
+	      uint64_t u = use_[found].fetch_add(1) + 1;
+	      static std::atomic<uint64_t> total{0};
+	      if ((total.fetch_add(1) % 20000ull) == 0) {
+	        std::fprintf(stderr, "[TEX-USE] ");
+	        int m = seen_n.load(); if (m > 64) m = 64;
+	        for (int i = 0; i < m; i++)
+	          std::fprintf(stderr, "#%d(%ux%u)=%llu ", i, w_[i], h_[i],
+	                       static_cast<unsigned long long>(use_[i].load()));
+	        std::fprintf(stderr, "\n"); std::fflush(stderr);
+	      }
+	      (void)u;
+	    }
+	  } }
 	const bool storage = resource.kind == ShaderRecompiler::IR::ResourceKind::StorageImage ||
 	                     resource.kind == ShaderRecompiler::IR::ResourceKind::StorageImageUint;
 	const auto variant = NativeTextureVariant(resource);
@@ -704,6 +742,38 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 		} else {
 			image = g_render_ctx->GetTextureCache()->FindRenderTargetByRange(command_buffer,
 			                                                                 address, size.size);
+		}
+		// psemu tani: sampled texture bir RENDER TARGET alias'i olarak bulundu mu?
+		// Bulunmazsa guest bellekten yuklenir; GPU ile cizilmis bir yuzey icin bu
+		// SIYAH verir. Menude ortadaki tum icerik siyah -> GameMaker'in
+		// application surface'i (offscreen RT) boyle okunuyor olabilir.
+		{
+			static uint64_t seen_a[64] = {0}; static std::atomic<int> seen_c{0};
+			int n = seen_c.load(); bool is_new = true;
+			for (int i = 0; i < n && i < 64; i++) if (seen_a[i] == address) { is_new = false; break; }
+			if (is_new) {
+				int idx = seen_c.fetch_add(1);
+				if (idx < 64) {
+					seen_a[idx] = address;
+					// Guest bellekte gercekten piksel var mi? (Sifir ise kaynak
+					// veri yok/henuz yazilmamis -> gorunmez cizim.)
+					uint32_t nz = 0, sampled = 0;
+					{
+						const uint32_t* px = reinterpret_cast<const uint32_t*>(address);
+						MEMORY_BASIC_INFORMATION mbi{};
+						if (VirtualQuery(px, &mbi, sizeof(mbi)) != 0 && mbi.State == MEM_COMMIT) {
+							uint32_t lim = 4096; // ilk 16KB
+							for (uint32_t i = 0; i < lim; i++) { sampled++; if (px[i] != 0) nz++; }
+						}
+					}
+					std::fprintf(stderr, "[RT?] addr=0x%llx %ux%u tile=%u rt_alias=%s guest_px_nonzero=%u/%u\n",
+					             static_cast<unsigned long long>(address), width, height,
+					             static_cast<uint32_t>(tile),
+					             image != nullptr ? "BULUNDU(RT)" : "YOK->guest-upload",
+					             nz, sampled);
+					std::fflush(stderr);
+				}
+			}
 		}
 		if (image != nullptr) {
 			if (check_depth) {

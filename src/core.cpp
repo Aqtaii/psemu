@@ -15,7 +15,8 @@
 #include <cstdio>
 #include <cerrno>   // strtoull/strtod'un ERANGE bildirimi icin
 #include <cmath>    // isnan/isinf (fp_isfinite)
-#include <mutex>    // direct memory havuzu kilidi
+#include <mutex>
+#include <deque>    // direct memory havuzu kilidi
 #include "nids.h"
 #include "video.h"
 #include "kernel/eventQueue.h"
@@ -1245,15 +1246,153 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         if (access_addr >= 0x10000000000ULL && access_addr < 0x10000010000ULL) {
             g_last_activity = GetTickCount64(); // hang watchdog icin aktivite isareti
             uint32_t plt_index = static_cast<uint32_t>(access_addr - 0x10000000000ULL);
-            std::string func_name = "UNKNOWN_PLT_" + std::to_string(plt_index);
-            std::string readable_name = "";
-            if (g_plt_names.find(plt_index) != g_plt_names.end()) {
-                func_name = g_plt_names[plt_index];
-                if (g_nid_to_name.find(func_name) != g_nid_to_name.end()) {
-                    readable_name = g_nid_to_name[func_name];
+
+            // ============================================================
+            // HIZ: isim cozumlemesi plt_index basina BIR KEZ (onbellek).
+            // Eski hali HER cagride: "UNKNOWN_PLT_N" string insasi (heap
+            // alloc) + g_plt_names map aramasi + string kopyasi +
+            // g_nid_to_name map aramasi (string karsilastirmalari) + kopya.
+            // Oyun menude ~9 MILYON PLT cagrisi yapiyor (cagri basina
+            // ~7.7us -> ~70s overhead = "donma"). Bu maliyeti sifirliyoruz;
+            // isimler map'lerde sabit durdugu icin pointer'lari onbellekleriz.
+            // ============================================================
+            // TANI: handler'in ICINDE gecen sure vs cagri basina toplam sure.
+            // inside << toplam ise darbogaz Windows exception (AV->VEH) round
+            // trip'idir ve handler'i optimize etmek FAYDASIZ; cozum PLT/GOT
+            // slotlarini native stub'a yamamaktir (exception hic olusmaz).
+            // Sadece PLT#173 (memset) olcuyoruz: bloklamayan, onemsiz bir is.
+            // WaitSema/MutexLock gibi handler'lar mesru sekilde BEKLEDIGI icin
+            // genel toplam yanilticiydi (ve cok-thread topluyordu).
+            static std::atomic<uint64_t> s_ms_ns{0};
+            static std::atomic<uint64_t> s_ms_calls{0};
+            struct PltTimer {
+                uint64_t t0; uint32_t idx;
+                explicit PltTimer(uint32_t i) : t0(i == 173 ? MonotonicNs() : 0), idx(i) {}
+                ~PltTimer() {
+                    if (idx == 173) {
+                        s_ms_ns.fetch_add(MonotonicNs() - t0, std::memory_order_relaxed);
+                        s_ms_calls.fetch_add(1, std::memory_order_relaxed);
+                    }
                 }
+            } plt_timer(plt_index);
+
+            static constexpr uint32_t kPltCacheMax = 4096;
+            static const std::string* s_fn_cache[kPltCacheMax] = {};
+            static const std::string* s_rn_cache[kPltCacheMax] = {};
+            static const std::string  s_empty_name;
+            static std::deque<std::string> s_interned; // UNKNOWN_PLT_* kalici depo
+            static std::mutex s_intern_mutex;
+
+            const std::string* fn_ptr = nullptr;
+            const std::string* rn_ptr = nullptr;
+            if (plt_index < kPltCacheMax) {
+                fn_ptr = s_fn_cache[plt_index];
+                rn_ptr = s_rn_cache[plt_index];
             }
+            if (fn_ptr == nullptr) {
+                const std::string* f = nullptr;
+                const std::string* r = &s_empty_name;
+                auto it = g_plt_names.find(plt_index);
+                if (it != g_plt_names.end()) {
+                    f = &it->second;
+                    auto it2 = g_nid_to_name.find(it->second);
+                    if (it2 != g_nid_to_name.end()) r = &it2->second;
+                } else {
+                    std::lock_guard<std::mutex> lk(s_intern_mutex);
+                    s_interned.push_back("UNKNOWN_PLT_" + std::to_string(plt_index));
+                    f = &s_interned.back();
+                }
+                if (plt_index < kPltCacheMax) {
+                    s_fn_cache[plt_index] = f;
+                    s_rn_cache[plt_index] = r;
+                }
+                fn_ptr = f;
+                rn_ptr = r;
+            }
+            const std::string& func_name     = *fn_ptr;
+            const std::string& readable_name = *rn_ptr;
             
+            // SPIN/ORAN MONITORU: LOG-FILTRE bir fonksiyonu 8 cagridan sonra
+            // susturdugu icin sonsuz donguler log'da GORUNMUYORDU (menu donmasi).
+            // Toplam PLT cagri sayacini periyodik basip o anki fonksiyonu
+            // gosteriyoruz -> hangi fn spin ediyor kesin belli olur.
+            {
+                static std::atomic<uint64_t> s_plt_total{0};
+                s_plt_total.fetch_add(1, std::memory_order_relaxed);
+            }
+
+            // ============================================================
+            // HIZLI YOL: sicak fonksiyonlar icin string-karsilastirmasiz
+            // dispatch. Olculdu: handler basina ~14us CPU; buyuk kismi dev
+            // if-else zincirindeki onlarca "readable_name == literal"
+            // karsilastirmasi (memset ~60 dal derinde). Asagidaki 6 op
+            // cagrilarin ~%75'i. Op kodu plt_index basina BIR KEZ cozulur,
+            // sonra switch ile dogrudan islenir; semantik mevcut
+            // handler'larla AYNI (kod oradan birebir alindi).
+            // ============================================================
+            enum : uint8_t { FOP_UNRESOLVED = 0, FOP_NONE, FOP_MEMSET, FOP_MEMCPY,
+                             FOP_MTX_LOCK, FOP_MTX_UNLOCK, FOP_ERRNO, FOP_RET0 };
+            static uint8_t s_fop[kPltCacheMax] = {};
+            uint8_t fop = (plt_index < kPltCacheMax) ? s_fop[plt_index] : FOP_NONE;
+            if (fop == FOP_UNRESOLVED && plt_index < kPltCacheMax) {
+                uint8_t f = FOP_NONE;
+                if      (readable_name == "memset")                 f = FOP_MEMSET;
+                else if (readable_name == "memcpy")                 f = FOP_MEMCPY;
+                else if (readable_name == "scePthreadMutexLock" ||
+                         readable_name == "pthread_mutex_lock")     f = FOP_MTX_LOCK;
+                else if (readable_name == "scePthreadMutexUnlock" ||
+                         readable_name == "pthread_mutex_unlock")   f = FOP_MTX_UNLOCK;
+                else if (readable_name == "__error")                f = FOP_ERRNO;
+                s_fop[plt_index] = f;
+                fop = FOP_NONE; // ILK cagri normal yoldan gitsin (loglanabilsin)
+            }
+            if (fop > FOP_NONE) {
+                switch (fop) {
+                    case FOP_MEMSET: {
+                        void*  dst = reinterpret_cast<void*>(ctx->Rdi);
+                        size_t n   = static_cast<size_t>(ctx->Rdx);
+                        if (dst != nullptr && n != 0 && SafeWritable(dst, n)) {
+                            memset(dst, static_cast<int>(ctx->Rsi), n);
+                        }
+                        ctx->Rax = ctx->Rdi;
+                        break;
+                    }
+                    case FOP_MEMCPY: {
+                        void*  dst = reinterpret_cast<void*>(ctx->Rdi);
+                        void*  src = reinterpret_cast<void*>(ctx->Rsi);
+                        size_t n   = static_cast<size_t>(ctx->Rdx);
+                        if (dst != nullptr && src != nullptr && n != 0 &&
+                            SafeReadable(src, n) && SafeWritable(dst, n)) {
+                            memcpy(dst, src, n);
+                        }
+                        ctx->Rax = ctx->Rdi;
+                        break;
+                    }
+                    case FOP_MTX_LOCK: {
+                        GuestMutex* m = GetOrCreateMutex(reinterpret_cast<uint64_t*>(ctx->Rdi));
+                        if (m != nullptr) EnterCriticalSection(&m->cs);
+                        ctx->Rax = 0;
+                        break;
+                    }
+                    case FOP_MTX_UNLOCK: {
+                        GuestMutex* m = GetOrCreateMutex(reinterpret_cast<uint64_t*>(ctx->Rdi));
+                        if (m != nullptr) LeaveCriticalSection(&m->cs);
+                        ctx->Rax = 0;
+                        break;
+                    }
+                    case FOP_ERRNO: ctx->Rax = reinterpret_cast<uint64_t>(&g_guest_errno); break;
+                    case FOP_RET0:  ctx->Rax = 0; break;
+                    default: break;
+                }
+                // RET simulasyonu (normal yoldakinin aynisi). Donus adresi
+                // stack'in tepesinde; PLT cagrisinda oyun stack'i her zaman
+                // gecerli oldugu icin SafeReadable'in VirtualQuery maliyetini
+                // odemeden dogrudan okuyoruz.
+                ctx->Rip = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                ctx->Rsp += 8;
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+
             // Gurultu filtresi: her fonksiyonu ilk N kez logla (asagidaki
             // RET-simulasyon logu da ayni karara bagli).
             bool log_this = ShouldLogPlt(plt_index,
@@ -1296,7 +1435,22 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             // HLE handler'larindan ONCE Kyty'ye yonlendir. Kyty sahiplenirse
             // (is_render) tum zincir atlanir; boylece render-state TAMAMEN
             // Kyty'de tutarli kalir (yari-psemu/yari-Kyty karisimi olmaz).
-            if (Agc::Dispatch(func_name, readable_name, ctx)) {
+            // HIZ: bir PLT'nin AGC/render olup olmadigi SABIT. Eski hali her
+            // libc cagrisinda (memset dahil) Agc::Dispatch'e girip substr
+            // (heap alloc) + 3 rfind + Kyty NID DB aramasi yapiyordu. Artik
+            // karar plt_index basina bir kez veriliyor (0=bilinmiyor, 1=agc,
+            // 2=agc-degil); "agc-degil" ise Dispatch hic cagrilmiyor.
+            static uint8_t s_agc_state[kPltCacheMax] = {};
+            bool try_agc = !(plt_index < kPltCacheMax && s_agc_state[plt_index] == 2);
+            bool agc_handled = false;
+            if (try_agc) {
+                agc_handled = Agc::Dispatch(func_name, readable_name, ctx);
+                if (plt_index < kPltCacheMax) {
+                    s_agc_state[plt_index] = agc_handled ? 1 : 2;
+                }
+            }
+
+            if (agc_handled) {
                 special_return_set = true;
             } else if (readable_name == "sceKernelCreateEqueue") {
                 ctx->Rax = Libs::LibKernel::EventQueue::KernelCreateEqueue((Libs::LibKernel::EventQueue::KernelEqueue*)ctx->Rdi, (const char*)ctx->Rsi);
@@ -2413,6 +2567,29 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 }
                 ctx->Rax = found;
                 special_return_set = true;
+            } else if (func_name.find("QJ5xVfKkni0") != std::string::npos) {
+                // char_traits<char16_t>::compare(s1, s2, n): (RDI=s1, RSI=s2, RDX=n), 2 byte.
+                // find('|') sonrasi bulunan pozisyonu ayrac pattern'iyle karsilastirmak
+                // icin cagriliyor. Handler YOKTU -> stub RAX=0 (=esit) donuyordu ->
+                // GameMaker parse'i yanlis ilerleyip ayni string'leri tekrar isleyerek
+                // DONUYORDU. Donus: 0=esit, <0 s1<s2, >0 s1>s2.
+                const uint16_t* s1 = reinterpret_cast<const uint16_t*>(ctx->Rdi);
+                const uint16_t* s2 = reinterpret_cast<const uint16_t*>(ctx->Rsi);
+                size_t          n  = static_cast<size_t>(ctx->Rdx);
+                { static int s_c = 0; if (s_c < 4 && s1 && s2 &&
+                     SafeReadable(s1, n * 2) && SafeReadable(s2, n * 2)) { s_c++;
+                  const uint8_t* a = reinterpret_cast<const uint8_t*>(s1);
+                  const uint8_t* b = reinterpret_cast<const uint8_t*>(s2);
+                  printf("[U16CMP] n=%zu s1=%02x %02x %02x %02x s2=%02x %02x %02x %02x\n",
+                         n, a[0],a[1],a[2],a[3], b[0],b[1],b[2],b[3]); fflush(stdout); } }
+                int result = 0;
+                if (s1 && s2 && n > 0 && SafeReadable(s1, n * 2) && SafeReadable(s2, n * 2)) {
+                    for (size_t i = 0; i < n; i++) {
+                        if (s1[i] != s2[i]) { result = (s1[i] < s2[i]) ? -1 : 1; break; }
+                    }
+                }
+                ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(result));
+                special_return_set = true;
             } else if (func_name.find("kALvdgEv5ME") != std::string::npos || func_name.find("9nf8joUTSaQ") != std::string::npos || func_name.find("rcQCUr0EaRU") != std::string::npos || func_name.find("sUP1hBaouOw") != std::string::npos || func_name.find("p6LrHjIQMdk") != std::string::npos || func_name.find("hqi8yMOCmG0") != std::string::npos || func_name.find("QW2jL1J5rwY") != std::string::npos || func_name.find("P8F2oavZXtY") != std::string::npos || func_name.find("Q1BL70XVV0o") != std::string::npos) {
                 // _Locksyslock / _Unlocksyslock / locales / exceptions
                 ctx->Rax = 0;
@@ -2850,6 +3027,27 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 void* data = reinterpret_cast<void*>(ctx->Rsi);
                 if (data && SafeWritable(data, 120)) {
                     ctx->Rax = Libs::Controller::PadReadState(handle, reinterpret_cast<Libs::Controller::PadData*>(data));
+                    // ===== GECICI: ANA MENUYU ATLAMA =====
+                    // Menu yazilari gorunmuyor ama menu MANTIGI calisiyor olabilir.
+                    // Onay tusunu nabiz halinde enjekte edip oyuna girmeyi deniyoruz
+                    // (CROSS, sonra CIRCLE - bolgeye gore onay tusu degisebilir).
+                    // Ayrica gercek pad sorgu sayisini olcuyoruz: oyun menude pad'i
+                    // hic sorgulamiyorsa enjeksiyon ise yaramaz (baska yol gerekir).
+                    // PadData: buttons = offset 0 (uint32) [gpu/src/libs/padData.h].
+                    static std::atomic<uint64_t> s_pad_calls{0};
+                    uint64_t pc = s_pad_calls.fetch_add(1) + 1;
+                    uint32_t phase = static_cast<uint32_t>(pc % 240ull);
+                    uint32_t btn = 0;
+                    if (phase < 20)                       btn = 0x4000u; // CROSS
+                    else if (phase >= 120 && phase < 140) btn = 0x2000u; // CIRCLE
+                    if (btn != 0) {
+                        *reinterpret_cast<uint32_t*>(data) |= btn;
+                    }
+                    if (pc <= 3 || (pc % 300ull) == 0) {
+                        printf("[PAD] okuma=%llu phase=%u btn=0x%04x (menu-atlama enjeksiyonu)\n",
+                               static_cast<unsigned long long>(pc), phase, btn);
+                        fflush(stdout);
+                    }
                 } else {
                     ctx->Rax = -2137915391; // PAD_ERROR_INVALID_ARG
                 }
@@ -3645,6 +3843,17 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     // icin RAX'a zaten dokunulmus, onu ezmiyoruz.
                     if (!special_return_set) {
                         ctx->Rax = 0;
+                        // HIZLI YOL isaretleme: bu PLT'yi HICBIR handler
+                        // sahiplenmedi (sonuc sadece RAX=0). Isimsiz NID'ler
+                        // icin bunu onbellege alip sonraki cagrilarda tum
+                        // zinciri atliyoruz -> davranis BIREBIR ayni, ama
+                        // string karsilastirmasi yok. (Or. QOQtbeDqsT4 =
+                        // cagrilarin ~%25'i.) PLT#8'i haric tutuyoruz: onun
+                        // zincir DISINDA ozel yakalamasi var.
+                        if (readable_name.empty() && plt_index != 8 &&
+                            plt_index < kPltCacheMax && s_fop[plt_index] == FOP_NONE) {
+                            s_fop[plt_index] = FOP_RET0;
+                        }
                     }
 
                     if (log_this) {
@@ -3918,15 +4127,18 @@ DWORD WINAPI Core::ExecutionThread(LPVOID lpParam) {
         uint64_t found_block_array = 0;
         
         LOG_INFO("[SCANNER] Gercek ProcessParam block_array araniyor (0x6AC156EF)...");
-        for (size_t i = 0; i < scan_size - 24; i += 4) {
-            if (!SafeReadable(&scan_base[i], 24)) {
-                break;
+        // HIZ: SafeReadable'i her 4 baytta degil, SAYFA basina bir kez cagir.
+        // Onceki hali 32MB icin ~8M SafeReadable (VirtualQuery/IsBadReadPtr)
+        // yapip acilisi saniyelerce bekletiyordu.
+        for (size_t base = 0; base + 24 <= scan_size && found_block_array == 0; base += 0x1000) {
+            size_t want = (scan_size - base < 0x1000 + 16) ? (scan_size - base) : (0x1000 + 16);
+            if (!SafeReadable(&scan_base[base], want)) {
+                break; // sayfa okunamiyor -> tarama bolgesinin sonu
             }
-            
-            uint32_t val1 = *reinterpret_cast<uint32_t*>(&scan_base[i]);
-            if (val1 == 0x6AC156EF) {
-                uint32_t val2 = *reinterpret_cast<uint32_t*>(&scan_base[i + 12]);
-                if (val2 == 0x6AC15610) {
+            size_t end = (base + 0x1000 < scan_size - 24) ? (base + 0x1000) : (scan_size - 24);
+            for (size_t i = base; i < end; i += 4) {
+                if (*reinterpret_cast<uint32_t*>(&scan_base[i]) == 0x6AC156EF &&
+                    *reinterpret_cast<uint32_t*>(&scan_base[i + 12]) == 0x6AC15610) {
                     found_block_array = g_base_addr + i;
                     std::stringstream ss;
                     ss << "[SCANNER] block_array bulundu! Adres: 0x" << std::hex << found_block_array;
@@ -3938,14 +4150,16 @@ DWORD WINAPI Core::ExecutionThread(LPVOID lpParam) {
         
         if (found_block_array != 0) {
             LOG_INFO("[SCANNER] ProcessParam yapisi icin tersine pointer taramasi basliyor...");
-            for (size_t i = 0; i < scan_size - 8; i += 8) {
-                if (!SafeReadable(&scan_base[i], 8)) {
+            // HIZ: yine sayfa basina bir kez okunabilirlik kontrolu.
+            for (size_t base = 0; base + 8 <= scan_size && g_real_process_param == 0; base += 0x1000) {
+                size_t want = (scan_size - base < 0x1000) ? (scan_size - base) : 0x1000;
+                if (!SafeReadable(&scan_base[base], want)) {
                     break;
                 }
-                
-                uint64_t ptr = *reinterpret_cast<uint64_t*>(&scan_base[i]);
-                if (ptr == found_block_array) {
-                    if (i >= 0x30) {
+                size_t end = (base + 0x1000 < scan_size - 8) ? (base + 0x1000) : (scan_size - 8);
+                for (size_t i = base; i < end; i += 8) {
+                    uint64_t ptr = *reinterpret_cast<uint64_t*>(&scan_base[i]);
+                    if (ptr == found_block_array && i >= 0x30) {
                         g_real_process_param = g_base_addr + i - 0x30;
                         std::stringstream ss;
                         ss << "[!!!] GERCEK ProcessParam BULUNDU! Adres: 0x" << std::hex << g_real_process_param;

@@ -1,31 +1,29 @@
 @echo off
 REM ============================================================
-REM  loader.exe'i calistirir ve TUM ciktisini (stdout + stderr)
-REM  hem "loader_log.txt" dosyasina kaydeder hem de konsolda gosterir.
+REM  loader.exe'i calistirir; TUM ciktisini (stdout + stderr)
+REM  konsolda CANLI gosterir VE "loader_log.txt"e UTF-8 yazar.
 REM
 REM  Kullanim:
 REM    run.bat PPSA02929-app0\eboot.bin
 REM
-REM  Not: cmd'nin "> dosya 2>&1" yonlendirmesi OS seviyesindedir;
-REM  hem C (printf) hem C++ (cout/cerr) ciktisini temiz sekilde,
-REM  satir sarmalamasi olmadan yakalar. Koddaki fflush/endl cagrilari
-REM  sayesinde bir cokme/kilitlenme aninda bile ciktinin buyuk kismi
-REM  diske yazilmis olur.
+REM  Nasil: 'cmd /c "loader.exe ... 2>&1"' stderr'i OS seviyesinde
+REM  stdout'a birlestirir; PowerShell her satiri hem konsola
+REM  ([Console]::WriteLine) hem UTF-8 StreamWriter'a (AutoFlush)
+REM  yazar -> ANLIK akar, cokme aninda bile dosya tam kalir,
+REM  ve dosya UTF-8'dir (grep/analiz temiz; Tee-Object'in UTF-16
+REM  + null-byte sorunu YOK).
 REM ============================================================
 setlocal
 set "LOGFILE=loader_log.txt"
 
 echo [run.bat] Calistiriliyor: loader.exe %*
-echo [run.bat] Cikti "%LOGFILE%" dosyasina kaydediliyor...
+echo [run.bat] Cikti CANLI: ekran + "%LOGFILE%" (UTF-8)
 echo.
 
-loader.exe %* > "%LOGFILE%" 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$sw=[System.IO.StreamWriter]::new('%LOGFILE%',$false,[System.Text.Encoding]::UTF8); $sw.AutoFlush=$true; try { cmd /c '.\loader.exe %* 2>&1' | ForEach-Object { [Console]::WriteLine($_); $sw.WriteLine($_) } } finally { $sw.Close() }"
 
 echo.
 echo ============================================================
 echo [run.bat] Bitti. Tam log: %LOGFILE%
 echo ============================================================
-echo.
-echo ------------------- KONSOL CIKTISI -------------------------
-type "%LOGFILE%"
 endlocal

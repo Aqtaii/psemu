@@ -508,7 +508,10 @@ static void ZCheck(const HW::DepthRenderTarget& z) {
 		EXIT_NOT_IMPLEMENTED(z.z_info.tile_surface_enable != false);
 		EXIT_NOT_IMPLEMENTED(z.z_info.expclear_enabled != false);
 		if (z.z_info.zrange_precision != 0) {
-			LOGF("Warning: zrange_precision != 0\n");
+			static std::atomic<uint32_t> log_count {0};
+			if (log_count.fetch_add(1, std::memory_order_relaxed) < 16) {
+				LOGF("Warning: zrange_precision != 0\n");
+			}
 			// z.z_info.zrange_precision = 0;
 		}
 		if (z.z_info.embedded_sample_locations) {
@@ -636,8 +639,11 @@ static void ZCheck(const HW::DepthRenderTarget& z) {
 		EXIT_NOT_IMPLEMENTED(z.stencil_read_base_addr != z.stencil_write_base_addr);
 		EXIT_NOT_IMPLEMENTED(z.z_write_base_addr == 0);
 		if (z.stencil_info.format != 0 && z.stencil_write_base_addr == 0) {
-			LOGF("\t warning: stencil format is set without a stencil base address, continuing "
-			     "without stencil attachment\n");
+			static std::atomic<uint32_t> log_count {0};
+			if (log_count.fetch_add(1, std::memory_order_relaxed) < 16) {
+				LOGF("\t warning: stencil format is set without a stencil base address, continuing "
+				     "without stencil attachment\n");
+			}
 		}
 		// EXIT_NOT_IMPLEMENTED(z.pitch_div8_minus1 != 0x000000ff);
 		// EXIT_NOT_IMPLEMENTED(z.height_div8_minus1 != 0x0000008f);
