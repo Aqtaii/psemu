@@ -65,6 +65,12 @@ public:
 
 	bool InitAll(bool print_msg) {
 		while (SubsListStruct* n = FindNextToInitialize()) {
+			// psemu tani: init'in ARALIKLI olarak kilitlendigi subsystem'i
+			// saptamak icin BASLAMADAN once yaz (bitisi "Initialized: X").
+			if (print_msg) {
+				printf("Initializing: %s ...\n", n->name);
+				fflush(stdout);
+			}
 			n->s->Init(&parent);
 
 			if (n->s->m_p->failed) {

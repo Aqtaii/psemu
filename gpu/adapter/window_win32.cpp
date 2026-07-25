@@ -1,4 +1,4 @@
-// ============================================================================
+﻿// ============================================================================
 // psemu: Kyty graphics/presentation/window/window.cpp'nin SDL'siz Win32
 // karsiligi. Orijinal window.cpp'de 175 SDL referansi vardi ve cogu INPUT +
 // SDL game-loop icindi (render icin gereksiz). Burada yalnizca renderer/videoOut
@@ -7,6 +7,7 @@
 // window.cpp CMake'te DERLENMIYOR; bu dosya onun yerini aliyor.
 // ============================================================================
 #include <windows.h>
+#include <cstdio>
 
 #include "common/assert.h"
 #include "common/threads.h"
@@ -98,6 +99,11 @@ static void WindowCreate(WindowContext* ctx) {
 	int width  = static_cast<int>(ctx->graphic_ctx.screen_width);
 	int height = static_cast<int>(ctx->graphic_ctx.screen_height);
 
+	// psemu tani: init'in ARALIKLI olarak kilitlendigi yeri saptamak icin
+	// (launch'larin ~%50'si [INIT-MARK] WaitForGraphicInitialized'da donuyordu).
+	#define WMARK(x) do { std::fprintf(stderr, "[WIN-MARK] " x "\n"); std::fflush(stderr); } while (0)
+	WMARK("WindowCreate: RegisterClassExW oncesi");
+
 	const wchar_t* cls_name = L"PsemuKytyWindow";
 	WNDCLASSEXW    wc       = {};
 	wc.cbSize        = sizeof(wc);
@@ -106,6 +112,7 @@ static void WindowCreate(WindowContext* ctx) {
 	wc.hCursor       = LoadCursorW(nullptr, reinterpret_cast<LPCWSTR>(IDC_ARROW));
 	wc.lpszClassName = cls_name;
 	RegisterClassExW(&wc);
+	WMARK("WindowCreate: RegisterClassExW SONRASI; CreateWindowExW oncesi");
 
 	// Oyun 4K isteyebilir; ekrana sigmasi icin pencereyi kucult (swapchain
 	// yine tam cozunurlukte olur, DWM olcekler). Basitlik icin simdilik dogrudan.
@@ -117,21 +124,31 @@ static void WindowCreate(WindowContext* ctx) {
 	                            nullptr, nullptr, wc.hInstance, nullptr);
 	EXIT_IF(hwnd == nullptr);
 
+	WMARK("WindowCreate: CreateWindowExW SONRASI");
 	ctx->window        = hwnd;
 	ctx->window_hidden = false;
 	ShowWindow(hwnd, SW_SHOW);
 	UpdateWindow(hwnd);
+	WMARK("WindowCreate: BITTI");
 }
 
 void WindowRun() {
 	EXIT_IF(g_window_ctx == nullptr);
 
+	std::fprintf(stderr, "[WIN-MARK] WindowRun: THREAD BASLADI (mutex oncesi)\n");
+	std::fflush(stderr);
 	g_window_ctx->mutex.Lock();
 	{
+		std::fprintf(stderr, "[WIN-MARK] WindowRun: mutex ALINDI\n");
+		std::fflush(stderr);
 		EXIT_IF(g_window_ctx->graphic_initialized);
 
 		WindowCreate(g_window_ctx);
+		std::fprintf(stderr, "[WIN-MARK] WindowRun: VulkanCreate oncesi\n");
+		std::fflush(stderr);
 		VulkanCreate(g_window_ctx);
+		std::fprintf(stderr, "[WIN-MARK] WindowRun: VulkanCreate SONRASI\n");
+		std::fflush(stderr);
 
 		g_window_ctx->game = nullptr; // psemu: SDL WindowGame/game-loop yok
 
@@ -143,7 +160,7 @@ void WindowRun() {
 	GraphicsRenderCreateContext();
 
 	// psemu: Kyty'nin SDL GameMainLoop'unun render kismini replike ediyoruz.
-	// KRITIK: her frame VideoOutFlipWindow(0) cagrilmali — bu, flip queue'yu
+	// KRITIK: her frame VideoOutFlipWindow(0) cagrilmali â€” bu, flip queue'yu
 	// drain edip WaitForNextVblank + FlipQueue::Flip -> WindowPresentFrame
 	// (swapchain'e present) yapar. Onceki minimal GetMessage-only dongusu bunu
 	// yapmiyordu, o yuzden flip kuyruga giriyor ama HIC sunulmuyordu (beyaz

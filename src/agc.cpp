@@ -141,7 +141,19 @@ void EnsureKytyGraphicsInit() {
     if (!started.compare_exchange_strong(expected, true)) return;
 
     LOG_INFO("[KYTY-GFX] Baslatiliyor: Kyty subsystem'leri + WindowInit + VulkanCreate...");
-    PsemuInitKytyGraphics(); // subsystem init + WindowInit + WindowRun + wait
+
+    // ONEMLI: init'i AYRI BIR THREAD'de yapiyoruz.
+    // Buraya VEH (exception handler) BAGLAMINDAN geliyoruz: Dispatch, PLT
+    // fault'unu isleyen handler'in icinden cagriliyor. Agir Win32/Vulkan/CRT
+    // init'ini exception baglaminda yapmak, ayni anda VEH'e giren DIGER guest
+    // thread'leriyle kilit ters siralamasi uretiyordu: launch'larin ~%50'si
+    // "Initializing: FileSystem ..." (sadece iki adet 'new'!) satirinda
+    // SONSUZA KADAR donuyordu. Init'i normal bir thread baglamina tasiyip
+    // burada yalnizca sonucu bekliyoruz (qsort'ta ise yarayan ayni desen).
+    {
+        std::thread init_th([] { PsemuInitKytyGraphics(); });
+        init_th.join();
+    }
     LOG_INFO("[KYTY-GFX] Vulkan HAZIR (instance/device/swapchain kuruldu).");
 }
 
