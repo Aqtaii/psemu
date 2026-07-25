@@ -2701,20 +2701,25 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 // dokup menu string'inin buraya HIC gelip gelmedigini goruyoruz.
                 { static std::atomic<uint64_t> s_d{0};
                   uint64_t cnt = s_d.fetch_add(1, std::memory_order_relaxed) + 1;
-                  // ilk 20'yi ve sonra her 200'de birini yaz -> TOPLAM ilerleme gorunur
-                  // (onceki hali 80 ile sinirliydi ve sayac doygun kaliyordu: farkli
-                  // kosulari karsilastirmak imkansizdi).
-                  if ((cnt <= 20 || cnt % 200 == 0) && p != nullptr &&
-                      n > 0 && SafeReadable(p, (n < 48 ? n : 48) * 2)) {
+                  if (p != nullptr && n > 0 && SafeReadable(p, (n < 48 ? n : 48) * 2)) {
                     char txt[52]; size_t m = (n < 48 ? n : 48), k = 0;
                     for (size_t i = 0; i < m; i++) {
                         uint16_t ch = p[i];
                         txt[k++] = (ch >= 0x20 && ch < 0x7f) ? static_cast<char>(ch) : '.';
                     }
                     txt[k] = '\0';
-                    printf("[U16SPLIT] #%llu c=0x%x n=%zu \"%s\"\n",
-                           static_cast<unsigned long long>(cnt), c, n, txt);
-                    fflush(stdout);
+                    // Ornekleme (ilk 20 + her 200) YETMIYOR: menu anahtari lang0.json'da
+                    // 96. girdi (~split #384) ve ornekleme araligina dusmuyordu.
+                    // "menu"/"New game" iceren HER split'i mutlaka yaz -> loadDictionary
+                    // menu0'i gercekten isliyor mu, kesin gorelim.
+                    const bool is_menu = (strstr(txt, "menu") != nullptr) ||
+                                         (strstr(txt, "New game") != nullptr);
+                    if (cnt <= 20 || cnt % 200 == 0 || is_menu) {
+                        printf("[U16SPLIT] #%llu c=0x%x n=%zu \"%s\"%s\n",
+                               static_cast<unsigned long long>(cnt), c, n, txt,
+                               is_menu ? "   <== MENU!" : "");
+                        fflush(stdout);
+                    }
                   } }
                 uint64_t found = 0;
                 if (p != nullptr && n > 0 && SafeReadable(p, n * 2)) {
@@ -3060,6 +3065,20 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                         std::string s(ptr, ptr + take);
                         while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
                         if (!s.empty()) LOG_INFO("[GAME-LOG] " + s);
+                        // TANI: menu etiketleri icin bir numarali supheli, dil
+                        // kodunun BOSALMASI ("langcode is us" -> "langcode is ").
+                        // Bu mesaji basan CAGRI NOKTASINI yakalayip RVA'ya
+                        // ceviriyoruz; sonra disassembly ile langcode'un hangi
+                        // global'den okundugunu bulacagiz.
+                        if (s.find("SAVEGAME MISSING") != std::string::npos) {
+                            uint64_t* rsp_p = reinterpret_cast<uint64_t*>(ctx->Rsp);
+                            uint64_t  ret   = (SafeReadable(rsp_p, 8)) ? *rsp_p : 0;
+                            printf("[LANGCODE] \"%s\" | cagiran RVA=0x%llx%s\n", s.c_str(),
+                                   static_cast<unsigned long long>(ret - g_base_addr),
+                                   (s.find("is )") != std::string::npos ||
+                                    s.find("is  )") != std::string::npos) ? "  <== BOS!" : "");
+                            fflush(stdout);
+                        }
                     }
                     ctx->Rax = static_cast<uint64_t>(cnt);
                 }
@@ -3903,6 +3922,23 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 }
                 // Mesaji BURADA logla: buffer'a yazma veya sonraki fputs basarisiz
                 // olsa bile oyunun ne demek istedigini kesin goruruz.
+                // TANI (menu etiketleri): dil kodunun BOSALMASINI izliyoruz.
+                // Cagiran RVA'yi ve va-alanindaki ilk pointer'lari dokuyoruz;
+                // boylece langcode'un hangi bellekten okundugunu bulup oraya
+                // yazan kodu yakalayacagiz.
+                if (s.find("SAVEGAME MISSING") != std::string::npos) {
+                    uint64_t* rsp_p = reinterpret_cast<uint64_t*>(ctx->Rsp);
+                    uint64_t  ret   = SafeReadable(rsp_p, 8) ? *rsp_p : 0;
+                    std::stringstream lc;
+                    lc << "[LANGCODE] \"" << s << "\" | cagiran RVA=0x" << std::hex
+                       << (ret - g_base_addr) << " | va=0x" << ctx->Rcx;
+                    const uint64_t* va = reinterpret_cast<const uint64_t*>(ctx->Rcx);
+                    if (va != nullptr && SafeReadable(va, 48)) {
+                        lc << " va[0..5]=";
+                        for (int q = 0; q < 6; q++) lc << "0x" << va[q] << " ";
+                    }
+                    LOG_INFO(lc.str());
+                }
                 if (!s.empty()) {
                     LOG_INFO("[GAME-LOG] " + s + (wrote ? "" : "   <-- [UYARI: buffer'a yazilamadi]"));
                 } else {
