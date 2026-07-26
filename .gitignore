@@ -27,3 +27,7 @@ tools/dumps/
 loader_err.txt
 err*.txt
 log*.txt
+
+# Oyun kosu loglari (her oyun icin ayri isim)
+*_log.txt
+*_err.txt

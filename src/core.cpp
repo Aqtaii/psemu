@@ -19,6 +19,7 @@
 #include <memory>  // tembel tani stringstream'i icin unique_ptr
 #include <deque>    // direct memory havuzu kilidi
 #include "nids.h"
+#include "game_profile.h"
 #include "video.h"
 #include "kernel/eventQueue.h"
 #include "graphics/presentation/videoOut.h"
@@ -265,7 +266,11 @@ static std::mutex g_vfs_mutex;
 // klasorudur; diger mutlak yollari da ayni koke baglariz.
 // Kayit verisi kok klasoru. Oyunun /saveDataN/... yollari BURAYA eslenir.
 // Oyun dizinini kirletmemek ve gercek kayit destegi verebilmek icin ayri tutulur.
-static const char* kSaveDataRoot = "savedata";
+// TITLE ID ile ayrilir ("savedata/PPSA02929"): iki oyun birbirinin kaydini
+// EZMESIN. Profil cozulemezse duz "savedata"ya duser (bkz. game_profile.cpp).
+static std::string SaveDataRoot() {
+    return Game::Current().savedata_root;
+}
 
 // Verilen HOST yolunun ust dizinlerini olusturur (yoksa). fopen("wb") ancak
 // dizin varsa basarili olur; oyun kayit dosyasini olusturamayinca
@@ -293,7 +298,7 @@ static std::string TranslateGuestPath(const std::string& guest) {
         std::string low = guest.substr(0, 9);
         for (auto& ch : low) ch = static_cast<char>(tolower(static_cast<unsigned char>(ch)));
         if (low == "/savedata") {
-            return std::string(kSaveDataRoot) + guest;
+            return SaveDataRoot() + guest;
         }
     }
     if (guest[0] == '/')                return g_game_root + guest;  // diger mutlak yollar
@@ -1695,7 +1700,12 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
     // buffer'a yonlendirip komutu YENIDEN CALISTIR. Boylece tum taÅŸma erisimleri
     // (5. kayit) zararsizca dummy'ye gider, ilk 4 gecerli kayit tabloda kalir,
     // fonksiyon normal tamamlanir. Instruction atlama / whack-a-mole YOK.
-    if (code == EXCEPTION_ACCESS_VIOLATION &&
+    // OYUNA OZEL: bu RVA araligi yalnizca Dreaming Sarah'in binary'sinde
+    // tip-kayit fonksiyonudur. Baska bir oyunda ayni adreste bambaska kod olur
+    // ve asagidaki "RBX/RDX'i dummy'ye yonlendir" duzeltmesi sessizce bellegi
+    // bozar. Bu yuzden profile bagli (bkz. game_profile.h).
+    if (Game::Current().quirk_c2_type_registration_overflow &&
+        code == EXCEPTION_ACCESS_VIOLATION &&
         ctx->Rip >= g_base_addr + 0x2dfff0 && ctx->Rip < g_base_addr + 0x2e0900) {
         uint64_t fault = ExceptionInfo->ExceptionRecord->NumberParameters >= 2 ?
                          ExceptionInfo->ExceptionRecord->ExceptionInformation[1] : ~0ull;
@@ -1715,8 +1725,11 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         }
     }
 
-    // Texture metadata read recovery at RVA 0x1654f8 (mov esi, [rcx + 0x120])
-    if (code == EXCEPTION_ACCESS_VIOLATION && ctx->Rip == g_base_addr + 0x1654f8) {
+    // OYUNA OZEL: RVA 0x1654f8 (mov esi, [rcx + 0x120]) texture metadata
+    // okumasi. Adres Dreaming Sarah'a ait; baska oyunda RIP'i 0x165508'e
+    // zorlamak keyfi bir yere atlamak demektir.
+    if (Game::Current().quirk_texture_meta_recover && code == EXCEPTION_ACCESS_VIOLATION &&
+        ctx->Rip == g_base_addr + 0x1654f8) {
         ctx->Rsi = 1;
         ctx->Rip = g_base_addr + 0x165508; // Jump past jz check to force main menu scene transition!
         LOG_INFO("[VEH-RECOVER] Force-completed texture load at RVA 0x1654f8 -> transitioning scene to main menu!");
@@ -3130,7 +3143,10 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                             if (!SafeReadable(reinterpret_cast<void*>(rbp), 16)) break;
                             uint64_t saved = *reinterpret_cast<uint64_t*>(rbp);
                             uint64_t ret   = *reinterpret_cast<uint64_t*>(rbp + 8);
-                            if (ret == g_base_addr + 0x1e3cf7) {
+                            // OYUNA OZEL tani: 0x1e3cf7/0x1423bf adresleri
+                            // Dreaming Sarah'in JSON getter cercevesine ait.
+                            if (Game::Current().quirk_rva_diagnostics &&
+                                ret == g_base_addr + 0x1e3cf7) {
                                 frame_1e23c0 = saved;
                                 break;
                             }

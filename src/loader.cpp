@@ -1,4 +1,4 @@
-#include <iostream>
+﻿#include <iostream>
 #include <fstream>
 #include <vector>
 #include <string>
@@ -6,6 +6,8 @@
 #include <windows.h>
 #include "elf64.h"
 #include "logger.h"
+#include "game_profile.h"
+#include <fstream>
 #include "syscalls.h"
 #include "core.h"
 
@@ -14,7 +16,7 @@ extern "C" void Utf16DiagValue(void*);
 #include "scanner.h"
 #include "linker.h"
 
-// ELF bellek izinlerini Windows API bellek koruma bayraklarına dönüştüren yardımcı fonksiyon
+// ELF bellek izinlerini Windows API bellek koruma bayraklarÄ±na dÃ¶nÃ¼ÅŸtÃ¼ren yardÄ±mcÄ± fonksiyon
 DWORD GetWindowsProtection(uint32_t p_flags) {
     bool r = (p_flags & PF_R) != 0;
     bool w = (p_flags & PF_W) != 0;
@@ -42,7 +44,7 @@ bool LoadEboot(const std::string& filePath) {
     // ==========================================
     // 1. Dosya Okuma (Binary Mode)
     // ==========================================
-    // Dosyayı sonuna kadar açıp boyutunu öğreniyoruz (ate = at end). Binary flag ile işliyoruz.
+    // DosyayÄ± sonuna kadar aÃ§Ä±p boyutunu Ã¶ÄŸreniyoruz (ate = at end). Binary flag ile iÅŸliyoruz.
     std::ifstream file(filePath, std::ios::binary | std::ios::ate);
     if (!file.is_open()) {
         std::cerr << "Dosya acilamadi: " << filePath << std::endl;
@@ -52,8 +54,8 @@ bool LoadEboot(const std::string& filePath) {
     std::streamsize size = file.tellg();
     file.seekg(0, std::ios::beg);
 
-    // Tüm dosyayı RAM'e alıyoruz. High-performance loader'lar dosya I/O işlemlerini
-    // azaltmak için tüm buffer'ı bir kerede çekmelidir veya memory-mapped file kullanmalıdır.
+    // TÃ¼m dosyayÄ± RAM'e alÄ±yoruz. High-performance loader'lar dosya I/O iÅŸlemlerini
+    // azaltmak iÃ§in tÃ¼m buffer'Ä± bir kerede Ã§ekmelidir veya memory-mapped file kullanmalÄ±dÄ±r.
     std::vector<uint8_t> buffer(size);
     if (!file.read(reinterpret_cast<char*>(buffer.data()), size)) {
         std::cerr << "Dosya okunamadi!" << std::endl;
@@ -61,7 +63,7 @@ bool LoadEboot(const std::string& filePath) {
     }
 
     // ==========================================
-    // 2. Başlık Doğrulama (SELF / ELF Parsing)
+    // 2. BaÅŸlÄ±k DoÄŸrulama (SELF / ELF Parsing)
     // ==========================================
     if (size < sizeof(SelfHeader)) {
         std::cerr << "Dosya cok kucuk, gecerli bir SELF/ELF olamaz." << std::endl;
@@ -96,10 +98,10 @@ bool LoadEboot(const std::string& filePath) {
         elf_offset = 0;
     }
 
-    // Pointer Aritmetiği: Bulunan ofset kadar ileri giderek gercek ELF Header'a ulasalim
+    // Pointer AritmetiÄŸi: Bulunan ofset kadar ileri giderek gercek ELF Header'a ulasalim
     Elf64_Ehdr* header = reinterpret_cast<Elf64_Ehdr*>(buffer.data() + elf_offset);
 
-    // Magic Bytes Kontrolü (\x7fELF)
+    // Magic Bytes KontrolÃ¼ (\x7fELF)
     if (header->e_ident[EI_MAG0] != ELFMAG0 ||
         header->e_ident[EI_MAG1] != ELFMAG1 ||
         header->e_ident[EI_MAG2] != ELFMAG2 ||
@@ -108,19 +110,19 @@ bool LoadEboot(const std::string& filePath) {
         return false;
     }
 
-    // 64-bit Kontrolü
+    // 64-bit KontrolÃ¼
     if (header->e_ident[EI_CLASS] != ELFCLASS64) {
         std::cerr << "HATA: Dosya 64-bit ELF degil." << std::endl;
         return false;
     }
 
-    // Little-Endian Kontrolü
+    // Little-Endian KontrolÃ¼
     if (header->e_ident[EI_DATA] != ELFDATA2LSB) {
         std::cerr << "HATA: Dosya Little-Endian degil." << std::endl;
         return false;
     }
 
-    // Mimari Kontrolü (PS5/Orbis x86_64 mimarisidir)
+    // Mimari KontrolÃ¼ (PS5/Orbis x86_64 mimarisidir)
     if (header->e_machine != EM_X86_64) {
         std::cerr << "HATA: Desteklenmeyen mimari. x86_64 bekleniyor." << std::endl;
         return false;
@@ -131,7 +133,7 @@ bool LoadEboot(const std::string& filePath) {
     // ==========================================
     // 3. Bellek Tahsisi (Unified Memory Mapping)
     // ==========================================
-    // Pointer Aritmetiği: elf_offset (gercek ELF'in baslangici) uzerine e_phoff eklenir
+    // Pointer AritmetiÄŸi: elf_offset (gercek ELF'in baslangici) uzerine e_phoff eklenir
     Elf64_Phdr* phdrs = reinterpret_cast<Elf64_Phdr*>(buffer.data() + elf_offset + header->e_phoff);
 
     // Adim 3.1: Toplam Sanal Bellek Ihtiyacini Hesapla ve Ozel Segmentleri Bul
@@ -447,7 +449,7 @@ bool LoadEboot(const std::string& filePath) {
                 }
                 std::cout << "[+] RELA islemi tamamlandi! Toplam " << patch_count << " adet pointer yamanip guncellendi." << std::endl;
                 
-                // JMPREL (PLT) Tablosunu işle ve g_plt_names'i doldur
+                // JMPREL (PLT) Tablosunu iÅŸle ve g_plt_names'i doldur
                 if (jmprel_table != nullptr && jmprel_size > 0 && rela_ent > 0) {
                     size_t num_plt = jmprel_size / rela_ent;
                     std::cout << "[INFO] DT_JMPREL bulundu, " << num_plt << " adet JUMP_SLOT isleniyor..." << std::endl;
@@ -560,7 +562,7 @@ bool LoadEboot(const std::string& filePath) {
     }
 
     // ==========================================
-    // 5. Entry Point (Giriş Noktası)
+    // 5. Entry Point (GiriÅŸ NoktasÄ±)
     // ==========================================
     // Oyun artik Base Address ile yamanmistir. Giris noktasi da bu kaymayi alir.
     uint64_t original_entry = reinterpret_cast<uint64_t>(base_ptr) + header->e_entry;
@@ -578,7 +580,7 @@ bool LoadEboot(const std::string& filePath) {
         }
     }
     
-    // PLT/GOT tablolari text segmentin sonunda yer alir ama GOT farklı bir segmentte olabilir.
+    // PLT/GOT tablolari text segmentin sonunda yer alir ama GOT farklÄ± bir segmentte olabilir.
     // Bu yuzden tarayiciya tum yuklenmis bellek alanini (max_vaddr_end) geciriyoruz.
     size_t scan_size = (text_segment_size > 0) ? text_segment_size : max_vaddr_end;
     
@@ -802,6 +804,16 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Oyuna ozel davranis profilini SEC. Adres bagimli tum duzeltmeler buna
+    // baglidir; taninmayan oyunda hepsi kapali kalir (bkz. game_profile.h).
+    // Yukleyiciden ONCE cagrilmali: kayit klasoru ve quirk'ler daha ilk
+    // dosya/HLE isleminde gerekiyor.
+    Game::InitProfile(argv[1]);
+
+    // NOT: SELF konteyneri kontrolu BURAYA EKLENMEDI. LoadEboot zaten SELF'i
+    // taniyip icindeki ELF'i ariyor ve bulamazsa net bir mesaj veriyor
+    // ("Dosya tamamen sifreli olabilir"). Burada ikinci, daha kati bir kapi
+    // koymak icinde duz ELF tasiyan SELF'leri de reddederdi.
     LoadEboot(argv[1]);
 
     return 0;
