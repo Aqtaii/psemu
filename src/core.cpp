@@ -1700,6 +1700,46 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
     // buffer'a yonlendirip komutu YENIDEN CALISTIR. Boylece tum taÅŸma erisimleri
     // (5. kayit) zararsizca dummy'ye gider, ilk 4 gecerli kayit tabloda kalir,
     // fonksiyon normal tamamlanir. Instruction atlama / whack-a-mole YOK.
+    // ================================================================
+    // MISAFIR TUZAGI: int 0x41
+    // ================================================================
+    // PS5 kodu hata durumunda "int 0x41" isletir (assert/abort tuzagi).
+    // Windows bunu genel koruma hatasi olarak teslim eder ve hata adresi
+    // 0xFFFFFFFFFFFFFFFF gorunur - yani BELLEK HATASI gibi gorunur, oysa
+    // degildir. Astro Bot'ta olculen kalip:
+    //     test eax, eax ; je +2 ; int 0x41   <- donus degeri sifir degilse tuzak
+    // Bunu ayirt edip ANLASILIR sekilde raporluyoruz; aksi halde saatlerce
+    // yanlis yerde (bellek bozulmasinda) aranir.
+    //
+    // Varsayilan olarak ATLIYORUZ (RIP += 2): tuzak oyunun kendi "burada
+    // durmaliyim" karari; emulatorde ilerlemeye devam edip bir sonraki gercek
+    // eksigi gormek istiyoruz. Kapatmak icin: PSEMU_TRAP_FATAL=1
+    if (code == EXCEPTION_ACCESS_VIOLATION &&
+        ExceptionInfo->ExceptionRecord->NumberParameters >= 2 &&
+        ExceptionInfo->ExceptionRecord->ExceptionInformation[1] == ~0ull) {
+        const uint8_t* p = reinterpret_cast<const uint8_t*>(ctx->Rip);
+        if (SafeReadable(p, 2) && p[0] == 0xCD && p[1] == 0x41) {
+            static const bool s_fatal = [] {
+                const char* e = getenv("PSEMU_TRAP_FATAL");
+                return e != nullptr && e[0] != '0';
+            }();
+            static std::atomic<uint64_t> s_traps{0};
+            const uint64_t tn = s_traps.fetch_add(1) + 1;
+            if (tn <= 12 || (tn % 500ull) == 0) {
+                std::stringstream ts;
+                ts << "[GUEST-TRAP] int 0x41 (oyunun kendi hata tuzagi) #" << tn << " @ RVA 0x"
+                   << std::hex << (ctx->Rip - g_base_addr) << " | RAX=0x" << ctx->Rax
+                   << " RDI=0x" << ctx->Rdi << " RSI=0x" << ctx->Rsi << std::dec
+                   << (s_fatal ? "  -> OLUMCUL (PSEMU_TRAP_FATAL=1)" : "  -> atlandi");
+                LOG_ERROR(ts.str());
+            }
+            if (!s_fatal) {
+                ctx->Rip += 2; // tuzagi gec
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+        }
+    }
+
     // OYUNA OZEL: bu RVA araligi yalnizca Dreaming Sarah'in binary'sinde
     // tip-kayit fonksiyonudur. Baska bir oyunda ayni adreste bambaska kod olur
     // ve asagidaki "RBX/RDX'i dummy'ye yonlendir" duzeltmesi sessizce bellegi
