@@ -2185,6 +2185,120 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             }
 
             // ========================================================
+            // sceLibcMspace* (Sony mspace ayiricisi) - ZINCIRDEN ONCE
+            // ========================================================
+            // Astro Bot'un ic ayiricisi bunun uzerine kurulu. Implemente
+            // olmadigi icin sceLibcMspaceMalloc 0 donduruyordu ve oyun donen
+            // NULL'a nesne yazmaya calisip cokuyordu (WRITE @ 0x0, RVA
+            // 0x70a932c: "mov [rax], rax"). NID hicbir veritabaninda yoktu;
+            // modul tablosundan libc oldugu anlasilip tuzlu SHA1 ile cozuldu
+            // (OJjm-QOIHlI, bkz. tools/scripts/nid_libc.py).
+            //
+            // mspace TUTAMACINI YOK SAYIYORUZ: gercek bir dlmalloc havuzu
+            // kurmak yerine tum tahsisleri malloc/_Znwm ile AYNI ayiriciya
+            // yonlendiriyoruz. Oyun ayni isaretciyi free/delete/MspaceFree ile
+            // birakabildigi icin tek ayirici kullanmak SART.
+            // C++ global serbest birakma operatorleri. NID'leri toplu cozumden
+            // geldi (bkz. tools/scripts/nid_bulk.py). new/malloc/MspaceMalloc
+            // ile AYNI ayiriciyi kullandigimiz icin hepsi _aligned_free.
+            // Hizalanmis ve nothrow varyantlarinda da ilk arguman isaretcidir.
+            if (readable_name == "_ZdlPv" || readable_name == "_ZdaPv" ||
+                readable_name == "_ZdlPvm" || readable_name == "_ZdaPvm" ||
+                readable_name == "_ZdlPvSt11align_val_t" ||
+                readable_name == "_ZdaPvSt11align_val_t" ||
+                readable_name == "_ZdlPvmSt11align_val_t" ||
+                readable_name == "_ZdaPvmSt11align_val_t" ||
+                readable_name == "_ZdlPvRKSt9nothrow_t" ||
+                readable_name == "_ZdaPvRKSt9nothrow_t") {
+                void* p = reinterpret_cast<void*>(ctx->Rdi);
+                if (p != nullptr) _aligned_free(p);
+                ctx->Rax  = 0;
+                ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                ctx->Rsp += 8;
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+            if (readable_name == "sceLibcMspaceMalloc" ||
+                readable_name == "sceLibcMspaceCalloc" ||
+                readable_name == "sceLibcMspaceMemalign" ||
+                readable_name == "sceLibcMspaceRealloc" ||
+                readable_name == "sceLibcMspaceFree" ||
+                readable_name == "sceLibcMspaceCreate" ||
+                readable_name == "sceLibcMspaceDestroy" ||
+                readable_name == "sceLibcMspaceMallocStats" ||
+                readable_name == "sceLibcMspaceMallocStatsFast" ||
+                readable_name == "sceLibcMspaceIsHeapEmpty" ||
+                readable_name == "sceLibcMspaceMallocUsableSize") {
+                uint64_t rv = 0;
+                if (readable_name == "sceLibcMspaceCreate") {
+                    // Create(name, base, capacity, flag) -> mspace tutamaci.
+                    // Sifir olmayan sahte bir tutamac yeter; gercek havuzu
+                    // kullanmiyoruz. Oyun bunu sadece geri veriyor.
+                    static uint64_t s_fake_mspace = 0x4D53504100000001ull; // "MSPA..."
+                    rv = ++s_fake_mspace;
+                } else if (readable_name == "sceLibcMspaceDestroy" ||
+                           readable_name == "sceLibcMspaceMallocStats" ||
+                           readable_name == "sceLibcMspaceMallocStatsFast") {
+                    rv = 0; // istatistik yapisini dokunmadan basarili don
+                } else if (readable_name == "sceLibcMspaceIsHeapEmpty") {
+                    rv = 0; // "bos degil"
+                } else if (readable_name == "sceLibcMspaceFree") {
+                    // Free(mspace, ptr)
+                    void* p = reinterpret_cast<void*>(ctx->Rsi);
+                    if (p != nullptr) _aligned_free(p);
+                    rv = 0;
+                } else if (readable_name == "sceLibcMspaceMallocUsableSize") {
+                    rv = LookupAllocSize(reinterpret_cast<void*>(ctx->Rsi));
+                } else {
+                    // Malloc(mspace, size) / Calloc(mspace, n, size) /
+                    // Memalign(mspace, align, size) / Realloc(mspace, ptr, size)
+                    size_t n = 0;
+                    size_t align = 16;
+                    void*  old_p = nullptr;
+                    if (readable_name == "sceLibcMspaceCalloc") {
+                        n = static_cast<size_t>(ctx->Rsi) * static_cast<size_t>(ctx->Rdx);
+                    } else if (readable_name == "sceLibcMspaceMemalign") {
+                        align = static_cast<size_t>(ctx->Rsi);
+                        if (align < 16 || (align & (align - 1)) != 0) align = 16;
+                        n = static_cast<size_t>(ctx->Rdx);
+                    } else if (readable_name == "sceLibcMspaceRealloc") {
+                        old_p = reinterpret_cast<void*>(ctx->Rsi);
+                        n     = static_cast<size_t>(ctx->Rdx);
+                    } else {
+                        n = static_cast<size_t>(ctx->Rsi);
+                    }
+                    // malloc yolundaki ayni comert tampon: oyun bazen
+                    // istediginden fazlasina dokunuyor.
+                    const size_t alloc_sz = n ? (n + 65536) : 65536;
+                    void*        p        = _aligned_malloc(alloc_sz, align);
+                    if (p != nullptr) {
+                        memset(p, 0, alloc_sz);
+                        if (old_p != nullptr) {
+                            const size_t old_n = LookupAllocSize(old_p);
+                            const size_t cp    = (old_n < n) ? old_n : n;
+                            if (cp != 0) memcpy(p, old_p, cp);
+                            _aligned_free(old_p);
+                        }
+                        RegisterAllocSize(p, n);
+                    }
+                    rv = reinterpret_cast<uint64_t>(p);
+                }
+                static std::atomic<uint64_t> s_ms{0};
+                const uint64_t mn = s_ms.fetch_add(1) + 1;
+                if (mn <= 6 || (mn % 5000ull) == 0) {
+                    printf("[MSPACE] #%llu %s(rsi=0x%llx rdx=0x%llx) -> 0x%llx\n",
+                           static_cast<unsigned long long>(mn), readable_name.c_str(),
+                           static_cast<unsigned long long>(ctx->Rsi),
+                           static_cast<unsigned long long>(ctx->Rdx),
+                           static_cast<unsigned long long>(rv));
+                    fflush(stdout);
+                }
+                ctx->Rax  = rv;
+                ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                ctx->Rsp += 8;
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+
+            // ========================================================
             // COMMON DIALOG (mesaj penceresi) - ZINCIRDEN ONCE
             // ========================================================
             // Astro Bot acilista bir sistem mesaj penceresi acip durumunu

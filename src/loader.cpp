@@ -695,7 +695,34 @@ bool LoadEboot(const std::string& filePath) {
     // ==========================================
     // 6. Syscall Hooking (VEH Patching)
     // ==========================================
-    std::cout << "[+] Calistirilabilir (Executable) segmentler taranip Syscall kancalari (INT 3) atiliyor..." << std::endl;
+    // VARSAYILAN: KAPALI. Bu tarama KOD BOZUYORDU.
+    //
+    // Calistirilabilir segmentte gecen HER "0F 05" bayt cifti "CC 90"a
+    // ceviriliyordu. Ama 0F 05 yalnizca "syscall" komutu olarak gecmez; bir
+    // komutun yer degistirme (displacement) veya immediate alaninin ICINDE de
+    // gecebilir. O zaman yama komutu bozuyor.
+    //
+    // Astro Bot'ta yakalanan somut ornek (RVA 0x3256b4b):
+    //   dosyada  : C5 F8 10 05 ED 7A 0F 05   vmovups xmm0,[rip+0x050F7AED]
+    //   bellekte : C5 F8 10 05 ED 7A CC 90   vmovups xmm0,[rip+0x90CC7AED]
+    // Yer degistirme negatife dondu, adres imajin 1.8 GB altina kaydi ve oyun
+    // cokuyordu.
+    //
+    // OLCUM: Astro Bot'ta 1539, Dreaming Sarah'ta 5 yama yapiliyordu ve IKI
+    // OYUNDA DA INT3 handler'i TEK BIR syscall gormedi (0 adet [SYSCALL] logu).
+    // Yani tarama tamamen zararli: kod bozuyor, karsiliginda hicbir sey
+    // kazandirmiyor. PS5 oyunlari libkernel'i PLT uzerinden cagirir; ham
+    // syscall komutu libkernel'in ICINDE olur, o da yuklenmiyor.
+    //
+    // Arastirmak isteyen icin: PSEMU_PATCH_SYSCALLS=1
+    const char* patch_sc_env = getenv("PSEMU_PATCH_SYSCALLS");
+    const bool  patch_syscalls = (patch_sc_env != nullptr && patch_sc_env[0] != '0');
+    if (!patch_syscalls) {
+        std::cout << "[+] Syscall (0F 05 -> INT3) taramasi KAPALI (varsayilan): kod bozuyordu, "
+                     "karsiliginda hicbir syscall yakalanmiyordu. Acmak icin PSEMU_PATCH_SYSCALLS=1"
+                  << std::endl;
+    }
+    if (patch_syscalls)
     for (int i = 0; i < header->e_phnum; ++i) {
         Elf64_Phdr* phdr = &phdrs[i];
         if (phdr->p_type == PT_LOAD && (phdr->p_flags & PF_X)) {
