@@ -25,6 +25,7 @@
 #include "kernel/memory.h"
 #include "kernel/pthread.h"
 #include "libs/agc.h" // Libs::Graphics::GraphicsSubsystem
+#include "libs/controller.h"
 #include "loader/timer.h"
 
 void PsemuInitKytyGraphics() {
@@ -42,6 +43,10 @@ void PsemuInitKytyGraphics() {
 	auto* profiler    = Profiler::ProfilerSubsystem::Instance();
 	auto* pthread     = Libs::LibKernel::PthreadSubsystem::Instance();
 	auto* timer       = Loader::Timer::TimerSubsystem::Instance();
+	// Controller: g_controller'i yaratir ve klavyeyi sanal kumanda olarak
+	// baglar. Bu subsystem baslatilmadigi surece g_controller nullptr kaliyor,
+	// yani ne tuslar iletilebiliyor ne de PadReadState "bagli" diyebiliyordu.
+	auto* controller  = Libs::Controller::ControllerSubsystem::Instance();
 
 	// 0. faz (Kyty main.cpp): core + threads. core dep'siz eklenmeli — yoksa
 	// digerlerinin {core} bagimliligi ASLA tatmin olmaz (FindNextToInitialize
@@ -57,8 +62,9 @@ void PsemuInitKytyGraphics() {
 	slist->Add(config, {core});
 	slist->InitAll(true);
 
-	// 2. faz: graphics ve bagimliliklari. (controller/audio/network yok)
+	// 2. faz: graphics ve bagimliliklari. (audio/network yok)
 	MARK("Add(digerleri); InitAll #2");
+	slist->Add(controller, {core, log, timer});
 	slist->Add(file_system, {core, log, pthread});
 	slist->Add(graphics, {core, log, pthread, memory, config, profiler});
 	slist->Add(log, {core, config});

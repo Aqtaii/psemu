@@ -9,6 +9,12 @@ namespace Libs::Controller {
 
 KYTY_SUBSYSTEM_DEFINE(Controller);
 
+// Klavye, sanal bir kumanda olarak baglanir. ControllerButton/ControllerAxis
+// yalnizca AKTIF kumandanin kimligini kabul eder (bkz. GameController::Button
+// icindeki "m_active_id == id" kontrolu), bu yuzden pencere tarafinin da tam
+// olarak bu kimligi kullanmasi sart - aksi halde tuslar sessizce dusuyordu.
+constexpr int KEYBOARD_CONTROLLER_ID = -1000;
+
 constexpr uint32_t PAD_BUTTON_L3        = 0x00000002;
 constexpr uint32_t PAD_BUTTON_R3        = 0x00000004;
 constexpr uint32_t PAD_BUTTON_OPTIONS   = 0x00000008;

@@ -85,7 +85,8 @@ private:
 
 static GameController* g_controller = nullptr;
 
-static constexpr int KEYBOARD_CONTROLLER_ID = -1000;
+// NOT: artik controller.h'de tanimli - pencere tarafi (window_win32) da ayni
+// kimligi kullanabilsin diye tasindi.
 
 static uint8_t pad_connected_count_to_u8(int connected_count) {
 	return static_cast<uint8_t>(connected_count > 255 ? 255 : connected_count);
@@ -114,7 +115,12 @@ static void pad_fill_data(PadData* data, const ControllerState& state, bool conn
 }
 
 KYTY_SUBSYSTEM_INIT(Controller) {
-	EXIT_IF(g_controller != nullptr);
+	// psemu: init birden fazla kez cagrilabiliyor (subsystem listesi asamali
+	// olarak InitAll ediliyor). Kyty'nin orijinal EXIT_IF'i bu durumda fatal
+	// hata veriyordu; ikinci cagriyi sessizce yok saymak dogru davranis.
+	if (g_controller != nullptr) {
+		return;
+	}
 
 	g_controller = new GameController;
 	g_controller->Connect(KEYBOARD_CONTROLLER_ID);

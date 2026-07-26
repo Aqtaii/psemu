@@ -98,8 +98,18 @@ static LRESULT CALLBACK PsemuWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
 				case 'C':       button = ::Libs::Controller::PAD_BUTTON_CIRCLE; break;
 				default: break;
 			}
+			// Kimlik KEYBOARD_CONTROLLER_ID olmali: GameController::Button
+			// "m_active_id == id" olmayan cagrilari sessizce yok sayar. Burada
+			// eskiden 1 gonderiliyordu, yani HICBIR tus oyuna ulasmiyordu.
 			if (button != 0) {
-				::Libs::Controller::ControllerButton(1, button, down);
+				::Libs::Controller::ControllerButton(::Libs::Controller::KEYBOARD_CONTROLLER_ID,
+				                                     button, down);
+				static int s_n = 0;
+				if (++s_n <= 20) {
+					std::printf("[INPUT] tus vk=0x%02x -> pad butonu 0x%05x %s\n",
+					            static_cast<unsigned>(wp), button, down ? "BASILDI" : "birakildi");
+					std::fflush(stdout);
+				}
 			}
 			return 0;
 		}

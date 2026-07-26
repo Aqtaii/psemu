@@ -5212,15 +5212,23 @@ void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t tex
     // yuklemenin buyuk kismi render baslamadan once geciyor (zaman damgalarina
     // gore 64 sn ve 51 sn'lik sessiz araliklar). Bagimsiz bir thread'den
     // periyodik dokum alarak o araliklarda ne oldugunu goruyoruz.
-    CreateThread(
-        NULL, 0,
-        [](LPVOID) -> DWORD {
-            for (;;) {
-                Sleep(3000);
-                PsemuDumpPltTop();
-            }
-        },
-        nullptr, 0, NULL);
+    // Varsayilan KAPALI: bu thread, oyunun en erken boot asamasinda VEH ile
+    // ayni anda printf yapiyor ve isin basinda takilmalarla zaman olarak
+    // ortusuyor. Suclu oldugu KANITLANMADI, ama olcum araci oyunu bozuyorsa
+    // once olcumu izole etmek gerekir. Acmak icin: PSEMU_LOAD_PROFILE=1
+    if (const char* e = getenv("PSEMU_LOAD_PROFILE")) {
+        if (e[0] != '0') {
+            CreateThread(
+                NULL, 0,
+                [](LPVOID) -> DWORD {
+                    for (;;) {
+                        Sleep(3000);
+                        PsemuDumpPltTop();
+                    }
+                },
+                nullptr, 0, NULL);
+        }
+    }
 
     PVOID veh_handle = AddVectoredExceptionHandler(1, SyscallExceptionFilter);
     if (!veh_handle) {
