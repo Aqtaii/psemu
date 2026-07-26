@@ -1187,6 +1187,7 @@ static bool     g_initcall_verbose = false; // PSEMU_INIT_TRACE_LOG=1
 static uint64_t g_initcall_r15   = 0;   // callee-saved izleme
 static uint64_t g_initcall_r14   = 0;
 static uint64_t g_initcall_prev  = 0;   // bir onceki ilklendiricinin RVA'si
+uint64_t        g_expected_argv  = 0;   // module_start'a gecirilen argv (args_block+8)
 
 // ---------------------------------------------------------------------------
 // PROLOGUE BREAKPOINT'i  (PSEMU_BP=<rva>, virgulle en fazla 4 tane)
@@ -1217,6 +1218,41 @@ static uint64_t  g_trace_ring[kTraceRing] = {0};
 static uint64_t  g_trace_pos    = 0;
 static uint64_t  g_trace_steps  = 0;
 static uint64_t  g_trace_max    = 3000000; // PSEMU_TRACE_MAX ile degistirilebilir
+
+// ---------------------------------------------------------------------------
+// YIGIN KANARYASI  (PSEMU_CANARY=<rva>, o RVA ayrica PSEMU_BP'de olmali)
+//
+// Verilen fonksiyona girildiginde "push r15"in yazacagi yigin gozunun
+// ADRESI ve degeri saklanir. Bundan sonra HER HLE cagrisinin donusunde o
+// goz kontrol edilir; degisirse degistiren cagriyi ISMIYLE bildiririz.
+// Callee-saved bir registerin kaydedildigi goz, fonksiyon yasadigi surece
+// SABIT kalmak zorundadir - degisiyorsa biri yiginin uzerine yaziyor.
+// ---------------------------------------------------------------------------
+static uint64_t g_canary_bp   = 0;
+static uint64_t g_canary_addr = 0;
+static uint64_t g_canary_val  = 0;
+static int      g_canary_hits = 0;
+
+// Tek adim izleme sirasinda: R15 DOGRU argv degerini kaybettigi/geri
+// kazandigi anlari kaydet. "1" gibi yaygin degerleri izlemek yerine
+// dogrudan beklenen argv'yi izledigimiz icin gurultusuz.
+struct R15Event { uint64_t rip, from, to; };
+static const int kR15Ring = 16;
+static R15Event  g_r15_ring[kR15Ring] = {};
+static uint64_t  g_r15_pos  = 0;
+static uint64_t  g_r15_prev = 0;
+
+// ---------------------------------------------------------------------------
+// DONANIM YAZMA KESME NOKTASI  (PSEMU_WATCH_WRITE=<rva>)
+//
+// Bir kod/veri adresine YAZAN komutu bulmak icin DR0 kullaniyoruz. PAGE_GUARD
+// bir kod sayfasinda ise yaramaz (her calisma tetikler); donanim izleme
+// sadece YAZMADA tetikleniyor. DR7: L0=1, R/W0=01 (yazma), LEN0=11 (4 bayt,
+// adres 4'e hizali olmali).
+// ---------------------------------------------------------------------------
+static uint64_t g_watchw_addr  = 0;
+static bool     g_watchw_armed = false;
+static int      g_watchw_hits  = 0;
 
 static void ArmWatchpoint() {
     if (g_watch_page == nullptr) return;
@@ -1797,6 +1833,15 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         if (n == 1) {
             g_initcall_r15 = ctx->R15;
             g_initcall_r14 = ctx->R14;
+            // Statik init'in ILK girdisinde argv hala saglam mi? Bu, "argv'yi
+            // ilklendiriciler mi bozuyor yoksa daha once mi bozuluyor"
+            // sorusunu tek olcumde ayiriyor.
+            std::stringstream as;
+            as << "[INIT-ARGV] ilk girdide R15=0x" << std::hex << ctx->R15
+               << " beklenen argv=0x" << g_expected_argv << "  -> "
+               << (ctx->R15 == g_expected_argv ? "SAGLAM" : "ZATEN BOZUK")
+               << " | R14(argc)=0x" << ctx->R14;
+            LOG_ERROR(as.str());
         } else if (ctx->R15 != g_initcall_r15 || ctx->R14 != g_initcall_r14) {
             std::stringstream cs;
             cs << "[INIT-CLOBBER] #" << std::dec << (n - 1) << " (RVA 0x"
@@ -1848,6 +1893,26 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             ctx->Rsp -= 8;
             *reinterpret_cast<uint64_t*>(ctx->Rsp) = ctx->Rbp;
             ctx->Rip = g_bp_addr[i] + 1;
+            if (g_watchw_addr != 0 && !g_watchw_armed) {
+                g_watchw_armed = true;
+                ctx->ContextFlags |= CONTEXT_DEBUG_REGISTERS;
+                ctx->Dr0 = g_watchw_addr;
+                ctx->Dr7 = 0xD0001; // L0 + yazma + 4 bayt
+                ctx->Dr6 = 0;
+                std::stringstream ws;
+                ws << "[WATCH-W] donanim yazma izlemesi kuruldu: 0x"
+                   << std::hex << g_watchw_addr;
+                LOG_ERROR(ws.str());
+            }
+            if (g_canary_bp != 0 && g_bp_addr[i] == g_canary_bp && g_canary_addr == 0) {
+                // "push rbp"yi canlandirdik; siradaki "push r15" buraya yazacak
+                g_canary_addr = ctx->Rsp - 8;
+                g_canary_val  = ctx->R15;
+                std::stringstream cs;
+                cs << "[KANARYA] kuruldu: yigin gozu 0x" << std::hex << g_canary_addr
+                   << " beklenen deger 0x" << g_canary_val;
+                LOG_ERROR(cs.str());
+            }
             if (g_trace_from != 0 && g_bp_addr[i] == g_trace_from && !g_trace_active) {
                 g_trace_active = true;
                 ctx->EFlags |= 0x100; // TF
@@ -1857,9 +1922,33 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         }
     }
 
+    // Donanim yazma izlemesi tetiklendi mi? (DR0 -> Dr6 bit0)
+    if (code == EXCEPTION_SINGLE_STEP && g_watchw_armed && (ctx->Dr6 & 1)) {
+        if (g_watchw_hits++ < 10) {
+            std::stringstream ws;
+            ws << "[WATCH-W] 0x" << std::hex << g_watchw_addr
+               << " adresine YAZAN komut: RVA 0x" << (ctx->Rip - g_base_addr)
+               << "  | yeni deger 0x";
+            if (SafeReadable(reinterpret_cast<void*>(g_watchw_addr), 4))
+                ws << *reinterpret_cast<uint32_t*>(g_watchw_addr);
+            ws << " | RDI=0x" << ctx->Rdi << " RSI=0x" << ctx->Rsi
+               << " RCX=0x" << ctx->Rcx << " RDX=0x" << ctx->Rdx;
+            LOG_ERROR(ws.str());
+        }
+        ctx->ContextFlags |= CONTEXT_DEBUG_REGISTERS;
+        ctx->Dr6 = 0;
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
     // Tek adim izleme: sadece RIP'i kaydet, TF'i kurulu tut.
     if (code == EXCEPTION_SINGLE_STEP && g_trace_active) {
         g_trace_ring[g_trace_pos++ % kTraceRing] = ctx->Rip;
+        if (g_expected_argv != 0 && ctx->R15 != g_r15_prev &&
+            (g_r15_prev == g_expected_argv || ctx->R15 == g_expected_argv)) {
+            R15Event& e = g_r15_ring[g_r15_pos++ % kR15Ring];
+            e.rip = ctx->Rip; e.from = g_r15_prev; e.to = ctx->R15;
+        }
+        g_r15_prev = ctx->R15;
         if (++g_trace_steps >= g_trace_max) {
             g_trace_active = false;
             ctx->EFlags &= ~0x100;
@@ -6023,6 +6112,23 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                         LOG_INFO(ret_ss.str());
                     }
 
+                    // Yigin kanaryasi: bu HLE cagrisi kaydedilmis r15'in
+                    // uzerine yazdi mi?
+                    if (g_canary_addr != 0 && g_canary_hits < 12 &&
+                        SafeReadable(reinterpret_cast<void*>(g_canary_addr), 8)) {
+                        uint64_t cv = *reinterpret_cast<uint64_t*>(g_canary_addr);
+                        if (cv != g_canary_val) {
+                            g_canary_hits++;
+                            std::stringstream cs;
+                            cs << "[KANARYA] BOZULDU! 0x" << std::hex << g_canary_addr
+                               << ": 0x" << g_canary_val << " -> 0x" << cv
+                               << "  | bunu yapan HLE: " << readable_name
+                               << " (PLT#" << std::dec << plt_index << ")";
+                            LOG_ERROR(cs.str());
+                            g_canary_val = cv;
+                        }
+                    }
+
                     // RET komutu simulasyonu
                     ctx->Rip = ret_addr;
                     ctx->Rsp += 8;
@@ -6156,6 +6262,17 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             uint64_t v = g_trace_ring[(g_trace_pos - cnt + i) % kTraceRing];
             ss_init() << " 0x" << std::hex << (v - g_base_addr);
             if ((i % 8) == 7) ss_init() << "\n[-]  ";
+        }
+    }
+
+    if (g_r15_pos != 0) {
+        uint64_t cnt = g_r15_pos < (uint64_t)kR15Ring ? g_r15_pos : (uint64_t)kR15Ring;
+        ss_init() << "\n[-] [R15-ARGV] argv'nin r15'e girip ciktigi son "
+                  << std::dec << cnt << " an (toplam " << g_r15_pos << "):";
+        for (uint64_t i = 0; i < cnt; i++) {
+            const R15Event& e = g_r15_ring[(g_r15_pos - cnt + i) % kR15Ring];
+            ss_init() << "\n[-]   RVA 0x" << std::hex << (e.rip - g_base_addr)
+                      << "  r15: 0x" << e.from << " -> 0x" << e.to;
         }
     }
 
@@ -6469,6 +6586,9 @@ DWORD WINAPI Core::ExecutionThread(LPVOID lpParam) {
     *reinterpret_cast<uint64_t*>(args_block + 0x10) = 0;
     // envp[0] = NULL (terminator)
     *reinterpret_cast<uint64_t*>(args_block + 0x18) = 0;
+    // module_start "r15 = rdi + 8" ile argv'yi kuruyor; tani araclari bunu
+    // dogrulayabilsin diye beklenen degeri saklıyoruz.
+    g_expected_argv = reinterpret_cast<uint64_t>(args_block) + 8;
     
     void* trampoline1 = BuildSysVTrampoline(
         entry_point,
@@ -6737,6 +6857,33 @@ void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t tex
                 LOG_ERROR(bs.str());
             }
             s = (*end == ',') ? end + 1 : end;
+        }
+    }
+
+    // Donanim yazma izlemesi: PSEMU_WATCH_WRITE=<rva> (PSEMU_BP ilk tetiklendiginde kurulur)
+    if (const char* ww = std::getenv("PSEMU_WATCH_WRITE")) {
+        uint64_t rva = std::strtoull(ww, nullptr, 0);
+        if (rva != 0) {
+            if (rva & 3)
+                LOG_ERROR("[WATCH-W] RVA 4'e hizali degil, izleme kurulmayacak.");
+            else if (g_bp_count == 0)
+                LOG_ERROR("[WATCH-W] PSEMU_BP gerekli (izleme orada kuruluyor).");
+            else
+                g_watchw_addr = base_addr + rva;
+        }
+    }
+
+    // Yigin kanaryasi: PSEMU_CANARY=<rva> (o RVA ayrica PSEMU_BP'de olmali)
+    if (const char* cv = std::getenv("PSEMU_CANARY")) {
+        uint64_t rva = std::strtoull(cv, nullptr, 0);
+        if (rva != 0) {
+            g_canary_bp = base_addr + rva;
+            bool armed = false;
+            for (int i = 0; i < g_bp_count; i++)
+                if (g_bp_addr[i] == g_canary_bp) armed = true;
+            if (!armed)
+                LOG_ERROR("[KANARYA] UYARI: PSEMU_CANARY icin PSEMU_BP'de ayni "
+                          "RVA yok, kanarya kurulmayacak.");
         }
     }
 
