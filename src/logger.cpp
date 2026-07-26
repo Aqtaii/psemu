@@ -1,7 +1,23 @@
 #include "logger.h"
 #include <iomanip>
+#include <chrono>
 
 std::mutex Logger::log_mutex;
+
+// Yukleme suresi analizi icin: her satirin basina programin basindan bu yana
+// gecen saniye. Boylece hangi asamanin ne kadar surdugu logdan dogrudan
+// okunabiliyor (tahmin yok).
+static double ElapsedSeconds() {
+    using clock = std::chrono::steady_clock;
+    static const clock::time_point t0 = clock::now();
+    return std::chrono::duration<double>(clock::now() - t0).count();
+}
+
+static std::string TimeTag() {
+    char buf[24];
+    snprintf(buf, sizeof(buf), "[T+%7.2f] ", ElapsedSeconds());
+    return std::string(buf);
+}
 
 void Logger::Init() {
     // Gelecekte dosyaya loglama yazilabilir.
@@ -9,7 +25,7 @@ void Logger::Init() {
 
 void Logger::Info(const std::string& message) {
     std::lock_guard<std::mutex> lock(log_mutex);
-    std::cout << "[INFO] " << message << std::endl;
+    std::cout << TimeTag() << "[INFO] " << message << std::endl;
 }
 
 void Logger::Error(const std::string& message) {

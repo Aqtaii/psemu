@@ -15,6 +15,18 @@ KYTY_SUBSYSTEM_DEFINE(Log);
 enum class Direction { Silent, Console, File };
 
 Direction GetDirection();
+
+// PERFORMANS ANAHTARI.
+// LOGF her cagrisinda once fmt::sprintf ile bir std::string kurar (heap
+// tahsisi + bicimlendirme), sonra kilit alip yazar. Bazi LOGF'ler cok sicak:
+// "RenderColorTarget" HER CIZIM icin (kare basina ~20 satir), "Equeue wait
+// received" her beklemede, swapchain uyarilari her karede. Bayragi makro
+// SEVIYESINDE kontrol ediyoruz ki bicimlendirme maliyeti de olusmasin.
+// Varsayilan: KAPALI. Acmak icin: PSEMU_GPU_LOG=1
+extern bool g_log_enabled;
+inline bool Enabled() {
+	return g_log_enabled;
+}
 void      Write(std::string_view text);
 void      Write(fmt::text_style style, std::string_view text);
 void      WriteFatal(std::string_view text);
@@ -41,8 +53,14 @@ inline constexpr auto BrightWhite   = fmt::fg(fmt::terminal_color::bright_white)
 } // namespace Log
 
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
-#define LOGF(...) ::Log::Write(::fmt::sprintf(__VA_ARGS__))
+#define LOGF(...)                                                                                  \
+	do {                                                                                           \
+		if (::Log::Enabled()) ::Log::Write(::fmt::sprintf(__VA_ARGS__));                            \
+	} while (0)
 // NOLINTNEXTLINE(cppcoreguidelines-macro-usage)
-#define LOGF_COLOR(style, ...) ::Log::Write((style), ::fmt::sprintf(__VA_ARGS__))
+#define LOGF_COLOR(style, ...)                                                                     \
+	do {                                                                                           \
+		if (::Log::Enabled()) ::Log::Write((style), ::fmt::sprintf(__VA_ARGS__));                   \
+	} while (0)
 
 #endif /* KYTY_COMMON_LOGGING_LOG_H_ */

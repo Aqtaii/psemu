@@ -46,12 +46,24 @@ extern "C" void PsemuMetricAddVehCycles(unsigned long long cycles);
 // icin probe'un urettigi exception once BIZE dusuyor -> IsBadReadPtr gecerli
 // adresler icin bile hatali sonuc verebiliyor. (Oturumda daha once recursive-VEH
 // olarak yakalanan hatanin ayni sinifi.) VirtualQuery exception uretmez.
+// OLCUM: SafeReadable/SafeWritable bolge bolge VirtualQuery yapar. Misafir
+// bellegi cok parcaliysa (bizim 64KB'lik otomatik commit'lerimiz ve tek tek
+// RO->RW cevirdigimiz sayfalar araligi bolduğu icin) buyuk bir aralik yuzlerce
+// sorgu demek olabilir. mem* fonksiyonlarinin cagri basina 250k-1.1M dongu
+// yakmasinin sebebi gercek veri hacmi mi yoksa bu dogrulama mi - sayaclar
+// PLT-TOP dokumunde raporlaniyor.
+std::atomic<uint64_t> g_vq_calls{0};
+std::atomic<uint64_t> g_memcmp_bytes{0}; // memcmp'e verilen toplam n
+std::atomic<uint64_t> g_memcmp_max{0};   // gorulen en buyuk n
+std::atomic<uint64_t> g_veh_nested{0};   // VEH'in kendi icinden tekrar girilme sayisi
+
 static bool SafeReadable(const void* p, size_t n) {
     if (p == nullptr || n == 0) return false;
     const uint8_t* cur = reinterpret_cast<const uint8_t*>(p);
     const uint8_t* end = cur + n;
     while (cur < end) {
         MEMORY_BASIC_INFORMATION mbi;
+        g_vq_calls.fetch_add(1, std::memory_order_relaxed);
         if (VirtualQuery(cur, &mbi, sizeof(mbi)) == 0) return false;
         if (mbi.State != MEM_COMMIT) return false;
         DWORD prot = mbi.Protect & 0xFF;
@@ -81,6 +93,7 @@ static bool SafeWritable(void* p, size_t n) {
     uint8_t* const end = cur + n;
     while (cur < end) {
         MEMORY_BASIC_INFORMATION mbi;
+        g_vq_calls.fetch_add(1, std::memory_order_relaxed);
         if (VirtualQuery(cur, &mbi, sizeof(mbi)) == 0) return false;
         if (mbi.State != MEM_COMMIT) return false;
         const DWORD prot = mbi.Protect & 0xFF;
@@ -1263,6 +1276,24 @@ extern "C" void PsemuDumpPltTop() {
             }
         }
     }
+    {
+        static uint64_t pv = 0, pn = 0;
+        const uint64_t v = g_vq_calls.load(std::memory_order_relaxed);
+        const uint64_t nn = g_veh_nested.load(std::memory_order_relaxed);
+        // Toplam PLT cagrisi = toplam Windows exception sayisi (her PLT cagrisi
+        // bir access violation -> VEH turu). Yukleme suresinin ne kadarinin
+        // buna gittigini kestirmek icin en onemli sayi bu.
+        uint64_t total_plt = 0;
+        for (uint32_t i = 0; i < kPltCacheMax; i++) {
+            total_plt += g_plt_counts[i].load(std::memory_order_relaxed);
+        }
+        printf("[MEM] aralikta: VirtualQuery %llu | ic ice VEH %llu || BASTAN BERI toplam PLT (=exception) %llu\n",
+               static_cast<unsigned long long>(v - pv),
+               static_cast<unsigned long long>(nn - pn),
+               static_cast<unsigned long long>(total_plt));
+        pv = v;
+        pn = nn;
+    }
     printf("[PLT-TOP] CPU'yu en cok yakan PLT cagrilari (son aralik):\n");
     for (int k = 0; k < 12 && top[k].cyc > 0; k++) {
         const std::string* rn = g_plt_rn_cache[top[k].idx];
@@ -1282,15 +1313,29 @@ extern "C" void PsemuDumpPltTop() {
 // QueryThreadCycleTime ile GERCEK CPU dongusu sayiyoruz: uyuyan thread dongu
 // harcamaz. Boylece metrik "emulasyon katmani ne kadar CPU yiyor" sorusunu
 // dogru cevaplar.
+// IC ICE VEH SAYACI: HLE handler'imiz misafir bellegine dokundugunda
+// (memcpy/memcmp'in SafeReadable'i, RET simulasyonu, vs.) sayfa henuz commit
+// edilmemisse YENI bir access violation olusur ve VEH kendi icinden tekrar
+// cagrilir. Bu ic ice tur tam bir Windows exception gidis-donusu (cekirdek
+// dahil) demek ve DIS PltTimer penceresine yazilir - bu yuzden "hicbir sey
+// yapmayan" __cxa_atexit bile 145.000 dongu gorunebiliyor. Sayarak dogruluyoruz.
+static thread_local int t_veh_depth = 0;
+
 namespace {
 struct VehTimer {
     ULONG64 c0 = 0;
-    VehTimer() { QueryThreadCycleTime(GetCurrentThread(), &c0); }
+    VehTimer() {
+        if (++t_veh_depth > 1) {
+            g_veh_nested.fetch_add(1, std::memory_order_relaxed);
+        }
+        QueryThreadCycleTime(GetCurrentThread(), &c0);
+    }
     ~VehTimer() {
         ULONG64 c1 = 0;
         if (QueryThreadCycleTime(GetCurrentThread(), &c1) && c1 > c0) {
             PsemuMetricAddVehCycles(c1 - c0);
         }
+        --t_veh_depth;
     }
 };
 } // namespace
@@ -1757,7 +1802,8 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             // handler'larla AYNI (kod oradan birebir alindi).
             // ============================================================
             enum : uint8_t { FOP_UNRESOLVED = 0, FOP_NONE, FOP_MEMSET, FOP_MEMCPY,
-                             FOP_MTX_LOCK, FOP_MTX_UNLOCK, FOP_ERRNO, FOP_RET0 };
+                             FOP_MTX_LOCK, FOP_MTX_UNLOCK, FOP_ERRNO, FOP_RET0,
+                             FOP_MEMCMP, FOP_MEMMOVE };
             static uint8_t s_fop[kPltCacheMax] = {};
             uint8_t fop = (plt_index < kPltCacheMax) ? s_fop[plt_index] : FOP_NONE;
             if (fop == FOP_UNRESOLVED && plt_index < kPltCacheMax) {
@@ -1768,6 +1814,8 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                          readable_name == "pthread_mutex_lock")     f = FOP_MTX_LOCK;
                 else if (readable_name == "scePthreadMutexUnlock" ||
                          readable_name == "pthread_mutex_unlock")   f = FOP_MTX_UNLOCK;
+                else if (readable_name == "memcmp")                 f = FOP_MEMCMP;
+                else if (readable_name == "memmove")                f = FOP_MEMMOVE;
                 else if (readable_name == "__error")                f = FOP_ERRNO;
                 // Sik cagrilan ve davranisi "hicbir sey yap, 0 don" olan isimli
                 // fonksiyonlar: nids.h'e isim eklendiginde hizli yolu kaybetmesinler.
@@ -1819,6 +1867,26 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                         GuestMutex* m = GetOrCreateMutex(reinterpret_cast<uint64_t*>(ctx->Rdi));
                         if (m != nullptr) LeaveCriticalSection(&m->cs);
                         ctx->Rax = 0;
+                        break;
+                    }
+                    case FOP_MEMCMP: {
+                        const void* a = reinterpret_cast<const void*>(ctx->Rdi);
+                        const void* b = reinterpret_cast<const void*>(ctx->Rsi);
+                        size_t n = static_cast<size_t>(ctx->Rdx);
+                        int r = 0;
+                        if (n && SafeReadable(a, n) && SafeReadable(b, n)) r = memcmp(a, b, n);
+                        ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(r));
+                        break;
+                    }
+                    case FOP_MEMMOVE: {
+                        void*       dst = reinterpret_cast<void*>(ctx->Rdi);
+                        const void* src = reinterpret_cast<const void*>(ctx->Rsi);
+                        size_t      n   = static_cast<size_t>(ctx->Rdx);
+                        if (dst != nullptr && src != nullptr && n != 0 &&
+                            SafeReadable(src, n) && SafeWritable(dst, n)) {
+                            memmove(dst, src, n);
+                        }
+                        ctx->Rax = ctx->Rdi;
                         break;
                     }
                     case FOP_ERRNO: ctx->Rax = reinterpret_cast<uint64_t>(&g_guest_errno); break;
@@ -2302,6 +2370,11 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 const void* b = reinterpret_cast<const void*>(ctx->Rsi);
                 size_t n = static_cast<size_t>(ctx->Rdx);
                 int r = 0;
+                g_memcmp_bytes.fetch_add(n, std::memory_order_relaxed);
+                uint64_t prev_max = g_memcmp_max.load(std::memory_order_relaxed);
+                while (n > prev_max &&
+                       !g_memcmp_max.compare_exchange_weak(prev_max, n,
+                                                           std::memory_order_relaxed)) {}
                 if (n && SafeReadable(a, n) && SafeReadable(b, n)) r = memcmp(a, b, n);
                 ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(r));
                 special_return_set = true;
@@ -5133,6 +5206,21 @@ void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t tex
     // fs:[0] hizli yolu icin Windows TLS slotunu VEH'ten ONCE ayir: VEH
     // icinde TlsAlloc gibi kilit alan is yapmiyoruz.
     PsemuInitTlsFastPath();
+
+    // YUKLEME PROFILI: PLT-TOP dokumu eskiden yalnizca present yolundan
+    // cagriliyordu, yani ancak render basladiktan SONRA veri veriyordu. Oysa
+    // yuklemenin buyuk kismi render baslamadan once geciyor (zaman damgalarina
+    // gore 64 sn ve 51 sn'lik sessiz araliklar). Bagimsiz bir thread'den
+    // periyodik dokum alarak o araliklarda ne oldugunu goruyoruz.
+    CreateThread(
+        NULL, 0,
+        [](LPVOID) -> DWORD {
+            for (;;) {
+                Sleep(3000);
+                PsemuDumpPltTop();
+            }
+        },
+        nullptr, 0, NULL);
 
     PVOID veh_handle = AddVectoredExceptionHandler(1, SyscallExceptionFilter);
     if (!veh_handle) {

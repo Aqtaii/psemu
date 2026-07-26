@@ -1,4 +1,4 @@
-
+﻿
 #include "common/logging/log.h"
 
 #include "common/assert.h"
@@ -10,6 +10,7 @@
 #include <fmt/format.h>
 #include <memory>
 #include <mutex>
+#include <cstdlib>
 #include <spdlog/formatter.h>
 #include <spdlog/logger.h>
 #include <spdlog/sinks/basic_file_sink.h>
@@ -69,6 +70,14 @@ void WriteStdout(std::string_view text, fmt::text_style style = {}) {
 namespace Log {
 
 static bool                            g_initialized = false;
+// Varsayilan KAPALI: sicak LOGF'ler (her cizimde RenderColorTarget, her
+// beklemede Equeue, her karede swapchain uyarilari) hem bicimlendirme hem
+// kilit+I/O maliyeti getiriyordu. PSEMU_GPU_LOG=1 ile geri acilir.
+bool g_log_enabled = [] {
+	const char* e = std::getenv("PSEMU_GPU_LOG");
+	return e != nullptr && e[0] != '0';
+}();
+
 static Direction                       g_direction   = Direction::Console;
 static std::filesystem::path           g_output_file;
 static std::mutex                      g_logger_mutex;

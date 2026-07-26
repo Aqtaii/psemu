@@ -133,7 +133,9 @@ bool PsemuMetricFormat(char* buf, size_t buf_size) {
 		s_since_log = 0.0;
 		std::printf("[PERF] %s\n", buf);
 		std::fflush(stdout);
-		PsemuDumpPltTop(); // hangi HLE fonksiyonlari sicak (core.cpp)
+		// NOT: PLT-TOP dokumu artik core.cpp'deki bagimsiz profil thread'inden
+		// aliniyor - yukleme asamasini da kapsasin diye (present henuz
+		// calismiyorken de veri lazim). Buradan cagirmak deltalari bozardi.
 	}
 	return true;
 }
