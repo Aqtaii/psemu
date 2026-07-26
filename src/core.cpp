@@ -23,6 +23,7 @@
 #include "kernel/eventQueue.h"
 #include "graphics/presentation/videoOut.h"
 #include "libs/controller.h"
+#include "libs/padData.h"
 #include <immintrin.h>
 
 extern "C" void PsemuMarkCpuModified(uint64_t vaddr, uint64_t size);
@@ -1919,6 +1920,69 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             }
 
             // ========================================================
+            // PAD OKUMA - ZINCIRDEN ONCE (girdi yolu)
+            // ========================================================
+            // Asagidaki dev if/else zincirinde bir "PadReadState" dali VAR ama
+            // olcumle kanitlandi ki oraya HIC ULASILMIYOR (dala konan tani
+            // satiri bir kez bile basilmadi, oysa [PLT-HLE] PadReadState
+            // loglaniyor). Zincirin nerede kesildigini aramak yerine girdi
+            // yolunu buraya, zincirin ONUNE aliyoruz: tek sorumlulugu var ve
+            // dogru calistigi dogrulanabilir.
+            // PadOpen/PadGetHandle de buraya alindi: zincire guvenemedigimiz
+            // icin tutamac uretimi ile okuma AYNI yerde olmali. Oyun aksi halde
+            // tutamac yerine bir hata kodu tasiyip okumayi reddettiriyordu
+            // (olculdu: handle=-2137915391, yani 0x80... Sony hata kodu).
+            if (readable_name == "PadOpen" || readable_name == "scePadOpen" ||
+                readable_name == "PadGetHandle" || readable_name == "scePadGetHandle") {
+                ctx->Rax = 1; // gecerli tutamac; Kyty yalnizca 1'i kabul ediyor
+                ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                ctx->Rsp += 8;
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+            if (readable_name == "PadGetControllerInformation" ||
+                readable_name == "scePadGetControllerInformation") {
+                void* info = reinterpret_cast<void*>(ctx->Rsi);
+                int   rc   = 0;
+                if (info != nullptr && SafeWritable(info, 32)) {
+                    rc = Libs::Controller::PadGetControllerInformation(
+                        1, reinterpret_cast<Libs::Controller::PadControllerInformation*>(info));
+                }
+                ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(rc));
+                ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                ctx->Rsp += 8;
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+            if (readable_name == "PadReadState" || readable_name == "scePadReadState" ||
+                readable_name == "PadRead" || readable_name == "scePadRead") {
+                const int guest_handle = static_cast<int>(ctx->Rdi);
+                void*     data         = reinterpret_cast<void*>(ctx->Rsi);
+                int       rc           = 0;
+                // Kyty yalnizca handle==1'i kabul eder. Oyun elinde gecerli bir
+                // tutamac olmadan da okumaya calisiyor; emulator olarak bunu
+                // reddetmek yerine tek sanal kumandaya yonlendiriyoruz - aksi
+                // halde girdi hicbir zaman ulasmiyor.
+                const int handle = 1;
+                if (data != nullptr && SafeWritable(data, sizeof(Libs::Controller::PadData))) {
+                    rc = Libs::Controller::PadReadState(
+                        handle, reinterpret_cast<Libs::Controller::PadData*>(data));
+                }
+                (void)guest_handle;
+                static std::atomic<uint64_t> s_pad_reads{0};
+                const uint64_t pr = s_pad_reads.fetch_add(1) + 1;
+                if (pr <= 3 || (pr % 600ull) == 0) {
+                    const uint32_t btn =
+                        (data != nullptr) ? *reinterpret_cast<uint32_t*>(data) : 0u;
+                    printf("[PAD] okuma=%llu misafir_handle=%d data=%p rc=%d butonlar=0x%08x\n",
+                           static_cast<unsigned long long>(pr), guest_handle, data, rc, btn);
+                    fflush(stdout);
+                }
+                ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(rc));
+                ctx->Rip = *reinterpret_cast<uint64_t*>(ctx->Rsp); // RET simulasyonu
+                ctx->Rsp += 8;
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+
+            // ========================================================
             // GERCEK BELLEK YONETIMI
             // (sceKernelGetDirectMemorySize / sceKernelAllocateDirectMemory /
             //  sceKernelMapDirectMemory)
@@ -3755,9 +3819,55 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             } else if (readable_name == "PadOpen" || readable_name == "PadGetHandle") {
                 ctx->Rax = 1; // gecerli handle (0 DEGIL - kritik)
                 special_return_set = true;
+            } else if (readable_name == "PadInit" || readable_name == "scePadInit") {
+                ctx->Rax = static_cast<uint64_t>(Libs::Controller::PadInit());
+                special_return_set = true;
+            } else if (readable_name == "PadGetControllerInformation" ||
+                       readable_name == "scePadGetControllerInformation") {
+                // KRITIK: bu implemente degildi ve varsayilan stub'a dusuyordu,
+                // yani bilgi yapisi HIC doldurulmuyordu. Oyun "bagli kumanda
+                // yok" gorup PadOpen/SetMotionSensorState/GetControllerInformation
+                // ucslusunu tekrar tekrar deniyor ve PadReadState'e hic gecmiyordu
+                // (logda bu ucslu 4 kez ust uste tekrarliyor).
+                int   handle = static_cast<int>(ctx->Rdi);
+                void* info   = reinterpret_cast<void*>(ctx->Rsi);
+                if (info != nullptr && SafeWritable(info, 32)) {
+                    ctx->Rax = static_cast<uint64_t>(Libs::Controller::PadGetControllerInformation(
+                        handle, reinterpret_cast<Libs::Controller::PadControllerInformation*>(info)));
+                } else {
+                    ctx->Rax = 0;
+                }
+                special_return_set = true;
+            } else if (readable_name == "PadSetMotionSensorState" ||
+                       readable_name == "scePadSetMotionSensorState") {
+                ctx->Rax = static_cast<uint64_t>(Libs::Controller::PadSetMotionSensorState(
+                    static_cast<int>(ctx->Rdi), ctx->Rsi != 0));
+                special_return_set = true;
             } else if (readable_name == "PadReadState" || readable_name == "scePadReadState") {
                 int handle = static_cast<int>(ctx->Rdi);
                 void* data = reinterpret_cast<void*>(ctx->Rsi);
+                // TANI: PadReadState cagriliyor ama [PAD] satiri hic basilmiyordu,
+                // yani asagidaki kosul duşuyor ve Kyty'nin okumasina HIC
+                // girilmiyor - girdi bu yuzden oyuna ulasmiyor. Neden dustugunu
+                // tahmin etmek yerine sayfanin gercek durumunu dokelim.
+                {
+                    static std::atomic<int> s_diag{0};
+                    if (s_diag.fetch_add(1) < 5) {
+                        MEMORY_BASIC_INFORMATION mbi {};
+                        SIZE_T q = data ? VirtualQuery(data, &mbi, sizeof(mbi)) : 0;
+                        printf("[PAD-TANI] handle=%d data=%p vq=%llu state=0x%lx protect=0x%lx "
+                               "bolge_kalan=%llu SafeWritable=%d\n",
+                               handle, data, static_cast<unsigned long long>(q),
+                               static_cast<unsigned long>(mbi.State),
+                               static_cast<unsigned long>(mbi.Protect),
+                               q ? static_cast<unsigned long long>(
+                                       reinterpret_cast<uint64_t>(mbi.BaseAddress) + mbi.RegionSize -
+                                       reinterpret_cast<uint64_t>(data))
+                                 : 0ull,
+                               (data && SafeWritable(data, 120)) ? 1 : 0);
+                        fflush(stdout);
+                    }
+                }
                 if (data && SafeWritable(data, 120)) {
                     ctx->Rax = Libs::Controller::PadReadState(handle, reinterpret_cast<Libs::Controller::PadData*>(data));
                     // ===== GECICI: ANA MENUYU ATLAMA =====

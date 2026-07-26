@@ -1,4 +1,4 @@
-#include "libs/controller.h"
+﻿#include "libs/controller.h"
 
 #include "common/assert.h"
 #include "common/common.h"
@@ -9,6 +9,7 @@
 #include "libs/errno.h"
 #include "libs/libs.h"
 #include "libs/padData.h"
+#include <cstdio>
 
 #include <algorithm>
 #include <cstring>
@@ -214,6 +215,15 @@ void GameController::AddState(const ControllerState& state) {
 
 void GameController::Button(int id, uint32_t button, bool down) {
 	Common::LockGuard lock(m_mutex);
+
+	{
+		static int s_n = 0;
+		if (++s_n <= 10) {
+			std::printf("[PAD-BTN] id=%d aktif_id=%d bagli=%d buton=0x%05x %s\n", id, m_active_id,
+			            m_connected ? 1 : 0, button, down ? "BASILI" : "birak");
+			std::fflush(stdout);
+		}
+	}
 
 	if (m_active_id == id) {
 		auto state = GetLastState();
