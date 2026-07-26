@@ -1,4 +1,4 @@
-#ifndef PSEMU_GAME_PROFILE_H_
+﻿#ifndef PSEMU_GAME_PROFILE_H_
 #define PSEMU_GAME_PROFILE_H_
 
 #include <string>
@@ -33,6 +33,10 @@ struct Profile {
 	// RVA 0x1654f8'deki texture metadata okumasi cokuyor; sahneyi ilerletmek
 	// icin komutu atlayip RSI=1 zorluyoruz.
 	bool quirk_texture_meta_recover = false;
+	// e_entry'den ONCE DT_INIT'i elle cagir. PS5'te _start bunu genelde kendisi
+	// yapar; iki kez calisirsa statik kayitlar bozulur (bkz. core.cpp ADIM 0.9).
+	bool quirk_call_dt_init = false;
+
 	// RVA'ya bagli tani ciktilari (yigin cercevesi dogrulamasi vs.)
 	bool quirk_rva_diagnostics = false;
 
@@ -52,3 +56,4 @@ const Profile& Current();
 } // namespace Game
 
 #endif // PSEMU_GAME_PROFILE_H_
+

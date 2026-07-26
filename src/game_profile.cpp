@@ -1,4 +1,4 @@
-#include "game_profile.h"
+﻿#include "game_profile.h"
 
 #include "logger.h"
 
@@ -81,6 +81,7 @@ void InitProfile(const std::string& eboot_path) {
 		g_current.name                                = "Dreaming Sarah";
 		g_current.quirk_c2_type_registration_overflow = true;
 		g_current.quirk_texture_meta_recover          = true;
+		g_current.quirk_call_dt_init                  = true;
 		g_current.quirk_rva_diagnostics               = true;
 	} else if (id == "PPSA21564") {
 		g_current.name = "Astro Bot";
@@ -109,3 +110,4 @@ const Profile& Current() {
 }
 
 } // namespace Game
+

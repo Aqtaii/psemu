@@ -5860,7 +5860,18 @@ DWORD WINAPI Core::ExecutionThread(LPVOID lpParam) {
     // klasik crtbegin.o "_init" fonksiyonudur. Bu adres daha once HICBIR
     // ZAMAN cagirilmiyordu - RVA 0x2c61b2 cokmesindeki gibi initialize
     // edilmemis global/static objelerin gercek kok nedeni buydu.
-    if (g_init_vaddr != 0) {
+    // OYUNA OZEL. PS5'te e_entry (_start) ZATEN .init_array'i kendisi
+    // yurutur; DT_INIT'i ayrica cagirmak statik ilklendiricileri IKI KEZ
+    // calistirir. Dreaming Sarah'ta bu gerekliydi (onun _start'i init'i
+    // calistirmiyor; olculdu - eklenmeden once initialize edilmemis globaller
+    // yuzunden cokuyordu), ama Astro Bot'ta ZARARLI:
+    //   Statik kayit fonksiyonu iki kez calisinca ayni dugumu listeye IKINCI
+    //   kez ekliyor. Ekleme "listenin sonunu bul, [tail]=node" seklinde
+    //   oldugu icin dugum KENDI next'ine kendini yaziyor (node->next = node)
+    //   ve sonraki liste yuruyusu SONSUZ DONGUYE giriyor.
+    //   Olculdu: RVA 0x7426c03'te tam 1.00 cekirdek spin, watchdog'da
+    //   RDX+0x10 == RCX ve degerler her ornekte ayni.
+    if (g_init_vaddr != 0 && Game::Current().quirk_call_dt_init) {
         uint64_t init_entry = g_base_addr + g_init_vaddr;
         void* init_trampoline = BuildSysVTrampoline(init_entry, 0, 0, 0);
 
