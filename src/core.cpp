@@ -1165,6 +1165,39 @@ static uint64_t g_diag_bp_addr    = 0;
 static uint8_t  g_diag_bp_orig    = 0;
 static bool     g_diag_bp_pending = false; // single-step sonrasi 0xCC'yi geri koy
 
+// ---------------------------------------------------------------------------
+// .init_array IZLEYICISI  (PSEMU_INIT_TRACE=<call rax RVA'si>, or. 0x62)
+//
+// Oyunun CRT'sindeki .init_array yuruyucusu su sekilde:
+//     0x50: add rbx, -8
+//     0x54: mov rax, [rbx]      <- rbx = imlec, rax = ilklendirici
+//     0x62: call rax            <- FF D0
+//     0x64: jmp 0x50
+// "call rax" uzerine 0xCC koyup VEH'de yakaliyoruz: hangi girdinin
+// calistigini (indeks + RVA) biliyoruz, sonra cagriyi ELDE canlandiriyoruz
+// (donus adresini it, RIP=RAX). Boylece orijinal bayti geri koymaya ve
+// single-step ile yeniden kurmaya gerek kalmiyor - thread-guvenli.
+// ---------------------------------------------------------------------------
+static uint64_t g_initcall_addr  = 0;   // "call rax" komutunun mutlak adresi
+static uint64_t g_initcall_next  = 0;   // komutun hemen sonrasi (donus adresi)
+static uint64_t g_initcall_n     = 0;   // kacinci ilklendirici
+static uint64_t g_initcall_last  = 0;   // en son cagrilan ilklendiricinin RVA'si
+static uint64_t g_initcall_cursor = 0;  // yuruyucunun imleci (RVA)
+static bool     g_initcall_verbose = false; // PSEMU_INIT_TRACE_LOG=1
+
+// ---------------------------------------------------------------------------
+// PROLOGUE BREAKPOINT'i  (PSEMU_BP=<rva>, virgulle en fazla 4 tane)
+//
+// Hedef RVA "push rbp" (0x55) ile basliyorsa oraya 0xCC koyup VEH'de
+// yakaliyoruz: tum registerlari ve [RSP]'deki DONUS ADRESINI (yani cagirani)
+// dokuyoruz, sonra "push rbp"yi elde canlandirip devam ediyoruz. Orijinal
+// bayti geri koymak / single-step ile yeniden kurmak gerekmiyor.
+// ---------------------------------------------------------------------------
+static uint64_t g_bp_addr[4] = {0, 0, 0, 0};
+static int      g_bp_count = 0;
+static int      g_bp_hits[4] = {0, 0, 0, 0};
+static const int kBpLogLimit = 8;   // her breakpoint icin en fazla bu kadar log
+
 static void ArmWatchpoint() {
     if (g_watch_page == nullptr) return;
     DWORD oldProt;
@@ -1727,6 +1760,56 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         g_diag_bp_pending = true;
         return EXCEPTION_CONTINUE_EXECUTION;
     }
+    // .init_array izleyicisi: "call rax" yerine konan 0xCC
+    // NOT: Windows EXCEPTION_BREAKPOINT'te ctx->Rip'i INT3'un USTUNDE verir
+    // (asagidaki syscall yolu da bu yuzden "Rip += 1" yapiyor).
+    if (code == EXCEPTION_BREAKPOINT && g_initcall_addr != 0 &&
+        (ctx->Rip == g_initcall_addr || ctx->Rip == g_initcall_addr + 1)) {
+        g_initcall_last = ctx->Rax - g_base_addr;
+        g_initcall_cursor = ctx->Rbx - g_base_addr;
+        uint64_t n = ++g_initcall_n;
+        // Varsayilan olarak SESSIZ: VEH icinden her girdide log yazmak
+        // logger kilidi uzerinden kilitlenmeye yol aciyor. Sayaclar cokme
+        // dokumunde basiliyor; ayrintili iz icin PSEMU_INIT_TRACE_LOG=1.
+        if (g_initcall_verbose) {
+            std::stringstream is;
+            is << "[INIT#" << std::dec << n << "] RVA 0x" << std::hex << g_initcall_last
+               << "  (imlec RVA 0x" << g_initcall_cursor << ")";
+            LOG_INFO(is.str());
+        }
+        // "call rax"i elde canlandir
+        ctx->Rsp -= 8;
+        *reinterpret_cast<uint64_t*>(ctx->Rsp) = g_initcall_next;
+        ctx->Rip = ctx->Rax;
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
+    // Prologue breakpoint'i: "push rbp" yerine konan 0xCC
+    if (code == EXCEPTION_BREAKPOINT && g_bp_count > 0) {
+        for (int i = 0; i < g_bp_count; i++) {
+            if (ctx->Rip != g_bp_addr[i] && ctx->Rip != g_bp_addr[i] + 1) continue;
+            if (g_bp_hits[i]++ < kBpLogLimit) {
+                uint64_t ret = 0;
+                if (SafeReadable(reinterpret_cast<void*>(ctx->Rsp), 8))
+                    ret = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                std::stringstream bs;
+                bs << "[BP] RVA 0x" << std::hex << (g_bp_addr[i] - g_base_addr)
+                   << " #" << std::dec << g_bp_hits[i] << std::hex
+                   << "  CAGIRAN RVA 0x" << (ret - g_base_addr)
+                   << "\n     RDI=0x" << ctx->Rdi << " RSI=0x" << ctx->Rsi
+                   << " RDX=0x" << ctx->Rdx << " RCX=0x" << ctx->Rcx
+                   << " R8=0x" << ctx->R8 << " R9=0x" << ctx->R9
+                   << " RAX=0x" << ctx->Rax;
+                LOG_INFO(bs.str());
+            }
+            // "push rbp"yi elde canlandir
+            ctx->Rsp -= 8;
+            *reinterpret_cast<uint64_t*>(ctx->Rsp) = ctx->Rbp;
+            ctx->Rip = g_bp_addr[i] + 1;
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+    }
+
     if (code == EXCEPTION_SINGLE_STEP && g_diag_bp_pending) {
         g_diag_bp_pending = false;
         ctx->EFlags &= ~0x100;
@@ -6005,9 +6088,15 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         }
     }
 
+    if (g_initcall_addr != 0) {
+        ss_init() << "\n[-] [INIT-TRACE] son calisan .init_array girdisi: #"
+                  << std::dec << g_initcall_n << " RVA 0x" << std::hex << g_initcall_last
+                  << " (imlec RVA 0x" << g_initcall_cursor << ")";
+    }
+
     ss_init() << std::dec;
     LOG_ERROR(ss_init().str());
-    
+
     // Register dokumu
     std::stringstream regs;
     regs << std::hex
@@ -6530,6 +6619,55 @@ void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t tex
     // fonksiyonlari tetikleniyor (logda 32 isabet) ve hemen ardindan
     // access violation geliyordu. Yeniden gerekirse tek satirla acilir.
     (void)base_addr;
+
+    // .init_array izleyicisi (istege bagli): PSEMU_INIT_TRACE=0x62 gibi,
+    // CRT yuruyucusundeki "call rax" komutunun RVA'si verilir.
+    if (const char* itr = std::getenv("PSEMU_INIT_TRACE")) {
+        uint64_t rva = std::strtoull(itr, nullptr, 0);
+        if (rva != 0) {
+            uint8_t* p = reinterpret_cast<uint8_t*>(base_addr + rva);
+            if (p[0] == 0xFF && p[1] == 0xD0) { // call rax
+                DWORD oldp = 0;
+                VirtualProtect(p, 2, PAGE_EXECUTE_READWRITE, &oldp);
+                g_initcall_addr = base_addr + rva;
+                g_initcall_next = base_addr + rva + 2;
+                if (const char* v = std::getenv("PSEMU_INIT_TRACE_LOG"))
+                    g_initcall_verbose = (v[0] == '1');
+                p[0] = 0xCC;
+                LOG_INFO("[INIT-TRACE] .init_array izleyicisi kuruldu (RVA 0x" +
+                         std::to_string(rva) + ")");
+            } else {
+                LOG_ERROR("[INIT-TRACE] RVA 0x" + std::to_string(rva) +
+                          " 'call rax' (FF D0) degil, izleyici kurulmadi.");
+            }
+        }
+    }
+
+    // Prologue breakpoint'leri: PSEMU_BP=0x29fb10,0x2b2200 gibi
+    if (const char* bpe = std::getenv("PSEMU_BP")) {
+        const char* s = bpe;
+        while (*s && g_bp_count < 4) {
+            char* end = nullptr;
+            uint64_t rva = std::strtoull(s, &end, 0);
+            if (end == s) break;
+            uint8_t* p = reinterpret_cast<uint8_t*>(base_addr + rva);
+            if (rva != 0 && p[0] == 0x55) { // push rbp
+                DWORD oldp = 0;
+                VirtualProtect(p, 1, PAGE_EXECUTE_READWRITE, &oldp);
+                g_bp_addr[g_bp_count++] = base_addr + rva;
+                p[0] = 0xCC;
+                std::stringstream bs;
+                bs << "[BP] RVA 0x" << std::hex << rva << " kuruldu.";
+                LOG_INFO(bs.str());
+            } else {
+                std::stringstream bs;
+                bs << "[BP] RVA 0x" << std::hex << rva
+                   << " 'push rbp' (0x55) degil, kurulmadi.";
+                LOG_ERROR(bs.str());
+            }
+            s = (*end == ',') ? end + 1 : end;
+        }
+    }
 
     // Hang watchdog thread'ini baslat (worker takilirsa RIP'ini doksun)
     CreateThread(NULL, 0, HangWatchdogProc, nullptr, 0, NULL);
