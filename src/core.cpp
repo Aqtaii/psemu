@@ -2106,6 +2106,68 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             const std::string& func_name     = *fn_ptr;
             const std::string& readable_name = *rn_ptr;
 
+            // ================================================================
+            // YIGIN KORUYUCUSU (PSEMU_STACK_GUARD=1)
+            // ================================================================
+            // HLE handler'i calisirken MISAFIR KODU DURUYOR. Dolayisiyla o
+            // sirada misafir yiginin da degismemesi gerekir - donus adresi
+            // dahil. Girişte yiginin bir penceresini kopyalayip cikista
+            // karsilastiriyoruz: fark varsa yigini bozan cagriyi ADIYLA
+            // yakalamis oluyoruz.
+            //
+            // Neden gerekli: Astro Bot'ta cokmeler bir komutun ORTASINA
+            // dusuyor ve kosudan kosuya degisiyor - klasik "donus adresi
+            // ezildi" belirtisi. Kod butunlugu temiz cikti, yani bozulma
+            // calisma zamaninda oluyor.
+            //
+            // Varsayilan KAPALI: cagri basina 2 x 128 bayt kopya, saniyede
+            // ~150.000 cagrida olcülebilir maliyet.
+            struct StackGuard {
+                enum { kWin = 128 };
+                static bool Enabled() {
+                    static const bool e = [] {
+                        const char* v = getenv("PSEMU_STACK_GUARD");
+                        return v != nullptr && v[0] != '0';
+                    }();
+                    return e;
+                }
+                PCONTEXT           c;
+                const std::string* nm;
+                uint64_t           rsp0 = 0;
+                uint8_t            snap[kWin];
+                bool               armed = false;
+
+                StackGuard(PCONTEXT ctx_, const std::string* name) : c(ctx_), nm(name) {
+                    if (!Enabled()) return;
+                    rsp0 = c->Rsp;
+                    if (SafeReadable(reinterpret_cast<void*>(rsp0), kWin)) {
+                        memcpy(snap, reinterpret_cast<void*>(rsp0), kWin);
+                        armed = true;
+                    }
+                }
+                ~StackGuard() {
+                    if (!armed) return;
+                    // Handler RET'i simule ettiyse RSP 8 artmis olur; pencereyi
+                    // yine ESKI rsp0'dan karsilastiriyoruz.
+                    if (!SafeReadable(reinterpret_cast<void*>(rsp0), kWin)) return;
+                    const uint8_t* now = reinterpret_cast<const uint8_t*>(rsp0);
+                    for (size_t i = 0; i < kWin; i++) {
+                        if (now[i] == snap[i]) continue;
+                        std::stringstream sg;
+                        sg << "[YIGIN-BOZULDU] '" << (nm ? *nm : std::string("?"))
+                           << "' cagrisi misafir yiginini degistirdi! rsp=0x" << std::hex << rsp0
+                           << " ofset +" << std::dec << i << " : 0x" << std::hex
+                           << static_cast<int>(snap[i]) << " -> 0x" << static_cast<int>(now[i])
+                           << " | eski donus=0x"
+                           << *reinterpret_cast<const uint64_t*>(snap)
+                           << " yeni donus=0x" << *reinterpret_cast<const uint64_t*>(now)
+                           << std::dec;
+                        LOG_ERROR(sg.str());
+                        break;
+                    }
+                }
+            } stack_guard(ctx, readable_name.empty() ? fn_ptr : rn_ptr);
+
             // Halka tampona kaydet: cokme aninda son cagrilar dokulecek.
             {
                 const uint32_t slot = g_plt_trace_pos.fetch_add(1, std::memory_order_relaxed) %
@@ -6304,5 +6366,8 @@ void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t tex
 }
 
 extern "C" void PsemuNotifyKytyFlip() {}
+
+
+
 
 
