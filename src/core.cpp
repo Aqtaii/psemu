@@ -1203,23 +1203,31 @@ static HANDLE   g_worker_thread = nullptr;         // scePthreadCreate ile olust
 static int      g_watchdog_dumps = 0;
 static const int kWatchdogMaxDumps = 15;           // en fazla bu kadar dok (spam onleme)
 
+// Ana misafir thread'i (ExecutionThread). Worker yokken watchdog bunu izler.
+static HANDLE g_exec_thread = nullptr;
+
 static DWORD WINAPI HangWatchdogProc(LPVOID) {
     // Cok agresif: worker sadece ~300ms sessiz kalirsa bile ornek al.
     // Sessiz olum (stack overflow) ihtimaline karsi hizli sampling gerekiyor.
     for (;;) {
         Sleep(150);
-        if (g_worker_thread == nullptr || g_last_activity == 0) continue;
+        // Worker YOKSA ana misafir thread'ini izle. Eskiden yalnizca
+        // scePthreadCreate ile acilmis worker'a bakiyordu; oyun daha worker
+        // yaratmadan takilirsa (Astro Bot: e_entry'den hemen sonra tek thread
+        // %100 CPU ile donuyor) watchdog hic ornek almiyordu.
+        HANDLE target = (g_worker_thread != nullptr) ? g_worker_thread : g_exec_thread;
+        if (target == nullptr || g_last_activity == 0) continue;
         if (g_watchdog_dumps >= kWatchdogMaxDumps) continue;
 
         ULONGLONG now = GetTickCount64();
         if (now - g_last_activity < 300) continue; // hala aktif
 
-        if (SuspendThread(g_worker_thread) == (DWORD)-1) continue;
+        if (SuspendThread(target) == (DWORD)-1) continue;
 
         CONTEXT c;
         memset(&c, 0, sizeof(c));
         c.ContextFlags = CONTEXT_FULL;
-        if (GetThreadContext(g_worker_thread, &c)) {
+        if (GetThreadContext(target, &c)) {
             g_watchdog_dumps++;
             std::stringstream ss;
             ss << "[WATCHDOG #" << g_watchdog_dumps << "] Worker sessiz (>300ms). RIP=0x" << std::hex << c.Rip;
@@ -1255,7 +1263,7 @@ static DWORD WINAPI HangWatchdogProc(LPVOID) {
             }
             LOG_ERROR(bt.str());
         }
-        ResumeThread(g_worker_thread);
+        ResumeThread(target);
     }
     return 0;
 }
@@ -2182,6 +2190,72 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                            << " RSI=0x" << ctx->Rsi << " RDX=0x" << ctx->Rdx << std::dec;
                 }
                 LOG_INFO(hle_ss.str());
+            }
+
+            // ========================================================
+            // pthread THREAD-SPECIFIC ANAHTARLARI - ZINCIRDEN ONCE
+            // ========================================================
+            // Hicbiri implemente degildi ve hepsi RAX=0 donuyordu. Bu SESSIZ
+            // ama agir bir hata:
+            //   key_create(key*, dtor) 0 (basarili) donuyor ama *key'e HICBIR
+            //     SEY YAZMIYOR -> oyun cop bir anahtar degeri kullaniyor
+            //   setspecific(key, val)  hicbir sey yapmiyor -> deger kayboluyor
+            //   getspecific(key)       daima 0 -> oyun "ilklenmemis" saniyor
+            // Astro Bot'ta cokmeden hemen once pthread_getspecific cagriliyor
+            // ve ardindan imaj disi bir isaretciye dallaniyor.
+            //
+            // Windows TLS slotlariyla dogrudan esliyoruz: anahtar = TLS indeksi.
+            if (readable_name == "pthread_key_create" ||
+                readable_name == "scePthreadKeyCreate") {
+                // (key*, destructor) -> *key = yeni indeks, 0 don
+                uint32_t*  key = reinterpret_cast<uint32_t*>(ctx->Rdi);
+                const DWORD idx = TlsAlloc();
+                int rc = 0;
+                if (idx == TLS_OUT_OF_INDEXES) {
+                    rc = 11; // EAGAIN
+                } else if (key != nullptr && SafeWritable(key, 4)) {
+                    *key = static_cast<uint32_t>(idx);
+                } else {
+                    TlsFree(idx);
+                    rc = 22; // EINVAL
+                }
+                // NOT: yikici (destructor) cagrilmiyor. Oyun thread bitiminde
+                // temizlik bekliyorsa sizinti olur; ama yanlis deger dondurmekten
+                // cok daha iyisi.
+                static std::atomic<int> s_kc{0};
+                if (s_kc.fetch_add(1) < 8) {
+                    printf("[PTHREAD-TLS] key_create -> anahtar=%lu rc=%d\n", idx, rc);
+                    fflush(stdout);
+                }
+                ctx->Rax  = static_cast<uint64_t>(static_cast<int64_t>(rc));
+                ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                ctx->Rsp += 8;
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+            if (readable_name == "pthread_setspecific" ||
+                readable_name == "scePthreadSetspecific") {
+                const DWORD idx = static_cast<DWORD>(ctx->Rdi);
+                TlsSetValue(idx, reinterpret_cast<void*>(ctx->Rsi));
+                ctx->Rax  = 0;
+                ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                ctx->Rsp += 8;
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+            if (readable_name == "pthread_getspecific" ||
+                readable_name == "scePthreadGetspecific") {
+                const DWORD idx = static_cast<DWORD>(ctx->Rdi);
+                ctx->Rax  = reinterpret_cast<uint64_t>(TlsGetValue(idx));
+                ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                ctx->Rsp += 8;
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+            if (readable_name == "pthread_key_delete" ||
+                readable_name == "scePthreadKeyDelete") {
+                TlsFree(static_cast<DWORD>(ctx->Rdi));
+                ctx->Rax  = 0;
+                ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                ctx->Rsp += 8;
+                return EXCEPTION_CONTINUE_EXECUTION;
             }
 
             // ========================================================
@@ -6082,6 +6156,11 @@ void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t tex
 
     LOG_INFO("[TANI] Oyun (ExecutionThread) TID=" + std::to_string(gameThreadId));
 
+    // Watchdog'un izleyebilmesi icin BAGIMSIZ bir handle kopyasi: asagidaki
+    // WaitForSingleObject/CloseHandle bunu kapatmasin.
+    DuplicateHandle(GetCurrentProcess(), hThread, GetCurrentProcess(), &g_exec_thread,
+                    THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT, FALSE, 0);
+
     // Emulator ana dongusu bitmemesi icin thread'in bitmesini bekle
     WaitForSingleObject(hThread, INFINITE);
     CloseHandle(hThread);
@@ -6090,4 +6169,5 @@ void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t tex
 }
 
 extern "C" void PsemuNotifyKytyFlip() {}
+
 
