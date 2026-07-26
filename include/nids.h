@@ -1355,6 +1355,24 @@ inline std::unordered_map<std::string, std::string> g_nid_to_name = {
     {"ryUxD-60bKM#s#s", "_ZnwmRKSt9nothrow_t"},
     {"xENtRue8dpI#s#s", "strtof"},
     {"z+P+xCnWLBk#s#s", "_ZdlPv"},
+    {"pZ9WXcClPO8#s#s", "_ZTVN10__cxxabiv120__si_class_type_infoE"},
+    {"P330P3dFF68#s#s", "Need_sceLibc"},
+    {"khbdMADH4cQ#s#s", "_ZNSt9bad_allocD1Ev"},
+    {"byV+FWlAnB4#s#s", "_ZTVN10__cxxabiv117__class_type_infoE"},
+    {"EMNG6cHitlQ#s#s", "_ZTVSt9bad_alloc"},
+    {"keXoyW-rV-0#s#s", "_ZTVSt16invalid_argument"},
+    {"udTM6Nxx-Ng#s#s", "_ZTVSt11logic_error"},
+    {"tyHd3P7oDrU#s#s", "_ZNKSt9exception8_DoraiseEv"},
+    {"Qoo175Ig+-k#s#s", "_ZSt21_sceLibcClassicLocale"},
+    {"yLE5H3058Ao#s#s", "_ZTVNSt8ios_base7failureE"},
+    {"-L+-8F0+gBc#s#s", "_ZTVSt13runtime_error"},
+    {"Cv+zC4EjGMA#s#s", "_ZNSt5ctypeIcE2idE"},
+    {"H4fcpQOpc08#s#s", "_ZNSt6locale2id7_Id_cntE"},
+    {"FQ9NFbBHb5Y#s#s", "_ZSt7_BADOFF"},
+    {"wiR+rIcbnlc#s#s", "_ZSt4_Fpz"},
+    {"eVFYZnYNDo0#s#s", "_ZNSt7codecvtIcc9_MbstatetE2idE"},
+    {"aK1Ymf-NhAs#s#s", "_ZTVSt7codecvtIcc9_MbstatetE"},
+    {"7brRfHVVAlI#s#s", "_ZNSt7collateIcE2idE"},
     {"zr094EQ39Ww#s#s", "__cxa_pure_virtual"},
     {"zr094EQ39Ww#T#T", "__cxa_pure_virtual"},
     {"XwLA5cTHjt4#s#s", "__gxx_personality_v0"},
@@ -4994,6 +5012,7 @@ inline std::unordered_map<std::string, std::string> g_nid_to_name = {
     {"not_a_nid#T#N", "sceKernelWaitSema"},
     {"not_a_nid#S#T", "sceKernelWaitSema"},
 };
+
 
 
 

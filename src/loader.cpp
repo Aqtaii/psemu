@@ -11,6 +11,7 @@
 // core.cpp: plt_index icin exception'siz native karsilik (yoksa nullptr).
 extern "C" void* PsemuNativePltStub(int plt_index);
 extern "C" void* PsemuNativeDataSymbol(const char* raw_nid);
+extern "C" bool PsemuFillVtableCell(void* cell, size_t bytes, const char* raw_nid);
 #include <fstream>
 #include "syscalls.h"
 #include "core.h"
@@ -502,7 +503,11 @@ bool LoadEboot(const std::string& filePath) {
                         uint64_t* cell = reinterpret_cast<uint64_t*>(
                             VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
                         if (cell) {
-                            memset(cell, 0, 0x1000);
+                            // Vtable sembolu ise slotlari guvenli fonksiyona bagla;
+                            // degilse sifirla (eski davranis).
+                            if (!PsemuFillVtableCell(cell, 0x1000, sym_name.c_str())) {
+                                memset(cell, 0, 0x1000);
+                            }
                             uint64_t* patch_target = reinterpret_cast<uint64_t*>(base_ptr + rela->r_offset);
                             *patch_target = reinterpret_cast<uint64_t>(cell) + rela->r_addend;
 
@@ -985,4 +990,5 @@ int main(int argc, char** argv) {
 
     return 0;
 }
+
 

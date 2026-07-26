@@ -739,6 +739,43 @@ extern "C" void* PsemuNativeDataSymbol(const char* raw_nid) {
     return nullptr;
 }
 
+// Cozulemeyen bir C++ VTABLE sembolu (_ZTV...) icin hucreyi GUVENLI doldurur.
+// Vtable bir isaretci dizisidir; sifirla doldurulursa oyunun o siniftan bir
+// nesnede yaptigi HER sanal cagri adres 0'a (veya cop veriye) atlar. Bunun
+// yerine tum slotlari "hicbir sey yapip donen" native fonksiyona baglayip
+// vahsi dallanmayi engelliyoruz.
+// true donerse cagiran hucreyi sifirlamamali.
+extern "C" bool PsemuFillVtableCell(void* cell, size_t bytes, const char* raw_nid) {
+    if (cell == nullptr || raw_nid == nullptr) return false;
+
+    std::string nid(raw_nid);
+    const std::string* rn = nullptr;
+    auto exact = g_nid_to_name.find(nid);
+    if (exact != g_nid_to_name.end()) {
+        rn = &exact->second;
+    } else if (nid.size() >= 11) {
+        const auto& pidx = NidPrefixIndex();
+        auto pit = pidx.find(nid.substr(0, 11));
+        if (pit != pidx.end()) rn = pit->second;
+    }
+    if (rn == nullptr || rn->rfind("_ZTV", 0) != 0) return false;
+
+    uint64_t* slots = reinterpret_cast<uint64_t*>(cell);
+    const uint64_t safe = reinterpret_cast<uint64_t>(&NativePureVirtual);
+    // Ilk iki slot RTTI alanidir (offset-to-top, typeinfo); onlari 0 birakiyoruz
+    // ki tip sorgulari "bilinmiyor" gorsun. Geri kalani sanal fonksiyon slotu.
+    const size_t n = bytes / 8;
+    for (size_t i = 0; i < n; i++) {
+        slots[i] = (i < 2) ? 0ull : safe;
+    }
+    static std::atomic<int> s_vt{0};
+    if (s_vt.fetch_add(1) < 8) {
+        printf("[VTABLE] %s -> %zu slot guvenli fonksiyona baglandi\n", rn->c_str(), n);
+        fflush(stdout);
+    }
+    return true;
+}
+
 // plt_index -> native fonksiyon (yoksa nullptr => eski sentinel/VEH yolu).
 // linker.cpp GOT'u yamarken cagirir.
 extern "C" void* PsemuNativePltStub(int plt_index) {

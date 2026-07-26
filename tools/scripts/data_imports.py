@@ -105,3 +105,12 @@ if unresolved:
     print(f"\n--- COZULEMEYEN ({len(unresolved)}) ---")
     for raw, n, _ in unresolved[:20]:
         print(f"  {n:>5}x  {raw}")
+
+# nids.h'ye eklenmeye hazir satirlar. Veri sembolleri toplu cozume dahil
+# DEGILDI (nid_bulk.py yalnizca JMPREL'i isliyor), bu yuzden ayrica gerekiyor.
+nidsh = open("include/nids.h", encoding="utf-8", errors="replace").read()
+missing = [(raw, name) for raw, n, name in resolved if raw.split("#")[0] not in nidsh]
+if missing:
+    print(f"\n--- nids.h'de OLMAYAN {len(missing)} sembol (eklenecek satirlar) ---")
+    for raw, name in missing:
+        print(f'    {{"{raw}", "{name}"}},')
