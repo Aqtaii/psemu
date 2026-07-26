@@ -1,18 +1,18 @@
-#include "linker.h"
+﻿#include "linker.h"
 #include "scanner.h"
 #include "logger.h"
 
 // core.cpp: plt_index icin exception'siz native karsilik (yoksa nullptr).
 extern "C" void* PsemuNativePltStub(int plt_index);
 
-// Sahte (Stub) kütüphane fonksiyonlarımız
+// Sahte (Stub) kÃ¼tÃ¼phane fonksiyonlarÄ±mÄ±z
 extern "C" uint64_t Stub_sceLibcInit() {
-    LOG_INFO("[PRX] libSceLibc -> sceLibcInit() çağrıldı! (Stubbed)");
+    LOG_INFO("[PRX] libSceLibc -> sceLibcInit() Ã§aÄŸrÄ±ldÄ±! (Stubbed)");
     return 0;
 }
 
 extern "C" uint64_t Stub_libkernel_init() {
-    LOG_INFO("[PRX] libkernel -> libkernel_init() çağrıldı! (Stubbed)");
+    LOG_INFO("[PRX] libkernel -> libkernel_init() Ã§aÄŸrÄ±ldÄ±! (Stubbed)");
     return 0;
 }
 
@@ -51,7 +51,8 @@ void Linker::ResolveImports(uint8_t* base_addr, size_t text_size) {
     
     int hook_count = 0;
     int skip_count = 0;
-    int native_count = 0; // exception'siz dogrudan baglanan fonksiyon sayisi
+    int native_count = 0;   // exception'siz dogrudan baglanan fonksiyon sayisi
+    int already_hooked = 0; // JMPREL yolu tarafindan zaten kancalanmis slotlar
     
     static const int pattern[] = {0xFF, 0x25, -1, -1, -1, -1, 0x68, -1, -1, -1, -1, 0xE9};
     const size_t pattern_size = sizeof(pattern) / sizeof(pattern[0]);
@@ -79,6 +80,18 @@ void Linker::ResolveImports(uint8_t* base_addr, size_t text_size) {
             // sentinel yerine DOGRUDAN onun adresini yaz. Misafirin "jmp [GOT]"u
             // native fonksiyona atlar, fonksiyonun "ret"i cagirana doner; hicbir
             // access violation / VEH turu olusmaz. (bkz. core.cpp PsemuNativePltStub)
+            // JMPREL yolu (loader.cpp) bu slotu ZATEN kancaladiysa dokunma.
+            // Iki mekanizma ayni indeks alanini kullaniyor, yani sonuc ayni
+            // olurdu; ama gereksiz yazma yerine sayip gecmek, hangi yolun ise
+            // yaradigini logdan gormeyi kolaylastiriyor.
+            {
+                const uint64_t cur = *reinterpret_cast<uint64_t*>(got_addr);
+                if (cur >= 0x10000000000ULL && cur < 0x10000010000ULL) {
+                    already_hooked++;
+                    continue;
+                }
+            }
+
             uint64_t magic_addr = 0x10000000000ULL + static_cast<uint64_t>(plt_index);
             if (void* native = PsemuNativePltStub(plt_index)) {
                 magic_addr = reinterpret_cast<uint64_t>(native);
@@ -102,8 +115,8 @@ void Linker::ResolveImports(uint8_t* base_addr, size_t text_size) {
         }
     }
     
-    printf("[DEBUG-LINKER] Tarama bitti! hook=%d, skip=%d, NATIVE(exception'siz)=%d\n", hook_count,
-           skip_count, native_count);
+    printf("[DEBUG-LINKER] Tarama bitti! hook=%d, skip=%d, NATIVE=%d, JMPREL-zaten=%d\n", hook_count,
+           skip_count, native_count, already_hooked);
     fflush(stdout);
     
     LOG_INFO("[LINKER] Toplam " + std::to_string(hook_count) + " adet PLT/GOT kancasi (Stub) atildi!");

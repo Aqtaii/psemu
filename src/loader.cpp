@@ -7,6 +7,9 @@
 #include "elf64.h"
 #include "logger.h"
 #include "game_profile.h"
+
+// core.cpp: plt_index icin exception'siz native karsilik (yoksa nullptr).
+extern "C" void* PsemuNativePltStub(int plt_index);
 #include <fstream>
 #include "syscalls.h"
 #include "core.h"
@@ -180,6 +183,46 @@ bool LoadEboot(const std::string& filePath) {
     uint8_t* base_ptr = reinterpret_cast<uint8_t*>(base_address);
     std::cout << "[+] Bellek blogu basariyla tahsis edildi. Base Address: 0x" << std::hex << reinterpret_cast<uint64_t>(base_ptr) << std::dec << std::endl;
 
+    // ==========================================
+    // 3.15: SELF SEGMENT TABLOSU
+    // ==========================================
+    // SELF konteynerinde ELF program basliklarindaki p_offset degerleri DOSYA
+    // KONUMU DEGILDIR: SELF'in kendi segment tablosu segmentleri baska yerlere
+    // koyar. Eskiden "elf_offset + p_offset"ten okunuyordu ve bu, SELF'lerde
+    // YANLIS VERI yukluyordu - oyun cop kod calistiriyordu (Astro Bot'ta
+    // gorulen "bilinmeyen syscall" selinin gercek sebebi buydu).
+    //
+    // Olculen ornek (Astro Bot PPSA21564):
+    //   PT_LOAD #0  ELF der ki 0x4000     ama gercekte 0x3B1F0
+    //   PT_LOAD #1  ELF der ki 0x74F4000  ama gercekte 0x7532DF0
+    //
+    // Tablo duzeni: 0x18'de segment sayisi, 0x20'den itibaren 32 bayt/kayit
+    // (flags, file_offset, encrypted_size, decrypted_size). flags>>20 hedef
+    // program basligi indeksi, (flags & 0x800) ise "bu, veri segmentidir"
+    // demektir (digerleri imza/digest tablolaridir).
+    std::map<uint32_t, uint64_t> self_seg_offset;
+    if (*file_magic == SELFMAG && size > 0x20) {
+        const uint16_t num_self_segs = *reinterpret_cast<uint16_t*>(buffer.data() + 0x18);
+        for (uint16_t s = 0; s < num_self_segs; ++s) {
+            const size_t rec = 0x20 + static_cast<size_t>(s) * 32;
+            if (rec + 32 > static_cast<size_t>(size)) break;
+            const uint64_t flags = *reinterpret_cast<uint64_t*>(buffer.data() + rec);
+            const uint64_t foff  = *reinterpret_cast<uint64_t*>(buffer.data() + rec + 8);
+            const uint64_t esz   = *reinterpret_cast<uint64_t*>(buffer.data() + rec + 16);
+            const uint64_t dsz   = *reinterpret_cast<uint64_t*>(buffer.data() + rec + 24);
+            if ((flags & 0x800ULL) == 0) continue; // digest/imza tablosu, veri degil
+            if (esz != dsz) {
+                std::cout << "[-] UYARI: SELF segment " << s
+                          << " SIKISTIRILMIS/SIFRELI (enc=0x" << std::hex << esz
+                          << " dec=0x" << dsz << std::dec << ") - desteklenmiyor." << std::endl;
+                continue;
+            }
+            self_seg_offset[static_cast<uint32_t>(flags >> 20)] = foff;
+        }
+        std::cout << "[+] SELF segment tablosu: " << num_self_segs << " kayit, "
+                  << self_seg_offset.size() << " veri segmenti eslendi." << std::endl;
+    }
+
     // Adim 3.2: Segmentleri Bellege Kopyala
     for (int i = 0; i < header->e_phnum; ++i) {
         Elf64_Phdr* phdr = &phdrs[i];
@@ -191,7 +234,13 @@ bool LoadEboot(const std::string& filePath) {
 
             // p_offset ham ELF'in baslangicina gore hesaplanmistir. SELF dosyalarinda 
             // gercek veriye ulasmak icin daima elf_offset eklenmelidir!
-            size_t absolute_file_offset = phdr->p_offset + elf_offset;
+            size_t     absolute_file_offset = phdr->p_offset + elf_offset;
+            const auto sit                  = self_seg_offset.find(static_cast<uint32_t>(i));
+            if (sit != self_seg_offset.end()) {
+                absolute_file_offset = static_cast<size_t>(sit->second);
+                std::cout << "   -> SELF tablosundan gercek konum: 0x" << std::hex
+                          << absolute_file_offset << std::dec << std::endl;
+            }
 
             if (absolute_file_offset + phdr->p_filesz > (size_t)size) {
                 std::cerr << "[-] UYARI: Segment dosya boyutunu asiyor! ofset: " << absolute_file_offset << " filesz: " << phdr->p_filesz << std::endl;
@@ -452,6 +501,7 @@ bool LoadEboot(const std::string& filePath) {
                 // JMPREL (PLT) Tablosunu iÅŸle ve g_plt_names'i doldur
                 if (jmprel_table != nullptr && jmprel_size > 0 && rela_ent > 0) {
                     size_t num_plt = jmprel_size / rela_ent;
+                    int    jmprel_hooks = 0, jmprel_native = 0;
                     std::cout << "[INFO] DT_JMPREL bulundu, " << num_plt << " adet JUMP_SLOT isleniyor..." << std::endl;
                     
                     for (size_t k = 0; k < num_plt; ++k) {
@@ -462,12 +512,41 @@ bool LoadEboot(const std::string& filePath) {
                         if (r_type == R_X86_64_JUMP_SLOT && sym_table && str_table && r_sym > 0) {
                             Elf64_Sym* sym = &sym_table[r_sym];
                             std::string sym_name = &str_table[sym->st_name];
-                            
+
                             // core.cpp'nin erisebilmesi icin map'e kaydet
                             g_plt_names[static_cast<int>(k)] = sym_name;
+
+                            // ============================================
+                            // GOT KANCASI - DOGRUDAN RELOCATION'DAN
+                            // ============================================
+                            // Eskiden kancalar YALNIZCA .text icinde
+                            // "FF 25 / 68 idx / E9" bayt deseni aranarak
+                            // atiliyordu (Linker::ResolveImports). O desen eski
+                            // tarz lazy-binding PLT duzenine ait; Astro Bot gibi
+                            // yeni SDK ile derlenmis oyunlarda HIC eslesmiyor ve
+                            // sonuc "hook=0" oluyordu - tek bir import bile
+                            // kancalanmiyor, oyun haritalanmamis adreslere
+                            // gidiyordu.
+                            //
+                            // Oysa JUMP_SLOT relocation'i GOT slotunun adresini
+                            // (r_offset) ZATEN veriyor. Desene hic bakmadan
+                            // dogrudan yaziyoruz: her ELF icin calisir.
+                            // Indeks alani ayni (lazy binding'de push edilen
+                            // deger de relocation indeksidir), yani core.cpp'nin
+                            // plt_index eslemesi degismiyor.
+                            uint64_t* got = reinterpret_cast<uint64_t*>(base_ptr + rela->r_offset);
+                            uint64_t  target = 0x10000000000ULL + static_cast<uint64_t>(k);
+                            if (void* native = PsemuNativePltStub(static_cast<int>(k))) {
+                                target = reinterpret_cast<uint64_t>(native);
+                                jmprel_native++;
+                            }
+                            *got = target;
+                            jmprel_hooks++;
                         }
                     }
-                    std::cout << "[+] JMPREL sembol isimleri alindi." << std::endl;
+                    std::cout << "[+] JMPREL sembol isimleri alindi. GOT kancasi: " << jmprel_hooks
+                              << " (bunlarin " << jmprel_native << " tanesi native/exception'siz)"
+                              << std::endl;
                 }
             } else {
                 std::cout << "[-] UYARI: DYNAMIC segment var ama icinde RELA tablosu bulunamadi." << std::endl;
