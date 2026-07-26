@@ -2317,6 +2317,99 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             }
 
             // ========================================================
+            // strtok / strtok_r - ZINCIRDEN ONCE
+            // ========================================================
+            // char* dondurur ve DURUM TUTAR. Stub'landiginda NULL donuyordu;
+            // bir ayristirma dongusu NULL alinca "basardim" bayragini set edip
+            // BOS bir yapi birakiyor. Astro Bot'taki cokme izi tam buydu:
+            // "global ilklendi bayragi set, ama isaret ettigi veri yok".
+            // Girdi dizesini YERINDE degistirir (ayirici yerine NUL yazar).
+            if (readable_name == "strtok" || readable_name == "strtok_r") {
+                static thread_local char* t_save = nullptr;
+                const bool is_r = (readable_name == "strtok_r");
+
+                char*       s     = reinterpret_cast<char*>(ctx->Rdi);
+                const char* delim = reinterpret_cast<const char*>(ctx->Rsi);
+                char**      savep = is_r ? reinterpret_cast<char**>(ctx->Rdx) : nullptr;
+
+                // Ayirici kumesi (en fazla 256 farkli bayt)
+                bool isdelim[256] = {};
+                if (delim != nullptr) {
+                    const std::string d = SafeReadCString(delim, 256);
+                    for (unsigned char c : d) isdelim[c] = true;
+                }
+
+                char* cur = s;
+                if (cur == nullptr) {
+                    cur = is_r ? (savep && SafeReadable(savep, 8) ? *savep : nullptr) : t_save;
+                }
+
+                char* result = nullptr;
+                if (cur != nullptr) {
+                    // Bastaki ayiricilari atla
+                    while (SafeReadable(cur, 1) && *cur != '\0' &&
+                           isdelim[static_cast<unsigned char>(*cur)]) {
+                        cur++;
+                    }
+                    if (SafeReadable(cur, 1) && *cur != '\0') {
+                        result   = cur;
+                        // Parcanin sonunu bul
+                        while (SafeReadable(cur, 1) && *cur != '\0' &&
+                               !isdelim[static_cast<unsigned char>(*cur)]) {
+                            cur++;
+                        }
+                        if (SafeReadable(cur, 1) && *cur != '\0') {
+                            if (SafeWritable(cur, 1)) *cur = '\0';
+                            cur++;
+                        }
+                    } else {
+                        cur = nullptr;
+                    }
+                }
+
+                if (is_r) {
+                    if (savep != nullptr && SafeWritable(savep, 8)) *savep = cur;
+                } else {
+                    t_save = cur;
+                }
+
+                static std::atomic<int> s_tk{0};
+                if (s_tk.fetch_add(1) < 8) {
+                    printf("[STRTOK] -> %s\n",
+                           result ? SafeReadCString(result, 64).c_str() : "(NULL)");
+                    fflush(stdout);
+                }
+
+                ctx->Rax  = reinterpret_cast<uint64_t>(result);
+                ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                ctx->Rsp += 8;
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+
+            // ========================================================
+            // Kucuk ama SIFIR DONMEMESI GEREKEN cagrilar
+            // ========================================================
+            if (readable_name == "scePthreadGetthreadid" ||
+                readable_name == "pthread_getthreadid_np") {
+                // Thread kimligi indeks/anahtar olarak kullanilabiliyor; 0
+                // donmek cakismalara yol acar.
+                ctx->Rax  = GetCurrentThreadId();
+                ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                ctx->Rsp += 8;
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+            if (readable_name == "_ZSt14_Random_devicev") {
+                // std::random_device(): 0 donmek tohumlamayi bozar.
+                static std::atomic<uint32_t> s_rnd{0x9E3779B9u};
+                uint32_t x = s_rnd.fetch_add(0x6D2B79F5u, std::memory_order_relaxed);
+                x ^= x >> 15; x *= 0x2C1B3C6Du; x ^= x >> 12; x *= 0x297A2D39u; x ^= x >> 15;
+                ctx->Rax  = x;
+                ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                ctx->Rsp += 8;
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+
+            // ========================================================
             // puts / fputs - OYUNUN MESAJLARI - ZINCIRDEN ONCE
             // ========================================================
             // Astro Bot cokmeden hemen once puts cagiriyordu, yani bize bir sey
