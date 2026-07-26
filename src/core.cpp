@@ -1968,10 +1968,15 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 }
                 (void)guest_handle;
                 static std::atomic<uint64_t> s_pad_reads{0};
-                const uint64_t pr = s_pad_reads.fetch_add(1) + 1;
-                if (pr <= 3 || (pr % 600ull) == 0) {
-                    const uint32_t btn =
-                        (data != nullptr) ? *reinterpret_cast<uint32_t*>(data) : 0u;
+                const uint64_t pr  = s_pad_reads.fetch_add(1) + 1;
+                const uint32_t btn = (data != nullptr) ? *reinterpret_cast<uint32_t*>(data) : 0u;
+                // Buton BASILI oldugu her okumayi yaz. Eskiden yalnizca her
+                // 600. okuma yazdiriliyordu (~saniyede bir); bir tus vurusu
+                // ~100 ms surdugu icin basimlar neredeyse hep kaciriliyor ve
+                // "girdi ulasmiyor" izlenimi veriyordu.
+                static std::atomic<int> s_btn_logs{0};
+                const bool log_press = (btn != 0) && (s_btn_logs.fetch_add(1) < 40);
+                if (pr <= 3 || (pr % 600ull) == 0 || log_press) {
                     printf("[PAD] okuma=%llu misafir_handle=%d data=%p rc=%d butonlar=0x%08x\n",
                            static_cast<unsigned long long>(pr), guest_handle, data, rc, btn);
                     fflush(stdout);
