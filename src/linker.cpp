@@ -2,6 +2,9 @@
 #include "scanner.h"
 #include "logger.h"
 
+// core.cpp: plt_index icin exception'siz native karsilik (yoksa nullptr).
+extern "C" void* PsemuNativePltStub(int plt_index);
+
 // Sahte (Stub) kütüphane fonksiyonlarımız
 extern "C" uint64_t Stub_sceLibcInit() {
     LOG_INFO("[PRX] libSceLibc -> sceLibcInit() çağrıldı! (Stubbed)");
@@ -48,6 +51,7 @@ void Linker::ResolveImports(uint8_t* base_addr, size_t text_size) {
     
     int hook_count = 0;
     int skip_count = 0;
+    int native_count = 0; // exception'siz dogrudan baglanan fonksiyon sayisi
     
     static const int pattern[] = {0xFF, 0x25, -1, -1, -1, -1, 0x68, -1, -1, -1, -1, 0xE9};
     const size_t pattern_size = sizeof(pattern) / sizeof(pattern[0]);
@@ -70,7 +74,16 @@ void Linker::ResolveImports(uint8_t* base_addr, size_t text_size) {
             uint64_t got_addr = rip_next + static_cast<int64_t>(rel_offset);
             
             int32_t plt_index = *reinterpret_cast<int32_t*>(&base_addr[i + 7]);
+
+            // NATIVE PLT: bu fonksiyonun exception'siz bir karsiligi varsa GOT'a
+            // sentinel yerine DOGRUDAN onun adresini yaz. Misafirin "jmp [GOT]"u
+            // native fonksiyona atlar, fonksiyonun "ret"i cagirana doner; hicbir
+            // access violation / VEH turu olusmaz. (bkz. core.cpp PsemuNativePltStub)
             uint64_t magic_addr = 0x10000000000ULL + static_cast<uint64_t>(plt_index);
+            if (void* native = PsemuNativePltStub(plt_index)) {
+                magic_addr = reinterpret_cast<uint64_t>(native);
+                native_count++;
+            }
             
             // Her 50 match'te bir ilerleme raporu ver
             if (hook_count % 50 == 0) {
@@ -89,7 +102,8 @@ void Linker::ResolveImports(uint8_t* base_addr, size_t text_size) {
         }
     }
     
-    printf("[DEBUG-LINKER] Tarama bitti! hook=%d, skip=%d\n", hook_count, skip_count);
+    printf("[DEBUG-LINKER] Tarama bitti! hook=%d, skip=%d, NATIVE(exception'siz)=%d\n", hook_count,
+           skip_count, native_count);
     fflush(stdout);
     
     LOG_INFO("[LINKER] Toplam " + std::to_string(hook_count) + " adet PLT/GOT kancasi (Stub) atildi!");

@@ -601,6 +601,98 @@ static GuestMutex* GetOrCreateMutex(uint64_t* slot) {
     return result;
 }
 
+// ============================================================================
+// NATIVE PLT: exception'siz dogrudan cagri
+// ----------------------------------------------------------------------------
+// Simdiye kadar HER HLE cagrisi bir Windows exception turuydu: PLT stub'i
+// haritalanmamis bir "sentinel" adrese jmp eder, CPU access violation uretir,
+// VEH devreye girer, dispatch eder ve RET'i elle simule ederdi. Olculen yuk:
+// kare basina ~21.000 cagri (130k/sn / 6 FPS) -> 167 ms'lik karenin neredeyse
+// tamami.
+//
+// Oysa PLT stub'i "jmp [GOT]" yapiyor. GOT slotuna sentinel yerine SysV ABI'li
+// NATIVE bir fonksiyonun adresini yazarsak misafir dogrudan oraya atlar ve
+// fonksiyonun kendi "ret"i cagirana geri doner - exception hic olusmaz.
+// clang'in __attribute__((sysv_abi))'si sayesinde assembly'e gerek yok.
+//
+// Buradaki fonksiyonlar VEH yolundaki karsiliklariyla AYNI davranisi
+// uretmelidir. SafeReadable/SafeWritable dogrulamalari bilerek YOK: misafir
+// gecerli isaretciler veriyor, commit edilmemis sayfa olursa zaten VEH'in
+// otomatik commit yolu devreye giriyor (ve o yol bu fonksiyonlarin icinden
+// tetiklendiginde de calisir).
+//
+// Kill switch: PSEMU_NATIVE_PLT=0 -> hepsi eski VEH yoluna doner.
+// ============================================================================
+#define PSEMU_SYSV __attribute__((sysv_abi))
+
+static PSEMU_SYSV void* NativeMemcpy(void* d, const void* s, size_t n) {
+    return (d && s && n) ? memcpy(d, s, n) : d;
+}
+static PSEMU_SYSV void* NativeMemset(void* d, int c, size_t n) {
+    return (d && n) ? memset(d, c, n) : d;
+}
+static PSEMU_SYSV void* NativeMemmove(void* d, const void* s, size_t n) {
+    return (d && s && n) ? memmove(d, s, n) : d;
+}
+static PSEMU_SYSV int NativeMemcmp(const void* a, const void* b, size_t n) {
+    return (a && b && n) ? memcmp(a, b, n) : 0;
+}
+static PSEMU_SYSV size_t NativeStrlen(const char* s) { return s ? strlen(s) : 0; }
+
+static PSEMU_SYSV int NativeMutexLock(uint64_t* slot) {
+    GuestMutex* m = GetOrCreateMutex(slot);
+    if (m != nullptr) EnterCriticalSection(&m->cs);
+    return 0;
+}
+static PSEMU_SYSV int NativeMutexUnlock(uint64_t* slot) {
+    GuestMutex* m = GetOrCreateMutex(slot);
+    if (m != nullptr) LeaveCriticalSection(&m->cs);
+    return 0;
+}
+// sceKernelWaitSema henuz implemente degil; VEH yolu da RAX=0 donuyordu.
+// Davranis birebir ayni, yalnizca exception maliyeti yok.
+static PSEMU_SYSV int NativeRet0() { return 0; }
+static PSEMU_SYSV int* NativeErrno() { return &g_guest_errno; }
+
+// plt_index -> native fonksiyon (yoksa nullptr => eski sentinel/VEH yolu).
+// linker.cpp GOT'u yamarken cagirir.
+extern "C" void* PsemuNativePltStub(int plt_index) {
+    static const bool s_enabled = [] {
+        const char* e = getenv("PSEMU_NATIVE_PLT");
+        return !(e != nullptr && e[0] == '0');
+    }();
+    if (!s_enabled) return nullptr;
+
+    auto it = g_plt_names.find(plt_index);
+    if (it == g_plt_names.end()) return nullptr;
+
+    // NID -> okunabilir isim (tam eslesme, yoksa 11 karakterlik onek).
+    const std::string* rn = nullptr;
+    auto exact = g_nid_to_name.find(it->second);
+    if (exact != g_nid_to_name.end()) {
+        rn = &exact->second;
+    } else if (it->second.size() >= 11) {
+        const auto& pidx = NidPrefixIndex();
+        auto pit = pidx.find(it->second.substr(0, 11));
+        if (pit != pidx.end()) rn = pit->second;
+    }
+    if (rn == nullptr) return nullptr;
+
+    const std::string& n = *rn;
+    if (n == "memcpy")  return reinterpret_cast<void*>(&NativeMemcpy);
+    if (n == "memset")  return reinterpret_cast<void*>(&NativeMemset);
+    if (n == "memmove") return reinterpret_cast<void*>(&NativeMemmove);
+    if (n == "memcmp")  return reinterpret_cast<void*>(&NativeMemcmp);
+    if (n == "strlen")  return reinterpret_cast<void*>(&NativeStrlen);
+    if (n == "scePthreadMutexLock" || n == "pthread_mutex_lock")
+        return reinterpret_cast<void*>(&NativeMutexLock);
+    if (n == "scePthreadMutexUnlock" || n == "pthread_mutex_unlock")
+        return reinterpret_cast<void*>(&NativeMutexUnlock);
+    if (n == "sceKernelWaitSema") return reinterpret_cast<void*>(&NativeRet0);
+    if (n == "__error")           return reinterpret_cast<void*>(&NativeErrno);
+    return nullptr;
+}
+
 static GuestCond* GetOrCreateCond(uint64_t* slot) {
     if (slot == nullptr || !SafeWritable(slot, sizeof(uint64_t))) return nullptr;
     std::lock_guard<std::mutex> lk(g_sync_create_mutex);
