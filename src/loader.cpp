@@ -10,6 +10,7 @@
 
 // core.cpp: plt_index icin exception'siz native karsilik (yoksa nullptr).
 extern "C" void* PsemuNativePltStub(int plt_index);
+extern "C" void* PsemuNativeDataSymbol(const char* raw_nid);
 #include <fstream>
 #include "syscalls.h"
 #include "core.h"
@@ -476,6 +477,26 @@ bool LoadEboot(const std::string& filePath) {
                         if (sym_table && str_table && r_sym > 0) {
                             Elf64_Sym* sym = &sym_table[r_sym];
                             sym_name = &str_table[sym->st_name];
+                        }
+
+                        // ONCE: bu sembol aslinda bir FONKSIYON mu? Oyun bazi
+                        // fonksiyonlarin adresini veri olarak import eder; en
+                        // kritigi __cxa_pure_virtual (her soyut sinifin
+                        // vtable'inda, Astro Bot'ta 1176 slot). Asagidaki "bos
+                        // hucre" yolu onlar icin YANLIS: hucre PAGE_READWRITE,
+                        // yani calistirilamaz - cagrildiginda veriye atlanip
+                        // gecersiz komut/vahsi dallanma olusuyor.
+                        if (void* native = PsemuNativeDataSymbol(sym_name.c_str())) {
+                            uint64_t* pt = reinterpret_cast<uint64_t*>(base_ptr + rela->r_offset);
+                            *pt = reinterpret_cast<uint64_t>(native) + rela->r_addend;
+                            static int s_nat64 = 0;
+                            if (++s_nat64 <= 10) {
+                                std::cout << "[R_X86_64_64] " << sym_name
+                                          << " -> NATIVE fonksiyon @ 0x" << std::hex
+                                          << reinterpret_cast<uint64_t>(native) << std::dec
+                                          << std::endl;
+                            }
+                            continue;
                         }
 
                         uint64_t* cell = reinterpret_cast<uint64_t*>(
@@ -964,3 +985,4 @@ int main(int argc, char** argv) {
 
     return 0;
 }
+

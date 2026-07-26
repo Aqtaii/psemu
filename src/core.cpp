@@ -677,6 +677,68 @@ static PSEMU_SYSV int NativeUsleep(uint64_t us) {
 // tablonun duzenini dogrulamak gerek; tahminle doldurmak yeni hata uretir.
 static PSEMU_SYSV void* NativeCharTable() { return nullptr; }
 
+// ============================================================================
+// VERI SEMBOLU olarak import edilen FONKSIYONLAR
+// ----------------------------------------------------------------------------
+// Oyun bazi fonksiyonlarin ADRESINI veri olarak import eder (R_X86_64_64 /
+// GLOB_DAT). En onemlisi __cxa_pure_virtual: derleyici bunu HER soyut sinifin
+// vtable'ina yazar - Astro Bot'ta 1176 slot.
+//
+// psemu bu sembolleri cozemedigi icin her biri icin SIFIRLANMIS ve
+// CALISTIRILAMAZ (PAGE_READWRITE) bir sayfa ayirip adresini yaziyordu. Sonuc:
+// bir saf sanal cagri yapildiginda veri sayfasina atlaniyor -> gecersiz komut
+// / vahsi dallanma. Astro Bot'taki "komut ortasina dusen, kosudan kosuya
+// degisen" cokmelerin profili tam buydu.
+//
+// Burada bu semboller icin GERCEK fonksiyon adresi donduruyoruz.
+static PSEMU_SYSV void NativePureVirtual() {
+    static std::atomic<int> s_n{0};
+    if (s_n.fetch_add(1) < 8) {
+        LOG_ERROR("[PURE-VIRTUAL] Oyun saf sanal bir fonksiyonu cagirdi (nesne henuz "
+                  "kurulmamis ya da yikilmis olabilir). Cokmemek icin donuluyor.");
+    }
+}
+static PSEMU_SYSV void* NativeMalloc(size_t n) {
+    const size_t sz = n ? (n + 65536) : 65536;
+    void*        p  = _aligned_malloc(sz, 16);
+    if (p != nullptr) {
+        memset(p, 0, sz);
+        RegisterAllocSize(p, n);
+    }
+    return p;
+}
+static PSEMU_SYSV void NativeFree(void* p) {
+    if (p != nullptr) _aligned_free(p);
+}
+static PSEMU_SYSV int NativePersonality() { return 0; }
+
+// Veri sembolu olarak import edilen bir FONKSIYONUN native adresi (yoksa
+// nullptr => eski "bos hucre" davranisi). loader.cpp relocation sirasinda
+// cagirir; parametre ham NID dizesidir.
+extern "C" void* PsemuNativeDataSymbol(const char* raw_nid) {
+    if (raw_nid == nullptr) return nullptr;
+    std::string nid(raw_nid);
+    const std::string* rn = nullptr;
+    auto exact = g_nid_to_name.find(nid);
+    if (exact != g_nid_to_name.end()) {
+        rn = &exact->second;
+    } else if (nid.size() >= 11) {
+        const auto& pidx = NidPrefixIndex();
+        auto pit = pidx.find(nid.substr(0, 11));
+        if (pit != pidx.end()) rn = pit->second;
+    }
+    if (rn == nullptr) return nullptr;
+
+    const std::string& n = *rn;
+    if (n == "__cxa_pure_virtual")   return reinterpret_cast<void*>(&NativePureVirtual);
+    if (n == "__gxx_personality_v0") return reinterpret_cast<void*>(&NativePersonality);
+    if (n == "malloc")               return reinterpret_cast<void*>(&NativeMalloc);
+    if (n == "free")                 return reinterpret_cast<void*>(&NativeFree);
+    if (n == "memcpy")               return reinterpret_cast<void*>(&NativeMemcpy);
+    if (n == "memset")               return reinterpret_cast<void*>(&NativeMemset);
+    return nullptr;
+}
+
 // plt_index -> native fonksiyon (yoksa nullptr => eski sentinel/VEH yolu).
 // linker.cpp GOT'u yamarken cagirir.
 extern "C" void* PsemuNativePltStub(int plt_index) {

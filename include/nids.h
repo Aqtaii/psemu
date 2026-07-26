@@ -1355,6 +1355,12 @@ inline std::unordered_map<std::string, std::string> g_nid_to_name = {
     {"ryUxD-60bKM#s#s", "_ZnwmRKSt9nothrow_t"},
     {"xENtRue8dpI#s#s", "strtof"},
     {"z+P+xCnWLBk#s#s", "_ZdlPv"},
+    {"zr094EQ39Ww#s#s", "__cxa_pure_virtual"},
+    {"zr094EQ39Ww#T#T", "__cxa_pure_virtual"},
+    {"XwLA5cTHjt4#s#s", "__gxx_personality_v0"},
+    {"2sWzhYqFH4E#s#s", "_Stdout"},
+    {"H8AprKeZtNg#s#s", "_Stderr"},
+    {"NLwJ3q+64bY#s#s", "_ZSt7nothrow"},
     {"OJjm-QOIHlI#s#s", "sceLibcMspaceMalloc"},
     {"OJjm-QOIHlI#T#T", "sceLibcMspaceMalloc"},
     {"YQ0navp+YIc#s#s", "puts"},
@@ -4988,6 +4994,7 @@ inline std::unordered_map<std::string, std::string> g_nid_to_name = {
     {"not_a_nid#T#N", "sceKernelWaitSema"},
     {"not_a_nid#S#T", "sceKernelWaitSema"},
 };
+
 
 
 
