@@ -32,5 +32,16 @@ log*.txt
 *_log.txt
 *_err.txt
 
+# KOK DIZINDEKI TUM .txt DOSYALARI YOK SAYILIR.
+# Tani/kosu loglari surekli yeni ve rastgele isimlerle uretiliyor
+# (a_o1.txt, bp_e.txt, r15_o.txt, ww_e.txt ...); tek tek kural yazmak
+# yetismedi ve bir kismi yanlislikla repoya girdi. Beyaz liste yaklasimi
+# daha guvenli: kokte SADECE asagida acikca izin verilenler kalir.
+/*.txt
+!/CMakeLists.txt
+
+# Calisma zamani ikili bagimliliklari (kaynak degil)
+*.dll
+
 # Topluluk NID veritabanlari (indirilen, lisansi belirsiz - repoya girmez)
 tools/nid_db/
