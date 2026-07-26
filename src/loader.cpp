@@ -456,6 +456,15 @@ bool LoadEboot(const std::string& filePath) {
                                 *cell = reinterpret_cast<uint64_t>(s_fake_obj);
                                 std::cout << "[GLOB_DAT] Qoo175Ig+-k -> SAHTE C++ nesnesi @ 0x"
                                           << std::hex << *cell << std::dec << std::endl;
+                            } else if (void* nat = PsemuNativeDataSymbol(sym_name.c_str())) {
+                                // Sembol aslinda bir FONKSIYON: hucreye gercek
+                                // adresi koy. (R_X86_64_64 yolundaki ayni
+                                // duzeltmenin GLOB_DAT karsiligi.)
+                                *cell = reinterpret_cast<uint64_t>(nat);
+                            } else if (PsemuFillVtableCell(cell, 0x1000, sym_name.c_str())) {
+                                // _ZTV*: hucrenin KENDISI vtable olarak
+                                // dolduruldu; oyun [hedef] ile buraya ulasip
+                                // slotlari cagirabilir.
                             } else {
                                 *cell = 0; // guvenli varsayilan
                             }

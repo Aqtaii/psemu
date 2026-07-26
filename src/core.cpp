@@ -1950,6 +1950,19 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 }
                 *ss_ptr << std::dec;
             }
+            // CAGIRAN: vahsi dallanmalarda cokme adresi degil, ORAYA KIMIN
+            // gonderdigi onemli. [RSP] tipik olarak donus adresidir; modul
+            // icindeyse RVA olarak gosteriyoruz.
+            if (SafeReadable(reinterpret_cast<void*>(ctx->Rsp), 8)) {
+                const uint64_t ret = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                *ss_ptr << "\n[-] [RSP] = 0x" << std::hex << ret;
+                if (ret >= g_base_addr && ret < g_base_addr + g_module_size) {
+                    *ss_ptr << "  (RVA 0x" << (ret - g_base_addr) << ")  <- muhtemel cagiran";
+                } else {
+                    *ss_ptr << "  (modul DISI)";
+                }
+                *ss_ptr << std::dec;
+            }
             DumpPltTrace(*ss_ptr);
         }
         return *ss_ptr;
