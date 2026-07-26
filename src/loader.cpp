@@ -695,6 +695,46 @@ bool LoadEboot(const std::string& filePath) {
     // ==========================================
     // 6. Syscall Hooking (VEH Patching)
     // ==========================================
+    // ==========================================
+    // 5.9: KOD BUTUNLUGU DOGRULAMASI
+    // ==========================================
+    // Konum-bagimsiz PS5 binary'lerinde .text'e relocation UYGULANMAZ; tum
+    // duzeltmeler .data/.got'a gider. Dolayisiyla yukleme + relocation'dan
+    // sonra calistirilabilir segment dosyadaki HALIYLE BIREBIR AYNI olmalidir.
+    // Tek bir bayt farki bile bir hatadir - nitekim syscall taramasi tam olarak
+    // bunu yapiyordu (1539 bozulma) ve teshisi cok zor cokmeler uretiyordu.
+    // Bu kontrol o sinifi bir daha sessizce kacirmamamizi sagliyor.
+    for (int i = 0; i < header->e_phnum; ++i) {
+        Elf64_Phdr* ph = &phdrs[i];
+        if (ph->p_type != PT_LOAD || (ph->p_flags & PF_X) == 0 || ph->p_filesz == 0) continue;
+
+        size_t     src_off = ph->p_offset + elf_offset;
+        const auto sit2    = self_seg_offset.find(static_cast<uint32_t>(i));
+        if (sit2 != self_seg_offset.end()) src_off = static_cast<size_t>(sit2->second);
+        if (src_off + ph->p_filesz > static_cast<size_t>(size)) continue;
+
+        const uint8_t* mem  = base_ptr + ph->p_vaddr;
+        const uint8_t* file = buffer.data() + src_off;
+        size_t         diff = 0;
+        uint64_t       first_diff = 0;
+        for (size_t k = 0; k < ph->p_filesz; ++k) {
+            if (mem[k] != file[k]) {
+                if (diff == 0) first_diff = ph->p_vaddr + k;
+                diff++;
+            }
+        }
+        if (diff != 0) {
+            std::cout << "[-] UYARI: KOD BOZULMASI! vaddr=0x" << std::hex << ph->p_vaddr
+                      << " icinde " << std::dec << diff << " bayt dosyadan FARKLI (ilk fark RVA 0x"
+                      << std::hex << first_diff << std::dec
+                      << "). Calistirilabilir segmente relocation uygulanmamali!" << std::endl;
+        } else {
+            std::cout << "[+] Kod butunlugu OK: vaddr=0x" << std::hex << ph->p_vaddr
+                      << " (" << std::dec << ph->p_filesz << " bayt) dosyayla birebir ayni."
+                      << std::endl;
+        }
+    }
+
     // VARSAYILAN: KAPALI. Bu tarama KOD BOZUYORDU.
     //
     // Calistirilabilir segmentte gecen HER "0F 05" bayt cifti "CC 90"a

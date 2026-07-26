@@ -1803,6 +1803,22 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             if (code == 0xC00000FD) {
                 *ss_ptr << " [STACK OVERFLOW]";
             }
+            // RIP'teki baytlari HER cokme turunde dok. Eskiden yalnizca erisim
+            // ihlallerinde basiliyordu; oysa "gecersiz komut" (0xC000001D)
+            // hatalarinda bu bilgi daha da kritik - bellekteki kodun dosyadaki
+            // ile ayni olup olmadigini ancak boyle karsilastirabiliyoruz.
+            if (ctx->Rip >= g_base_addr && ctx->Rip < g_base_addr + g_module_size &&
+                SafeReadable(reinterpret_cast<void*>(ctx->Rip), 16)) {
+                const uint8_t* rb = reinterpret_cast<const uint8_t*>(ctx->Rip);
+                *ss_ptr << "\n[-] RIP baytlari (RVA 0x" << std::hex << (ctx->Rip - g_base_addr)
+                        << "): ";
+                for (int i = 0; i < 16; i++) {
+                    char b[4];
+                    snprintf(b, sizeof(b), "%02X ", rb[i]);
+                    *ss_ptr << b;
+                }
+                *ss_ptr << std::dec;
+            }
         }
         return *ss_ptr;
     };
@@ -2190,6 +2206,58 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                            << " RSI=0x" << ctx->Rsi << " RDX=0x" << ctx->Rdx << std::dec;
                 }
                 LOG_INFO(hle_ss.str());
+            }
+
+            // ========================================================
+            // puts / fputs - OYUNUN MESAJLARI - ZINCIRDEN ONCE
+            // ========================================================
+            // Astro Bot cokmeden hemen once puts cagiriyordu, yani bize bir sey
+            // SOYLUYOR. Stub'landigi icin mesaj kayboluyordu. Artik [GAME-LOG]
+            // olarak yaziyoruz - hata ayiklamada en degerli tek kaynak budur.
+            if (readable_name == "puts" || readable_name == "fputs") {
+                // puts(s): RDI=s | fputs(s, stream): RDI=s, RSI=stream
+                const std::string s = SafeReadCString(reinterpret_cast<const char*>(ctx->Rdi));
+                if (!s.empty()) LOG_INFO("[GAME-LOG] " + s);
+                ctx->Rax  = 0;
+                ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                ctx->Rsp += 8;
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+
+            // ========================================================
+            // sceSystemServiceParamGetInt - ZINCIRDEN ONCE
+            // ========================================================
+            // (param_id, int* out) -> sistem ayarini dondurur. Stub 0 donuyor
+            // AMA *out'a HICBIR SEY YAZMIYOR; oyun ilklenmemis bir degeri
+            // ayar sanip onunla dizi indeksliyor (olculdu: RDI=1 ile
+            // "mov rdx,[rdi+rcx*8]" -> adres 0x1'e erisim).
+            // Makul varsayilanlar yaziyoruz.
+            if (readable_name == "sceSystemServiceParamGetInt") {
+                const int32_t id  = static_cast<int32_t>(ctx->Rdi);
+                int32_t*      out = reinterpret_cast<int32_t*>(ctx->Rsi);
+                int32_t       val = 0;
+                switch (id) {
+                    case 1:  val = 1; break; // LANG: 1 = English (US)
+                    case 2:  val = 0; break; // DATE_FORMAT: YYYY/MM/DD
+                    case 3:  val = 0; break; // TIME_FORMAT: 24 saat
+                    case 4:  val = 0; break; // TIME_ZONE
+                    case 5:  val = 0; break; // SUMMERTIME
+                    case 7:  val = 0; break; // GAME_PARENTAL_LEVEL: kisitlama yok
+                    case 1000000: val = 0; break; // ENTER_BUTTON_ASSIGN: cross
+                    default: val = 0; break;
+                }
+                if (out != nullptr && SafeWritable(out, 4)) {
+                    *out = val;
+                }
+                static std::atomic<int> s_sp{0};
+                if (s_sp.fetch_add(1) < 12) {
+                    printf("[SYSPARAM] GetInt(id=%d) -> %d\n", id, val);
+                    fflush(stdout);
+                }
+                ctx->Rax  = 0;
+                ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                ctx->Rsp += 8;
+                return EXCEPTION_CONTINUE_EXECUTION;
             }
 
             // ========================================================
