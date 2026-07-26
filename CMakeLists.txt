@@ -1,5 +1,5 @@
-# ============================================================================
-# psemu — PS5 emulator (KytyPS5 GPU port entegrasyonu icin CMake build)
+﻿# ============================================================================
+# psemu â€” PS5 emulator (KytyPS5 GPU port entegrasyonu icin CMake build)
 # ----------------------------------------------------------------------------
 # Onceki build tek komuttu: cl /EHsc /std:c++17 src\*.cpp /I include.
 # Kyty'nin graphics'ini (Vulkan + spirv-tools + ~58k satir) eklemek icin
@@ -44,7 +44,7 @@ endif()
 
 # user32/gdi32 zaten video.cpp icinde #pragma comment(lib,...) ile linkleniyor;
 # yine de acikca belirtelim (CMake linkeri icin guvenli).
-target_link_libraries(loader PRIVATE user32 gdi32)
+target_link_libraries(loader PRIVATE user32 gdi32 winmm)  # winmm: timeBeginPeriod
 
 # --- Vulkan (SU AN sadece bulunabilirligi dogrulaniyor; henuz linklenmiyor) --
 # Kyty graphics eklenince target'a baglanacak. Baseline'i kirmamak icin simdi
@@ -53,7 +53,7 @@ find_package(Vulkan QUIET)
 if(Vulkan_FOUND)
     message(STATUS "[psemu] Vulkan bulundu: ${Vulkan_INCLUDE_DIRS}")
 else()
-    message(WARNING "[psemu] Vulkan bulunamadi — VULKAN_SDK ayarli mi?")
+    message(WARNING "[psemu] Vulkan bulunamadi â€” VULKAN_SDK ayarli mi?")
 endif()
 
 # --- GPU stack (KytyPS5 port, GPL-2.0) --------------------------------------

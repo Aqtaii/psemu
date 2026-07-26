@@ -1,4 +1,4 @@
-// psemu: SDL -> Win32.
+﻿// psemu: SDL -> Win32.
 #include <windows.h>
 #include "common/assert.h"
 #include "common/common.h"
@@ -424,9 +424,9 @@ PreparedFrame* WindowPrepareBlankFrame(CommandBuffer* buffer, uint32_t width, ui
 	return frame;
 }
 
-// psemu: adapter/screenshot.cpp'de tanimli — present edilen kareyi BMP kaydeder.
+// psemu: adapter/screenshot.cpp'de tanimli â€” present edilen kareyi BMP kaydeder.
 void PsemuCaptureFrame(GraphicContext* ctx, const VulkanImage* image);
-// psemu: adapter/metrics.cpp — canli performans metrikleri (pencere basligi).
+// psemu: adapter/metrics.cpp â€” canli performans metrikleri (pencere basligi).
 extern "C" void PsemuMetricAddPresent(uint64_t ticks);
 
 void WindowPresentFrame(PreparedFrame* frame) {

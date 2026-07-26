@@ -1,4 +1,4 @@
-// psemu: SDL -> Win32 (pencere + Vulkan surface). VK_USE_PLATFORM_WIN32_KHR
+﻿// psemu: SDL -> Win32 (pencere + Vulkan surface). VK_USE_PLATFORM_WIN32_KHR
 // gpu/CMakeLists'te global tanimli (vkCreateWin32SurfaceKHR tipleri icin).
 #include <windows.h>
 #include "common/assert.h"
@@ -1107,6 +1107,11 @@ void VulkanCreate(WindowContext* ctx) {
 	VulkanCreateQueues(&ctx->graphic_ctx, queues);
 	std::printf("[VK-MARK] CreateQueues OK; CreateSwapchain...\n"); std::fflush(stdout);
 
+	// NOT: uclu tamponlama (3 goruntu) DENENDI, OLCULEBILIR FAYDA VERMEDI.
+	// Beklenti, misafirin kare basina sceKernelWaitEqueue'de bekledigi ~35 ms'i
+	// dusurmekti; sonuc FPS 9.5-11.1 ve bekleme 44 ms/cagri oldu (yani daha iyi
+	// degil). Demek ki darbogaz swapchain goruntu sayisi degil, flip-done
+	// olayini misafire ne zaman ilettigimiz.
 	ctx->swapchain = VulkanCreateSwapchain(&ctx->graphic_ctx, 2);
 	std::printf("[VK-MARK] CreateSwapchain OK; VulkanCreate BITTI\n"); std::fflush(stdout);
 	RenderDocSetActiveWindow(ctx->graphic_ctx.instance, ctx->window);

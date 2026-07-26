@@ -25,6 +25,7 @@
 #include "libs/controller.h"
 #include "libs/padData.h"
 #include <immintrin.h>
+#include <timeapi.h>  // timeBeginPeriod: Sleep granulerligi
 
 extern "C" void PsemuMarkCpuModified(uint64_t vaddr, uint64_t size);
 // Performans metrikleri (gpu/adapter/metrics.cpp) - pencere basliginda gosterilir.
@@ -1421,29 +1422,42 @@ static const std::string* g_plt_fn_cache[kPltCacheMax] = {};
 static const std::string* g_plt_rn_cache[kPltCacheMax] = {};
 static std::atomic<uint32_t> g_plt_counts[kPltCacheMax];
 static std::atomic<uint64_t> g_plt_cycles[kPltCacheMax];
+// Kare suresinin nereye gittigini bulmak icin: YALNIZCA oyun thread'inde ve
+// DUVAR SAATIYLE (QPC) olculen sure. CPU dongusu yetmiyor cunku bloklayan
+// cagrilar (uyku/bekleme) dongu harcamaz ama kareyi yer.
+static std::atomic<uint64_t> g_plt_wall[kPltCacheMax];
+static DWORD                 g_game_tid = 0;
 
 // Saniyede on binlerce PLT cagrisi var; HANGI fonksiyonlar oldugunu bilmeden
 // optimize etmek tahmindir. Periyodik olarak en sicak 15'ini dok.
 extern "C" void PsemuDumpPltTop() {
     static uint32_t s_prev_n[kPltCacheMax] = {};
     static uint64_t s_prev_c[kPltCacheMax] = {};
-    struct Row { uint32_t idx, calls; uint64_t cyc; };
+    static uint64_t s_prev_w[kPltCacheMax] = {};
+    struct Row { uint32_t idx, calls; uint64_t cyc, wall; };
     Row top[12] = {};
+    uint64_t total_wall = 0;
     for (uint32_t i = 0; i < kPltCacheMax; i++) {
         const uint32_t n_now = g_plt_counts[i].load(std::memory_order_relaxed);
         const uint64_t c_now = g_plt_cycles[i].load(std::memory_order_relaxed);
+        const uint64_t w_now = g_plt_wall[i].load(std::memory_order_relaxed);
         const uint32_t dn = n_now - s_prev_n[i];
         const uint64_t dc = c_now - s_prev_c[i];
+        const uint64_t dw = w_now - s_prev_w[i];
         s_prev_n[i] = n_now;
         s_prev_c[i] = c_now;
+        s_prev_w[i] = w_now;
+        total_wall += dw;
         if (dn == 0) continue;
         // CAGRI SAYISINA gore sirala. Dongu sutunu bilgi amacli duruyor ama
         // guvenilir degil (QueryThreadCycleTime baglam degisiminde sacmaliyor);
         // oysa her cagri bir exception turu demek, yani sayim = maliyet.
+        // OYUN THREAD'INDEKI DUVAR SAATINE gore sirala: kare suresini yiyen sey
+        // budur (bloklayan cagrilar dongu harcamaz ama kareyi yer).
         for (int k = 0; k < 12; k++) {
-            if (dn > top[k].calls) {
+            if (dw > top[k].wall) {
                 for (int m = 11; m > k; m--) top[m] = top[m - 1];
-                top[k] = Row{i, dn, dc};
+                top[k] = Row{i, dn, dc, dw};
                 break;
             }
         }
@@ -1466,15 +1480,19 @@ extern "C" void PsemuDumpPltTop() {
         pv = v;
         pn = nn;
     }
-    printf("[PLT-TOP] CPU'yu en cok yakan PLT cagrilari (son aralik):\n");
+    LARGE_INTEGER qf;
+    QueryPerformanceFrequency(&qf);
+    const double ms_per_tick = 1000.0 / static_cast<double>(qf.QuadPart);
+    printf("[PLT-TOP] OYUN THREAD'inde HLE icinde gecen sure (son aralik, toplam %.0f ms):\n",
+           static_cast<double>(total_wall) * ms_per_tick);
     for (int k = 0; k < 12 && top[k].calls > 0; k++) {
         const std::string* rn = g_plt_rn_cache[top[k].idx];
         const std::string* fn = g_plt_fn_cache[top[k].idx];
         const char* nm = (rn && !rn->empty()) ? rn->c_str() : (fn ? fn->c_str() : "?");
-        const double mcyc = static_cast<double>(top[k].cyc) / 1e6;
-        const double per  = top[k].calls ? static_cast<double>(top[k].cyc) / top[k].calls : 0.0;
-        printf("   %8.1f Mdongu  %6u cagri  %8.0f dongu/cagri  PLT#%u %s\n",
-               mcyc, top[k].calls, per, top[k].idx, nm);
+        printf("   %8.1f ms  %6u cagri  %7.3f ms/cagri  PLT#%u %s\n",
+               static_cast<double>(top[k].wall) * ms_per_tick, top[k].calls,
+               top[k].calls ? static_cast<double>(top[k].wall) * ms_per_tick / top[k].calls : 0.0,
+               top[k].idx, nm);
     }
     fflush(stdout);
 }
@@ -1883,15 +1901,29 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             // bloklanan/uyuyan sure sayilmaz, sadece yakilan CPU). Boylece
             // "en cok cagrilan" degil "en cok CPU yiyen" fonksiyonu goruyoruz.
             struct PltTimer {
-                ULONG64 c0; uint32_t idx;
+                ULONG64       c0;
+                LARGE_INTEGER w0;
+                uint32_t      idx;
+                bool          is_game;
                 explicit PltTimer(uint32_t i) : c0(0), idx(i) {
+                    is_game = (g_game_tid != 0 && GetCurrentThreadId() == g_game_tid);
                     QueryThreadCycleTime(GetCurrentThread(), &c0);
+                    if (is_game) QueryPerformanceCounter(&w0);
                 }
                 ~PltTimer() {
+                    if (idx >= kPltCacheMax) return;
                     ULONG64 c1 = 0;
-                    if (idx < kPltCacheMax && QueryThreadCycleTime(GetCurrentThread(), &c1) &&
-                        c1 > c0) {
+                    if (QueryThreadCycleTime(GetCurrentThread(), &c1) && c1 > c0) {
                         g_plt_cycles[idx].fetch_add(c1 - c0, std::memory_order_relaxed);
+                    }
+                    if (is_game) {
+                        LARGE_INTEGER w1;
+                        QueryPerformanceCounter(&w1);
+                        if (w1.QuadPart > w0.QuadPart) {
+                            g_plt_wall[idx].fetch_add(
+                                static_cast<uint64_t>(w1.QuadPart - w0.QuadPart),
+                                std::memory_order_relaxed);
+                        }
                     }
                 }
             } plt_timer(plt_index);
@@ -1899,6 +1931,13 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             static const std::string  s_empty_name;
             if (plt_index < kPltCacheMax) {
                 g_plt_counts[plt_index].fetch_add(1, std::memory_order_relaxed);
+            }
+            // Kareyi SUREN thread'i tespit et: flip'i kim cagiriyorsa odur.
+            // ExecutionThread degil (olculdu: orada HLE icinde 0 ms geciyor) -
+            // C2 dongusu oyunun kendi olusturdugu bir pthread'de calisiyor.
+            if (g_plt_rn_cache[plt_index] != nullptr &&
+                g_plt_rn_cache[plt_index]->find("Flip") != std::string::npos) {
+                g_game_tid = GetCurrentThreadId();
             }
             static std::deque<std::string> s_interned; // UNKNOWN_PLT_* kalici depo
             static std::mutex s_intern_mutex;
@@ -2088,6 +2127,51 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                            << " RSI=0x" << ctx->Rsi << " RDX=0x" << ctx->Rdx << std::dec;
                 }
                 LOG_INFO(hle_ss.str());
+            }
+
+            // ========================================================
+            // sceKernelUsleep - ZINCIRDEN ONCE (hassas uyku)
+            // ========================================================
+            // Kare suresi 64-67 ms ve tam 4 vblank katina kilitli; VEH ise
+            // yalnizca ~7 ms/kare. Geri kalan sure UYKUDA gecmis olmali:
+            // bu fonksiyon saniyede ~660 kez cagriliyor (kare basina ~44).
+            // Eski hal Sleep(us/1000, en az 1) idi. Windows'ta varsayilan
+            // zamanlayici cozunurlugu 15.6 ms'dir, yani Sleep(1) GERCEKTE
+            // ~15 ms uyur. Kare basina birkac tanesi bile butun kareyi yer.
+            //
+            // Cozum: yuksek cozunurluklu bekleme zamanlayicisi (100 ns
+            // birimli, thread'e ozel). CPU yakmaz, Sleep'in granulerligine
+            // takilmaz. Desteklenmiyorsa Sleep'e duseriz.
+            if (readable_name == "sceKernelUsleep" || readable_name == "usleep") {
+                const uint64_t us = ctx->Rdi;
+
+                static std::atomic<uint64_t> s_us_calls{0};
+                static std::atomic<uint64_t> s_us_total{0};
+                s_us_calls.fetch_add(1, std::memory_order_relaxed);
+                s_us_total.fetch_add(us, std::memory_order_relaxed);
+                const uint64_t uc = s_us_calls.load(std::memory_order_relaxed);
+                if (uc <= 8 || (uc % 3000ull) == 0) {
+                    printf("[USLEEP] #%llu istenen=%llu us (ortalama %llu us)\n",
+                           static_cast<unsigned long long>(uc),
+                           static_cast<unsigned long long>(us),
+                           static_cast<unsigned long long>(
+                               s_us_total.load(std::memory_order_relaxed) / uc));
+                    fflush(stdout);
+                }
+
+                // Hassas (yuksek cozunurluklu) uyku DENENDI, FPS'i DUSURDU -
+                // bkz. yukaridaki not. Eski davranista kaliyoruz.
+                if (us == 0) {
+                    SwitchToThread();
+                } else {
+                    const DWORD ms = static_cast<DWORD>(us / 1000);
+                    Sleep(ms != 0 ? ms : 1);
+                }
+
+                ctx->Rax  = 0;
+                ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                ctx->Rsp += 8;
+                return EXCEPTION_CONTINUE_EXECUTION;
             }
 
             // ========================================================
@@ -4084,6 +4168,15 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     if (num == 0 || num > 4096) num = 256; // makul degilse grain varsay
                     DWORD ms = static_cast<DWORD>((static_cast<uint64_t>(num) * 1000ull) / 48000ull);
                     if (ms == 0) ms = 1;
+                    // TANI: bu bloklayan uyku HANGI thread'de? Oyun thread'inde
+                    // ise kare basina ~14 cagri x 5.3 ms = butun kareyi yer.
+                    static std::atomic<uint64_t> s_ao{0};
+                    const uint64_t an = s_ao.fetch_add(1) + 1;
+                    if (an <= 4 || (an % 1500ull) == 0) {
+                        printf("[AUDIO] #%llu TID=%lu num=%u uyku=%lu ms\n",
+                               static_cast<unsigned long long>(an), GetCurrentThreadId(), num, ms);
+                        fflush(stdout);
+                    }
                     Sleep(ms);
                     ctx->Rax = num; // yazilan ornek sayisi
                 }
@@ -5178,6 +5271,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
 }
 
 DWORD WINAPI Core::ExecutionThread(LPVOID lpParam) {
+    g_game_tid = GetCurrentThreadId(); // PLT-TOP duvar saati olcumu icin
     // TLS blogunu/TEB slotunu misafir koda girmeden hazirla: fs:[0] komutlari
     // yamalandiktan sonra artik fault etmiyor, yani tembel kurulum yetmez.
     GetThreadTlsBase();
@@ -5588,6 +5682,14 @@ void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t tex
     // fs:[0] hizli yolu icin Windows TLS slotunu VEH'ten ONCE ayir: VEH
     // icinde TlsAlloc gibi kilit alan is yapmiyoruz.
     PsemuInitTlsFastPath();
+
+    // DENENDI VE GERI ALINDI: timeBeginPeriod(1) + usleep icin yuksek
+    // cozunurluklu bekleme zamanlayicisi. Beklenti kare suresini dusurmekti;
+    // OLCUM TERSINI SOYLEDI: FPS 15 -> 11-13'e dustu ve PLT hizi da dustu
+    // (39-40k -> 29-37k/sn), yani sistem topluca yavasladi. Oyunun usleep
+    // istekleri zaten hep tam 1000 us ve cagri sayisi degismedi; uykuyu
+    // kisaltmak kareyi hizlandirmadi, muhtemelen o thread'i daha sik uyandirip
+    // oyun thread'inden CPU caldi.
 
     // YUKLEME PROFILI: PLT-TOP dokumu eskiden yalnizca present yolundan
     // cagriliyordu, yani ancak render basladiktan SONRA veri veriyordu. Oysa
