@@ -1184,6 +1184,9 @@ static uint64_t g_initcall_n     = 0;   // kacinci ilklendirici
 static uint64_t g_initcall_last  = 0;   // en son cagrilan ilklendiricinin RVA'si
 static uint64_t g_initcall_cursor = 0;  // yuruyucunun imleci (RVA)
 static bool     g_initcall_verbose = false; // PSEMU_INIT_TRACE_LOG=1
+static uint64_t g_initcall_r15   = 0;   // callee-saved izleme
+static uint64_t g_initcall_r14   = 0;
+static uint64_t g_initcall_prev  = 0;   // bir onceki ilklendiricinin RVA'si
 
 // ---------------------------------------------------------------------------
 // PROLOGUE BREAKPOINT'i  (PSEMU_BP=<rva>, virgulle en fazla 4 tane)
@@ -1197,6 +1200,23 @@ static uint64_t g_bp_addr[4] = {0, 0, 0, 0};
 static int      g_bp_count = 0;
 static int      g_bp_hits[4] = {0, 0, 0, 0};
 static const int kBpLogLimit = 8;   // her breakpoint icin en fazla bu kadar log
+
+// ---------------------------------------------------------------------------
+// TEK ADIM IZLEME  (PSEMU_TRACE_FROM=<rva>)
+//
+// Verilen fonksiyona girildiginde TF (trap flag) kurulur; ondan sonraki her
+// komutun RIP'i halka tamponuna yazilir (LOG YOK - her adimda log yazmak
+// isi tamamen durdurur). Cokme aninda son kTraceRing adres dokulur; boylece
+// "RIP nereden bu cop adrese atladi" sorusu KESIN olarak cevaplanir.
+// Adim siniri asilirsa izleme kendini kapatir (oyun donmasin).
+// ---------------------------------------------------------------------------
+static const int kTraceRing = 64;
+static uint64_t  g_trace_from   = 0;     // izlemeyi baslatan fonksiyonun adresi
+static bool      g_trace_active = false;
+static uint64_t  g_trace_ring[kTraceRing] = {0};
+static uint64_t  g_trace_pos    = 0;
+static uint64_t  g_trace_steps  = 0;
+static uint64_t  g_trace_max    = 3000000; // PSEMU_TRACE_MAX ile degistirilebilir
 
 static void ArmWatchpoint() {
     if (g_watch_page == nullptr) return;
@@ -1771,6 +1791,24 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         // Varsayilan olarak SESSIZ: VEH icinden her girdide log yazmak
         // logger kilidi uzerinden kilitlenmeye yol aciyor. Sayaclar cokme
         // dokumunde basiliyor; ayrintili iz icin PSEMU_INIT_TRACE_LOG=1.
+        // r15/r14 SysV'de callee-saved. module_start bunlarda argv/argc
+        // tasiyor; hangi ilklendiricinin bozdugunu yakalamak icin her
+        // girdide degisimi kontrol ediyoruz (tek karsilastirma, ucuz).
+        if (n == 1) {
+            g_initcall_r15 = ctx->R15;
+            g_initcall_r14 = ctx->R14;
+        } else if (ctx->R15 != g_initcall_r15 || ctx->R14 != g_initcall_r14) {
+            std::stringstream cs;
+            cs << "[INIT-CLOBBER] #" << std::dec << (n - 1) << " (RVA 0x"
+               << std::hex << g_initcall_prev << ") callee-saved bozdu: "
+               << "R15 0x" << g_initcall_r15 << " -> 0x" << ctx->R15
+               << " | R14 0x" << g_initcall_r14 << " -> 0x" << ctx->R14;
+            LOG_ERROR(cs.str());
+            g_initcall_r15 = ctx->R15;
+            g_initcall_r14 = ctx->R14;
+        }
+        g_initcall_prev = g_initcall_last;
+
         if (g_initcall_verbose) {
             std::stringstream is;
             is << "[INIT#" << std::dec << n << "] RVA 0x" << std::hex << g_initcall_last
@@ -1799,15 +1837,36 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                    << "\n     RDI=0x" << ctx->Rdi << " RSI=0x" << ctx->Rsi
                    << " RDX=0x" << ctx->Rdx << " RCX=0x" << ctx->Rcx
                    << " R8=0x" << ctx->R8 << " R9=0x" << ctx->R9
-                   << " RAX=0x" << ctx->Rax;
+                   << " RAX=0x" << ctx->Rax
+                   << "\n     [callee-saved] RBX=0x" << ctx->Rbx << " RBP=0x" << ctx->Rbp
+                   << " R12=0x" << ctx->R12 << " R13=0x" << ctx->R13
+                   << " R14=0x" << ctx->R14 << " R15=0x" << ctx->R15
+                   << " RSP=0x" << ctx->Rsp;
                 LOG_INFO(bs.str());
             }
             // "push rbp"yi elde canlandir
             ctx->Rsp -= 8;
             *reinterpret_cast<uint64_t*>(ctx->Rsp) = ctx->Rbp;
             ctx->Rip = g_bp_addr[i] + 1;
+            if (g_trace_from != 0 && g_bp_addr[i] == g_trace_from && !g_trace_active) {
+                g_trace_active = true;
+                ctx->EFlags |= 0x100; // TF
+                LOG_INFO("[TRACE] tek adim izleme basladi.");
+            }
             return EXCEPTION_CONTINUE_EXECUTION;
         }
+    }
+
+    // Tek adim izleme: sadece RIP'i kaydet, TF'i kurulu tut.
+    if (code == EXCEPTION_SINGLE_STEP && g_trace_active) {
+        g_trace_ring[g_trace_pos++ % kTraceRing] = ctx->Rip;
+        if (++g_trace_steps >= g_trace_max) {
+            g_trace_active = false;
+            ctx->EFlags &= ~0x100;
+        } else {
+            ctx->EFlags |= 0x100;
+        }
+        return EXCEPTION_CONTINUE_EXECUTION;
     }
 
     if (code == EXCEPTION_SINGLE_STEP && g_diag_bp_pending) {
@@ -6088,6 +6147,18 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         }
     }
 
+    if (g_trace_steps != 0) {
+        ss_init() << "\n[-] [TRACE] son " << std::dec
+                  << (g_trace_pos < (uint64_t)kTraceRing ? g_trace_pos : (uint64_t)kTraceRing)
+                  << " komut (toplam " << g_trace_steps << " adim), RVA olarak:\n[-]  ";
+        uint64_t cnt = g_trace_pos < (uint64_t)kTraceRing ? g_trace_pos : (uint64_t)kTraceRing;
+        for (uint64_t i = 0; i < cnt; i++) {
+            uint64_t v = g_trace_ring[(g_trace_pos - cnt + i) % kTraceRing];
+            ss_init() << " 0x" << std::hex << (v - g_base_addr);
+            if ((i % 8) == 7) ss_init() << "\n[-]  ";
+        }
+    }
+
     if (g_initcall_addr != 0) {
         ss_init() << "\n[-] [INIT-TRACE] son calisan .init_array girdisi: #"
                   << std::dec << g_initcall_n << " RVA 0x" << std::hex << g_initcall_last
@@ -6666,6 +6737,22 @@ void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t tex
                 LOG_ERROR(bs.str());
             }
             s = (*end == ',') ? end + 1 : end;
+        }
+    }
+
+    // Tek adim izleme: PSEMU_TRACE_FROM=<rva> (o RVA ayrica PSEMU_BP'de olmali)
+    if (const char* tf = std::getenv("PSEMU_TRACE_FROM")) {
+        uint64_t rva = std::strtoull(tf, nullptr, 0);
+        if (rva != 0) {
+            g_trace_from = base_addr + rva;
+            if (const char* tm = std::getenv("PSEMU_TRACE_MAX"))
+                g_trace_max = std::strtoull(tm, nullptr, 0);
+            bool armed = false;
+            for (int i = 0; i < g_bp_count; i++)
+                if (g_bp_addr[i] == g_trace_from) armed = true;
+            if (!armed)
+                LOG_ERROR("[TRACE] UYARI: PSEMU_TRACE_FROM icin PSEMU_BP'de ayni "
+                          "RVA yok, izleme baslamayacak.");
         }
     }
 

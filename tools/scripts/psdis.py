@@ -51,6 +51,22 @@ if arg3 == "-back":
     start = rva - 0x400 + p
     print(f"fonksiyon basi (tahmin): RVA 0x{start:x}   [+0x{rva - start:x}]")
     rva, n = start, (rva - start) + 48
+elif arg3 == "-func":
+    # Fonksiyon basini int3 DOLGUSUNDAN bul: clang bu ikilide fonksiyonlar
+    # arasini 0xCC ile dolduruyor, yani >=4 ardisik 0xCC'nin hemen ardi
+    # bir fonksiyon basidir. Prologue kalibina guvenmekten cok daha saglam.
+    lo = v2f(rva - 0x2000)
+    hi = v2f(rva)
+    blob = data[lo:hi]
+    p = blob.rfind(b"\xcc\xcc\xcc\xcc")
+    if p < 0:
+        print("0x2000 bayt geriye dogru int3 dolgusu bulunamadi")
+        sys.exit(1)
+    while p + 4 < len(blob) and blob[p + 4] == 0xCC:
+        p += 1
+    start = rva - 0x2000 + p + 4
+    print(f"fonksiyon basi: RVA 0x{start:x}   [hedef +0x{rva - start:x}]")
+    rva, n = start, (rva - start) + 32
 elif arg3 == "-ret":
     # rva bir DONUS adresi: hizalamayi deneme-yanilma ile bul, cagri komutunu goster.
     best = None
