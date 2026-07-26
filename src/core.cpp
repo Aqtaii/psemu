@@ -934,20 +934,50 @@ static uint32_t g_teb_slot_off = 0; // 0 => yama devre disi, VEH yolu kullanilir
 // TlsAlloc gibi kilit alan is yapmak istemiyoruz.
 void PsemuInitTlsFastPath() {
     if (g_teb_slot_off != 0) return;
-    // A/B testi icin kapatilabilir: PSEMU_TLS_PATCH=0 -> eski VEH yolu.
-    if (const char* e = getenv("PSEMU_TLS_PATCH")) {
-        if (e[0] == '0') {
-            printf("[TLS] Hizli yol KAPALI (PSEMU_TLS_PATCH=0) - her fs:[0] VEH'e dusecek\n");
-            fflush(stdout);
-            return;
-        }
+    // VARSAYILAN: KAPALI.
+    // Bu yama TLS fault'larini binlerce/sn'den ~0'a indiriyor AMA olculdu ki
+    // oyunu kararsizlastiriyor: 5 kosunun 5'i T+11-22 arasinda cokuyor
+    // (READ @ 0x0 / kanonik olmayan adres), kapaliyken 5/5 sorunsuz boot
+    // ediyor. Bos TEB slotu hipotezi test edildi ve ELENDI (slot garantisi +
+    // her thread icin TLS geri cagrisi eklendi, yine 5/5 coktu). Kalan en
+    // guclu aciklama: calisan kodu diger cekirdekler o komutu isletirken
+    // degistirmek (cross-modifying code) x86'da senkronizasyon gerektirir.
+    // Dogru cozum muhtemelen yamayi ONCEDEN, misafir thread'leri baslamadan
+    // statik taramayla uygulamak. O yapilana kadar varsayilan kapali.
+    // Acmak icin: PSEMU_TLS_PATCH=1
+    const char* e = getenv("PSEMU_TLS_PATCH");
+    if (e == nullptr || e[0] == '0') {
+        printf("[TLS] Hizli yol KAPALI (varsayilan; PSEMU_TLS_PATCH=1 ile acilir) - "
+               "her fs:[0] VEH'e dusecek\n");
+        fflush(stdout);
+        return;
     }
     DWORD s = TlsAlloc();
     if (s == TLS_OUT_OF_INDEXES) return;
     if (s < 64) { // >= 64 ise TlsExpansionSlots'a taser; sabit TEB ofseti olmaz
+        // KENDI KENDINI TEST: TEB.TlsSlots ofsetinin (0x1480) bu Windows
+        // surumunde gercekten dogru oldugunu VARSAYMAK yerine dogruluyoruz.
+        // Yanlis olsaydi yamali komutlar TEB'in baska bir alanini okur ve
+        // tesadufi cop degerler uretirdi - teshis edilmesi cok zor bir hata.
+        const uint32_t off = kTebTlsSlotsOffset + 8u * s;
+        const uint64_t magic = 0x5053454D55544C53ull; // "PSEMUTLS"
+        TlsSetValue(s, reinterpret_cast<void*>(magic));
+        uint64_t read_back = 0;
+        __asm__ volatile("movq %%gs:(%1), %0" : "=r"(read_back) : "r"(static_cast<uint64_t>(off)));
+        TlsSetValue(s, nullptr);
+        if (read_back != magic) {
+            TlsFree(s);
+            printf("[TLS] Hizli yol KAPALI: gs:[0x%x] TlsSetValue ile uyusmuyor "
+                   "(okunan 0x%llx, beklenen 0x%llx) - TEB duzeni farkli\n",
+                   off, static_cast<unsigned long long>(read_back),
+                   static_cast<unsigned long long>(magic));
+            fflush(stdout);
+            return;
+        }
         g_win_tls_slot = s;
-        g_teb_slot_off = kTebTlsSlotsOffset + 8u * s;
-        printf("[TLS] Hizli yol etkin: fs:[0] -> gs:[0x%x] (TLS slot %lu)\n", g_teb_slot_off, s);
+        g_teb_slot_off = off;
+        printf("[TLS] Hizli yol etkin: fs:[0] -> gs:[0x%x] (TLS slot %lu, dogrulandi)\n",
+               g_teb_slot_off, s);
     } else {
         TlsFree(s);
         printf("[TLS] Hizli yol KAPALI: TlsAlloc slot %lu >= 64\n", s);
@@ -965,9 +995,6 @@ static uint64_t GetThreadTlsBase() {
             // Yamalanmis komutlarin okudugu yer: bu thread'in TEB slotu.
             // Yama fault uretmedigi icin slot, thread guest koda girmeden
             // DOLU olmak zorunda (bkz. GamePthreadProc / GuestSortThread).
-            if (g_teb_slot_off != 0) {
-                TlsSetValue(g_win_tls_slot, reinterpret_cast<void*>(t_tp));
-            }
             static volatile LONG s_n = 0;
             LONG n = InterlockedIncrement(&s_n);
             if (n <= 8) {
@@ -977,8 +1004,33 @@ static uint64_t GetThreadTlsBase() {
             }
         }
     }
+    // Slot HER cagride garantiye alinir. Yamali komut dogrudan TEB slotunu
+    // okur; slot bossa thread pointer 0 cikar ve o thread'in TUM TLS erisimleri
+    // cop adrese gider. (Olculdu: yama acikken 5 kosunun 5'i T+13-20 arasinda
+    // coktu; kapaliyken 5/5 boot etti.) Ayrica hizli yol, blok yaratildiktan
+    // SONRA etkinlesmis olabilir - o durumda ilk kurulumda slot yazilmamis olur.
+    if (t_tp != 0 && g_teb_slot_off != 0 && TlsGetValue(g_win_tls_slot) == nullptr) {
+        TlsSetValue(g_win_tls_slot, reinterpret_cast<void*>(t_tp));
+    }
     return t_tp;
 }
+
+// HICBIR THREAD ATLANMASIN: Windows bu geri cagriyi surecte olusan HER thread
+// icin calistirir. Boylece guest koda girecek bir thread'in TEB slotu, o thread
+// daha ilk komutunu isletmeden dolmus olur. Elle ekledigimiz giris noktalari
+// (ExecutionThread/GamePthreadProc/GuestSortThread) yeterli DEGILDI: Kyty'nin
+// kendi thread'leri de guest geri cagrilarini isletebiliyor.
+static void NTAPI PsemuThreadAttachTls(PVOID, DWORD reason, PVOID) {
+    if (reason == DLL_THREAD_ATTACH || reason == DLL_PROCESS_ATTACH) {
+        if (g_teb_slot_off != 0) {
+            GetThreadTlsBase();
+        }
+    }
+}
+
+#pragma comment(linker, "/INCLUDE:_tls_used")
+#pragma section(".CRT$XLB", long, read)
+extern "C" __declspec(allocate(".CRT$XLB")) PIMAGE_TLS_CALLBACK psemu_tls_cb = PsemuThreadAttachTls;
 
 // (fs: komut yamasi TryPatchFsMov, DecodeFsMov'un hemen ardinda tanimli.)
 
@@ -2036,6 +2088,102 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                            << " RSI=0x" << ctx->Rsi << " RDX=0x" << ctx->Rdx << std::dec;
                 }
                 LOG_INFO(hle_ss.str());
+            }
+
+            // ========================================================
+            // __dynamic_cast - ZINCIRDEN ONCE
+            // ========================================================
+            // KARARSIZLIGIN KAYNAGI. Bu fonksiyonun HIC karsiligi yoktu; zincirin
+            // sonundaki varsayilan stub'a dusup RAX=0 donuyordu, yani oyundaki
+            // HER dynamic_cast nullptr aliyordu. Olcum: 6 kosunun 5'i T+13-17
+            // arasinda "READ violation @ 0x0" ile coktu ve ucunde de cokmeden
+            // hemen onceki baskin cagri __dynamic_cast'ti. (Kalan biri ayni
+            // yerde takildi.)
+            //
+            // Itanium C++ ABI:
+            //   void* __dynamic_cast(const void* sub, const __class_type_info* src,
+            //                        const __class_type_info* dst, ptrdiff_t src2dst)
+            // SysV: RDI=sub, RSI=src, RDX=dst, RCX=src2dst
+            //
+            // Nesnenin GERCEK tipi vtable'dan okunur:
+            //   vptr          = *(void**)sub
+            //   offset_to_top = *(int64*)(vptr - 16)
+            //   typeinfo      = *(void**)(vptr - 8)
+            // Tam nesne = sub + offset_to_top.
+            //
+            // src2dst >= 0 ise "dst, src'nin tekil public non-virtual tabani"
+            // demektir ve sonuc sub - src2dst olur (libc++abi'nin hizli yolu).
+            // Tam hiyerarsi yurumesi (coklu/sanal kalitim) YAPILMIYOR; o
+            // durumlarda 0 donuyoruz - yani eski davranis, daha kotusu degil.
+            if (readable_name == "__dynamic_cast") {
+                const uint64_t  sub     = ctx->Rdi;
+                const uint64_t  dst_ti  = ctx->Rdx;
+                const int64_t   s2d     = static_cast<int64_t>(ctx->Rcx);
+                uint64_t        result  = 0;
+                const char*     karar   = "null";
+
+                if (sub != 0 && SafeReadable(reinterpret_cast<void*>(sub), 8)) {
+                    const uint64_t vptr = *reinterpret_cast<uint64_t*>(sub);
+                    if (vptr >= 16 && SafeReadable(reinterpret_cast<void*>(vptr - 16), 16)) {
+                        const int64_t  off_to_top = *reinterpret_cast<int64_t*>(vptr - 16);
+                        const uint64_t obj_ti     = *reinterpret_cast<uint64_t*>(vptr - 8);
+                        if (obj_ti == dst_ti) {
+                            result = static_cast<uint64_t>(static_cast<int64_t>(sub) + off_to_top);
+                            karar  = "tam-tip";
+                        } else if (s2d >= 0) {
+                            // src2dst >= 0 "cast BASARILIYSA ofset budur" demek;
+                            // "basarilidir" DEMEK DEGIL. Ilk surumde bunu ipucuna
+                            // bakip dogrudan dondurmustum: nesnenin gercek tipi
+                            // hedefle ilgisiz oldugunda oyuna GECERSIZ isaretci
+                            // gidiyordu (olculdu: R15 = 0x56415741e5894855, yani
+                            // bir fonksiyon prologu bayt dizisi -> kanonik olmayan
+                            // adres -> "READ @ 0xffffffffffffffff").
+                            // Bu yuzden dst_ti'nin gercekten bir taban olup
+                            // olmadigini DOGRULUYORUZ: tek-kalitim zincirini yuru.
+                            // __si_class_type_info duzeni: [vptr][name][__base_type]
+                            uint64_t ti = obj_ti;
+                            bool     ok = false;
+                            for (int depth = 0; depth < 16; depth++) {
+                                if (ti == dst_ti) { ok = true; break; }
+                                if (!SafeReadable(reinterpret_cast<void*>(ti + 16), 8)) break;
+                                const uint64_t base = *reinterpret_cast<uint64_t*>(ti + 16);
+                                if (base == 0 || !SafeReadable(reinterpret_cast<void*>(base), 16))
+                                    break;
+                                // Taban gercekten bir type_info mi? Adi okunabilir
+                                // bir mangled ASCII string olmali; degilse +16
+                                // alani taban degil, alakasiz bellek demektir.
+                                const uint64_t nm = *reinterpret_cast<uint64_t*>(base + 8);
+                                if (nm == 0 || !SafeReadable(reinterpret_cast<void*>(nm), 1)) break;
+                                const char c0 = *reinterpret_cast<char*>(nm);
+                                if (c0 < 0x20 || c0 >= 0x7f) break;
+                                ti = base;
+                            }
+                            if (ok) {
+                                result = static_cast<uint64_t>(static_cast<int64_t>(sub) - s2d);
+                                karar  = "taban-dogrulandi";
+                            } else {
+                                karar = "null(taban-degil)";
+                            }
+                        }
+                    }
+                }
+
+                static std::atomic<uint64_t> s_dc{0};
+                const uint64_t dc = s_dc.fetch_add(1) + 1;
+                if (dc <= 8 || (dc % 2000ull) == 0) {
+                    printf("[DYNCAST] #%llu sub=0x%llx dst_ti=0x%llx src2dst=%lld -> 0x%llx (%s)\n",
+                           static_cast<unsigned long long>(dc),
+                           static_cast<unsigned long long>(sub),
+                           static_cast<unsigned long long>(dst_ti),
+                           static_cast<long long>(s2d),
+                           static_cast<unsigned long long>(result), karar);
+                    fflush(stdout);
+                }
+
+                ctx->Rax  = result;
+                ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp); // RET simulasyonu
+                ctx->Rsp += 8;
+                return EXCEPTION_CONTINUE_EXECUTION;
             }
 
             // ========================================================
