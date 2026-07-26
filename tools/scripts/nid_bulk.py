@@ -182,8 +182,39 @@ for f in ("HeapGetTraceInfo", "MspaceCreate", "MspaceDestroy", "MspaceMalloc",
           "HeapGetAddressRanges", "HeapSetTraceInfo", "HeapUnsetTraceInfo"):
     cands.add("sceLibc" + f)
 
-hits, misses = [], []
+# ---- indirilen topluluk veritabanlari (varsa) ------------------------------
+# tools/nid_db/ gitignore'da: lisansi belirsiz, repoya girmiyor. Cozulen isimler
+# nids.h'ye BIZIM satirlarimiz olarak yaziliyor, veritabanini tasimaya gerek yok.
+#   known_names.txt : satir basina bir isim -> NID'i biz hesapliyoruz
+#   aerolib.csv     : "NID isim" -> hazir eslesme, hash'e hic gerek yok
+import os
+
 table = {}
+db_direct = 0
+try:
+    with open("tools/nid_db/aerolib.csv", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            parts = line.split()
+            if len(parts) >= 2 and len(parts[0]) == 11:
+                table.setdefault(parts[0], parts[1])
+                db_direct += 1
+except OSError:
+    pass
+
+db_names = 0
+try:
+    with open("tools/nid_db/known_names.txt", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            n = line.strip()
+            if n:
+                cands.add(n)
+                db_names += 1
+except OSError:
+    pass
+
+print(f"veritabani: aerolib {db_direct} hazir eslesme, known_names {db_names} isim")
+
+hits, misses = [], []
 for c in cands:
     table.setdefault(nid(c), c)
 for pref, raw in sorted(unresolved.items()):

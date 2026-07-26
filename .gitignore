@@ -31,3 +31,6 @@ log*.txt
 # Oyun kosu loglari (her oyun icin ayri isim)
 *_log.txt
 *_err.txt
+
+# Topluluk NID veritabanlari (indirilen, lisansi belirsiz - repoya girmez)
+tools/nid_db/
