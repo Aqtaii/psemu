@@ -2628,8 +2628,9 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 static std::atomic<uint64_t> s_ms{0};
                 const uint64_t mn = s_ms.fetch_add(1) + 1;
                 if (mn <= 6 || (mn % 5000ull) == 0) {
-                    printf("[MSPACE] #%llu %s(rsi=0x%llx rdx=0x%llx) -> 0x%llx\n",
+                    printf("[MSPACE] #%llu %s(mspace=0x%llx rsi=0x%llx rdx=0x%llx) -> 0x%llx\n",
                            static_cast<unsigned long long>(mn), readable_name.c_str(),
+                           static_cast<unsigned long long>(ctx->Rdi),
                            static_cast<unsigned long long>(ctx->Rsi),
                            static_cast<unsigned long long>(ctx->Rdx),
                            static_cast<unsigned long long>(rv));
@@ -6459,6 +6460,7 @@ void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t tex
 }
 
 extern "C" void PsemuNotifyKytyFlip() {}
+
 
 
 
