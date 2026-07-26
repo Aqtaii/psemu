@@ -17,6 +17,8 @@
 #include <cstdint>
 #include <cstdio>
 
+extern "C" void PsemuDumpPltTop();
+
 namespace {
 
 std::atomic<uint64_t> g_frames{0};
@@ -24,6 +26,9 @@ std::atomic<uint64_t> g_present_ticks{0};
 std::atomic<uint64_t> g_submit_ticks{0};
 std::atomic<uint64_t> g_draws{0};
 std::atomic<uint64_t> g_textures{0};
+std::atomic<uint64_t> g_tls_faults{0}; // fs: erisimlerinin VEH'e dusme sayisi
+std::atomic<uint64_t> g_plt_calls{0};  // PLT hook dispatch sayisi
+std::atomic<uint64_t> g_veh_cycles{0}; // VEH icinde harcanan GERCEK CPU dongusu
 
 int64_t QpcFreq() {
 	static int64_t f = [] {
@@ -49,12 +54,25 @@ void PsemuMetricAddSubmit(uint64_t ticks) {
 
 void PsemuMetricAddDraw() { g_draws.fetch_add(1, std::memory_order_relaxed); }
 
+// core.cpp'deki VEH, her fs: (TLS) erisimi exception'a dustugunde cagirir.
+// Donanim FS_BASE calisiyorsa bu sayac ~0 kalmali; buyukse TLS yolu darbogaz.
+void PsemuMetricAddTlsFault() { g_tls_faults.fetch_add(1, std::memory_order_relaxed); }
+
+void PsemuMetricAddPltCall() { g_plt_calls.fetch_add(1, std::memory_order_relaxed); }
+
+// VEH handler'inin harcadigi GERCEK CPU dongusu (uyku sayilmaz - bkz. core.cpp
+// VehTimer). ~4 GHz'de saniyede 4e9 dongu = bir cekirdegin tamami demektir.
+void PsemuMetricAddVehCycles(unsigned long long cycles) {
+	g_veh_cycles.fetch_add(cycles, std::memory_order_relaxed);
+}
+
 void PsemuMetricAddTextureCount() { g_textures.fetch_add(1, std::memory_order_relaxed); }
 
 // Baslik metnini uretir. En fazla ~2 kez/saniye guncellenmesi icin cagiran
 // tarafta zaman kontrolu yapilir (bkz. WindowUpdateTitle).
 bool PsemuMetricFormat(char* buf, size_t buf_size) {
-	static uint64_t last_qpc = 0, last_frames = 0, last_pres = 0, last_sub = 0, last_draws = 0;
+	static uint64_t last_qpc = 0, last_frames = 0, last_pres = 0, last_sub = 0, last_draws = 0,
+	                last_tls = 0, last_plt = 0, last_veh = 0;
 
 	LARGE_INTEGER now_li;
 	QueryPerformanceCounter(&now_li);
@@ -72,6 +90,9 @@ bool PsemuMetricFormat(char* buf, size_t buf_size) {
 	const uint64_t p = g_present_ticks.load(std::memory_order_relaxed);
 	const uint64_t s = g_submit_ticks.load(std::memory_order_relaxed);
 	const uint64_t d = g_draws.load(std::memory_order_relaxed);
+	const uint64_t t = g_tls_faults.load(std::memory_order_relaxed);
+	const uint64_t pl = g_plt_calls.load(std::memory_order_relaxed);
+	const uint64_t vn = g_veh_cycles.load(std::memory_order_relaxed);
 
 	const uint64_t df = f - last_frames;
 	const double   fps = (df > 0) ? df / dt : 0.0;
@@ -79,18 +100,41 @@ bool PsemuMetricFormat(char* buf, size_t buf_size) {
 	const double   pres_ms = (df > 0) ? (p - last_pres) * ms_per_tick / df : 0.0;
 	const double   sub_ms  = (df > 0) ? (s - last_sub) * ms_per_tick / df : 0.0;
 	const double   dpf     = (df > 0) ? static_cast<double>(d - last_draws) / df : 0.0;
+	// TLS fault'lari saniye basina: kare hizindan bagimsiz olsun ki kare
+	// gelmedigi (donma) anlarda da anlamli kalsin.
+	const double   tls_ps  = (t - last_tls) / dt;
+	const double   plt_ps  = (pl - last_plt) / dt;
+	// VEH'in CPU maliyeti: saniyede kac milyar dongu. Tum threadlerin toplami,
+	// yani "kac cekirdek dolusu CPU" olarak okunur (~4 GHz'de 1.0 = 1 cekirdek).
+	const double   veh_gc  = ((vn - last_veh) / 1e9) / dt;
 
 	std::snprintf(buf, buf_size,
 	              "psemu - PS5   |  FPS %.1f  |  kare %.1f ms  |  present %.2f ms  |  "
-	              "submit %.2f ms  |  cizim/kare %.0f  |  tex %llu",
+	              "submit %.2f ms  |  cizim/kare %.0f  |  tex %llu  |  tls %.0f/sn  |  "
+	              "plt %.0f/sn  |  veh %.2f Gdongu/sn",
 	              fps, (fps > 0.0 ? 1000.0 / fps : 0.0), pres_ms, sub_ms, dpf,
-	              static_cast<unsigned long long>(g_textures.load(std::memory_order_relaxed)));
+	              static_cast<unsigned long long>(g_textures.load(std::memory_order_relaxed)),
+	              tls_ps, plt_ps, veh_gc);
 
 	last_qpc    = now;
 	last_frames = f;
 	last_pres   = p;
 	last_sub    = s;
 	last_draws  = d;
+	last_tls    = t;
+	last_plt    = pl;
+	last_veh    = vn;
+
+	// Ayni satiri loga da bas (birkac saniyede bir): pencere basligi yalnizca
+	// oyun ayaktayken okunabiliyor, cokme sonrasi analiz icin log sart.
+	static double s_since_log = 0.0;
+	s_since_log += dt;
+	if (s_since_log >= 3.0) {
+		s_since_log = 0.0;
+		std::printf("[PERF] %s\n", buf);
+		std::fflush(stdout);
+		PsemuDumpPltTop(); // hangi HLE fonksiyonlari sicak (core.cpp)
+	}
 	return true;
 }
 

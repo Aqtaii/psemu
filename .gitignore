@@ -21,3 +21,9 @@ loader.exe
 _Shaders/
 images/
 build_out.txt
+
+# Oyunun kendi grafikleri/loglari - TELIF: asla push edilmez
+tools/dumps/
+loader_err.txt
+err*.txt
+log*.txt

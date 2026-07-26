@@ -1,4 +1,4 @@
-#include "core.h"
+﻿#include "core.h"
 #include "agc.h"
 #include "logger.h"
 #include "syscalls.h"
@@ -16,6 +16,7 @@
 #include <cerrno>   // strtoull/strtod'un ERANGE bildirimi icin
 #include <cmath>    // isnan/isinf (fp_isfinite)
 #include <mutex>
+#include <memory>  // tembel tani stringstream'i icin unique_ptr
 #include <deque>    // direct memory havuzu kilidi
 #include "nids.h"
 #include "video.h"
@@ -25,6 +26,10 @@
 #include <immintrin.h>
 
 extern "C" void PsemuMarkCpuModified(uint64_t vaddr, uint64_t size);
+// Performans metrikleri (gpu/adapter/metrics.cpp) - pencere basliginda gosterilir.
+extern "C" void PsemuMetricAddTlsFault();
+extern "C" void PsemuMetricAddPltCall();
+extern "C" void PsemuMetricAddVehCycles(unsigned long long cycles);
 
 // ========================================================
 // SysV AMD64 va_list printf formatlayici
@@ -453,7 +458,12 @@ struct GuestSortJob {
     size_t     size;
     GuestCmpFn cmp;
 };
+static uint64_t GetThreadTlsBase(); // asagida tanimli (TLS hizli yolu)
+
 static DWORD WINAPI GuestSortThread(LPVOID param) {
+    // Misafir karsilastiricisini cagiracagiz: bu thread'in TLS blogu ve TEB
+    // slotu hazir olmali (yamali fs: komutlari artik fault uretmiyor).
+    GetThreadTlsBase();
     auto* j     = static_cast<GuestSortJob*>(param);
     t_guest_cmp = j->cmp;
     std::qsort(j->base, j->nmemb, j->size, HostCmpBridge);
@@ -529,18 +539,52 @@ static std::mutex          g_sync_create_mutex;
 static std::set<uint64_t>  g_known_mutexes;
 static std::set<uint64_t>  g_known_conds;
 
+// SICAK YOL ONBELLEGI (thread'e ozel, kilitsiz).
+// Olcum: oyun menude saniyede ~85.000 kez mutex kilitleyip aciyor ve eski hal
+// HER cagride (a) SafeWritable -> VirtualQuery, (b) TUM threadleri seri hale
+// getiren tek bir global std::mutex, (c) std::set agac aramasi yapiyordu.
+// Olculen maliyet: cagri basina ~83.000 CPU dongusu (~18 us) -> tek basina
+// kare suresinin buyuk kismi. Ayni mutex arka arkaya kilitlenip acildigi icin
+// kucuk bir dogrudan-eslemeli onbellek neredeyse %100 isabet ediyor.
+namespace {
+struct MtxCacheEnt {
+    uint64_t*   slot = nullptr;
+    GuestMutex* m    = nullptr;
+    uint64_t    val  = 0; // onbellege alindigi andaki *slot degeri
+};
+} // namespace
+static thread_local MtxCacheEnt t_mtx_cache[16];
+
 static GuestMutex* GetOrCreateMutex(uint64_t* slot) {
-    if (slot == nullptr || !SafeWritable(slot, sizeof(uint64_t))) return nullptr;
-    std::lock_guard<std::mutex> lk(g_sync_create_mutex);
-    uint64_t h = *slot;
-    if (h != 0 && g_known_mutexes.count(h) != 0) {
-        return reinterpret_cast<GuestMutex*>(h);
+    if (slot == nullptr) return nullptr;
+
+    // Isabet sarti: ayni slot adresi VE slot icerigi degismemis olsun. Icerigi
+    // okumak guvenli, cunku bu adresi onbellege almadan once SafeWritable ile
+    // dogruladik; oyun slotu degistirirse esitlik tutmaz ve yavas yola duseriz.
+    MtxCacheEnt& e = t_mtx_cache[(reinterpret_cast<uintptr_t>(slot) >> 4) & 15u];
+    if (e.slot == slot && e.m != nullptr && *slot == e.val) {
+        return e.m;
     }
-    GuestMutex* m = new GuestMutex();
-    InitializeCriticalSection(&m->cs);
-    *slot = reinterpret_cast<uint64_t>(m);
-    g_known_mutexes.insert(*slot);
-    return m;
+
+    if (!SafeWritable(slot, sizeof(uint64_t))) return nullptr;
+    GuestMutex* result = nullptr;
+    {
+        std::lock_guard<std::mutex> lk(g_sync_create_mutex);
+        uint64_t h = *slot;
+        if (h != 0 && g_known_mutexes.count(h) != 0) {
+            result = reinterpret_cast<GuestMutex*>(h);
+        } else {
+            GuestMutex* m = new GuestMutex();
+            InitializeCriticalSection(&m->cs);
+            *slot = reinterpret_cast<uint64_t>(m);
+            g_known_mutexes.insert(*slot);
+            result = m;
+        }
+    }
+    e.slot = slot;
+    e.m    = result;
+    e.val  = *slot;
+    return result;
 }
 
 static GuestCond* GetOrCreateCond(uint64_t* slot) {
@@ -733,6 +777,53 @@ static inline void SafeWriteFsBase(uint64_t val) {
 }
 #endif
 
+// ========================================================
+// TLS HIZLANDIRMA: fs:[0] -> gs:[TEB TlsSlots+N]
+// --------------------------------------------------------
+// PS5 ELF'i thread pointer'i Linux tarzi "mov reg, fs:[0]" ile okur. Windows'ta
+// FS tabani kullanici modunda kalici DEGILDIR: wrfsbase ile yazilan deger ilk
+// baglam degisiminde sifirlanir (bu makinede olculdu: Sleep(20) sonrasi
+// rdfsbase=0, 200/200 tur basarisiz). Dolayisiyla her fs: erisimi bir access
+// violation -> VEH gidis-donusu demek; JS motoru gibi TLS'i yogun kullanan kod
+// bunun altinda eziliyor.
+//
+// Cozum: komutu YERINDE yamalamak. Windows'ta GS tabani TEB'i gosterir ve TEB'in
+// TlsSlots dizisi (ofset 0x1480) thread'e ozeldir - yani TAM olarak ihtiyacimiz
+// olan sey. Iki kodlama ayni uzunluktadir:
+//     64 48 8B 04 25 00 00 00 00   mov rax, fs:[0]
+//     65 48 8B 04 25 80 14 00 00   mov rax, gs:[0x1480]
+// Sadece segment on eki (0x64->0x65) ve disp32 degisir. Yamadan sonra o komut
+// bir daha ASLA exception uretmez ve her thread kendi tp'sini okur.
+// ========================================================
+static const uint32_t kTebTlsSlotsOffset = 0x1480; // TEB.TlsSlots[0]
+static DWORD    g_win_tls_slot = TLS_OUT_OF_INDEXES;
+static uint32_t g_teb_slot_off = 0; // 0 => yama devre disi, VEH yolu kullanilir
+
+// Oyun baslamadan once (VEH kaydiyla ayni yerde) cagrilir: VEH icinde
+// TlsAlloc gibi kilit alan is yapmak istemiyoruz.
+void PsemuInitTlsFastPath() {
+    if (g_teb_slot_off != 0) return;
+    // A/B testi icin kapatilabilir: PSEMU_TLS_PATCH=0 -> eski VEH yolu.
+    if (const char* e = getenv("PSEMU_TLS_PATCH")) {
+        if (e[0] == '0') {
+            printf("[TLS] Hizli yol KAPALI (PSEMU_TLS_PATCH=0) - her fs:[0] VEH'e dusecek\n");
+            fflush(stdout);
+            return;
+        }
+    }
+    DWORD s = TlsAlloc();
+    if (s == TLS_OUT_OF_INDEXES) return;
+    if (s < 64) { // >= 64 ise TlsExpansionSlots'a taser; sabit TEB ofseti olmaz
+        g_win_tls_slot = s;
+        g_teb_slot_off = kTebTlsSlotsOffset + 8u * s;
+        printf("[TLS] Hizli yol etkin: fs:[0] -> gs:[0x%x] (TLS slot %lu)\n", g_teb_slot_off, s);
+    } else {
+        TlsFree(s);
+        printf("[TLS] Hizli yol KAPALI: TlsAlloc slot %lu >= 64\n", s);
+    }
+    fflush(stdout);
+}
+
 // Bu thread'in tp'si; ilk fs: erisiminde olusturulur.
 static uint64_t GetThreadTlsBase() {
     static thread_local uint64_t t_tp = 0;
@@ -740,15 +831,16 @@ static uint64_t GetThreadTlsBase() {
         t_tp = CreateTlsBlockForCurrentThread();
         if (t_tp != 0) {
             if (g_tls_base == 0) g_tls_base = t_tp; // ilk blok: geriye uyumluluk
-            __try {
-                SafeWriteFsBase(t_tp);
-            } __except (EXCEPTION_EXECUTE_HANDLER) {
-                // FSGSBASE donanim/IS tarafindan desteklenmiyorsa VEH handler devrede kalir
+            // Yamalanmis komutlarin okudugu yer: bu thread'in TEB slotu.
+            // Yama fault uretmedigi icin slot, thread guest koda girmeden
+            // DOLU olmak zorunda (bkz. GamePthreadProc / GuestSortThread).
+            if (g_teb_slot_off != 0) {
+                TlsSetValue(g_win_tls_slot, reinterpret_cast<void*>(t_tp));
             }
             static volatile LONG s_n = 0;
             LONG n = InterlockedIncrement(&s_n);
             if (n <= 8) {
-                printf("[TLS] Thread'e ozel TLS blogu #%ld: TID=%lu tp=0x%llx (HW FS_BASE ayarlandi)\n",
+                printf("[TLS] Thread'e ozel TLS blogu #%ld: TID=%lu tp=0x%llx\n",
                        n, GetCurrentThreadId(), t_tp);
                 fflush(stdout);
             }
@@ -756,6 +848,8 @@ static uint64_t GetThreadTlsBase() {
     }
     return t_tp;
 }
+
+// (fs: komut yamasi TryPatchFsMov, DecodeFsMov'un hemen ardinda tanimli.)
 
 // ========================================================
 // TANI: Bellek Yazma Izleme Noktasi (Watchpoint)
@@ -992,7 +1086,7 @@ static bool DecodeFsMov(const uint8_t* code, FsMovInfo& info) {
     int i = 0;
     uint8_t rex = 0;
 
-    // Bazi derleyiciler hizalama/redundant amaçlarla birden fazla 66 on eki uretebilir
+    // Bazi derleyiciler hizalama/redundant amaÃ§larla birden fazla 66 on eki uretebilir
     while (code[i] == 0x66) i++;
 
     if (code[i] != 0x64) return false; // FS segment override zorunlu
@@ -1042,6 +1136,76 @@ static bool DecodeFsMov(const uint8_t* code, FsMovInfo& info) {
     return true;
 }
 
+// "64 [REX] 8B 04 25 00000000" komutunu yerinde "65 [REX] 8B 04 25 <teb_off>"
+// haline getirir. Sadece disp==0 formunda gecerlidir: yamali hal TEB slotunu
+// OKUR (= tp), VEH yolu ise tp+disp hesaplar; bu ikisi yalnizca disp==0 iken
+// ayni sonucu verir. (Loglarda olculdu: oyunun TUM fs: erisimleri disp=0.)
+//
+// Yazma sirasi onemli: once disp32, sonra segment baytini yaziyoruz. Ara
+// durumda komut hala fs: oldugu icin fault etmeye devam eder ve VEH tarafi
+// disp==g_teb_slot_off ozel durumunu dogru degerle karsilar (bkz. VEH icindeki
+// not). Ters sirada yazsaydik "gs:[0]" ara durumu olusurdu; o da TEB'in ilk
+// alanini sessizce okur - yanlis deger, fault yok, tespit edilemez.
+// Yama neden atlandi? Tahmin etmemek icin ilk birkac vakayi baytlariyla dok.
+static void LogPatchSkip(const uint8_t* code, const char* why) {
+    static volatile LONG s_n = 0;
+    LONG n = InterlockedIncrement(&s_n);
+    if (n > 12) return;
+    printf("[TLS] Yama ATLANDI (%s) @ 0x%llx baytlar: %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+           why, reinterpret_cast<uint64_t>(code), code[0], code[1], code[2], code[3], code[4],
+           code[5], code[6], code[7], code[8]);
+    fflush(stdout);
+}
+
+static void TryPatchFsMov(uint8_t* code, const FsMovInfo& info) {
+    if (g_teb_slot_off == 0) return;
+    if (info.disp != 0) { LogPatchSkip(code, "disp!=0"); return; }
+
+    int p = 0;
+    while (code[p] == 0x66) p++;
+    if (code[p] != 0x64) { LogPatchSkip(code, "0x64 yok"); return; }
+    const int seg_pos = p;
+    p++;
+    if ((code[p] & 0xF0) == 0x40) p++;      // opsiyonel REX
+    if (code[p] != 0x8B) { LogPatchSkip(code, "opcode 8B degil"); return; }
+    p++;
+    if ((code[p] & 0xC7) != 0x04) { LogPatchSkip(code, "modrm mod/rm uymuyor"); return; }
+    p++;
+    if (code[p] != 0x25) { LogPatchSkip(code, "SIB 0x25 degil"); return; }
+    p++;
+    uint8_t* disp_ptr = &code[p];
+
+    // Yirtilmayi (torn store) onle: magaza tek bir cache satiri icinde kalmali.
+    // x86'da satir-ici magaza atomiktir; satiri asarsa baska bir cekirdek yarim
+    // yazilmis disp gorup yanlis adres hesaplayabilir.
+    // Mevcut disp32 = 0 ve TEB ofseti < 0x10000 oldugundan yalnizca ALT 2 BAYTI
+    // yazmak yeterli; ust 2 bayt zaten 0. Boylece 4 bayt yerine 2 bayt kaydiriyoruz
+    // ve satir asma ihtimali 3/64'ten 1/64'e duser.
+    const uintptr_t a = reinterpret_cast<uintptr_t>(disp_ptr);
+    if ((a & 63u) > 62u) { LogPatchSkip(code, "disp cache satirini asiyor"); return; }
+
+    DWORD old_prot = 0;
+    if (!VirtualProtect(code, 16, PAGE_EXECUTE_READWRITE, &old_prot)) {
+        LogPatchSkip(code, "VirtualProtect basarisiz");
+        return;
+    }
+    *reinterpret_cast<volatile uint16_t*>(disp_ptr) =
+        static_cast<uint16_t>(g_teb_slot_off);  // 1) disp'in alt 16 biti
+    _mm_sfence();
+    code[seg_pos] = 0x65;                                             // 2) FS -> GS
+    DWORD tmp = 0;
+    VirtualProtect(code, 16, old_prot, &tmp);
+    FlushInstructionCache(GetCurrentProcess(), code, 16);
+
+    static volatile LONG s_patched = 0;
+    LONG n = InterlockedIncrement(&s_patched);
+    if (n <= 5 || (n % 100) == 0) {
+        printf("[TLS] Yama #%ld: 0x%llx artik gs:[0x%x] okuyor (bu komut bir daha fault etmez)\n",
+               n, reinterpret_cast<uint64_t>(code), g_teb_slot_off);
+        fflush(stdout);
+    }
+}
+
 // Cozulen hedef register koduna gore CONTEXT alanina yazan yardimci fonksiyon
 static void SetContextReg(PCONTEXT ctx, int reg, uint64_t value) {
     switch (reg) {
@@ -1064,7 +1228,75 @@ static void SetContextReg(PCONTEXT ctx, int reg, uint64_t value) {
     }
 }
 
+// VEH icinde gecen sureyi olcer (metrik cubugundaki "veh %%").
+// Handler'in birden fazla cikis noktasi var; RAII ile hepsini kapsiyoruz.
+// Bu fonksiyonda __try/__except yok, dolayisiyla yikici guvenle calisir.
+// PLT dispatch onbellekleri + cagri sayaclari (dosya kapsaminda: "en cok
+// cagrilanlar" dokumu handler disindan da okuyabilsin).
+static constexpr uint32_t kPltCacheMax = 4096;
+static const std::string* g_plt_fn_cache[kPltCacheMax] = {};
+static const std::string* g_plt_rn_cache[kPltCacheMax] = {};
+static std::atomic<uint32_t> g_plt_counts[kPltCacheMax];
+static std::atomic<uint64_t> g_plt_cycles[kPltCacheMax];
+
+// Saniyede on binlerce PLT cagrisi var; HANGI fonksiyonlar oldugunu bilmeden
+// optimize etmek tahmindir. Periyodik olarak en sicak 15'ini dok.
+extern "C" void PsemuDumpPltTop() {
+    static uint32_t s_prev_n[kPltCacheMax] = {};
+    static uint64_t s_prev_c[kPltCacheMax] = {};
+    struct Row { uint32_t idx, calls; uint64_t cyc; };
+    Row top[12] = {};
+    for (uint32_t i = 0; i < kPltCacheMax; i++) {
+        const uint32_t n_now = g_plt_counts[i].load(std::memory_order_relaxed);
+        const uint64_t c_now = g_plt_cycles[i].load(std::memory_order_relaxed);
+        const uint32_t dn = n_now - s_prev_n[i];
+        const uint64_t dc = c_now - s_prev_c[i];
+        s_prev_n[i] = n_now;
+        s_prev_c[i] = c_now;
+        if (dc == 0) continue;
+        // CPU dongusune gore sirala: darbogaz "en cok cagrilan" degil "en cok yakan".
+        for (int k = 0; k < 12; k++) {
+            if (dc > top[k].cyc) {
+                for (int m = 11; m > k; m--) top[m] = top[m - 1];
+                top[k] = Row{i, dn, dc};
+                break;
+            }
+        }
+    }
+    printf("[PLT-TOP] CPU'yu en cok yakan PLT cagrilari (son aralik):\n");
+    for (int k = 0; k < 12 && top[k].cyc > 0; k++) {
+        const std::string* rn = g_plt_rn_cache[top[k].idx];
+        const std::string* fn = g_plt_fn_cache[top[k].idx];
+        const char* nm = (rn && !rn->empty()) ? rn->c_str() : (fn ? fn->c_str() : "?");
+        const double mcyc = static_cast<double>(top[k].cyc) / 1e6;
+        const double per  = top[k].calls ? static_cast<double>(top[k].cyc) / top[k].calls : 0.0;
+        printf("   %8.1f Mdongu  %6u cagri  %8.0f dongu/cagri  PLT#%u %s\n",
+               mcyc, top[k].calls, per, top[k].idx, nm);
+    }
+    fflush(stdout);
+}
+
+// NOT: duvar saati YANILTICI. HLE'nin bloklayan cagrilari (sceAudioOutOutput
+// pacing'i, WaitSema, vblank beklemesi) VEH'in ICINDE calisiyor; duvar saatiyle
+// olcunce "VEH %450" cikiyor ama bunun cogu UYKU, CPU yanmasi degil. Bu yuzden
+// QueryThreadCycleTime ile GERCEK CPU dongusu sayiyoruz: uyuyan thread dongu
+// harcamaz. Boylece metrik "emulasyon katmani ne kadar CPU yiyor" sorusunu
+// dogru cevaplar.
+namespace {
+struct VehTimer {
+    ULONG64 c0 = 0;
+    VehTimer() { QueryThreadCycleTime(GetCurrentThread(), &c0); }
+    ~VehTimer() {
+        ULONG64 c1 = 0;
+        if (QueryThreadCycleTime(GetCurrentThread(), &c1) && c1 > c0) {
+            PsemuMetricAddVehCycles(c1 - c0);
+        }
+    }
+};
+} // namespace
+
 LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
+    VehTimer veh_timer;
     DWORD code = ExceptionInfo->ExceptionRecord->ExceptionCode;
     PCONTEXT ctx = ExceptionInfo->ContextRecord;
 
@@ -1219,11 +1451,11 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
     // ================================================================
     // Tip-kayit 4-slot tabloya bazen 5. kaydi yapmaya calisir; cmova ile base
     // register (rbx/rdx) NULL'a duser ve [base+disp] NULL-yakini erisim (OKUMA
-    // veya YAZMA) cokerdi. Onceki cozum her taşma komutunu tek tek atliyordu
-    // (whack-a-mole; her timing degisiminde yeni RVA — Vulkan wiring sonrasi
+    // veya YAZMA) cokerdi. Onceki cozum her taÅŸma komutunu tek tek atliyordu
+    // (whack-a-mole; her timing degisiminde yeni RVA â€” Vulkan wiring sonrasi
     // 0x2e08aa gibi). GENEL COZUM: bu fonksiyonda (0x2dfff0..0x2e0900)
     // NULL-base fault olunca, NULL register'i (rbx/rdx) sifirlanmis bir DUMMY
-    // buffer'a yonlendirip komutu YENIDEN CALISTIR. Boylece tum taşma erisimleri
+    // buffer'a yonlendirip komutu YENIDEN CALISTIR. Boylece tum taÅŸma erisimleri
     // (5. kayit) zararsizca dummy'ye gider, ilk 4 gecerli kayit tabloda kalir,
     // fonksiyon normal tamamlanir. Instruction atlama / whack-a-mole YOK.
     if (code == EXCEPTION_ACCESS_VIOLATION &&
@@ -1254,16 +1486,28 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         return EXCEPTION_CONTINUE_EXECUTION;
     }
 
-    // Eger Syscall disinda baska bir cokme yasandiysa detayli register dokumu yap
-    std::stringstream ss;
-    ss << "CRASH yakalandi! Kod: 0x" << std::hex << code
-       << " | RIP: 0x" << ctx->Rip;
-    if (ctx->Rip >= g_base_addr && ctx->Rip < g_base_addr + g_module_size) {
-        ss << " (RVA 0x" << (ctx->Rip - g_base_addr) << ")";
-    }
-    if (code == 0xC00000FD) {
-        ss << " [STACK OVERFLOW]";
-    }
+    // Eger Syscall disinda baska bir cokme yasandiysa detayli register dokumu yap.
+    //
+    // PERFORMANS: bu handler saniyede ~100.000 kez cagriliyor (PLT dispatch'in
+    // tamami buradan geciyor) ve asagidaki yollarin NEREDEYSE HEPSI erken
+    // return ediyor - yani tani metni hic kullanilmiyor. std::stringstream
+    // kurulumu ucuz DEGIL (locale + stringbuf + heap). Bu yuzden akisi tembel
+    // yaptik: metin ancak gercekten cokme raporlayacaksak insa edilir.
+    std::unique_ptr<std::stringstream> ss_ptr;
+    auto ss_init = [&]() -> std::stringstream& {
+        if (!ss_ptr) {
+            ss_ptr = std::make_unique<std::stringstream>();
+            *ss_ptr << "CRASH yakalandi! Kod: 0x" << std::hex << code
+                    << " | RIP: 0x" << ctx->Rip;
+            if (ctx->Rip >= g_base_addr && ctx->Rip < g_base_addr + g_module_size) {
+                *ss_ptr << " (RVA 0x" << (ctx->Rip - g_base_addr) << ")";
+            }
+            if (code == 0xC00000FD) {
+                *ss_ptr << " [STACK OVERFLOW]";
+            }
+        }
+        return *ss_ptr;
+    };
 
     // Access Violation ise hangi adrese erisilmeye calisildigini goster
     if (code == 0xC0000005 && ExceptionInfo->ExceptionRecord->NumberParameters >= 2) {
@@ -1352,11 +1596,32 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 // GetThreadTlsBase): paylasilan blok, kilitsiz
                 // thread-local allocator listelerini bozuyordu.
                 uint64_t tls_tp = GetThreadTlsBase();
-                uint64_t value  = tls_tp + info.disp;
 
-                // Gurultu filtresi: her fs: erisim adresini sadece birkac kez logla
-                {
-                    static std::map<uint64_t, int> s_tls_seen;
+                // Yama ara durumu: disp32'yi yazdik ama segment baytini henuz
+                // GS yapmadik (ya da baska bir cekirdek tam o anda calisti).
+                // Komut hala fs: oldugu icin buraya duser; niyet edilen deger
+                // tp'nin KENDISI, tp+ofset degil.
+                uint64_t value = (g_teb_slot_off != 0 &&
+                                  static_cast<uint32_t>(info.disp) == g_teb_slot_off)
+                                     ? tls_tp
+                                     : tls_tp + info.disp;
+
+                // Bu komutu kalici olarak gs:[TEB slot] okuyacak sekilde yamala;
+                // basarili olursa bir daha buraya hic dusmez.
+                TryPatchFsMov(const_cast<uint8_t*>(code), info);
+
+                // OLCUM: her fs: erisimi tam bir exception gidis-donusu demek
+                // (~birkac mikrosaniye). Donanim FS_BASE calisiyorsa bu sayac
+                // thread basina ~1'de kalmali; binlere ciktiysa darbogaz burasi.
+                PsemuMetricAddTlsFault();
+
+                // Gurultu filtresi: her fs: erisim adresini sadece birkac kez logla.
+                // Harita aramasi sicak yolda maliyet: ilk 5000 fault'tan sonra
+                // haritaya hic dokunmuyoruz. Harita ayrica thread_local -
+                // eski paylasimli hali kilitsizdi ve threadler arasi yaris iceriyordu.
+                static std::atomic<uint64_t> s_tls_total{0};
+                if (s_tls_total.fetch_add(1, std::memory_order_relaxed) < 5000) {
+                    static thread_local std::map<uint64_t, int> s_tls_seen;
                     int n = ++s_tls_seen[ctx->Rip];
                     if (n <= 2) {
                         printf("[TLS-HOTFIX] FS: erisimi @ 0x%llx (disp=0x%x, tp=0x%llx) -> reg#%d = 0x%llx%s\n",
@@ -1378,6 +1643,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         // ================================================================
         if (access_addr >= 0x10000000000ULL && access_addr < 0x10000010000ULL) {
             g_last_activity = GetTickCount64(); // hang watchdog icin aktivite isareti
+            PsemuMetricAddPltCall();
             uint32_t plt_index = static_cast<uint32_t>(access_addr - 0x10000000000ULL);
 
             // ============================================================
@@ -1396,31 +1662,35 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             // Sadece PLT#173 (memset) olcuyoruz: bloklamayan, onemsiz bir is.
             // WaitSema/MutexLock gibi handler'lar mesru sekilde BEKLEDIGI icin
             // genel toplam yanilticiydi (ve cok-thread topluyordu).
-            static std::atomic<uint64_t> s_ms_ns{0};
-            static std::atomic<uint64_t> s_ms_calls{0};
+            // Her PLT indeksi icin GERCEK CPU dongusu (QueryThreadCycleTime:
+            // bloklanan/uyuyan sure sayilmaz, sadece yakilan CPU). Boylece
+            // "en cok cagrilan" degil "en cok CPU yiyen" fonksiyonu goruyoruz.
             struct PltTimer {
-                uint64_t t0; uint32_t idx;
-                explicit PltTimer(uint32_t i) : t0(i == 173 ? MonotonicNs() : 0), idx(i) {}
+                ULONG64 c0; uint32_t idx;
+                explicit PltTimer(uint32_t i) : c0(0), idx(i) {
+                    QueryThreadCycleTime(GetCurrentThread(), &c0);
+                }
                 ~PltTimer() {
-                    if (idx == 173) {
-                        s_ms_ns.fetch_add(MonotonicNs() - t0, std::memory_order_relaxed);
-                        s_ms_calls.fetch_add(1, std::memory_order_relaxed);
+                    ULONG64 c1 = 0;
+                    if (idx < kPltCacheMax && QueryThreadCycleTime(GetCurrentThread(), &c1) &&
+                        c1 > c0) {
+                        g_plt_cycles[idx].fetch_add(c1 - c0, std::memory_order_relaxed);
                     }
                 }
             } plt_timer(plt_index);
 
-            static constexpr uint32_t kPltCacheMax = 4096;
-            static const std::string* s_fn_cache[kPltCacheMax] = {};
-            static const std::string* s_rn_cache[kPltCacheMax] = {};
             static const std::string  s_empty_name;
+            if (plt_index < kPltCacheMax) {
+                g_plt_counts[plt_index].fetch_add(1, std::memory_order_relaxed);
+            }
             static std::deque<std::string> s_interned; // UNKNOWN_PLT_* kalici depo
             static std::mutex s_intern_mutex;
 
             const std::string* fn_ptr = nullptr;
             const std::string* rn_ptr = nullptr;
             if (plt_index < kPltCacheMax) {
-                fn_ptr = s_fn_cache[plt_index];
-                rn_ptr = s_rn_cache[plt_index];
+                fn_ptr = g_plt_fn_cache[plt_index];
+                rn_ptr = g_plt_rn_cache[plt_index];
             }
             if (fn_ptr == nullptr) {
                 const std::string* f = nullptr;
@@ -1459,8 +1729,8 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     f = &s_interned.back();
                 }
                 if (plt_index < kPltCacheMax) {
-                    s_fn_cache[plt_index] = f;
-                    s_rn_cache[plt_index] = r;
+                    g_plt_fn_cache[plt_index] = f;
+                    g_plt_rn_cache[plt_index] = r;
                 }
                 fn_ptr = f;
                 rn_ptr = r;
@@ -1505,6 +1775,15 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 else if (readable_name == "_Locksyslock" ||
                          readable_name == "_Unlocksyslock" ||
                          readable_name == "uncaught_exception") f = FOP_RET0;
+                // sceKernelWaitSema HENUZ IMPLEMENTE DEGIL: bugun zincirin
+                // sonundaki varsayilan stub'a dusup RAX=0 donuyor. Hizli yola
+                // almak DAVRANISI DEGISTIRMEZ, yalnizca 195 string
+                // karsilastirmasini atlar. Olcum: cagri basina 19.933 dongu,
+                // saniyede ~42.000 cagri (menude en pahali ikinci kalem).
+                // NOT: gercek cozum semaforu implemente etmektir - oyun su an
+                // her zaman "basarili" cevabi aldigi icin bekleyen thread
+                // donuyor (spin). Bu yuzden cagri sayisi bu kadar yuksek.
+                else if (readable_name == "sceKernelWaitSema") f = FOP_RET0;
                 s_fop[plt_index] = f;
                 fop = FOP_NONE; // ILK cagri normal yoldan gitsin (loglanabilsin)
             }
@@ -2207,7 +2486,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 }
                 // ERISILEN JSON NESNESINI DOK: parse'in sadik oldugu kanitlandigina
                 // gore hata, oyunun okudugu nesnenin bekledigimiz yapi OLMAMASINDA.
-                // nlohmann basic_json yerlesimi: +0 tip baytı, +8 deger/pointer.
+                // nlohmann basic_json yerlesimi: +0 tip baytÄ±, +8 deger/pointer.
                 // Dizi ise +8 -> std::vector{begin,end,cap}, eleman boyutu 16.
                 {
                     auto dump_json = [&](const char* label, uint64_t addr) {
@@ -3658,7 +3937,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 ExitProcess(static_cast<UINT>(code));
             }
             // ========================================================
-            // GRAFIK (GNM/Gen5) BASLATMA - GEÇICI STUB
+            // GRAFIK (GNM/Gen5) BASLATMA - GEÃ‡ICI STUB
             // ========================================================
             // Oyun sistem servislerini gecip GPU init'e ulasti. Bu fonksiyonlar
             // gercek GPU register-default tablolarina pointer donduruyor (KytyPS5
@@ -3700,7 +3979,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 // mutlak adrese cevirip (m += &m) *dst'ye header'i yazmaktir.
                 // Eskiden RAX'ta sahte bir nesne donduruyorduk; oyun *dst'yi
                 // (sifir) okuyup h->cx_registers (+0x18) NULL cikinca
-                // RVA 0x29516'da coküyordu.
+                // RVA 0x29516'da cokÃ¼yordu.
                 //
                 // Shader struct offsetleri (KytyPS5 shader.h):
                 //   0x08 user_data  0x10 code         0x18 cx_registers
@@ -3929,7 +4208,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 special_return_set = true;
             }
             // ========================================================
-            // AGC (GPU / HLE render) — sceAgc* + Graphics* yuzeyi
+            // AGC (GPU / HLE render) â€” sceAgc* + Graphics* yuzeyi
             // ========================================================
             // Oyun render'i AGC ile yapiyor. Agc::Dispatch bu fonksiyonlari
             // sahiplenir (flip'i Video'ya baglar, render-state'i yakalar);
@@ -4279,7 +4558,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         }
 
         // ================================================================
-        // Non-PLT EXEC violation handler (Harici kütüphane atlamaları)
+        // Non-PLT EXEC violation handler (Harici kÃ¼tÃ¼phane atlamalarÄ±)
         // ================================================================
         if (access_type != 0 && access_type != 1) { // EXEC violation
             std::stringstream nplt_ss;
@@ -4340,7 +4619,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             }
         }
 
-        ss << " | " << (access_type == 0 ? "READ" : (access_type == 1 ? "WRITE" : "EXEC"))
+        ss_init() << " | " << (access_type == 0 ? "READ" : (access_type == 1 ? "WRITE" : "EXEC"))
            << " violation @ 0x" << access_addr;
 
         // Faulting komutun kendi baytlarini goster - tahmin yerine gercek veriyle
@@ -4348,11 +4627,11 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         // bir komuttan kaynaklaniyorsa, sentinel/unmapped bir hedef degilse) anlamli.
         if (IsInModuleRange(ctx->Rip) && SafeReadable(reinterpret_cast<void*>(ctx->Rip), 16)) {
             const uint8_t* rip_bytes = reinterpret_cast<const uint8_t*>(ctx->Rip);
-            ss << "\n[-] Faulting komut baytlari @ RIP (RVA: 0x" << (ctx->Rip - g_base_addr) << "): ";
+            ss_init() << "\n[-] Faulting komut baytlari @ RIP (RVA: 0x" << (ctx->Rip - g_base_addr) << "): ";
             for (int bi = 0; bi < 16; bi++) {
                 char buf[4];
                 snprintf(buf, sizeof(buf), "%02X ", rip_bytes[bi]);
-                ss << buf;
+                ss_init() << buf;
             }
         }
 
@@ -4360,20 +4639,20 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         // gormek icin call zincirini takip etmek her turlu ihlalde faydali)
         {
             uint64_t* stack_ptr = reinterpret_cast<uint64_t*>(ctx->Rsp);
-            ss << "\n[-] --- STACK DUMP ---";
+            ss_init() << "\n[-] --- STACK DUMP ---";
             for (int i = 0; i < 16; i++) {
                 if (SafeReadable(stack_ptr + i, sizeof(uint64_t))) {
                     uint64_t val = stack_ptr[i];
-                    ss << "\n    RSP+" << std::hex << (i * 8) << ": 0x" << val;
+                    ss_init() << "\n    RSP+" << std::hex << (i * 8) << ": 0x" << val;
                     if (IsInTextSegment(val)) {
-                        ss << " [<-- VALID CODE OFFSET: 0x" << (val - g_base_addr) << "]";
+                        ss_init() << " [<-- VALID CODE OFFSET: 0x" << (val - g_base_addr) << "]";
                     }
                 } else {
-                    ss << "\n    RSP+" << std::hex << (i * 8) << ": [INACCESSIBLE]";
+                    ss_init() << "\n    RSP+" << std::hex << (i * 8) << ": [INACCESSIBLE]";
                     break; // Bellek erisilemez ise asagiya inmeye gerek yok
                 }
             }
-            ss << "\n[-] ------------------";
+            ss_init() << "\n[-] ------------------";
         }
     }
 
@@ -4382,20 +4661,20 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
     // topla. Ayni RVA'nin tekrar tekrar gorunmesi = OZYINELEME (stack overflow).
     {
         uint64_t* sp = reinterpret_cast<uint64_t*>(ctx->Rsp);
-        ss << "\n[-] [backtrace RVA]";
+        ss_init() << "\n[-] [backtrace RVA]";
         int found = 0;
         for (int i = 0; i < 256 && found < 16; i++) {
             if (!SafeReadable(sp + i, sizeof(uint64_t))) break;
             uint64_t v = sp[i];
             if (v >= g_base_addr && v < g_base_addr + g_module_size) {
-                ss << " 0x" << std::hex << (v - g_base_addr);
+                ss_init() << " 0x" << std::hex << (v - g_base_addr);
                 found++;
             }
         }
     }
 
-    ss << std::dec;
-    LOG_ERROR(ss.str());
+    ss_init() << std::dec;
+    LOG_ERROR(ss_init().str());
     
     // Register dokumu
     std::stringstream regs;
@@ -4444,6 +4723,10 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
 }
 
 DWORD WINAPI Core::ExecutionThread(LPVOID lpParam) {
+    // TLS blogunu/TEB slotunu misafir koda girmeden hazirla: fs:[0] komutlari
+    // yamalandiktan sonra artik fault etmiyor, yani tembel kurulum yetmez.
+    GetThreadTlsBase();
+
     uint64_t entry_point = reinterpret_cast<uint64_t>(lpParam);
     uint64_t procparam_vaddr = g_procparam_vaddr;
 
@@ -4520,7 +4803,7 @@ DWORD WINAPI Core::ExecutionThread(LPVOID lpParam) {
     if (procparam_vaddr != 0) {
         uint64_t target_addr = g_base_addr + procparam_vaddr;
         std::stringstream ss;
-        ss << "[INFO] PT_SCE_PROCPARAM bellek dökümü (0x" << std::hex << target_addr << ") ilk 96 byte:\n";
+        ss << "[INFO] PT_SCE_PROCPARAM bellek dÃ¶kÃ¼mÃ¼ (0x" << std::hex << target_addr << ") ilk 96 byte:\n";
         uint8_t* dump_ptr = reinterpret_cast<uint8_t*>(target_addr);
         for (int i = 0; i < 96; i++) {
             if (i > 0 && i % 16 == 0) ss << "\n";
@@ -4593,7 +4876,7 @@ DWORD WINAPI Core::ExecutionThread(LPVOID lpParam) {
     // ================================================================
     // PS4/PS5 kodu System V ABI bekliyor (RDI, RSI, RDX arguman register'lari).
     // MSVC inline assembly desteklemedigi icin calisma zamaninda makine kodu
-    // uretip VirtualAlloc PAGE_EXECUTE_READWRITE bir bloğa yaziyoruz.
+    // uretip VirtualAlloc PAGE_EXECUTE_READWRITE bir bloÄŸa yaziyoruz.
     //
     // Uretilen stub:
     //   mov rdi, <arg0>         ; 48 BF + 8 byte imm
@@ -4847,6 +5130,10 @@ void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t tex
     LOG_INFO("Vectored Exception Handler (VEH) kaydediliyor...");
     
     // Ilk sirada cagrilmasi icin 1 (TRUE) veriyoruz
+    // fs:[0] hizli yolu icin Windows TLS slotunu VEH'ten ONCE ayir: VEH
+    // icinde TlsAlloc gibi kilit alan is yapmiyoruz.
+    PsemuInitTlsFastPath();
+
     PVOID veh_handle = AddVectoredExceptionHandler(1, SyscallExceptionFilter);
     if (!veh_handle) {
         LOG_ERROR("VEH kaydedilemedi!");
