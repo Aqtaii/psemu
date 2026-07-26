@@ -1,4 +1,4 @@
-// ============================================================================
+﻿// ============================================================================
 // psemu: CANLI PERFORMANS METRIKLERI
 // ----------------------------------------------------------------------------
 // Olcumleri toplayip pencere BASLIGINDA (sol ust) gosterir. Vulkan icine metin
@@ -16,6 +16,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 
 extern "C" void PsemuDumpPltTop();
 
@@ -133,9 +134,19 @@ bool PsemuMetricFormat(char* buf, size_t buf_size) {
 		s_since_log = 0.0;
 		std::printf("[PERF] %s\n", buf);
 		std::fflush(stdout);
-		// NOT: PLT-TOP dokumu artik core.cpp'deki bagimsiz profil thread'inden
-		// aliniyor - yukleme asamasini da kapsasin diye (present henuz
-		// calismiyorken de veri lazim). Buradan cagirmak deltalari bozardi.
+		// PLT-TOP dokumu buradan (render thread'i) aliniyor. core.cpp'deki
+		// bagimsiz profil thread'i denendi ve iki kez erken takilmayla ortustu;
+		// bu yol daha once sorunsuz calisiyordu. Yukleme asamasini gormuyoruz,
+		// bedeli bu.
+		// Varsayilan KAPALI: 4096 girdilik tarama + ~13 satir printf, render
+		// thread'inde. Olcum yaparken ac: PSEMU_PLT_TOP=1
+		static const bool s_plt_top = [] {
+			const char* e = std::getenv("PSEMU_PLT_TOP");
+			return e != nullptr && e[0] != '0';
+		}();
+		if (s_plt_top) {
+			PsemuDumpPltTop();
+		}
 	}
 	return true;
 }

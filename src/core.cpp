@@ -653,6 +653,23 @@ static PSEMU_SYSV int NativeMutexUnlock(uint64_t* slot) {
 // Davranis birebir ayni, yalnizca exception maliyeti yok.
 static PSEMU_SYSV int NativeRet0() { return 0; }
 static PSEMU_SYSV int* NativeErrno() { return &g_guest_errno; }
+static PSEMU_SYSV int NativeStrcmp(const char* a, const char* b) {
+    if (a == nullptr || b == nullptr) return 0;
+    return strcmp(a, b);
+}
+static PSEMU_SYSV int NativeUsleep(uint64_t us) {
+    const DWORD ms = static_cast<DWORD>(us / 1000);
+    Sleep(ms != 0 ? ms : 1);
+    return 0;
+}
+// libc_char_table: bugun HIC implemente degil, zincirin sonundaki varsayilan
+// stub'a dusup 0 donuyor. Burada da BILEREK 0 donduruyoruz - bu adim yalnizca
+// exception maliyetini kaldirmali, davranisi degil. Oyun bunu saniyede ~3.700
+// kez cagiriyor, yani tek basina kalan yukun buyuk kismi.
+// AYRI KONU: NULL dondurmek muhtemelen yanlis (gercek bir ctype tablosu
+// donmeli, bkz. _Getpctype icin kurdugumuz 257 girdili tablo). Once dogru
+// tablonun duzenini dogrulamak gerek; tahminle doldurmak yeni hata uretir.
+static PSEMU_SYSV void* NativeCharTable() { return nullptr; }
 
 // plt_index -> native fonksiyon (yoksa nullptr => eski sentinel/VEH yolu).
 // linker.cpp GOT'u yamarken cagirir.
@@ -683,13 +700,21 @@ extern "C" void* PsemuNativePltStub(int plt_index) {
     if (n == "memset")  return reinterpret_cast<void*>(&NativeMemset);
     if (n == "memmove") return reinterpret_cast<void*>(&NativeMemmove);
     if (n == "memcmp")  return reinterpret_cast<void*>(&NativeMemcmp);
-    if (n == "strlen")  return reinterpret_cast<void*>(&NativeStrlen);
     if (n == "scePthreadMutexLock" || n == "pthread_mutex_lock")
         return reinterpret_cast<void*>(&NativeMutexLock);
     if (n == "scePthreadMutexUnlock" || n == "pthread_mutex_unlock")
         return reinterpret_cast<void*>(&NativeMutexUnlock);
     if (n == "sceKernelWaitSema") return reinterpret_cast<void*>(&NativeRet0);
     if (n == "__error")           return reinterpret_cast<void*>(&NativeErrno);
+    if (n == "strlen") return reinterpret_cast<void*>(&NativeStrlen);
+    // LISTEYI GENISLETME DENEMESI GERI ALINDI (2026-07-26):
+    // libc_char_table (3.700 cagri/sn), sceKernelUsleep ve strcmp eklendiginde
+    // kosular erken cokmeye basladi. ANCAK bunu onlara guvenle YUKLEYEMIYORUM:
+    // temel de aralikli olarak erken takiliyor/cokuyor (ayni oturumda native
+    // PLT'den ONCE de 398/402/408 cagride olen kosular oldu). Tek kosuya bakip
+    // suclu ilan etmek yanlis olur. Once o kararsizlik cozulmeli, sonra liste
+    // tek tek ve her biri icin BIRDEN FAZLA kosuyla genisletilmeli.
+    // Yukaridaki set 12 FPS ile dogrulanmis olan settir.
     return nullptr;
 }
 
@@ -1359,10 +1384,12 @@ extern "C" void PsemuDumpPltTop() {
         const uint64_t dc = c_now - s_prev_c[i];
         s_prev_n[i] = n_now;
         s_prev_c[i] = c_now;
-        if (dc == 0) continue;
-        // CPU dongusune gore sirala: darbogaz "en cok cagrilan" degil "en cok yakan".
+        if (dn == 0) continue;
+        // CAGRI SAYISINA gore sirala. Dongu sutunu bilgi amacli duruyor ama
+        // guvenilir degil (QueryThreadCycleTime baglam degisiminde sacmaliyor);
+        // oysa her cagri bir exception turu demek, yani sayim = maliyet.
         for (int k = 0; k < 12; k++) {
-            if (dc > top[k].cyc) {
+            if (dn > top[k].calls) {
                 for (int m = 11; m > k; m--) top[m] = top[m - 1];
                 top[k] = Row{i, dn, dc};
                 break;
@@ -1388,7 +1415,7 @@ extern "C" void PsemuDumpPltTop() {
         pn = nn;
     }
     printf("[PLT-TOP] CPU'yu en cok yakan PLT cagrilari (son aralik):\n");
-    for (int k = 0; k < 12 && top[k].cyc > 0; k++) {
+    for (int k = 0; k < 12 && top[k].calls > 0; k++) {
         const std::string* rn = g_plt_rn_cache[top[k].idx];
         const std::string* fn = g_plt_fn_cache[top[k].idx];
         const char* nm = (rn && !rn->empty()) ? rn->c_str() : (fn ? fn->c_str() : "?");
