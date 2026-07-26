@@ -988,6 +988,12 @@ void FlipQueue::GetFlipStatus(VideoOutConfig* cfg, VideoOutFlipStatus* out) {
 bool VideoOutFlipWindow(uint32_t micros) {
 	EXIT_IF(g_video_out_context == nullptr);
 
+	// DENENDI VE GERI ALINDI: "once flip, is yoksa vblank" sirasi. Beklenti,
+	// misafirin kare basina sceKernelWaitEqueue'de bekledigi ~35 ms'i
+	// dusurmekti (dongu once uyuyup SONRA kuyruga baktigi icin bir vblank
+	// kaybettigi dusunuluyordu). OLCUM fayda gostermedi: bekleme 35.9 ms'de
+	// kaldi, sceAgcSuspendPoint 10 -> 25 ms'e cikti, FPS daha oynak oldu.
+	// Darbogaz bu sira degil (bkz. asagidaki kare dokumu).
 	WaitForNextVblank();
 
 	return g_video_out_context->GetFlipQueue().Flip(micros);
