@@ -2145,6 +2145,48 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             }
 
             // ========================================================
+            // COMMON DIALOG (mesaj penceresi) - ZINCIRDEN ONCE
+            // ========================================================
+            // Astro Bot acilista bir sistem mesaj penceresi acip durumunu
+            // 60 Hz'de yokluyor (olculdu: sceMsgDialogUpdateStatus +
+            // sceKernelUsleep(16000) dongusu). Varsayilan stub 0 = NONE
+            // donduruyordu, yani pencere ASLA bitmiyor ve oyun o dongude
+            // sonsuza kadar kaliyordu.
+            //
+            // Sony durum degerleri: NONE=0, INITIALIZED=1, RUNNING=2, FINISHED=3.
+            // Pencereyi "hemen bitti" olarak bildiriyoruz ki oyun devam etsin.
+            if (readable_name == "sceMsgDialogUpdateStatus" ||
+                readable_name == "sceMsgDialogGetStatus" ||
+                readable_name == "sceCommonDialogUpdateStatus" ||
+                readable_name == "sceErrorDialogUpdateStatus" ||
+                readable_name == "sceErrorDialogGetStatus" ||
+                readable_name == "sceSaveDataDialogUpdateStatus" ||
+                readable_name == "sceSaveDataDialogGetStatus" ||
+                readable_name == "sceNpProfileDialogUpdateStatus" ||
+                readable_name == "sceImeDialogGetStatus") {
+                ctx->Rax  = 3; // SCE_COMMON_DIALOG_STATUS_FINISHED
+                ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                ctx->Rsp += 8;
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+            if (readable_name == "sceMsgDialogGetResult" ||
+                readable_name == "sceErrorDialogGetResult" ||
+                readable_name == "sceSaveDataDialogGetResult") {
+                // Sonuc yapisi: {int32 mode; int32 result; int32 buttonId; ...}
+                // Sifirlayip "OK" bildiriyoruz. Yapinin tam boyutunu bilmiyoruz;
+                // 64 bayt guvenli bir ust sinir.
+                void* res = reinterpret_cast<void*>(ctx->Rdi);
+                if (res != nullptr && SafeWritable(res, 64)) {
+                    memset(res, 0, 64);
+                    reinterpret_cast<int32_t*>(res)[2] = 1; // buttonId = OK
+                }
+                ctx->Rax  = 0;
+                ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                ctx->Rsp += 8;
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+
+            // ========================================================
             // SEMAFORLAR - ZINCIRDEN ONCE
             // ========================================================
             // Onceden HICBIRI implemente degildi: WaitSema aninda 0 (basarili)
@@ -2639,6 +2681,22 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             // 16-byte hizali doner; _aligned_* ailesi kullanarak free/realloc
             // ile tutarli kaliyoruz (TUM tahsisatlar ayni yoldan gectigi icin
             // free/realloc her zaman _aligned_* pointer'i gorur).
+            // C++ global tahsis operatorleri. Astro Bot bunlari libc'den import
+            // ediyor (modul tablosu: sonek "#s#s" -> id 44 -> libc) ve NID'leri
+            // hicbir veritabaninda yoktu; tuzlu SHA1 hash'iyle kaba kuvvet
+            // cozuldu (bkz. tools/scripts/nid_libc.py).
+            // malloc/free ile AYNI ayiriciyi kullanmak sart: oyun new ile
+            // aldigini free ile, malloc ile aldigini delete ile birakabiliyor.
+            else if (readable_name == "_Znwm" || readable_name == "_Znam" ||
+                     readable_name == "operator new") {
+                const size_t size     = static_cast<size_t>(ctx->Rdi);
+                const size_t alloc_sz = size ? (size + 65536) : 65536;
+                void*        p        = _aligned_malloc(alloc_sz, 16);
+                if (p) memset(p, 0, alloc_sz);
+                RegisterAllocSize(p, size);
+                ctx->Rax = reinterpret_cast<uint64_t>(p);
+                special_return_set = true;
+            }
             else if (readable_name == "malloc") {
                 // malloc(size): RDI=size
                 size_t size = static_cast<size_t>(ctx->Rdi);

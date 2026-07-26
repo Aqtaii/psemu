@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <string>
 #include <unordered_map>
 
@@ -158,6 +158,8 @@ inline std::unordered_map<std::string, std::string> g_nid_to_name = {
     {"5OqszGpy7Mg#S#N", "strtoull"},
     {"2vDqwBlpF-o#T#T", "strtod"},
     {"2vDqwBlpF-o#S#N", "strtod"},
+    {"fJnpuVVBbKk#s#s", "_Znwm"},
+    {"fJnpuVVBbKk#T#T", "_Znwm"},
     {"1uJgoVq3bQU#T#T", "libc_char_table"},
     {"1uJgoVq3bQU#S#N", "libc_char_table"},
     {"1uJgoVq3bQU#T#N", "libc_char_table"},
@@ -3785,3 +3787,4 @@ inline std::unordered_map<std::string, std::string> g_nid_to_name = {
     {"not_a_nid#T#N", "sceKernelWaitSema"},
     {"not_a_nid#S#T", "sceKernelWaitSema"},
 };
+
