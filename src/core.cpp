@@ -705,7 +705,9 @@ extern "C" void* PsemuNativePltStub(int plt_index) {
         return reinterpret_cast<void*>(&NativeMutexLock);
     if (n == "scePthreadMutexUnlock" || n == "pthread_mutex_unlock")
         return reinterpret_cast<void*>(&NativeMutexUnlock);
-    if (n == "sceKernelWaitSema") return reinterpret_cast<void*>(&NativeRet0);
+    // sceKernelWaitSema ARTIK NATIVE DEGIL: gercek semafor implementasyonu
+    // geldi (bloklamasi ve zaman asimini onurlandirmasi gerekiyor), o yuzden
+    // VEH'teki erken dala gitmeli.
     if (n == "__error")           return reinterpret_cast<void*>(&NativeErrno);
     if (n == "strlen") return reinterpret_cast<void*>(&NativeStrlen);
     // LISTEYI GENISLETME DENEMESI GERI ALINDI (2026-07-26):
@@ -2127,6 +2129,94 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                            << " RSI=0x" << ctx->Rsi << " RDX=0x" << ctx->Rdx << std::dec;
                 }
                 LOG_INFO(hle_ss.str());
+            }
+
+            // ========================================================
+            // SEMAFORLAR - ZINCIRDEN ONCE
+            // ========================================================
+            // Onceden HICBIRI implemente degildi: WaitSema aninda 0 (basarili)
+            // donuyordu. Oyunun "sayac gelene kadar bekle" istegi boylece aninda
+            // donen bir yoklamaya donusuyor ve donguye giriyordu - olculdu:
+            // saniyede ~42.000 WaitSema cagrisi, 1 tane CreateSema, SignalSema
+            // logda HIC yok.
+            //
+            // ABI (SysV): CreateSema(out RDI, name RSI, attr RDX, init RCX, max R8, opt R9)
+            //             WaitSema(sema RDI, need RSI, timeout_us* RDX)
+            //             SignalSema(sema RDI, count RSI)
+            //             PollSema(sema RDI, need RSI)
+            if (readable_name == "sceKernelCreateSema" || readable_name == "sceKernelWaitSema" ||
+                readable_name == "sceKernelSignalSema" || readable_name == "sceKernelPollSema" ||
+                readable_name == "sceKernelDeleteSema" ||
+                readable_name == "sceKernelCancelSema") {
+                int rc = 0;
+                if (readable_name == "sceKernelCreateSema") {
+                    uint64_t* out  = reinterpret_cast<uint64_t*>(ctx->Rdi);
+                    const int init = static_cast<int>(ctx->Rcx);
+                    int       maxv = static_cast<int>(ctx->R8);
+                    if (maxv <= 0) maxv = 0x7FFFFFFF;
+                    HANDLE h = CreateSemaphoreW(nullptr, init, maxv, nullptr);
+                    if (out != nullptr && SafeWritable(out, 8) && h != nullptr) {
+                        *out = reinterpret_cast<uint64_t>(h);
+                    } else {
+                        rc = -2147352575; // SCE_KERNEL_ERROR_ENOMEM benzeri
+                    }
+                    printf("[SEMA] create -> handle=%p init=%d max=%d\n", h, init, maxv);
+                    fflush(stdout);
+                } else if (readable_name == "sceKernelSignalSema") {
+                    HANDLE    h = reinterpret_cast<HANDLE>(ctx->Rdi);
+                    const int n = static_cast<int>(ctx->Rsi);
+                    if (h != nullptr) ReleaseSemaphore(h, n > 0 ? n : 1, nullptr);
+                    static std::atomic<uint64_t> s_sig{0};
+                    const uint64_t sg = s_sig.fetch_add(1) + 1;
+                    if (sg <= 4 || (sg % 1000ull) == 0) {
+                        printf("[SEMA] signal #%llu handle=%p count=%d\n",
+                               static_cast<unsigned long long>(sg), h, n);
+                        fflush(stdout);
+                    }
+                } else if (readable_name == "sceKernelPollSema") {
+                    HANDLE h = reinterpret_cast<HANDLE>(ctx->Rdi);
+                    rc = (h != nullptr && WaitForSingleObject(h, 0) == WAIT_OBJECT_0) ? 0 : -2147352573;
+                } else if (readable_name == "sceKernelWaitSema") {
+                    HANDLE          h  = reinterpret_cast<HANDLE>(ctx->Rdi);
+                    const uint32_t* tp = reinterpret_cast<const uint32_t*>(ctx->Rdx);
+                    // GUVENLIK SINIRI: oyun bu semaforu hic sinyallemiyorsa
+                    // INFINITE beklemek kilitlenme demek. En fazla 50 ms bekleyip
+                    // basarili donuyoruz - eski davranisin (aninda basari)
+                    // korunmus ama saniyede 42.000 yerine en fazla 20 kez
+                    // calisan hali. Sinira kac kez carptigimizi sayiyoruz:
+                    // sifira yakinsa sinyalleme calisiyor demektir.
+                    DWORD ms = 50;
+                    bool  had_timeout_arg = false;
+                    if (tp != nullptr && SafeReadable(tp, 4)) {
+                        had_timeout_arg = true;
+                        const uint32_t us = *tp;
+                        ms = static_cast<DWORD>(us / 1000u);
+                        if (ms > 50) ms = 50;
+                    }
+                    const DWORD wr = (h != nullptr) ? WaitForSingleObject(h, ms) : WAIT_TIMEOUT;
+
+                    static std::atomic<uint64_t> s_w{0}, s_to{0};
+                    const uint64_t wn = s_w.fetch_add(1) + 1;
+                    if (wr != WAIT_OBJECT_0) s_to.fetch_add(1, std::memory_order_relaxed);
+                    if (wn <= 6 || (wn % 500ull) == 0) {
+                        printf("[SEMA] wait #%llu handle=%p need=%d timeout_arg=%d ms=%lu "
+                               "sonuc=%s (zaman asimi orani %llu/%llu)\n",
+                               static_cast<unsigned long long>(wn), h,
+                               static_cast<int>(ctx->Rsi), had_timeout_arg ? 1 : 0, ms,
+                               (wr == WAIT_OBJECT_0) ? "SINYAL" : "zaman-asimi",
+                               static_cast<unsigned long long>(s_to.load()),
+                               static_cast<unsigned long long>(wn));
+                        fflush(stdout);
+                    }
+                    rc = 0; // zaman asiminda da basarili: eski davranis korunuyor
+                }
+                // DeleteSema/CancelSema: tutamaci kapatmiyoruz (baska thread
+                // hala bekliyor olabilir) - scePthreadMutexDestroy ile ayni yaklasim.
+
+                ctx->Rax  = static_cast<uint64_t>(static_cast<int64_t>(rc));
+                ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                ctx->Rsp += 8;
+                return EXCEPTION_CONTINUE_EXECUTION;
             }
 
             // ========================================================
