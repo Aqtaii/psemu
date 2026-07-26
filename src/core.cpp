@@ -705,7 +705,7 @@ extern "C" void* PsemuNativePltStub(int plt_index) {
     if (n == "memcpy")  return reinterpret_cast<void*>(&NativeMemcpy);
     if (n == "memset")  return reinterpret_cast<void*>(&NativeMemset);
     if (n == "memmove") return reinterpret_cast<void*>(&NativeMemmove);
-    if (n == "memcmp")  return reinterpret_cast<void*>(&NativeMemcmp);
+    if (n == "memcmp" || n == "bcmp") return reinterpret_cast<void*>(&NativeMemcmp);
     if (n == "scePthreadMutexLock" || n == "pthread_mutex_lock")
         return reinterpret_cast<void*>(&NativeMutexLock);
     if (n == "scePthreadMutexUnlock" || n == "pthread_mutex_unlock")
@@ -2212,7 +2212,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                          readable_name == "pthread_mutex_lock")     f = FOP_MTX_LOCK;
                 else if (readable_name == "scePthreadMutexUnlock" ||
                          readable_name == "pthread_mutex_unlock")   f = FOP_MTX_UNLOCK;
-                else if (readable_name == "memcmp")                 f = FOP_MEMCMP;
+                else if (readable_name == "memcmp" || readable_name == "bcmp") f = FOP_MEMCMP;
                 else if (readable_name == "memmove")                f = FOP_MEMMOVE;
                 else if (readable_name == "__error")                f = FOP_ERRNO;
                 // Sik cagrilan ve davranisi "hicbir sey yap, 0 don" olan isimli
@@ -3453,7 +3453,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 int r = strncmp(a.c_str(), b.c_str(), n);
                 ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(r));
                 special_return_set = true;
-            } else if (readable_name == "memcmp") {
+            } else if (readable_name == "memcmp" || readable_name == "bcmp") {
                 const void* a = reinterpret_cast<const void*>(ctx->Rdi);
                 const void* b = reinterpret_cast<const void*>(ctx->Rsi);
                 size_t n = static_cast<size_t>(ctx->Rdx);
@@ -6459,6 +6459,7 @@ void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t tex
 }
 
 extern "C" void PsemuNotifyKytyFlip() {}
+
 
 
 
