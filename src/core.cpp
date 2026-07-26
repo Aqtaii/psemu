@@ -1443,6 +1443,38 @@ static std::atomic<uint64_t> g_plt_cycles[kPltCacheMax];
 static std::atomic<uint64_t> g_plt_wall[kPltCacheMax];
 static DWORD                 g_game_tid = 0;
 
+// ============================================================================
+// SON HLE CAGRILARI HALKA TAMPONU
+// ----------------------------------------------------------------------------
+// Cokme aninda "hemen once ne calisti" sorusunu cevaplar. Normal log yeterli
+// degil: gurultu filtresi her fonksiyonu 8 cagridan sonra susturuyor, bu
+// yuzden cokmeden onceki gercek sira logda GORUNMUYOR.
+// RSP ve donus adresini de tutuyoruz - yigin bozulmasi arastirmasinin cekirdegi
+// budur: donus adresi bir komutun ORTASINA dusuyorsa, onu kimin yazdigini
+// buradan geriye dogru izleyebiliyoruz.
+// ============================================================================
+struct PltTrace {
+    const std::string* name;
+    uint64_t           rsp;
+    uint64_t           ret;
+    DWORD              tid;
+};
+static constexpr uint32_t kPltTraceMax = 24;
+static PltTrace              g_plt_trace[kPltTraceMax];
+static std::atomic<uint32_t> g_plt_trace_pos{0};
+
+static void DumpPltTrace(std::stringstream& out) {
+    const uint32_t pos = g_plt_trace_pos.load(std::memory_order_relaxed);
+    out << "\n[-] --- SON " << kPltTraceMax << " HLE CAGRISI (en yeni en altta) ---";
+    for (uint32_t i = 0; i < kPltTraceMax; i++) {
+        const PltTrace& e = g_plt_trace[(pos + i) % kPltTraceMax];
+        if (e.name == nullptr) continue;
+        out << "\n    TID=" << std::dec << e.tid << "  RSP=0x" << std::hex << e.rsp
+            << "  RET=0x" << e.ret << "  " << *e.name;
+    }
+    out << std::dec;
+}
+
 // Saniyede on binlerce PLT cagrisi var; HANGI fonksiyonlar oldugunu bilmeden
 // optimize etmek tahmindir. Periyodik olarak en sicak 15'ini dok.
 extern "C" void PsemuDumpPltTop() {
@@ -1819,6 +1851,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 }
                 *ss_ptr << std::dec;
             }
+            DumpPltTrace(*ss_ptr);
         }
         return *ss_ptr;
     };
@@ -2072,6 +2105,19 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             }
             const std::string& func_name     = *fn_ptr;
             const std::string& readable_name = *rn_ptr;
+
+            // Halka tampona kaydet: cokme aninda son cagrilar dokulecek.
+            {
+                const uint32_t slot = g_plt_trace_pos.fetch_add(1, std::memory_order_relaxed) %
+                                      kPltTraceMax;
+                PltTrace& e = g_plt_trace[slot];
+                e.name = readable_name.empty() ? fn_ptr : rn_ptr;
+                e.rsp  = ctx->Rsp;
+                e.ret  = SafeReadable(reinterpret_cast<void*>(ctx->Rsp), 8)
+                             ? *reinterpret_cast<uint64_t*>(ctx->Rsp)
+                             : 0;
+                e.tid  = GetCurrentThreadId();
+            }
             
             // SPIN/ORAN MONITORU: LOG-FILTRE bir fonksiyonu 8 cagridan sonra
             // susturdugu icin sonsuz donguler log'da GORUNMUYORDU (menu donmasi).
@@ -2469,12 +2515,22 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 readable_name == "sceErrorDialogGetResult" ||
                 readable_name == "sceSaveDataDialogGetResult") {
                 // Sonuc yapisi: {int32 mode; int32 result; int32 buttonId; ...}
-                // Sifirlayip "OK" bildiriyoruz. Yapinin tam boyutunu bilmiyoruz;
-                // 64 bayt guvenli bir ust sinir.
-                void* res = reinterpret_cast<void*>(ctx->Rdi);
-                if (res != nullptr && SafeWritable(res, 64)) {
-                    memset(res, 0, 64);
-                    reinterpret_cast<int32_t*>(res)[2] = 1; // buttonId = OK
+                //
+                // DIKKAT - BURADA BIR HATA YAPMISTIM: "yapinin tam boyutunu
+                // bilmiyoruz, 64 bayt guvenli bir ust sinir" deyip 64 bayt
+                // memset ediyordum. SceMsgDialogResult 44 bayttir
+                // (mode 4 + result 4 + buttonId 4 + reserved[32]); yapi YIGINDA
+                // duruyorsa 20 bayt tasip CAGIRANIN DONUS ADRESINI eziyordum.
+                // Belirtisi tam da gordugumuz seydi: komutun ORTASINA dusen,
+                // kosular arasi DEGISEN "gecersiz komut" cokmeleri.
+                //
+                // Kural: boyutunu KANITLAYAMADIGIMIZ bir yapiya asla tahminle
+                // yazma. Yalnizca anlamini bildigimiz ilk 12 bayti yaziyoruz.
+                int32_t* res = reinterpret_cast<int32_t*>(ctx->Rdi);
+                if (res != nullptr && SafeWritable(res, 12)) {
+                    res[0] = 0; // mode
+                    res[1] = 0; // result = OK
+                    res[2] = 1; // buttonId = OK
                 }
                 ctx->Rax  = 0;
                 ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
