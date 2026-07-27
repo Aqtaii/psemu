@@ -521,21 +521,62 @@ uint64_t g_dmem_base_addr = 0;
 
 // mspace tutamaci -> kapasite. sceLibcMspaceCreate'in 3. argumani, daha
 // sonra sceLibcMspaceMallocStats ile oyuna geri bildirilir.
+struct MspaceInfo {
+    uint64_t base = 0;   // sceLibcMspaceCreate'e verilen bellek
+    uint64_t cap  = 0;   // kapasite
+    uint64_t used = 0;   // bump ofseti
+};
 static std::mutex g_mspace_mtx;
-static std::map<uint64_t, uint64_t> g_mspace_cap;
+static std::map<uint64_t, MspaceInfo> g_mspace;
 
-static void MspaceRememberCapacity(uint64_t handle, uint64_t cap) {
+static void MspaceRemember(uint64_t handle, uint64_t base, uint64_t cap) {
     std::lock_guard<std::mutex> lock(g_mspace_mtx);
-    g_mspace_cap[handle] = cap;
+    // AYNI TABAN iki kez kaydedilirse ikincisini bolgesiz birak. Astro Bot
+    // ayni bellek uzerine ic ice mspace kuruyor (olculdu: base=0x...340000
+    // hem cap=0xb800000 hem cap=0x200000 ile). Ikisine de ayni bolgeden
+    // dagitsaydik birbirlerinin uzerine yazarlardi; bu durumda ikincisi
+    // guvenli host yigin yoluna duser.
+    for (const auto& kv : g_mspace) {
+        if (kv.second.base == base && base != 0) {
+            g_mspace[handle] = MspaceInfo{0, cap, 0};
+            return;
+        }
+    }
+    g_mspace[handle] = MspaceInfo{base, cap, 0};
 }
 
 static uint64_t MspaceCapacity(uint64_t handle) {
     std::lock_guard<std::mutex> lock(g_mspace_mtx);
-    auto it = g_mspace_cap.find(handle);
+    auto it = g_mspace.find(handle);
     // Bilinmeyen tutamac icin comert bir varsayilan: "yer var" demek,
     // "yer yok" demekten cok daha guvenli (oyun yoksa hic denemiyor).
-    return (it != g_mspace_cap.end() && it->second != 0) ? it->second
-                                                         : (256ull * 1024 * 1024);
+    return (it != g_mspace.end() && it->second.cap != 0) ? it->second.cap
+                                                        : (256ull * 1024 * 1024);
+}
+
+static uint64_t MspaceUsed(uint64_t handle) {
+    std::lock_guard<std::mutex> lock(g_mspace_mtx);
+    auto it = g_mspace.find(handle);
+    return (it != g_mspace.end()) ? it->second.used : 0;
+}
+
+// Tutamac GERCEK bir bellek bolgesi uzerine kurulduysa tahsisi O BOLGENIN
+// ICINDEN yap. Host yigininden vermek yanlisti: oyun bu isaretcileri GPU'ya
+// veriyor ve havuz araliginda olmalarini bekliyor. Bolge yoksa 0 don
+// (cagiran host yigin yoluna duser).
+static void* MspaceBumpAlloc(uint64_t handle, size_t n, size_t align) {
+    if (align < 16) align = 16;
+    std::lock_guard<std::mutex> lock(g_mspace_mtx);
+    auto it = g_mspace.find(handle);
+    if (it == g_mspace.end() || it->second.base == 0 || it->second.cap == 0) {
+        return nullptr;
+    }
+    MspaceInfo& m = it->second;
+    uint64_t p = (m.base + m.used + align - 1) & ~(uint64_t)(align - 1);
+    uint64_t end = p + n;
+    if (end > m.base + m.cap) return nullptr; // havuz doldu
+    m.used = end - m.base;
+    return reinterpret_cast<void*>(p);
 }
 
 static uint8_t* DmemBase() {
@@ -3173,7 +3214,13 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     // zorunda (asagiya bkz).
                     static uint64_t s_fake_mspace = 0x4D53504100000001ull; // "MSPA..."
                     rv = ++s_fake_mspace;
-                    MspaceRememberCapacity(rv, static_cast<uint64_t>(ctx->Rdx));
+                    // Create(name, base, capacity, flag): RSI=base, RDX=capacity
+                    MspaceRemember(rv, static_cast<uint64_t>(ctx->Rsi),
+                                       static_cast<uint64_t>(ctx->Rdx));
+                    printf("[MSPACE] Create -> handle=0x%llx base=0x%llx cap=0x%llx\n",
+                           (unsigned long long)rv, (unsigned long long)ctx->Rsi,
+                           (unsigned long long)ctx->Rdx);
+                    fflush(stdout);
                 } else if (readable_name == "sceLibcMspaceMallocStats" ||
                            readable_name == "sceLibcMspaceMallocStatsFast") {
                     // (SceLibcMspace msp, SceLibcMallocManagedSize* out)
@@ -3198,8 +3245,9 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                         *reinterpret_cast<uint32_t*>(st + 4) = 0;  // reserved
                         *reinterpret_cast<uint64_t*>(st + 8)  = cap; // maxSystemSize
                         *reinterpret_cast<uint64_t*>(st + 16) = cap; // currentSystemSize
-                        *reinterpret_cast<uint64_t*>(st + 24) = 0;   // maxInuseSize
-                        *reinterpret_cast<uint64_t*>(st + 32) = 0;   // currentInuseSize
+                        const uint64_t used = MspaceUsed(ctx->Rdi);
+                        *reinterpret_cast<uint64_t*>(st + 24) = used; // maxInuseSize
+                        *reinterpret_cast<uint64_t*>(st + 32) = used; // currentInuseSize
                     }
                     rv = 0;
                 } else if (readable_name == "sceLibcMspaceDestroy") {
@@ -3231,8 +3279,22 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     } else {
                         n = static_cast<size_t>(ctx->Rsi);
                     }
-                    // malloc yolundaki ayni comert tampon: oyun bazen
-                    // istediginden fazlasina dokunuyor.
+                    // Tutamac GERCEK bir bolge uzerine kurulduysa (GPU Onion
+                    // havuzu gibi) tahsisi ORADAN yap: oyun bu isaretcileri
+                    // GPU'ya veriyor ve havuz araliginda olmalarini bekliyor.
+                    // Realloc'ta eski veriyi tasimak gerektigi icin bump
+                    // yolunu yalnizca yeni tahsislerde kullaniyoruz.
+                    if (old_p == nullptr) {
+                        if (void* gp = MspaceBumpAlloc(ctx->Rdi, n ? n : 16, align)) {
+                            memset(gp, 0, n ? n : 16);
+                            RegisterAllocSize(gp, n);
+                            rv = reinterpret_cast<uint64_t>(gp);
+                            goto mspace_done;
+                        }
+                    }
+                    // Bolgesiz tutamac: host yigini. malloc yolundaki ayni
+                    // comert tampon (oyun bazen istediginden fazlasina dokunuyor).
+                    {
                     const size_t alloc_sz = n ? (n + 65536) : 65536;
                     void*        p        = _aligned_malloc(alloc_sz, align);
                     if (p != nullptr) {
@@ -3246,7 +3308,9 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                         RegisterAllocSize(p, n);
                     }
                     rv = reinterpret_cast<uint64_t>(p);
+                    }
                 }
+            mspace_done:
                 static std::atomic<uint64_t> s_ms{0};
                 const uint64_t mn = s_ms.fetch_add(1) + 1;
                 if (mn <= 6 || (mn % 5000ull) == 0) {
