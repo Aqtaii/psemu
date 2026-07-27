@@ -1306,6 +1306,11 @@ static uint64_t  g_trace_ring[kTraceRing] = {0};
 // vtable isaretcisi RAX'tadir ve nesnenin TURUNU ancak boyle ogrenebiliyoruz.
 // (Ilgili komut bir "push rbp" olmadigi icin prologue breakpoint'i kullanilamaz.)
 static uint64_t  g_trace_rax[kTraceRing] = {0};
+// RCX/R8/R11 de gerekti: incelenen tahsis dongusunde atanan isaretci RCX'te,
+// bump isaretcisi R8'de, girdi ofseti R11'de tutuluyor.
+static uint64_t  g_trace_rcx[kTraceRing] = {0};
+static uint64_t  g_trace_r8[kTraceRing]  = {0};
+static uint64_t  g_trace_r11[kTraceRing] = {0};
 static uint64_t  g_trace_pos    = 0;
 static uint64_t  g_trace_steps  = 0;
 static uint64_t  g_trace_max    = 3000000; // PSEMU_TRACE_MAX ile degistirilebilir
@@ -2236,6 +2241,9 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
     // Tek adim izleme: sadece RIP'i kaydet, TF'i kurulu tut.
     if (code == EXCEPTION_SINGLE_STEP && g_trace_active) {
         g_trace_rax[g_trace_pos % kTraceRing]    = ctx->Rax;
+        g_trace_rcx[g_trace_pos % kTraceRing]    = ctx->Rcx;
+        g_trace_r8[g_trace_pos % kTraceRing]     = ctx->R8;
+        g_trace_r11[g_trace_pos % kTraceRing]    = ctx->R11;
         g_trace_ring[g_trace_pos++ % kTraceRing] = ctx->Rip;
         if (g_expected_argv != 0 && ctx->R15 != g_r15_prev &&
             (g_r15_prev == g_expected_argv || ctx->R15 == g_expected_argv)) {
@@ -6789,7 +6797,10 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 return e ? std::strtoull(e, nullptr, 0) : 0ull;
             }();
             if (s_rax_at != 0 && (v - g_base_addr) == s_rax_at) {
-                ss_init() << "{RAX=0x" << g_trace_rax[k] << "}";
+                ss_init() << "{RAX=0x" << g_trace_rax[k]
+                          << " RCX=0x" << g_trace_rcx[k]
+                          << " R8=0x"  << g_trace_r8[k]
+                          << " R11=0x" << g_trace_r11[k] << "}";
             }
             if ((i % 8) == 7) ss_init() << "\n[-]  ";
         }
