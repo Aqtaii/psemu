@@ -1,6 +1,7 @@
-#ifndef EMULATOR_SRC_GRAPHICS_HOST_GPU_REGIONMANAGER_H_
+﻿#ifndef EMULATOR_SRC_GRAPHICS_HOST_GPU_REGIONMANAGER_H_
 #define EMULATOR_SRC_GRAPHICS_HOST_GPU_REGIONMANAGER_H_
 
+#include "graphics/host_gpu/psemuGfxTrace.h"
 #include "common/assert.h"
 #include "graphics/host_gpu/pageManager.h"
 #include "graphics/host_gpu/regionDefinitions.h"
@@ -263,7 +264,10 @@ public:
 			// sayfalarinin korumasini degistiriyor (VirtualProtect) - bizim
 			// VEH'imizle kesisen tek yer burasi. ForEachRange ise sadece
 			// bitmap geziyor. Hangisi oldugunu ayirt ediyoruz.
-			const bool trace = (size >= (1u << 20));
+			// VARSAYILAN KAPALI: bu yol cok sicak ve printf+fflush tek basina
+			// Dreaming Sarah'yi T+2'de takilir hale getirdi (olculdu).
+			// Acmak icin: PSEMU_GFX_TRACE=1
+			const bool trace = PsemuGfxTrace() && (size >= (1u << 20));
 			if (trace) { printf("[RM-MARK] ApplyProtection oncesi\n"); fflush(stdout); }
 			auto changed = m_cpu_dirty ^ m_writable;
 			m_writable   = m_cpu_dirty;

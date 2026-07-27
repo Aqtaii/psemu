@@ -1,6 +1,7 @@
-#ifndef EMULATOR_SRC_GRAPHICS_HOST_GPU_MEMORYTRACKER_H_
+﻿#ifndef EMULATOR_SRC_GRAPHICS_HOST_GPU_MEMORYTRACKER_H_
 #define EMULATOR_SRC_GRAPHICS_HOST_GPU_MEMORYTRACKER_H_
 
+#include "graphics/host_gpu/psemuGfxTrace.h"
 #include "common/assert.h"
 #include "graphics/host_gpu/pageManager.h"
 #include "graphics/host_gpu/regionManager.h"
@@ -98,7 +99,8 @@ public:
 		// TANI: Astro Bot'un ikinci video-out yuzeyinde burada takiliyor.
 		// Yalnizca BUYUK araliklari izliyoruz (video-out yuzeyleri); bufferCache
 		// bu sablonu cok sik cagiriyor, hepsini basmak logu bogardi.
-		const bool trace = (size >= (1u << 20));
+		// VARSAYILAN KAPALI - bkz. regionManager.h'deki ayni not.
+		const bool trace = PsemuGfxTrace() && (size >= (1u << 20));
 		if (trace) { printf("[MT-MARK] ForEachUploadRange giris (0x%llx bayt)\n",
 		                    (unsigned long long)size); fflush(stdout); }
 		CheckNotInUploadCallback();

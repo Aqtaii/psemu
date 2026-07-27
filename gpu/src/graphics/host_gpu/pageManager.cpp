@@ -351,6 +351,10 @@ void PageManager::UpdatePageWatchers(bool track, uint64_t vaddr, uint64_t size,
 		Fatal("invalid watcher mode");
 	}
 	const auto end = PageEnd(vaddr, size);
+	// NOT: buraya sayfa basina atomik bir ilerleme sayaci konulmustu; bu yol
+	// COK SICAK (her izlenen aralik icin sayfa sayfa donuyor) ve o sayac tek
+	// basina Dreaming Sarah'yi T+2'de takilir hale getirdi. Olcum araci
+	// olcugu seyi bozdu; kaldirildi.
 	for (auto page_vaddr = PageStart(vaddr); page_vaddr < end; page_vaddr += PAGE_SIZE) {
 		auto* region =
 		    track ? m_impl->GetOrCreateRegion(page_vaddr) : m_impl->FindRegion(page_vaddr);

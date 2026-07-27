@@ -715,6 +715,10 @@ static PSEMU_SYSV int NativeMemcmp(const void* a, const void* b, size_t n) {
 }
 static PSEMU_SYSV size_t NativeStrlen(const char* s) { return s ? strlen(s) : 0; }
 
+// VEH'teki "scePthreadGetthreadid" dali ile BIREBIR ayni deger; tek fark
+// exception turu olmadan calismasi.
+static PSEMU_SYSV uint64_t NativeGetThreadId() { return GetCurrentThreadId(); }
+
 static PSEMU_SYSV int NativeMutexLock(uint64_t* slot) {
     GuestMutex* m = GetOrCreateMutex(slot);
     if (m != nullptr) EnterCriticalSection(&m->cs);
@@ -884,6 +888,16 @@ extern "C" void* PsemuNativePltStub(int plt_index) {
     // VEH'teki erken dala gitmeli.
     if (n == "__error")           return reinterpret_cast<void*>(&NativeErrno);
     if (n == "strlen") return reinterpret_cast<void*>(&NativeStrlen);
+    // DENENDI VE GERI ALINDI (2026-07-27): scePthreadGetthreadid.
+    // Gerekce makuldu - Astro Bot'un is parcaciklari onu siki bir dongude
+    // cagiriyor ve her cagri bir exception turu. Native'e alindi, GOT'a
+    // gercekten yazildi (native slot 11 -> 12, PLT#72 artik hic [PLT-HLE]
+    // uretmiyor). AMA CPU yuku HIC DEGISMEDI (25 sn'de ~230 sn, ~9 cekirdek):
+    // yani cekirdekleri yakan sey bu degilmis. Ustelik ayni derlemede
+    // Dreaming Sarah T+2.31'de takildi (oncesinde 12.5 FPS oynuyordu).
+    // Faydasi olculemeyen, riski olcumle gorunen bir degisikligi tutmuyoruz.
+    // Yukaridaki notun uyardigi tam da bu: bu liste tek tek ve BIRDEN FAZLA
+    // kosuyla genisletilmeli.
     // LISTEYI GENISLETME DENEMESI GERI ALINDI (2026-07-26):
     // libc_char_table (3.700 cagri/sn), sceKernelUsleep ve strcmp eklendiginde
     // kosular erken cokmeye basladi. ANCAK bunu onlara guvenle YUKLEYEMIYORUM:
