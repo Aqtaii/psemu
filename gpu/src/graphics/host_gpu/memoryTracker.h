@@ -95,13 +95,26 @@ public:
 	                        UploadFunc&& upload_func) {
 		static_assert(std::is_nothrow_invocable_v<RangeFunc&, uint64_t, uint64_t>);
 		static_assert(std::is_nothrow_invocable_v<UploadFunc&>);
+		// TANI: Astro Bot'un ikinci video-out yuzeyinde burada takiliyor.
+		// Yalnizca BUYUK araliklari izliyoruz (video-out yuzeyleri); bufferCache
+		// bu sablonu cok sik cagiriyor, hepsini basmak logu bogardi.
+		const bool trace = (size >= (1u << 20));
+		if (trace) { printf("[MT-MARK] ForEachUploadRange giris (0x%llx bayt)\n",
+		                    (unsigned long long)size); fflush(stdout); }
 		CheckNotInUploadCallback();
+		if (trace) { printf("[MT-MARK] CheckNotInUploadCallback OK; m_access_mutex oncesi\n");
+		             fflush(stdout); }
 		std::unique_lock access(m_access_mutex);
+		if (trace) { printf("[MT-MARK] m_access_mutex ALINDI\n"); fflush(stdout); }
 		RequireMapped(vaddr, size);
 		Iterate<true>(vaddr, size, [](RegionManager*, uint64_t, uint64_t) {});
+		if (trace) { printf("[MT-MARK] Iterate<true> BITTI; manager kilitleri oncesi\n");
+		             fflush(stdout); }
 		s_upload_owner = this;
 		Iterate<false>(vaddr, size, [&](RegionManager* manager, uint64_t offset, uint64_t bytes) {
+			if (trace) { printf("[MT-MARK] manager->lock oncesi\n"); fflush(stdout); }
 			manager->lock.lock();
+			if (trace) { printf("[MT-MARK] manager->lock ALINDI\n"); fflush(stdout); }
 			manager->Track(manager->GetCpuAddr() + offset, bytes);
 			manager->ForEachModifiedRange<DirtySource::Cpu, true>(manager->GetCpuAddr() + offset,
 			                                                      bytes, range_func);

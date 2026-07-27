@@ -26,6 +26,7 @@ namespace Libs::Graphics {
 // TANI: pencere thread'i vblank/flip'e girdiginde damgalanir, cikinca 0
 // yapilir. Gozcu thread'i bunu izleyip takilmayi bildiriyor.
 static std::atomic<uint64_t> g_flip_enter_ms{0};
+static std::atomic<int>      g_flip_stage{0}; // 1=BeginVblank 2=FlipWindow 3=EndVblank
 
 
 // window.cpp'de tanimliydi; window.cpp derlenmedigi icin burada tanimliyoruz.
@@ -212,9 +213,15 @@ void WindowRun() {
 			const uint64_t dt = GetTickCount64() - t;
 			if (dt > 3000 && !reported) {
 				reported = true;
-				printf("[WIN-WATCH] pencere thread'i vblank/flip icinde %llu ms takildi "
+				const int stage = g_flip_stage.load(std::memory_order_relaxed);
+				const char* name = (stage == 1)   ? "BeginVblank (ctx->mutex bekliyor = KURBAN)"
+				                   : (stage == 2) ? "FlipWindow (izleyici kilidini ALMIS olabilir "
+				                                    "= DONGUSEL kilitlenme)"
+				                   : (stage == 3) ? "EndVblank"
+				                                  : "bilinmiyor";
+				printf("[WIN-WATCH] pencere thread'i %llu ms takildi; ASAMA=%d %s "
 				       "-> mesaj pompasi durdu (pencere 'Yanit Vermiyor')\n",
-				       static_cast<unsigned long long>(dt));
+				       static_cast<unsigned long long>(dt), stage, name);
 				fflush(stdout);
 			}
 		}
@@ -235,12 +242,15 @@ void WindowRun() {
 			TranslateMessage(&msg);
 			DispatchMessageW(&msg);
 		}
-		// TANI: pencere thread'i VideoOutFlipWindow icinde ctx->mutex'i
-		// bekleyip mesaj pompasina donemiyor mu? Girisi damgaliyoruz;
-		// asagidaki gozcu thread'i 3 saniyeden uzun surerse bildiriyor.
-		// (Cagri hic donmezse "sonrasinda olc" yaklasimi ise yaramaz.)
+		// TANI: pencere thread'i hangi ASAMADA takiliyor? Uc cagriyi ayri ayri
+		// damgaliyoruz. Bu ayrim onemli: BeginVblank'te takiliyorsa pencere
+		// yalnizca ctx->mutex'in KURBANI (asil kilit baska yerde); FlipWindow'un
+		// derinlerinde takiliyorsa izleyici kilidini ALMIS olabilir ve o zaman
+		// gercek bir DONGUSEL kilitlenme demektir.
+		g_flip_stage.store(1, std::memory_order_relaxed);
 		g_flip_enter_ms.store(GetTickCount64(), std::memory_order_relaxed);
 		VideoOut::VideoOutBeginVblank();
+		g_flip_stage.store(2, std::memory_order_relaxed);
 		// PERF: eskiden micros=0 idi. VideoOutFlipWindow once vblank'i bekler,
 		// SONRA flip kuyruguna bakar; timeout 0 ile kuyruk o an bossa hemen
 		// false doner ve bir sonraki vblank'e (16.6 ms) kayardik. Oyun karesini
@@ -253,7 +263,9 @@ void WindowRun() {
 		// surekli mesgul edilip oyun thread'inin ac kalmasi. Bilinen calisan
 		// deger (0) geri alindi; vsync kaybi baska yoldan cozulmeli.
 		VideoOut::VideoOutFlipWindow(0);
+		g_flip_stage.store(3, std::memory_order_relaxed);
 		VideoOut::VideoOutEndVblank();
+		g_flip_stage.store(0, std::memory_order_relaxed);
 		g_flip_enter_ms.store(0, std::memory_order_relaxed);
 	}
 }
