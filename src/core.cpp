@@ -22,6 +22,7 @@
 #include "nids.h"
 #include "game_profile.h"
 #include "video.h"
+#include "audio.h"   // sceAudioOut* -> waveOut arka ucu
 #include "kernel/eventQueue.h"
 #include "graphics/presentation/videoOut.h"
 #include "libs/controller.h"
@@ -5830,32 +5831,51 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     ctx->Rax = static_cast<uint64_t>(slen);
                 }
                 special_return_set = true;
+            } else if (readable_name == "sceAudioOutInit") {
+                ctx->Rax = static_cast<uint64_t>(Psemu::Audio::Init());
+                special_return_set = true;
+            } else if (readable_name == "sceAudioOutOpen") {
+                // int sceAudioOutOpen(user_id, type, index, len, freq, param)
+                // UYGULANMAMISTI: varsayilan stub RAX=0 donuyordu. Sony'de handle
+                // > 0'dir ve grain (len) ile bicim (param) YALNIZCA burada
+                // ogrenilir - Output'un uzunluk argumani yoktur.
+                ctx->Rax = static_cast<uint64_t>(static_cast<uint32_t>(Psemu::Audio::Open(
+                    static_cast<int>(ctx->Rdi), static_cast<int>(ctx->Rsi),
+                    static_cast<int>(ctx->Rdx), static_cast<uint32_t>(ctx->Rcx),
+                    static_cast<uint32_t>(ctx->R8), static_cast<uint32_t>(ctx->R9))));
+                special_return_set = true;
+            } else if (readable_name == "sceAudioOutSetVolume") {
+                // int sceAudioOutSetVolume(handle, flag, int vol[])
+                const int* vol = reinterpret_cast<const int*>(ctx->Rdx);
+                if (vol != nullptr && !SafeReadable(vol, 8 * sizeof(int))) vol = nullptr;
+                ctx->Rax = static_cast<uint64_t>(static_cast<uint32_t>(Psemu::Audio::SetVolume(
+                    static_cast<int>(ctx->Rdi), static_cast<uint32_t>(ctx->Rsi), vol)));
+                special_return_set = true;
+            } else if (readable_name == "sceAudioOutClose") {
+                ctx->Rax = static_cast<uint64_t>(static_cast<uint32_t>(
+                    Psemu::Audio::Close(static_cast<int>(ctx->Rdi))));
+                special_return_set = true;
             } else if (readable_name == "sceAudioOutOutput") {
-                // int sceAudioOutOutput(handle, ptr[, num])
-                // GERCEK donanimda bu cagri ses tamponu tuketilene kadar BLOKLAR
-                // ve audio thread'ini ornekleme hizina (~48 kHz) pace'ler.
-                // psemu'da isim cozulemedigi icin (NID son eki #N#O, tabloda
-                // #T#T vardi -> bkz. NID-PREFIX duzeltmesi) default stub RAX=0
-                // donuyordu: audio thread'i HIC beklemeden serbest doniyor,
-                // olculen TUM PLT cagrilarinin ~%25'ini uretip CPU'yu boguyor
-                // ve ana thread'i ac birakiyordu (yukleme bitmiyor, "donma").
-                // PS4/PS5 grain = 256 ornek @48 kHz -> ~5.33 ms.
+                // int sceAudioOutOutput(int handle, const void* ptr)
+                // UZUNLUK ARGUMANI YOKTUR. Eski kod RDX'i "num" sanip okuyordu;
+                // RDX orada onceki cagridan kalma copti (tesadufen 256
+                // gorunuyordu). Dogru ornek sayisi Open'daki len'dir.
+                //
+                // GERCEK donanimda bu cagri tampon tuketilene kadar BLOKLAR ve
+                // ses thread'ini ornekleme hizina pace'ler. Eskiden sabit bir
+                // Sleep atip VERIYI COPE ATIYORDUK - oyunun sessiz olmasinin
+                // sebebi buydu. Artik waveOut kuyrugu hem sesi caliyor hem de
+                // bloklamayi GERCEK tuketim hiziyla yapiyor.
                 {
-                    uint32_t num = static_cast<uint32_t>(ctx->Rdx);
-                    if (num == 0 || num > 4096) num = 256; // makul degilse grain varsay
-                    DWORD ms = static_cast<DWORD>((static_cast<uint64_t>(num) * 1000ull) / 48000ull);
-                    if (ms == 0) ms = 1;
-                    // TANI: bu bloklayan uyku HANGI thread'de? Oyun thread'inde
-                    // ise kare basina ~14 cagri x 5.3 ms = butun kareyi yer.
-                    static std::atomic<uint64_t> s_ao{0};
-                    const uint64_t an = s_ao.fetch_add(1) + 1;
-                    if (an <= 4 || (an % 1500ull) == 0) {
-                        printf("[AUDIO] #%llu TID=%lu num=%u uyku=%lu ms\n",
-                               static_cast<unsigned long long>(an), GetCurrentThreadId(), num, ms);
-                        fflush(stdout);
-                    }
-                    Sleep(ms);
-                    ctx->Rax = num; // yazilan ornek sayisi
+                    const int   handle = static_cast<int>(ctx->Rdi);
+                    const void* pcm    = reinterpret_cast<const void*>(ctx->Rsi);
+                    // Misafir bellegi: dokunmadan once TAM paket boyutuyla
+                    // dogrula (yalnizca ilk baytlara bakmak commit edilmemis
+                    // bir sayfayi kaciririr).
+                    const uint32_t need = Psemu::Audio::PacketBytes(handle);
+                    if (pcm != nullptr && need != 0 && !SafeReadable(pcm, need)) pcm = nullptr;
+                    ctx->Rax = static_cast<uint64_t>(static_cast<uint32_t>(
+                        Psemu::Audio::Output(handle, pcm)));
                 }
                 special_return_set = true;
             } else if (readable_name == "PadOpen" || readable_name == "PadGetHandle") {
