@@ -1315,6 +1315,11 @@ static uint64_t  g_trace_r11[kTraceRing] = {0};
 // ilk 16 bayti da aliyoruz: "tampon bize yanlis mi geliyor" sorusu ancak
 // icerigi gorerek cevaplanabiliyor.
 static uint64_t  g_trace_r13[kTraceRing]    = {0};
+// Bazi kararlar YIGIN YEREL degiskenlerine bakiyor (or. "cmp word
+// [rbp-0x16dc], 2"). Register dokumu bunlari gostermiyor; RBP'yi ve
+// PSEMU_TRACE_RBP_OFF ile verilen ofsetteki degeri de kaydediyoruz.
+static uint64_t  g_trace_rbp[kTraceRing]    = {0};
+static uint64_t  g_trace_stk[kTraceRing]    = {0};
 static uint64_t  g_trace_mem[kTraceRing][2] = {};
 static uint64_t  g_trace_pos    = 0;
 static uint64_t  g_trace_steps  = 0;
@@ -2275,6 +2280,39 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         g_trace_r8[g_trace_pos % kTraceRing]     = ctx->R8;
         g_trace_r11[g_trace_pos % kTraceRing]    = ctx->R11;
         g_trace_r13[g_trace_pos % kTraceRing]    = ctx->R13;
+        g_trace_rbp[g_trace_pos % kTraceRing]    = ctx->Rbp;
+        {
+            static const uint64_t s_off = [] {
+                const char* e = std::getenv("PSEMU_TRACE_RBP_OFF");
+                return e ? std::strtoull(e, nullptr, 0) : 0ull;
+            }();
+            uint64_t v = 0;
+            if (s_off != 0 && ctx->Rbp > s_off &&
+                SafeReadable(reinterpret_cast<void*>(ctx->Rbp - s_off), 8)) {
+                v = *reinterpret_cast<uint64_t*>(ctx->Rbp - s_off);
+            }
+            g_trace_stk[g_trace_pos % kTraceRing] = v;
+
+            // HEMEN BAS: ilgilendigimiz komut cokmeden cok once
+            // calisabiliyor ve halka tamponundan tasiyor (2048 adim).
+            // PSEMU_TRACE_RAX_AT ile secilen adreste aninda raporluyoruz.
+            static const uint64_t s_at = [] {
+                const char* e = std::getenv("PSEMU_TRACE_RAX_AT");
+                return e ? std::strtoull(e, nullptr, 0) : 0ull;
+            }();
+            static int s_at_hits = 0;
+            if (s_at != 0 && (ctx->Rip - g_base_addr) == s_at && s_at_hits < 12) {
+                s_at_hits++;
+                std::stringstream hs;
+                hs << "[TRACE-AT] RVA 0x" << std::hex << s_at
+                   << "  RAX=0x" << ctx->Rax << " RCX=0x" << ctx->Rcx
+                   << " RDX=0x" << ctx->Rdx << " R14=0x" << ctx->R14
+                   << " RBP=0x" << ctx->Rbp
+                   << "  [RBP-off]=0x" << v << "  (dusuk 16 bit: 0x"
+                   << (v & 0xFFFF) << ")";
+                LOG_ERROR(hs.str());
+            }
+        }
         {
             const uint64_t k2 = g_trace_pos % kTraceRing;
             g_trace_mem[k2][0] = 0;
@@ -6885,7 +6923,9 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                           << " R11=0x" << g_trace_r11[k]
                           << " R13=0x" << g_trace_r13[k]
                           << " [R13]=0x" << g_trace_mem[k][0]
-                          << ",0x" << g_trace_mem[k][1] << "}";
+                          << ",0x" << g_trace_mem[k][1]
+                          << " RBP=0x" << g_trace_rbp[k]
+                          << " [RBP-off]=0x" << g_trace_stk[k] << "}";
             }
             if ((i % 8) == 7) ss_init() << "\n[-]  ";
         }

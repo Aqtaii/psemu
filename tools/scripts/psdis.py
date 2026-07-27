@@ -55,16 +55,19 @@ elif arg3 == "-func":
     # Fonksiyon basini int3 DOLGUSUNDAN bul: clang bu ikilide fonksiyonlar
     # arasini 0xCC ile dolduruyor, yani >=4 ardisik 0xCC'nin hemen ardi
     # bir fonksiyon basidir. Prologue kalibina guvenmekten cok daha saglam.
-    lo = v2f(rva - 0x2000)
+    # Bazi fonksiyonlar cok buyuk (Astro Bot'ta 0x2000'i asan fabrika
+    # fonksiyonlari var); pencereyi genis tutuyoruz.
+    WIN = 0x20000
+    lo = v2f(rva - WIN)
     hi = v2f(rva)
     blob = data[lo:hi]
     p = blob.rfind(b"\xcc\xcc\xcc\xcc")
     if p < 0:
-        print("0x2000 bayt geriye dogru int3 dolgusu bulunamadi")
+        print(f"0x{WIN:x} bayt geriye dogru int3 dolgusu bulunamadi")
         sys.exit(1)
     while p + 4 < len(blob) and blob[p + 4] == 0xCC:
         p += 1
-    start = rva - 0x2000 + p + 4
+    start = rva - WIN + p + 4
     print(f"fonksiyon basi: RVA 0x{start:x}   [hedef +0x{rva - start:x}]")
     rva, n = start, (rva - start) + 32
 elif arg3 == "-align":
