@@ -1302,6 +1302,10 @@ static const int kTraceRing = 2048;
 static uint64_t  g_trace_from   = 0;     // izlemeyi baslatan fonksiyonun adresi
 static bool      g_trace_active = false;
 static uint64_t  g_trace_ring[kTraceRing] = {0};
+// RIP'in yaninda RAX'i da tutuyoruz: "call [rax+0x30]" gibi sanal cagrilarda
+// vtable isaretcisi RAX'tadir ve nesnenin TURUNU ancak boyle ogrenebiliyoruz.
+// (Ilgili komut bir "push rbp" olmadigi icin prologue breakpoint'i kullanilamaz.)
+static uint64_t  g_trace_rax[kTraceRing] = {0};
 static uint64_t  g_trace_pos    = 0;
 static uint64_t  g_trace_steps  = 0;
 static uint64_t  g_trace_max    = 3000000; // PSEMU_TRACE_MAX ile degistirilebilir
@@ -2231,6 +2235,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
 
     // Tek adim izleme: sadece RIP'i kaydet, TF'i kurulu tut.
     if (code == EXCEPTION_SINGLE_STEP && g_trace_active) {
+        g_trace_rax[g_trace_pos % kTraceRing]    = ctx->Rax;
         g_trace_ring[g_trace_pos++ % kTraceRing] = ctx->Rip;
         if (g_expected_argv != 0 && ctx->R15 != g_r15_prev &&
             (g_r15_prev == g_expected_argv || ctx->R15 == g_expected_argv)) {
@@ -6774,8 +6779,18 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                   << " komut (toplam " << g_trace_steps << " adim), RVA olarak:\n[-]  ";
         uint64_t cnt = g_trace_pos < (uint64_t)kTraceRing ? g_trace_pos : (uint64_t)kTraceRing;
         for (uint64_t i = 0; i < cnt; i++) {
-            uint64_t v = g_trace_ring[(g_trace_pos - cnt + i) % kTraceRing];
+            const uint64_t k = (g_trace_pos - cnt + i) % kTraceRing;
+            uint64_t v = g_trace_ring[k];
             ss_init() << " 0x" << std::hex << (v - g_base_addr);
+            // PSEMU_TRACE_RAX_AT=<rva>: yalnizca O komutta RAX'i de bas.
+            // Her adimda basmak izi okunmaz hale getiriyor.
+            static const uint64_t s_rax_at = [] {
+                const char* e = std::getenv("PSEMU_TRACE_RAX_AT");
+                return e ? std::strtoull(e, nullptr, 0) : 0ull;
+            }();
+            if (s_rax_at != 0 && (v - g_base_addr) == s_rax_at) {
+                ss_init() << "{RAX=0x" << g_trace_rax[k] << "}";
+            }
             if ((i % 8) == 7) ss_init() << "\n[-]  ";
         }
     }
