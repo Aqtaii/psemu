@@ -5348,12 +5348,24 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     size_t nmemb = static_cast<size_t>(ctx->Rsi);
                     size_t size  = static_cast<size_t>(ctx->Rdx);
                     auto   cmp   = reinterpret_cast<GuestCmpFn>(ctx->Rcx);
-                    // DIKKAT: karsilastirici GUEST kodudur ve onu VEH handler'inin
-                    // ICINDEN cagirmak (ic ice exception + ABI gecisi) grafik
-                    // init'inde KILITLENMEYE yol acti (log "[QSORT]" satirina hic
-                    // ulasmadan bitiyordu). Bu yuzden varsayilan KAPALI.
-                    // Denemek icin: PSEMU_QSORT=1
-                    static const bool s_qsort_on = (std::getenv("PSEMU_QSORT") != nullptr);
+                    // Karsilastirici GUEST kodudur; ayri bir thread'de
+                    // cagiriyoruz (bkz. GuestSortThread) cunku VEH handler'inin
+                    // icinden cagirmak ic ice exception uretiyor.
+                    //
+                    // Eskiden varsayilan KAPALI idi: grafik init'inde
+                    // kilitleniyordu. O kilitlenmenin gercek sebebi bulundu ve
+                    // duzeltildi - EnsureKytyGraphicsInit()'te CAS'i kaybeden
+                    // thread'ler init BITMEDEN donuyordu (bkz. agc.cpp). Artik
+                    // kilitlenme yok, olculdu: "[QSORT] nmemb=118 -> siralandi".
+                    // Atlamak zararliydi: siralanmamis tablo Astro Bot'ta cop
+                    // nesne uzerinden sanal cagriya (RVA 0x4baf39) yol aciyordu,
+                    // Dreaming Sarah'ta da lokalize metin aramalari basarisiz
+                    // olup menu etiketlerini bosaltiyordu.
+                    // Kapatmak icin: PSEMU_QSORT=0
+                    static const bool s_qsort_on = [] {
+                        const char* e = std::getenv("PSEMU_QSORT");
+                        return e == nullptr || e[0] != '0';
+                    }();
                     bool   done  = false;
                     if (s_qsort_on && base != nullptr && cmp != nullptr && size > 0 && nmemb > 1 &&
                         nmemb < (1u << 24) && SafeWritable(base, nmemb * size)) {
