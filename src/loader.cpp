@@ -457,10 +457,19 @@ bool LoadEboot(const std::string& filePath) {
                                 std::cout << "[GLOB_DAT] Qoo175Ig+-k -> SAHTE C++ nesnesi @ 0x"
                                           << std::hex << *cell << std::dec << std::endl;
                             } else if (void* nat = PsemuNativeDataSymbol(sym_name.c_str())) {
-                                // Sembol aslinda bir FONKSIYON: hucreye gercek
-                                // adresi koy. (R_X86_64_64 yolundaki ayni
-                                // duzeltmenin GLOB_DAT karsiligi.)
-                                *cell = reinterpret_cast<uint64_t>(nat);
+                                // Sembol aslinda bir FONKSIYON (malloc, free,
+                                // memcpy...). GOT gozune HUCRE adresini degil
+                                // FONKSIYONUN KENDI adresini yazmak gerekiyor:
+                                // misafir "call [GOT]" yapiyor, hucre adresi
+                                // yazilirsa veri sayfasina atliyordu. Astro
+                                // Bot'ta malloc boyle NULL donuyor ve oyun
+                                // bad_alloc ile abort ediyordu.
+                                uint64_t* pt = reinterpret_cast<uint64_t*>(base_ptr + rela->r_offset);
+                                *pt = reinterpret_cast<uint64_t>(nat);
+                                std::cout << "[GLOB_DAT] " << sym_name
+                                          << " -> NATIVE fonksiyon @ 0x" << std::hex
+                                          << reinterpret_cast<uint64_t>(nat) << std::dec << std::endl;
+                                continue;
                             } else if (PsemuFillVtableCell(cell, 0x1000, sym_name.c_str())) {
                                 // _ZTV*: hucrenin KENDISI vtable olarak
                                 // dolduruldu; oyun [hedef] ile buraya ulasip
@@ -838,7 +847,13 @@ bool LoadEboot(const std::string& filePath) {
     // fonksiyonu spinlock'lu bir trampoline'e sarip iki cagri yerini
     // (RVA 0xe380e, 0xe75be) oraya yonlendiriyoruz. Boylece tum cagrilar
     // serilesip sayac tutarli kaliyor.
-    {
+    // PROFILE BAGLI: bu RVA'lar (0x2dfff0, 0xe3813, 0xe75c3) SADECE Dreaming
+    // Sarah'ya (PPSA02929) ait. Astro Bot'ta 0xe3813 masum bir "call 0x24ae30"
+    // ve buraya yazmak oyunu bozuyordu: yeni rel32, 64-bit farkin int32'ye
+    // kirpilmasiyla hesaplandigi icin cagri modulun ortasinda rastgele bir
+    // adrese atliyor, komut ortasina dusup "gecersiz komut" ile cokuyordu.
+    // Adres her kosuda degistigi icin cokme de gezici gorunuyordu.
+    if (Game::Current().quirk_c2_type_registration_overflow) {
         uint8_t* base_ptr2 = reinterpret_cast<uint8_t*>(base_address);
         uint64_t target = reinterpret_cast<uint64_t>(base_ptr2) + 0x2dfff0;
         uint8_t* tr = reinterpret_cast<uint8_t*>(
@@ -899,7 +914,9 @@ bool LoadEboot(const std::string& filePath) {
     //     sonra orijinal converter'i cagirir. Thread-guvenli (single-step
     //     yok). Bozuk surrogate iceren gercek degerin tag'ini gormek icin.
     // ==========================================
-    {
+    // PROFILE BAGLI: 0x17b818 / 0x17b120 Dreaming Sarah'ya ozgu. Astro Bot'ta
+    // bu yama da ayni sekilde kodu bozuyordu (bir cokme RVA 0x17b81c'de goruldu).
+    if (Game::Current().quirk_rva_diagnostics) {
         uint8_t* base_ptr3 = reinterpret_cast<uint8_t*>(base_address);
         uint64_t conv = reinterpret_cast<uint64_t>(base_ptr3) + 0x17b120;
         uint64_t diag = reinterpret_cast<uint64_t>(&Utf16DiagValue);
@@ -950,7 +967,9 @@ bool LoadEboot(const std::string& filePath) {
     // fonksiyon normal yolundan (islem/ret) devam eder, cikti eksik olsa da
     // oyun cokmeden ILERLER. (Ayni mantik yaris-skip gibi: throw'a girmeden
     // engelle.) Gerekirse geri alinabilir.
-    {
+    // PROFILE BAGLI: 0x216462 / 0x2164cc Dreaming Sarah'ya ozgu. Baska oyunda
+    // o adreslerde bambaska komutlar var ve 6 bayti NOP'lamak onlari bozar.
+    if (Game::Current().quirk_c2_type_registration_overflow) {
         uint8_t* bp = reinterpret_cast<uint8_t*>(base_address);
         for (uint64_t rva : { (uint64_t)0x216462, (uint64_t)0x2164cc }) {
             uint8_t* site = bp + rva;

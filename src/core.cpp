@@ -1254,6 +1254,21 @@ static uint64_t g_watchw_addr  = 0;
 static bool     g_watchw_armed = false;
 static int      g_watchw_hits  = 0;
 
+// ---------------------------------------------------------------------------
+// KOD SAYFALARINI SALT-OKUNUR YAP  (PSEMU_PROTECT_CODE=1)
+//
+// Astro Bot'ta 0xe3814'teki "call 0x24ae30" komutunun rel32'si calisirken
+// uzerine yaziliyor (olculdu: dosya E8 17 76 16 00, bellek E8 C7 AE 0F 00).
+// DR0 yazma izlemesi misafir thread'inde TETIKLENMEDI - demek ki yazan
+// baska bir thread. Debug registerlari thread'e ozel oldugu icin onlari
+// goremiyor. Kod araligini PAGE_EXECUTE_READ yapinca HANGI thread olursa
+// olsun yazma erisim ihlaline dusuyor ve yazani RIP+TID ile yakaliyoruz.
+// Yakaladiktan sonra sayfayi yazilabilir yapip devam ediyoruz (oyun
+// durmasin); her sayfa icin ilk yazma bildiriliyor.
+// ---------------------------------------------------------------------------
+static bool     g_protect_code = false;
+static int      g_codew_hits   = 0;
+
 static void ArmWatchpoint() {
     if (g_watch_page == nullptr) return;
     DWORD oldProt;
@@ -2084,6 +2099,34 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
     // Varsayilan olarak ATLIYORUZ (RIP += 2): tuzak oyunun kendi "burada
     // durmaliyim" karari; emulatorde ilerlemeye devam edip bir sonraki gercek
     // eksigi gormek istiyoruz. Kapatmak icin: PSEMU_TRAP_FATAL=1
+    // KOD SAYFASINA YAZMA: kim ve hangi thread? (PSEMU_PROTECT_CODE=1)
+    if (g_protect_code && code == EXCEPTION_ACCESS_VIOLATION &&
+        ExceptionInfo->ExceptionRecord->NumberParameters >= 2 &&
+        ExceptionInfo->ExceptionRecord->ExceptionInformation[0] == 1) { // 1 = YAZMA
+        uint64_t fault = ExceptionInfo->ExceptionRecord->ExceptionInformation[1];
+        if (fault >= g_base_addr && fault < g_base_addr + g_text_size) {
+            if (g_codew_hits++ < 24) {
+                std::stringstream ws;
+                ws << "[KOD-YAZMA] RVA 0x" << std::hex << (fault - g_base_addr)
+                   << " adresine YAZILDI | TID=" << std::dec << GetCurrentThreadId()
+                   << " | yazan RIP=0x" << std::hex << ctx->Rip;
+                if (ctx->Rip >= g_base_addr && ctx->Rip < g_base_addr + g_module_size)
+                    ws << " (misafir RVA 0x" << (ctx->Rip - g_base_addr) << ")";
+                else
+                    ws << " (MISAFIR DISI - emulator/host kodu)";
+                ws << " RDI=0x" << ctx->Rdi << " RSI=0x" << ctx->Rsi
+                   << " RCX=0x" << ctx->Rcx;
+                LOG_ERROR(ws.str());
+            }
+            // Sayfayi yazilabilir yap ve devam et (oyun durmasin).
+            SYSTEM_INFO si; GetSystemInfo(&si);
+            void* page = reinterpret_cast<void*>(fault & ~(uint64_t)(si.dwPageSize - 1));
+            DWORD oldp = 0;
+            VirtualProtect(page, si.dwPageSize, PAGE_EXECUTE_READWRITE, &oldp);
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+    }
+
     if (code == EXCEPTION_ACCESS_VIOLATION &&
         ExceptionInfo->ExceptionRecord->NumberParameters >= 2 &&
         ExceptionInfo->ExceptionRecord->ExceptionInformation[1] == ~0ull) {
@@ -2180,6 +2223,29 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     *ss_ptr << b;
                 }
                 *ss_ptr << std::dec;
+            }
+            // ISTEGE BAGLI BAYT DOKUMU: PSEMU_DUMP_RVA=0xe3810,0x24ae30
+            // Bellekteki kodun dosyadakiyle ayni olup olmadigini KESIN
+            // karsilastirmak icin. "Kod uzerine mi yazildi?" sorusunu
+            // tahminle degil olcumle kapatiyoruz.
+            if (const char* dr = std::getenv("PSEMU_DUMP_RVA")) {
+                const char* s = dr;
+                for (int k = 0; k < 6 && *s; k++) {
+                    char* end = nullptr;
+                    uint64_t rva = std::strtoull(s, &end, 0);
+                    if (end == s) break;
+                    uint8_t* p = reinterpret_cast<uint8_t*>(g_base_addr + rva);
+                    if (SafeReadable(p, 16)) {
+                        *ss_ptr << "\n[-] [DUMP] RVA 0x" << std::hex << rva << ": ";
+                        for (int i = 0; i < 16; i++) {
+                            char b[4];
+                            snprintf(b, sizeof(b), "%02X ", p[i]);
+                            *ss_ptr << b;
+                        }
+                        *ss_ptr << std::dec;
+                    }
+                    s = (*end == ',') ? end + 1 : end;
+                }
             }
             // CAGIRAN: vahsi dallanmalarda cokme adresi degil, ORAYA KIMIN
             // gonderdigi onemli. [RSP] tipik olarak donus adresidir; modul
@@ -6857,6 +6923,45 @@ void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t tex
                 LOG_ERROR(bs.str());
             }
             s = (*end == ',') ? end + 1 : end;
+        }
+    }
+
+    // Kod araligini salt-okunur yap: PSEMU_PROTECT_CODE=1
+    if (const char* pc = std::getenv("PSEMU_PROTECT_CODE")) {
+        if (pc[0] == '1' && g_text_size > 0) {
+            DWORD oldp = 0;
+            if (VirtualProtect(reinterpret_cast<void*>(base_addr),
+                               static_cast<SIZE_T>(g_text_size),
+                               PAGE_EXECUTE_READ, &oldp)) {
+                g_protect_code = true;
+                std::stringstream ps;
+                ps << "[KOD-KORUMA] kod araligi salt-okunur yapildi: 0x"
+                   << std::hex << base_addr << " + 0x" << g_text_size;
+                LOG_ERROR(ps.str());
+                // Ayni baytlari MISAFIR HENUZ CALISMADAN dok: boylece
+                // bozulmanin yukleme aninda mi yoksa calisirken mi
+                // oldugunu ayirt ediyoruz.
+                if (const char* dr = std::getenv("PSEMU_DUMP_RVA")) {
+                    const char* s = dr;
+                    for (int k = 0; k < 6 && *s; k++) {
+                        char* end = nullptr;
+                        uint64_t rva = std::strtoull(s, &end, 0);
+                        if (end == s) break;
+                        const uint8_t* q = reinterpret_cast<const uint8_t*>(base_addr + rva);
+                        std::stringstream ds;
+                        ds << "[YUKLEME-SONRASI] RVA 0x" << std::hex << rva << ": ";
+                        for (int i = 0; i < 16; i++) {
+                            char b[4];
+                            snprintf(b, sizeof(b), "%02X ", q[i]);
+                            ds << b;
+                        }
+                        LOG_ERROR(ds.str());
+                        s = (*end == ',') ? end + 1 : end;
+                    }
+                }
+            } else {
+                LOG_ERROR("[KOD-KORUMA] VirtualProtect basarisiz.");
+            }
         }
     }
 
