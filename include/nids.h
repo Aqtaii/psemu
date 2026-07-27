@@ -11,6 +11,13 @@ inline std::unordered_map<std::string, std::string> g_nid_to_name = {
     {"AEJdIVZTEmo#T#T", "qsort"},
     {"QJ5xVfKkni0#T#T", "wmemcmp"},
     {"Noj9PsJrsa8#T#T", "wmemmove"},
+    // wmemcpy: EKSIKTI. Cozulemeyen NID -> varsayilan stub -> RAX=0 ve HIC
+    // KOPYALAMIYORDU. Konusma baloncugu aciliyor, daktilo efekti ilerliyor,
+    // ama metin bos kaliyordu: oyun diyalog metnini karakter karakter
+    // wmemcpy(hedef, kaynak, 1) ile tasiyor ve her biri dusuyordu.
+    // Kimlik tools/nid_db/aerolib.csv'den; ayni tablo komsu uclusunu
+    // (wmemmove/wmemchr/wmemcmp) da dogru veriyor, yani eslesme guvenilir.
+    {"fL3O02ypZFE#T#T", "wmemcpy"},
     {"SfQIZcqvvms#T#T", "strlcpy"},
     {"kALvdgEv5ME#T#T", "_Locksyslock"},
     {"9nf8joUTSaQ#T#T", "_Unlocksyslock"},

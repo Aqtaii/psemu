@@ -5139,10 +5139,83 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 uint16_t* dest = (uint16_t*)ctx->Rdi;
                 const uint16_t* src = (const uint16_t*)ctx->Rsi;
                 size_t n = (size_t)ctx->Rdx;
-                if (dest && src && n > 0 && SafeReadable(src, n * 2) && SafeWritable(dest, n * 2)) {
+                // ============================================================
+                // TANI: konusma metni BOS geliyor ve bu tampon tam da buradan
+                // donuyor (kullanicinin logu: wmemmove -> RAX=0x1672c2807a0,
+                // sonra ayni adres 24 eleman NUL okunuyor).
+                //
+                // Asagidaki koruma basarisiz olursa kopyalama SESSIZCE atlanir
+                // ama fonksiyon yine dest doner - yani "basarili" gorunur.
+                // Taze sayfalar sifir oldugu icin sonuc tam olarak gordugumuz
+                // sey olur. SafeReadable/SafeWritable MEM_COMMIT olmayan
+                // sayfayi reddediyor; psemu ise misafir sayfalarini HATA
+                // ANINDA commit ediyor, yani rezerve-ama-commit-edilmemis bir
+                // hedef testi gecemez.
+                //
+                // AMA BUNU VARSAYMIYORUZ. Iki ihtimali AYIRAN olcum: kopyalama
+                // atlandi mi, yoksa KAYNAK zaten sifir miydi? Ikisini de
+                // basiyoruz. Sinir 60 cagri - sicak yolu bozmuyor.
+                // ============================================================
+                const bool rd_ok = SafeReadable(src, n * 2);
+                const bool wr_ok = SafeWritable(dest, n * 2);
+                const bool did   = (dest && src && n > 0 && rd_ok && wr_ok);
+                { static std::atomic<uint64_t> s_m{0};
+                  uint64_t mc = s_m.fetch_add(1, std::memory_order_relaxed) + 1;
+                  if (mc <= 60) {
+                    char t[25]; int k = 0;
+                    for (int i = 0; i < 24; i++) {
+                        if (!SafeReadable(src + i, 2)) break;
+                        uint16_t ch = src[i];
+                        t[k++] = (ch >= 0x20 && ch < 0x7f) ? static_cast<char>(ch) : '.';
+                    }
+                    t[k] = '\0';
+                    printf("[U16MOVE] #%llu dest=%p src=%p n=%zu kopya=%s (rd=%d wr=%d) kaynak=\"%s\"\n",
+                           static_cast<unsigned long long>(mc), (void*)dest, (const void*)src, n,
+                           did ? "EVET" : "ATLANDI", rd_ok ? 1 : 0, wr_ok ? 1 : 0, t);
+                    fflush(stdout);
+                  } }
+                if (did) {
                     memmove(dest, src, n * 2);
                 }
                 ctx->Rax = (uint64_t)dest;
+                special_return_set = true;
+            } else if (func_name.find("fL3O02ypZFE") != std::string::npos) {
+                // ============================================================
+                // wmemcpy(dest, src, n) - char16_t, n = ELEMAN sayisi.
+                // ------------------------------------------------------------
+                // KONUSMA METNI HATASININ KOK NEDENI. Bu NID nids.h'de YOKTU,
+                // yani isim cozulemiyor ve varsayilan stub'a dusuyordu: RAX=0
+                // donup HICBIR SEY KOPYALAMIYORDU. Oyun diyalog metnini daktilo
+                // efektiyle karakter karakter tasiyor (n=1) ve her karakter
+                // dusuyordu -> tampon NUL kaliyor -> baloncuk aciliyor ama
+                // metin gorunmuyor.
+                //
+                // KANIT ZINCIRI (basarili kosu logu):
+                //   T+185.74  wmemmove     -> RAX=0x19c0dc207a0   (tampon)
+                //   T+186.79  fL3O02ypZFE  RDI=0x19c0dc207a0 n=1 -> RAX=0x0
+                //   T+186.88  u16string::find p=0x19C0DC207A0 -> 24 eleman NUL
+                //
+                // Eleman boyutu 2 BAYT: kardes fonksiyonlarla ayni aile ve
+                // cagri yeri disassembly'siyle kanitli (bkz. asagidaki not).
+                // memcpy yerine memmove: ustkume, ortusme olsa bile guvenli.
+                // ============================================================
+                uint16_t*       dest = reinterpret_cast<uint16_t*>(ctx->Rdi);
+                const uint16_t* src  = reinterpret_cast<const uint16_t*>(ctx->Rsi);
+                size_t          n    = static_cast<size_t>(ctx->Rdx);
+                if (dest != nullptr && src != nullptr && n > 0 &&
+                    SafeReadable(src, n * 2) && SafeWritable(dest, n * 2)) {
+                    memmove(dest, src, n * 2);
+                } else if (n > 0) {
+                    // SESSIZ ATLAMA YOK: koruma dusen kopyalama tam da bu
+                    // hatanin belirtisiydi, tekrar ederse GORELIM.
+                    static std::atomic<int> s_skip{0};
+                    if (s_skip.fetch_add(1, std::memory_order_relaxed) < 8) {
+                        printf("[U16CPY-ATLANDI] dest=%p src=%p n=%zu\n",
+                               (void*)dest, (const void*)src, n);
+                        fflush(stdout);
+                    }
+                }
+                ctx->Rax = reinterpret_cast<uint64_t>(dest);
                 special_return_set = true;
             } else if (func_name.find("fnUEjBCNRVU") != std::string::npos) {
                 // char_traits<char16_t>::find benzeri: (s=RDI, c=RSI, n=RDX), 2 byte.
