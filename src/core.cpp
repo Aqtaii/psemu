@@ -1330,6 +1330,59 @@ static int      g_watchw_hits  = 0;
 static bool     g_protect_code = false;
 static int      g_codew_hits   = 0;
 
+// ---------------------------------------------------------------------------
+// BOS ISARETCIYE YAZMAYI ATLA  (PSEMU_SKIP_NULL_STORE=1)
+//
+// Bring-up araci: oyun ayrilmamis bir listeye yazmaya calisiyorsa (NULL +
+// kucuk ofset) o TEK komutu atlayip devam ediyoruz. Amac bir sonraki gercek
+// engeli gorebilmek; kalici bir duzeltme DEGIL, bu yuzden varsayilan KAPALI
+// ve her atlama loglaniyor.
+//
+// Komut uzunlugunu bulmak icin kucuk bir x86-64 "store" cozucusu: onekler +
+// opcode + ModRM + SIB + disp + imm. Yalnizca MOV-store bicimleri
+// (88/89/C6/C7) ve yaygin SSE/AVX store'lari icin dogru; tanimadigi bicimde
+// 0 donup atlamayi reddediyor (yanlis uzunlukla ilerlemek felaket olurdu).
+// ---------------------------------------------------------------------------
+static bool g_skip_null_store = false;
+static int  g_skip_hits = 0;
+
+static size_t DecodeStoreLen(const uint8_t* p) {
+    size_t i = 0;
+    bool opsize16 = false;
+    // Eski onekler + REX
+    for (int k = 0; k < 8; k++) {
+        uint8_t b = p[i];
+        if (b == 0x66) { opsize16 = true; i++; continue; }
+        if (b == 0x67 || b == 0xF2 || b == 0xF3 || b == 0x2E || b == 0x36 ||
+            b == 0x3E || b == 0x26 || b == 0x64 || b == 0x65) { i++; continue; }
+        if (b >= 0x40 && b <= 0x4F) { i++; continue; }
+        break;
+    }
+    uint8_t op = p[i++];
+    int imm = 0;
+    if (op == 0x88 || op == 0x89) {          // mov r/m, r
+        imm = 0;
+    } else if (op == 0xC6) {                 // mov r/m8, imm8
+        imm = 1;
+    } else if (op == 0xC7) {                 // mov r/m32, imm32
+        imm = opsize16 ? 2 : 4;
+    } else if (op == 0x0F) {                 // 0F 11 = movups/movupd store
+        uint8_t op2 = p[i++];
+        if (op2 != 0x11 && op2 != 0x29 && op2 != 0x7F) return 0;
+    } else {
+        return 0;                            // tanimadik: atlama YOK
+    }
+    uint8_t modrm = p[i++];
+    uint8_t mod = modrm >> 6, rm = modrm & 7;
+    if (mod == 3) return 0;                  // register hedefi: store degil
+    if (rm == 4) i++;                        // SIB
+    if (mod == 1) i += 1;
+    else if (mod == 2) i += 4;
+    else if (mod == 0 && rm == 5) i += 4;    // rip-relative
+    else if (mod == 0 && rm == 4 && (p[i - 1] & 7) == 5) i += 4; // SIB base yok
+    return i + imm;
+}
+
 static void ArmWatchpoint() {
     if (g_watch_page == nullptr) return;
     DWORD oldProt;
@@ -2262,6 +2315,28 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
     // Varsayilan olarak ATLIYORUZ (RIP += 2): tuzak oyunun kendi "burada
     // durmaliyim" karari; emulatorde ilerlemeye devam edip bir sonraki gercek
     // eksigi gormek istiyoruz. Kapatmak icin: PSEMU_TRAP_FATAL=1
+    // BOS ISARETCIYE YAZMAYI ATLA (PSEMU_SKIP_NULL_STORE=1)
+    if (g_skip_null_store && code == EXCEPTION_ACCESS_VIOLATION &&
+        ExceptionInfo->ExceptionRecord->NumberParameters >= 2 &&
+        ExceptionInfo->ExceptionRecord->ExceptionInformation[0] == 1 &&
+        ExceptionInfo->ExceptionRecord->ExceptionInformation[1] < 0x100000 &&
+        ctx->Rip >= g_base_addr && ctx->Rip < g_base_addr + g_module_size &&
+        SafeReadable(reinterpret_cast<void*>(ctx->Rip), 16)) {
+        const uint8_t* p = reinterpret_cast<const uint8_t*>(ctx->Rip);
+        size_t len = DecodeStoreLen(p);
+        if (len != 0) {
+            if (g_skip_hits++ < 20) {
+                std::stringstream ks;
+                ks << "[NULL-STORE] RVA 0x" << std::hex << (ctx->Rip - g_base_addr)
+                   << " adres 0x" << ExceptionInfo->ExceptionRecord->ExceptionInformation[1]
+                   << " (" << std::dec << len << " bayt) ATLANDI";
+                LOG_ERROR(ks.str());
+            }
+            ctx->Rip += len;
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+    }
+
     // KOD SAYFASINA YAZMA: kim ve hangi thread? (PSEMU_PROTECT_CODE=1)
     if (g_protect_code && code == EXCEPTION_ACCESS_VIOLATION &&
         ExceptionInfo->ExceptionRecord->NumberParameters >= 2 &&
@@ -7232,6 +7307,13 @@ void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t tex
             }
             s = (*end == ',') ? end + 1 : end;
         }
+    }
+
+    // Bos isaretciye yazmayi atla (bring-up tanisi): PSEMU_SKIP_NULL_STORE=1
+    if (const char* sn = std::getenv("PSEMU_SKIP_NULL_STORE")) {
+        g_skip_null_store = (sn[0] == '1');
+        if (g_skip_null_store)
+            LOG_ERROR("[NULL-STORE] atlama ACIK - bu bir TANI kipi, kalici duzeltme degil.");
     }
 
     // Kod araligini salt-okunur yap: PSEMU_PROTECT_CODE=1
