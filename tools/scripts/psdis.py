@@ -67,6 +67,29 @@ elif arg3 == "-func":
     start = rva - 0x2000 + p + 4
     print(f"fonksiyon basi: RVA 0x{start:x}   [hedef +0x{rva - start:x}]")
     rva, n = start, (rva - start) + 32
+elif arg3 == "-align":
+    # Hedefte KOMUT BASLAYACAK bir hizalama bul. Fonksiyon basi
+    # bulunamadiginda (int3 dolgusu yoksa) tek care bu: geriye dogru
+    # baslangic noktalari deneyip hedefe tam oturani seciyoruz.
+    best = None
+    for back in range(96, 0, -1):
+        s = rva - back
+        f0 = v2f(s)
+        if f0 is None:
+            continue
+        for ins in md.disasm(data[f0:f0 + back + 48], s):
+            if ins.address == rva:
+                best = s
+                break
+            if ins.address > rva:
+                break
+        if best:
+            break
+    if best is None:
+        print("hedefte komut baslatan bir hizalama bulunamadi")
+        sys.exit(1)
+    print(f"hizalama: RVA 0x{best:x} (hedeften 0x{rva - best:x} geride)")
+    rva, n = best, (rva - best) + 64
 elif arg3 == "-ret":
     # rva bir DONUS adresi: hizalamayi deneme-yanilma ile bul, cagri komutunu goster.
     best = None
