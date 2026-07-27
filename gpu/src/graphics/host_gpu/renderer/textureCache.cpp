@@ -2055,13 +2055,22 @@ TextureCache::RegisterVideoOutSurfaces(GraphicContext*                  ctx,
 		cached->kind      = CachedImage::Kind::VideoOut;
 		cached->video_out = info;
 		cached->ctx       = ctx;
+		printf("[TC-MARK] CreateVideoOut oncesi\n");
+		fflush(stdout);
 		cached->image     = ImageOps::CreateVideoOut(ctx, info);
+		printf("[TC-MARK] CreateVideoOut BITTI; upload oncesi (sikistirma=%d)\n",
+		       static_cast<int>(info.compression));
+		fflush(stdout);
 		if (info.compression == VideoOutCompression::Uncompressed) {
 			m_memory_tracker.ForEachUploadRange(
 			    info.address, info.size, false, [](uint64_t, uint64_t) noexcept {},
 			    [&]() noexcept {
+				    printf("[TC-MARK] UploadVideoOut ICINE girildi\n");
+				    fflush(stdout);
 				    ImageOps::UploadVideoOut(ctx, static_cast<VideoOutVulkanImage*>(cached->image),
 				                             info, false);
+				    printf("[TC-MARK] UploadVideoOut DONDU\n");
+				    fflush(stdout);
 			    });
 		} else {
 			// A compressed guest surface cannot be decoded without its DCC metadata. Establish the
@@ -2071,6 +2080,8 @@ TextureCache::RegisterVideoOutSurfaces(GraphicContext*                  ctx,
 			    info.address, info.size, false, [](uint64_t, uint64_t) noexcept {},
 			    []() noexcept {});
 		}
+		printf("[TC-MARK] upload BITTI\n");
+		fflush(stdout);
 		result.push_back(static_cast<VideoOutVulkanImage*>(cached->image));
 		m_images.push_back(std::move(cached));
 		RegisterImageLocked(*m_images.back());
