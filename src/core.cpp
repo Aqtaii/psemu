@@ -1311,6 +1311,11 @@ static uint64_t  g_trace_rax[kTraceRing] = {0};
 static uint64_t  g_trace_rcx[kTraceRing] = {0};
 static uint64_t  g_trace_r8[kTraceRing]  = {0};
 static uint64_t  g_trace_r11[kTraceRing] = {0};
+// R13 = incelenen kodda INDEKS TAMPONUNUN tabani. Adresin yaninda oradaki
+// ilk 16 bayti da aliyoruz: "tampon bize yanlis mi geliyor" sorusu ancak
+// icerigi gorerek cevaplanabiliyor.
+static uint64_t  g_trace_r13[kTraceRing]    = {0};
+static uint64_t  g_trace_mem[kTraceRing][2] = {};
 static uint64_t  g_trace_pos    = 0;
 static uint64_t  g_trace_steps  = 0;
 static uint64_t  g_trace_max    = 3000000; // PSEMU_TRACE_MAX ile degistirilebilir
@@ -2244,6 +2249,16 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         g_trace_rcx[g_trace_pos % kTraceRing]    = ctx->Rcx;
         g_trace_r8[g_trace_pos % kTraceRing]     = ctx->R8;
         g_trace_r11[g_trace_pos % kTraceRing]    = ctx->R11;
+        g_trace_r13[g_trace_pos % kTraceRing]    = ctx->R13;
+        {
+            const uint64_t k2 = g_trace_pos % kTraceRing;
+            g_trace_mem[k2][0] = 0;
+            g_trace_mem[k2][1] = 0;
+            if (ctx->R13 > 0x10000 && SafeReadable(reinterpret_cast<void*>(ctx->R13), 16)) {
+                g_trace_mem[k2][0] = *reinterpret_cast<uint64_t*>(ctx->R13);
+                g_trace_mem[k2][1] = *reinterpret_cast<uint64_t*>(ctx->R13 + 8);
+            }
+        }
         g_trace_ring[g_trace_pos++ % kTraceRing] = ctx->Rip;
         if (g_expected_argv != 0 && ctx->R15 != g_r15_prev &&
             (g_r15_prev == g_expected_argv || ctx->R15 == g_expected_argv)) {
@@ -6800,7 +6815,10 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 ss_init() << "{RAX=0x" << g_trace_rax[k]
                           << " RCX=0x" << g_trace_rcx[k]
                           << " R8=0x"  << g_trace_r8[k]
-                          << " R11=0x" << g_trace_r11[k] << "}";
+                          << " R11=0x" << g_trace_r11[k]
+                          << " R13=0x" << g_trace_r13[k]
+                          << " [R13]=0x" << g_trace_mem[k][0]
+                          << ",0x" << g_trace_mem[k][1] << "}";
             }
             if ((i % 8) == 7) ss_init() << "\n[-]  ";
         }
