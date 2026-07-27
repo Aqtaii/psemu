@@ -35,15 +35,20 @@ for i in range(pn):
     k = 0
     while k + 7 <= n:
         # REX.W (48/4C) + 8D + modrm(mod=00, rm=101) = lea r64,[rip+disp32]
-        if seg[k] in (0x48, 0x4C) and seg[k + 1] == 0x8D and (seg[k + 2] & 0xC7) == 0x05:
+        # 8D = lea (adresi al), 8B = mov (icerigi oku). Ikisi de
+        # mod=00 rm=101 ile rip-goreli. Global bir TEKIL isaretcisini kimin
+        # OKUDUGUNU bulmak icin 8B de sart.
+        if seg[k] in (0x48, 0x4C) and seg[k + 1] in (0x8D, 0x8B) and \
+           (seg[k + 2] & 0xC7) == 0x05:
             d = struct.unpack_from("<i", seg, k + 3)[0]
             if pv + k + 7 + d == target:
                 reg = ((seg[k] & 0x04) << 1) | ((seg[k + 2] >> 3) & 7)
                 names = ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
                          "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"]
-                hits.append((pv + k, names[reg]))
+                kind = "lea" if seg[k + 1] == 0x8D else "mov"
+                hits.append((pv + k, f"{kind} {names[reg]}"))
         k += 1
 
-print(f"0x{target:x} adresini lea ile alan {len(hits)} yer:")
+print(f"0x{target:x} adresini lea/mov ile kullanan {len(hits)} yer:")
 for a, reg in hits[:30]:
     print(f"  RVA 0x{a:x}   (lea {reg})")
