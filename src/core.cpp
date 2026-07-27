@@ -7612,6 +7612,58 @@ void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t tex
         }
     }
 
+    // ------------------------------------------------------------------
+    // SAHTE DERINLIK HEDEFI  (PSEMU_FAKE_DEPTH=<stub RVA>)
+    //
+    // TANI KIPI - kalici duzeltme DEGIL. Astro Bot render hattini kurarken
+    // "depthTarget != nullptr" assert'inde abort ediyor ve komut tamponu
+    // insa etmeye HIC baslamiyor (olculdu: cizim/gonderim cagrilarinin
+    // hicbiri yok). Yani kapinin arkasini goremiyoruz.
+    //
+    // Assert su sanal cagridan geliyor:
+    //     0x74102c3  call [rax+0x30]   -> RVA 0x459d20 = "xor eax,eax; ret"
+    // O stub OYUNUN KENDI varsayilan gerceklemesi. Stub'i, guvenli bir
+    // sahte nesne dondurecek sekilde yamaliyoruz; boylece oyun ilerleyip
+    // ARKADAKI gercek eksikleri gosterebiliyor (ilk adayi zaten biliyoruz:
+    // sceAgcDriverAddEqEvent Kyty'de kayitli degil).
+    //
+    // Sahte nesne, hepsi "xor eax,eax; ret" olan bir vtable tasiyor ki
+    // uzerinde yapilan sanal cagrilar vahsi dallanma uretmesin.
+    // ------------------------------------------------------------------
+    if (const char* fd = std::getenv("PSEMU_FAKE_DEPTH")) {
+        const uint64_t rva = std::strtoull(fd, nullptr, 0);
+        uint8_t* stub = reinterpret_cast<uint8_t*>(base_addr + rva);
+        if (rva != 0 && stub[0] == 0x31 && stub[1] == 0xC0 && stub[2] == 0xC3) {
+            // ret0 stub'i + 512 girisli vtable + sifirlanmis nesne
+            uint8_t* ret0 = reinterpret_cast<uint8_t*>(VirtualAlloc(
+                nullptr, 16, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+            ret0[0] = 0x31; ret0[1] = 0xC0; ret0[2] = 0xC3; // xor eax,eax; ret
+            uint64_t* vt = reinterpret_cast<uint64_t*>(VirtualAlloc(
+                nullptr, 512 * 8, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+            for (int i = 0; i < 512; i++) vt[i] = reinterpret_cast<uint64_t>(ret0);
+            uint64_t* obj = reinterpret_cast<uint64_t*>(VirtualAlloc(
+                nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
+            memset(obj, 0, 0x1000);
+            obj[0] = reinterpret_cast<uint64_t>(vt);
+
+            // stub -> "movabs rax, <nesne>; ret"  (11 bayt; ardinda int3 dolgusu var)
+            DWORD oldp = 0;
+            if (VirtualProtect(stub, 16, PAGE_EXECUTE_READWRITE, &oldp)) {
+                stub[0] = 0x48; stub[1] = 0xB8;
+                const uint64_t v = reinterpret_cast<uint64_t>(obj);
+                memcpy(stub + 2, &v, 8);
+                stub[10] = 0xC3;
+                std::stringstream fs;
+                fs << "[SAHTE-DERINLIK] RVA 0x" << std::hex << rva
+                   << " artik sahte nesne donduruyor: 0x" << v
+                   << "  (TANI KIPI - kalici duzeltme degil)";
+                LOG_ERROR(fs.str());
+            }
+        } else {
+            LOG_ERROR("[SAHTE-DERINLIK] hedef 'xor eax,eax; ret' degil, yama yapilmadi.");
+        }
+    }
+
     // ISARETCI ZINCIRI IZLEME: PSEMU_WATCH_CHAIN=<rva>,<off1>,...,<offN>
     //   p = *(base + rva)                    ; global tekil
     //   p = *(p + off1) ... *(p + offN-1)    ; ara isaretciler
