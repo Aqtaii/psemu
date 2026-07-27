@@ -2056,6 +2056,15 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                    << " R12=0x" << ctx->R12 << " R13=0x" << ctx->R13
                    << " R14=0x" << ctx->R14 << " R15=0x" << ctx->R15
                    << " RSP=0x" << ctx->Rsp;
+                // SysV'de 7. argumandan itibaren YIGINDA gelir: [RSP+8]'den
+                // baslar (RSP'de donus adresi durur). Cok argumanli
+                // fonksiyonlarda tek basina register dokumu yetmiyor.
+                bs << "\n     [yigin arg]";
+                for (int k = 1; k <= 8; k++) {
+                    uint64_t* sp = reinterpret_cast<uint64_t*>(ctx->Rsp + k * 8);
+                    if (!SafeReadable(sp, 8)) break;
+                    bs << " +" << std::dec << (k * 8) << "=0x" << std::hex << *sp;
+                }
                 LOG_INFO(bs.str());
             }
             // "push rbp"yi elde canlandir
