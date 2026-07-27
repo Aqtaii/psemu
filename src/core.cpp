@@ -1386,6 +1386,31 @@ static int      g_codew_hits   = 0;
 static bool g_skip_null_store = false;
 static int  g_skip_hits = 0;
 
+// ---------------------------------------------------------------------------
+// FIZIKSEL ADRESE YAZMA IZLEME  (PSEMU_WATCH_PHYS=<dogrudan-bellek ofseti>)
+//
+// Donanim debug registerlari bu is icin YETERSIZ: thread'e ozel olduklari
+// icin baska bir thread'in yazmasini goremiyorlar (bu oturumda 0xe3814
+// denemesinde olculdu). Sayfa korumasi hangi thread olursa olsun yakalar.
+//
+// Sayfayi salt-okunur yapiyoruz; yazma erisim ihlali uretiyor, VEH'de
+// yazanin RIP+TID'sini bildiriyoruz, sonra sayfayi acip TF ile tek adim
+// atiyoruz ve single-step'te korumayi GERI TAKIYORUZ (aksi halde yalnizca
+// ilk yazmayi gorurduk). Yalnizca ilgilendigimiz 8 baytlik pencereye
+// yapilan yazmalar loglanir; ayni sayfadaki digerleri sessizce gecer.
+// ---------------------------------------------------------------------------
+static uint64_t g_wphys_target  = 0;   // izlenen mutlak adres
+static void*    g_wphys_page    = nullptr;
+static size_t   g_wphys_psize   = 0;
+static bool     g_wphys_pending = false; // single-step sonrasi korumayi geri tak
+static int      g_wphys_hits    = 0;
+
+static void WPhysArm() {
+    if (g_wphys_page == nullptr) return;
+    DWORD old = 0;
+    VirtualProtect(g_wphys_page, g_wphys_psize, PAGE_EXECUTE_READ, &old);
+}
+
 static size_t DecodeStoreLen(const uint8_t* p) {
     size_t i = 0;
     bool opsize16 = false;
@@ -2401,6 +2426,41 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
     // Varsayilan olarak ATLIYORUZ (RIP += 2): tuzak oyunun kendi "burada
     // durmaliyim" karari; emulatorde ilerlemeye devam edip bir sonraki gercek
     // eksigi gormek istiyoruz. Kapatmak icin: PSEMU_TRAP_FATAL=1
+    // FIZIKSEL ADRES IZLEME: sayfaya yazan kim? (PSEMU_WATCH_PHYS)
+    if (g_wphys_page != nullptr && code == EXCEPTION_ACCESS_VIOLATION &&
+        ExceptionInfo->ExceptionRecord->NumberParameters >= 2 &&
+        ExceptionInfo->ExceptionRecord->ExceptionInformation[0] == 1) { // yazma
+        const uint64_t fault = ExceptionInfo->ExceptionRecord->ExceptionInformation[1];
+        const uint64_t p0 = reinterpret_cast<uint64_t>(g_wphys_page);
+        if (fault >= p0 && fault < p0 + g_wphys_psize) {
+            // Sadece ilgilendigimiz 8 baytlik pencereyi raporla.
+            if (fault >= g_wphys_target && fault < g_wphys_target + 8 &&
+                g_wphys_hits++ < 20) {
+                std::stringstream ws;
+                ws << "[WATCH-PHYS] 0x" << std::hex << fault << " adresine YAZILDI"
+                   << " | TID=" << std::dec << GetCurrentThreadId()
+                   << " | yazan RIP=0x" << std::hex << ctx->Rip;
+                if (ctx->Rip >= g_base_addr && ctx->Rip < g_base_addr + g_module_size)
+                    ws << " (misafir RVA 0x" << (ctx->Rip - g_base_addr) << ")";
+                else
+                    ws << " (MISAFIR DISI - emulator/host kodu)";
+                LOG_ERROR(ws.str());
+            }
+            // Yazmanin gecmesi icin sayfayi ac, tek adim at, sonra geri tak.
+            DWORD old = 0;
+            VirtualProtect(g_wphys_page, g_wphys_psize, PAGE_EXECUTE_READWRITE, &old);
+            ctx->EFlags |= 0x100; // TF
+            g_wphys_pending = true;
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+    }
+    if (code == EXCEPTION_SINGLE_STEP && g_wphys_pending) {
+        g_wphys_pending = false;
+        ctx->EFlags &= ~0x100;
+        WPhysArm();
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
     // BOS ISARETCIYE YAZMAYI ATLA (PSEMU_SKIP_NULL_STORE=1)
     if (g_skip_null_store && code == EXCEPTION_ACCESS_VIOLATION &&
         ExceptionInfo->ExceptionRecord->NumberParameters >= 2 &&
@@ -7510,6 +7570,40 @@ void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t tex
 
     // Hang watchdog thread'ini baslat (worker takilirsa RIP'ini doksun)
     CreateThread(NULL, 0, HangWatchdogProc, nullptr, 0, NULL);
+
+    // Fiziksel adres izleme: PSEMU_WATCH_PHYS=<dogrudan-bellek ofseti>
+    // Hedef sayfa ancak oyun o bolgeyi esledikten sonra var olur, o yuzden
+    // ayri bir thread commit edilene kadar bekleyip korumayi kuruyor.
+    if (const char* wp = std::getenv("PSEMU_WATCH_PHYS")) {
+        const uint64_t phys = std::strtoull(wp, nullptr, 0);
+        if (phys != 0) {
+            CreateThread(NULL, 0, [](LPVOID param) -> DWORD {
+                const uint64_t ph = reinterpret_cast<uint64_t>(param);
+                SYSTEM_INFO si; GetSystemInfo(&si);
+                for (int i = 0; i < 600; i++) {
+                    Sleep(500);
+                    uint8_t* base = reinterpret_cast<uint8_t*>(g_dmem_base_addr);
+                    if (base == nullptr) continue;
+                    uint64_t abs = reinterpret_cast<uint64_t>(base) + ph;
+                    MEMORY_BASIC_INFORMATION mbi;
+                    if (VirtualQuery(reinterpret_cast<void*>(abs), &mbi, sizeof(mbi)) == 0) continue;
+                    if (mbi.State != MEM_COMMIT) continue;
+                    g_wphys_target = abs;
+                    g_wphys_psize  = si.dwPageSize;
+                    g_wphys_page   = reinterpret_cast<void*>(abs & ~(uint64_t)(si.dwPageSize - 1));
+                    WPhysArm();
+                    std::stringstream ws;
+                    ws << "[WATCH-PHYS] izleme kuruldu: phys 0x" << std::hex << ph
+                       << " -> 0x" << abs << " (sayfa 0x"
+                       << reinterpret_cast<uint64_t>(g_wphys_page) << ")";
+                    LOG_ERROR(ws.str());
+                    return 0;
+                }
+                LOG_ERROR("[WATCH-PHYS] adres commit edilmedi, izleme kurulamadi.");
+                return 0;
+            }, reinterpret_cast<LPVOID>(phys), 0, NULL);
+        }
+    }
 
     // Tum thread'leri periyodik ornekle: PSEMU_THREAD_SAMPLE=<saniye>
     if (const char* tse = std::getenv("PSEMU_THREAD_SAMPLE")) {
