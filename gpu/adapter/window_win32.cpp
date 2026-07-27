@@ -7,7 +7,9 @@
 // window.cpp CMake'te DERLENMIYOR; bu dosya onun yerini aliyor.
 // ============================================================================
 #include <windows.h>
+#include <atomic>
 #include <cstdio>
+#include <thread>
 
 #include "common/assert.h"
 #include "common/threads.h"
@@ -20,6 +22,11 @@
 #include "libs/controller.h"
 
 namespace Libs::Graphics {
+
+// TANI: pencere thread'i vblank/flip'e girdiginde damgalanir, cikinca 0
+// yapilir. Gozcu thread'i bunu izleyip takilmayi bildiriyor.
+static std::atomic<uint64_t> g_flip_enter_ms{0};
+
 
 // window.cpp'de tanimliydi; window.cpp derlenmedigi icin burada tanimliyoruz.
 WindowContext* g_window_ctx = nullptr;
@@ -189,6 +196,30 @@ void WindowRun() {
 
 	GraphicsRenderCreateContext();
 
+	// TANI GOZCUSU: pencere thread'i vblank/flip icinde takilirsa mesaj
+	// pompasi durur ve Windows pencereyi "Yanit Vermiyor" yapar (kullanici
+	// bunu gozlemledi). Takilmanin GERCEKTEN burada olup olmadigini
+	// kanitlamak icin ayri bir thread damgayi izliyor.
+	std::thread([] {
+		bool reported = false;
+		for (;;) {
+			Sleep(1000);
+			const uint64_t t = g_flip_enter_ms.load(std::memory_order_relaxed);
+			if (t == 0) {
+				reported = false;
+				continue;
+			}
+			const uint64_t dt = GetTickCount64() - t;
+			if (dt > 3000 && !reported) {
+				reported = true;
+				printf("[WIN-WATCH] pencere thread'i vblank/flip icinde %llu ms takildi "
+				       "-> mesaj pompasi durdu (pencere 'Yanit Vermiyor')\n",
+				       static_cast<unsigned long long>(dt));
+				fflush(stdout);
+			}
+		}
+	}).detach();
+
 	// psemu: Kyty'nin SDL GameMainLoop'unun render kismini replike ediyoruz.
 	// KRITIK: her frame VideoOutFlipWindow(0) cagrilmali â€” bu, flip queue'yu
 	// drain edip WaitForNextVblank + FlipQueue::Flip -> WindowPresentFrame
@@ -204,6 +235,11 @@ void WindowRun() {
 			TranslateMessage(&msg);
 			DispatchMessageW(&msg);
 		}
+		// TANI: pencere thread'i VideoOutFlipWindow icinde ctx->mutex'i
+		// bekleyip mesaj pompasina donemiyor mu? Girisi damgaliyoruz;
+		// asagidaki gozcu thread'i 3 saniyeden uzun surerse bildiriyor.
+		// (Cagri hic donmezse "sonrasinda olc" yaklasimi ise yaramaz.)
+		g_flip_enter_ms.store(GetTickCount64(), std::memory_order_relaxed);
 		VideoOut::VideoOutBeginVblank();
 		// PERF: eskiden micros=0 idi. VideoOutFlipWindow once vblank'i bekler,
 		// SONRA flip kuyruguna bakar; timeout 0 ile kuyruk o an bossa hemen
@@ -218,6 +254,7 @@ void WindowRun() {
 		// deger (0) geri alindi; vsync kaybi baska yoldan cozulmeli.
 		VideoOut::VideoOutFlipWindow(0);
 		VideoOut::VideoOutEndVblank();
+		g_flip_enter_ms.store(0, std::memory_order_relaxed);
 	}
 }
 
