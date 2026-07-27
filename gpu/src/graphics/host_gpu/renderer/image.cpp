@@ -369,7 +369,15 @@ void UploadVideoOut(GraphicContext* ctx, VideoOutVulkanImage* image, const Video
 		Transfer::WaitForGraphicsIdle(ctx);
 	}
 	image->layout = vk::ImageLayout::eUndefined;
+	// TANI: Astro Bot burada donuyor. Uc adim var; hangisi oldugunu
+	// isaretliyoruz. NOT: TileConvert... formati ALMIYOR (yalnizca
+	// bytes_per_element/genislik/yukseklik/pitch) ve bu degerler iki oyunda
+	// da AYNI - yani detiling'in formattan etkilenmesi beklenmiyor.
+	printf("[IMG-MARK] ScratchBuffer(%llu bayt) oncesi\n", (unsigned long long)info.size);
+	fflush(stdout);
 	Transfer::ScratchBuffer scratch(info.size);
+	printf("[IMG-MARK] ScratchBuffer HAZIR; detiling oncesi\n");
+	fflush(stdout);
 	TileConvertTiledToLinearRenderTarget(
 	    scratch.Data(), reinterpret_cast<const void*>(info.address), info.width, info.height,
 	    info.pitch, info.bytes_per_element, info.size);
@@ -379,8 +387,12 @@ void UploadVideoOut(GraphicContext* ctx, VideoOutVulkanImage* image, const Video
 			std::swap(pixels[i], pixels[i + 2]);
 		}
 	}
+	printf("[IMG-MARK] detiling BITTI; UploadImage oncesi\n");
+	fflush(stdout);
 	Transfer::UploadImage(ctx, image, scratch.Data(), info.size, info.pitch,
 	                      vk::ImageLayout::eGeneral);
+	printf("[IMG-MARK] UploadImage BITTI\n");
+	fflush(stdout);
 }
 
 GpuTextureVulkanImage* CreateDummyTexture(GraphicContext* ctx, bool uint_format, bool image_3d,
