@@ -1146,10 +1146,22 @@ static int RegisterBuffersInternal(VideoOutConfig* ctx, int set_id, int start_in
 	if (set_id < 0 || set_id >= VIDEO_OUT_BUFFER_ATTRIBUTE_NUM_MAX) {
 		EXIT("internal video-out buffer set identifier is out of range\n");
 	}
+	// TANI: Astro Bot'ta bir thread RegisterBuffers2 icinde kalici olarak
+	// bloke kaliyor (thread ornekleyicisiyle olculdu: son HLE PLT#117, RIP
+	// bir ntdll bekleme fonksiyonunda). Asagida uc ayri bekleme noktasi var;
+	// hangisinde durdugunu tahmin etmemek icin her birini isaretliyoruz.
+	printf("[VO-MARK] RegisterBuffers: WindowWaitForGraphicInitialized oncesi\n");
+	fflush(stdout);
 	Graphics::WindowWaitForGraphicInitialized();
+	printf("[VO-MARK] RegisterBuffers: GraphicsRenderCreateContext oncesi\n");
+	fflush(stdout);
 	Graphics::GraphicsRenderCreateContext();
+	printf("[VO-MARK] RegisterBuffers: ctx->mutex oncesi\n");
+	fflush(stdout);
 	auto*             graphic_ctx = g_video_out_context->GetGraphicCtx();
 	Common::LockGuard lock(ctx->mutex);
+	printf("[VO-MARK] RegisterBuffers: mutex ALINDI\n");
+	fflush(stdout);
 	if (ctx->closing) {
 		EXIT("cannot register buffers on a closing video-out handle\n");
 	}
@@ -1165,8 +1177,13 @@ static int RegisterBuffersInternal(VideoOutConfig* ctx, int set_id, int start_in
 			return VIDEO_OUT_ERROR_SLOT_OCCUPIED;
 		}
 	}
+	printf("[VO-MARK] RegisterBuffers: RegisterVideoOutSurfaces oncesi (%d yuzey)\n",
+	       buffer_num);
+	fflush(stdout);
 	auto images =
 	    Graphics::g_render_ctx->GetTextureCache()->RegisterVideoOutSurfaces(graphic_ctx, infos);
+	printf("[VO-MARK] RegisterBuffers: yuzeyler HAZIR (%zu adet)\n", images.size());
+	fflush(stdout);
 	if (images.size() != infos.size()) {
 		EXIT("video-out texture cache returned an incomplete surface set\n");
 	}
