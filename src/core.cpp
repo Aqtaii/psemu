@@ -5158,27 +5158,39 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 // data.js'te tek string olarak duruyor ("New Game|Continue|Options|
                 // ?????|Quit") ve bu fonksiyonla parcalaniyor. Icerigi ASCII'ye
                 // dokup menu string'inin buraya HIC gelip gelmedigini goruyoruz.
+                // ELEMAN BOYUTU 2 BAYT - DISASSEMBLY ILE KANITLANDI.
+                // Cagri yeri RVA 0x19108b (u16string::find):
+                //     0x19106d: lea   r15, [rax + rdx*2]   ; bitis = bas + sayi*2
+                //     0x191080: movzx esi, word ptr [r13]  ; aranan karakter WORD
+                //     0x1910b4: add   r14, 2               ; eleman basina 2 bayt
+                //     0x1910be: sar   rax, 1               ; bayt farki / 2
+                // Yani bu dal DOGRU. (nids.h bu NID'i "wmemchr" olarak cozuyor ve
+                // wchar_t=4 bayt sanip yazilmis bir dal daha vardi; zincirde sonra
+                // geldigi icin zaten hic calismiyordu ve YANLISTI - silindi.)
+                //
+                // ASIL SORUN ICERIK: log'da c=0x0 n=1 gorunuyor ve disassembly'de
+                // 0x191079 'test r12,r12' dali ALINMIYOR, yani desenin UZUNLUGU
+                // sifir degil ama ILK KARAKTERI NUL. Dizge dogru boyutta ama ICI
+                // SIFIR - taze sayfalar sifir oldugu icin bu, kopyalamasi gereken
+                // bir seyin sessizce hicbir sey yapmadigina isaret eder.
+                //
+                // Bu fonksiyon BOOT boyunca hic cagrilmiyor (ilk cagri diyalogda,
+                // T+169), bu yuzden ilk 60 cagriyi tam icerikle dokmek hem yeterli
+                // hem ucuz - sicak yolu bozmuyor.
                 { static std::atomic<uint64_t> s_d{0};
                   uint64_t cnt = s_d.fetch_add(1, std::memory_order_relaxed) + 1;
-                  if (p != nullptr && n > 0 && SafeReadable(p, (n < 48 ? n : 48) * 2)) {
-                    char txt[52]; size_t m = (n < 48 ? n : 48), k = 0;
-                    for (size_t i = 0; i < m; i++) {
+                  if (cnt <= 60 && p != nullptr) {
+                    char txt[25]; int k = 0;
+                    for (int i = 0; i < 24; i++) {
+                        if (!SafeReadable(p + i, 2)) break;
                         uint16_t ch = p[i];
                         txt[k++] = (ch >= 0x20 && ch < 0x7f) ? static_cast<char>(ch) : '.';
                     }
                     txt[k] = '\0';
-                    // Ornekleme (ilk 20 + her 200) YETMIYOR: menu anahtari lang0.json'da
-                    // 96. girdi (~split #384) ve ornekleme araligina dusmuyordu.
-                    // "menu"/"New game" iceren HER split'i mutlaka yaz -> loadDictionary
-                    // menu0'i gercekten isliyor mu, kesin gorelim.
-                    const bool is_menu = (strstr(txt, "menu") != nullptr) ||
-                                         (strstr(txt, "New game") != nullptr);
-                    if (cnt <= 20 || cnt % 200 == 0 || is_menu) {
-                        printf("[U16SPLIT] #%llu c=0x%x n=%zu \"%s\"%s\n",
-                               static_cast<unsigned long long>(cnt), c, n, txt,
-                               is_menu ? "   <== MENU!" : "");
-                        fflush(stdout);
-                    }
+                    printf("[U16FIND] #%llu p=%p n=%zu c=0x%x yigin=\"%s\"\n",
+                           static_cast<unsigned long long>(cnt), (const void*)p, n,
+                           static_cast<unsigned>(c), txt);
+                    fflush(stdout);
                   } }
                 uint64_t found = 0;
                 if (p != nullptr && n > 0 && SafeReadable(p, n * 2)) {
@@ -5197,12 +5209,30 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 const uint16_t* s1 = reinterpret_cast<const uint16_t*>(ctx->Rdi);
                 const uint16_t* s2 = reinterpret_cast<const uint16_t*>(ctx->Rsi);
                 size_t          n  = static_cast<size_t>(ctx->Rdx);
-                { static int s_c = 0; if (s_c < 4 && s1 && s2 &&
-                     SafeReadable(s1, n * 2) && SafeReadable(s2, n * 2)) { s_c++;
-                  const uint8_t* a = reinterpret_cast<const uint8_t*>(s1);
-                  const uint8_t* b = reinterpret_cast<const uint8_t*>(s2);
-                  printf("[U16CMP] n=%zu s1=%02x %02x %02x %02x s2=%02x %02x %02x %02x\n",
-                         n, a[0],a[1],a[2],a[3], b[0],b[1],b[2],b[3]); fflush(stdout); } }
+                // TANI: 4 bayt yerine TAM ICERIK dokuyoruz. Konusma metni bos
+                // geldigi icin asil soru "hangi dizge sifir?" - iki tarafi da
+                // okunabilir metin olarak gormek sart. Sinir 60 cagri: bu
+                // fonksiyon boot'ta seyrek, diyalogda ise saniyede birkac kez
+                // cagriliyor, yani 60 diyalogu yakalamaya yetiyor ve ucuz.
+                { static std::atomic<uint64_t> s_c{0};
+                  uint64_t cc = s_c.fetch_add(1, std::memory_order_relaxed) + 1;
+                  if (cc <= 60 && s1 != nullptr && s2 != nullptr) {
+                    char t1[25], t2[25]; int k1 = 0, k2 = 0;
+                    for (int i = 0; i < 24; i++) {
+                        if (!SafeReadable(s1 + i, 2)) break;
+                        uint16_t ch = s1[i];
+                        t1[k1++] = (ch >= 0x20 && ch < 0x7f) ? static_cast<char>(ch) : '.';
+                    }
+                    t1[k1] = '\0';
+                    for (int i = 0; i < 24; i++) {
+                        if (!SafeReadable(s2 + i, 2)) break;
+                        uint16_t ch = s2[i];
+                        t2[k2++] = (ch >= 0x20 && ch < 0x7f) ? static_cast<char>(ch) : '.';
+                    }
+                    t2[k2] = '\0';
+                    printf("[U16CMP] #%llu n=%zu s1=\"%s\"  s2=\"%s\"\n",
+                           static_cast<unsigned long long>(cc), n, t1, t2);
+                    fflush(stdout); } }
                 int result = 0;
                 if (s1 && s2 && n > 0 && SafeReadable(s1, n * 2) && SafeReadable(s2, n * 2)) {
                     for (size_t i = 0; i < n; i++) {
@@ -6644,51 +6674,26 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 }
                 ctx->Rax = static_cast<uint64_t>(s.size());
                 special_return_set = true;
-            } else if (readable_name == "wmemchr" || readable_name == "NID_fnUEjBCNRVU") {
-                // wchar_t* wmemchr(const wchar_t* s, wchar_t c, size_t n)
-                // PS5/FreeBSD'de wchar_t = 4 BYTE; n = ELEMAN sayisi. Onceki hook
-                // byte-tabanliydi (count byte arayip byte karsilastiriyordu) ->
-                // '|' ayraci count/4'ten ilerideyse BULUNAMIYOR, GameMaker'in
-                // parse dongusu spin ediyor (donma) + string'ler bos kaliyor
-                // (gorunmez butonlar).
-                const uint32_t* p = reinterpret_cast<const uint32_t*>(ctx->Rdi);
-                uint32_t        ch    = static_cast<uint32_t>(ctx->Rsi);
-                size_t          count = static_cast<size_t>(ctx->Rdx);
-                // DOGRULAMA: ilk birkac cagride kaynak baytlarini dok (wchar_t
-                // boyutunu gozle teyit: "b\0\0\0g..." = 4B, "b\0g\0" = 2B, "bg" = 1B).
-                {
-                    static int s_dbg = 0;
-                    if (s_dbg < 3 && p != nullptr && SafeReadable(p, 16)) {
-                        s_dbg++;
-                        const uint8_t* b = reinterpret_cast<const uint8_t*>(p);
-                        printf("[WMEMCHR] ptr=%p c=0x%x n=%zu bytes=%02x %02x %02x %02x %02x %02x %02x %02x\n",
-                               (void*)p, ch, count, b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7]);
-                        fflush(stdout);
-                    }
-                }
-                const uint32_t* result = nullptr;
-                if (p != nullptr && count > 0 && SafeReadable(p, count * sizeof(uint32_t))) {
-                    for (size_t i = 0; i < count; i++) {
-                        if (p[i] == ch) { result = &p[i]; break; }
-                    }
-                }
-                ctx->Rax = reinterpret_cast<uint64_t>(result);
-                special_return_set = true;
-            } else if (readable_name == "wmemmove" || readable_name == "NID_Noj9PsJrsa8") {
-                // wchar_t* wmemmove(wchar_t* d, const wchar_t* s, size_t n)
-                // n = ELEMAN sayisi; kopyalanacak = n * 4 byte. Onceki hook n byte
-                // kopyaliyordu -> genis karakterleri kirpiyor, string'ler bozuluyordu.
-                void*       dest  = reinterpret_cast<void*>(ctx->Rdi);
-                const void* src   = reinterpret_cast<const void*>(ctx->Rsi);
-                size_t      count = static_cast<size_t>(ctx->Rdx);
-                size_t      bytes = count * sizeof(uint32_t);
-                if (dest != nullptr && src != nullptr && count > 0 &&
-                    SafeReadable(src, bytes) && SafeWritable(dest, bytes)) {
-                    memmove(dest, src, bytes);
-                }
-                ctx->Rax = reinterpret_cast<uint64_t>(dest);
-                special_return_set = true;
             }
+            // ============================================================
+            // SILINDI: wmemchr/wmemmove'un "wchar_t = 4 BAYT" surumleri
+            // ------------------------------------------------------------
+            // Burada ayni NID'ler (fnUEjBCNRVU, Noj9PsJrsa8) icin 4 baytlik
+            // ikinci bir uygulama duruyordu. IKI SORUNU vardi:
+            //  1) OLU KOD: ayni NID'leri yakalayan 2 baytlik dallar bu
+            //     zincirde COK ONCE geliyor (bkz. func_name.find(...)), yani
+            //     buraya hicbir zaman ulasilmiyordu.
+            //  2) YANLISTI: eleman boyutu 2 bayt. Cagri yeri RVA 0x19108b
+            //     (u16string::find) disassembly'si kesin:
+            //         lea   r15, [rax + rdx*2]   ; bitis = bas + sayi*2
+            //         movzx esi, word ptr [r13]  ; aranan karakter WORD (16 bit)
+            //         add   r14, 2               ; eleman basina 2 bayt
+            //         sar   rax, 1               ; bayt farki / 2 = eleman sayisi
+            // Oyun bu NID'leri char16_t (u16string) semantigiyle cagiriyor.
+            // Iki celisen uygulamayi birakmak, ileride "olu dali canlandirmak"
+            // gibi gorunen bir DUZELTMENIN menuyu ve tum metni bozmasina yol
+            // acardi; bu yuzden tek dogru uygulama biraktik.
+            // ============================================================
 
             // ========================================================
             // PLT#8 OZEL YAKALAMA (sceKernelGetProcessParam)
