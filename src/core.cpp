@@ -2306,10 +2306,24 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 std::stringstream hs;
                 hs << "[TRACE-AT] RVA 0x" << std::hex << s_at
                    << "  RAX=0x" << ctx->Rax << " RCX=0x" << ctx->Rcx
-                   << " RDX=0x" << ctx->Rdx << " R14=0x" << ctx->R14
+                   << " RDX=0x" << ctx->Rdx << " RDI=0x" << ctx->Rdi
+                   << " R14=0x" << ctx->R14 << " R15=0x" << ctx->R15
                    << " RBP=0x" << ctx->Rbp
                    << "  [RBP-off]=0x" << v << "  (dusuk 16 bit: 0x"
                    << (v & 0xFFFF) << ")";
+                // Tanimlayici kaynaklari genelde R15/RDI'de duruyor; +0x28
+                // civarindaki 16 bayti da dokuyoruz ki alanlari gorebilelim.
+                for (int rr = 0; rr < 2; rr++) {
+                    const uint64_t b = rr ? ctx->Rdi : ctx->R15;
+                    if (b < 0x10000) continue;
+                    uint8_t* q = reinterpret_cast<uint8_t*>(b + 0x28);
+                    if (!SafeReadable(q, 16)) continue;
+                    hs << "\n     [" << (rr ? "RDI" : "R15") << "+0x28..0x38]:";
+                    for (int i = 0; i < 16; i++) {
+                        char bb[4]; snprintf(bb, sizeof(bb), " %02X", q[i]);
+                        hs << bb;
+                    }
+                }
                 LOG_ERROR(hs.str());
             }
         }
