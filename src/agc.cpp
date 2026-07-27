@@ -137,8 +137,23 @@ std::atomic<uint64_t> g_shaders_created{0};
 // ceker; statik-init veya Vulkan-device hatalari BURADA ortaya cikacak.
 void EnsureKytyGraphicsInit() {
     static std::atomic<bool> started{false};
+    static std::atomic<bool> finished{false};
+
     bool expected = false;
-    if (!started.compare_exchange_strong(expected, true)) return;
+    if (!started.compare_exchange_strong(expected, true)) {
+        // Init'i BASKA bir thread yapiyor: BITENE KADAR BEKLE.
+        //
+        // Eskiden burada dogrudan "return" vardi. Tek thread'li oyunlarda
+        // (Dreaming Sarah) fark etmiyordu, ama Astro Bot 19 thread aciyor ve
+        // birkaci ayni anda sceVideoOut*/sceAgc* cagiriyor. Beklemeden donen
+        // thread, g_video_out_context henuz kurulmamisken grafik cagrisina
+        // girip "EXIT_IF(g_video_out_context == nullptr)" fatal'ini
+        // tetikliyordu (videoOut.cpp:1017, VideoOutEndVblank).
+        while (!finished.load(std::memory_order_acquire)) {
+            Sleep(1);
+        }
+        return;
+    }
 
     LOG_INFO("[KYTY-GFX] Baslatiliyor: Kyty subsystem'leri + WindowInit + VulkanCreate...");
 
@@ -154,6 +169,7 @@ void EnsureKytyGraphicsInit() {
         std::thread init_th([] { PsemuInitKytyGraphics(); });
         init_th.join();
     }
+    finished.store(true, std::memory_order_release); // bekleyenleri serbest birak
     LOG_INFO("[KYTY-GFX] Vulkan HAZIR (instance/device/swapchain kuruldu).");
 }
 
