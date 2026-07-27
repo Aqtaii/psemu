@@ -33,6 +33,7 @@ extern "C" void PsemuMarkCpuModified(uint64_t vaddr, uint64_t size);
 // Performans metrikleri (gpu/adapter/metrics.cpp) - pencere basliginda gosterilir.
 extern "C" void PsemuMetricAddTlsFault();
 extern "C" void PsemuMetricAddPltCall();
+extern "C" void PsemuDumpPltTop();
 extern "C" void PsemuMetricAddVehCycles(unsigned long long cycles);
 
 // ========================================================
@@ -1644,6 +1645,12 @@ static DWORD WINAPI ThreadSamplerProc(LPVOID param) {
                 ss << "  son HLE: PLT#" << std::dec << th->plt.load(std::memory_order_relaxed);
         }
         LOG_ERROR(ss.str());
+
+        // Hangi PLT cagrilari CPU yiyor? PsemuDumpPltTop zaten var ama
+        // yalnizca PERF yolundan cagriliyordu ve Astro Bot oraya hic
+        // varmiyor. Ornekleyici ayri bir thread oldugu icin sicak yolu
+        // bozmadan buradan tetikliyoruz.
+        PsemuDumpPltTop();
     }
 }
 
@@ -1942,8 +1949,13 @@ extern "C" void PsemuDumpPltTop() {
         // oysa her cagri bir exception turu demek, yani sayim = maliyet.
         // OYUN THREAD'INDEKI DUVAR SAATINE gore sirala: kare suresini yiyen sey
         // budur (bloklayan cagrilar dongu harcamaz ama kareyi yer).
+        // SIRALAMA CAGRI SAYISINA gore. Eskiden duvar saatine goreydi ama o
+        // yalnizca OYUN THREAD'inde olculuyor; Astro Bot'ta CPU'yu yiyenler
+        // worker thread'ler oldugu icin tablo tamamen BOS cikiyordu
+        // ("toplam 0 ms"). Zaten her cagri bir exception turu, yani sayim
+        // dogrudan maliyettir.
         for (int k = 0; k < 12; k++) {
-            if (dw > top[k].wall) {
+            if (dn > top[k].calls) {
                 for (int m = 11; m > k; m--) top[m] = top[m - 1];
                 top[k] = Row{i, dn, dc, dw};
                 break;
@@ -2912,15 +2924,23 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 else if (readable_name == "_Locksyslock" ||
                          readable_name == "_Unlocksyslock" ||
                          readable_name == "uncaught_exception") f = FOP_RET0;
-                // sceKernelWaitSema HENUZ IMPLEMENTE DEGIL: bugun zincirin
-                // sonundaki varsayilan stub'a dusup RAX=0 donuyor. Hizli yola
-                // almak DAVRANISI DEGISTIRMEZ, yalnizca 195 string
-                // karsilastirmasini atlar. Olcum: cagri basina 19.933 dongu,
-                // saniyede ~42.000 cagri (menude en pahali ikinci kalem).
-                // NOT: gercek cozum semaforu implemente etmektir - oyun su an
-                // her zaman "basarili" cevabi aldigi icin bekleyen thread
-                // donuyor (spin). Bu yuzden cagri sayisi bu kadar yuksek.
-                else if (readable_name == "sceKernelWaitSema") f = FOP_RET0;
+                // KALDIRILDI: sceKernelWaitSema icin FOP_RET0.
+                //
+                // Bu hizli yol, WaitSema HENUZ IMPLEMENTE DEGILKEN eklenmisti
+                // ("davranisi degistirmez, sadece string karsilastirmasini
+                // atlar"). Sonradan GERCEK semafor implementasyonu yazildi
+                // (asagidaki "SEMAFORLAR - ZINCIRDEN ONCE" blogu) ama bu satir
+                // kaldirilmadi - ve hizli yol o bloktan ONCE calistigi icin
+                // gercek implementasyonu GOLGELIYORDU. Yani semafor kodu
+                // WaitSema icin olu koddu; cagri her zaman aninda 0 donuyordu.
+                //
+                // Sonuc olculdu (Astro Bot, 30 saniyelik aralik):
+                //     sceKernelWaitSema  9.166.328 cagri  (~305.000/sn)
+                //     VirtualQuery      18.332.654
+                //     toplam exception  76.071.972
+                // Bekleyen is parcaciklari bloke olmak yerine spin ediyor,
+                // ~9 cekirdek yaniyor ve ana thread CPU bulamadigi icin
+                // video-out kaydi surunuyordu.
                 s_fop[plt_index] = f;
                 fop = FOP_NONE; // ILK cagri normal yoldan gitsin (loglanabilsin)
             }
