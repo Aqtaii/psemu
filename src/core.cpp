@@ -1587,21 +1587,29 @@ static DWORD WINAPI ThreadSamplerProc(LPVOID param) {
     const DWORD pid  = GetCurrentProcessId();
     for (int round = 1;; round++) {
         Sleep(period_ms);
+        // DIKKAT: bir thread ASKIDAYKEN BELLEK AYIRMA. Askiya alinan thread
+        // CRT yigin kilidini tutuyorsa ayirma sonsuza kadar bloke olur, o
+        // thread de hicbir zaman devam ettirilemez -> tum surec kilitlenir.
+        // (Bu tam olarak yasandi: ornekleyici acikken kosular T+36'da
+        // donuyordu ve "oyun takildi" gibi gorunuyordu.) Bu yuzden sabit
+        // boyutlu dizi kullaniyoruz, std::vector degil.
         struct Sample { DWORD tid; uint64_t rip; };
-        std::vector<Sample> samples;
+        Sample samples[128];
+        int    nsample = 0;
         HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
         if (snap == INVALID_HANDLE_VALUE) continue;
         THREADENTRY32 te; te.dwSize = sizeof(te);
         if (Thread32First(snap, &te)) {
             do {
                 if (te.th32OwnerProcessID != pid || te.th32ThreadID == self) continue;
+                if (nsample >= 128) break;
                 HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT,
                                       FALSE, te.th32ThreadID);
                 if (h == nullptr) continue;
                 if (SuspendThread(h) != (DWORD)-1) {
                     CONTEXT c; memset(&c, 0, sizeof(c));
                     c.ContextFlags = CONTEXT_CONTROL;
-                    if (GetThreadContext(h, &c)) samples.push_back({te.th32ThreadID, c.Rip});
+                    if (GetThreadContext(h, &c)) { samples[nsample].tid = te.th32ThreadID; samples[nsample].rip = c.Rip; nsample++; }
                     ResumeThread(h); // ASKIDA LOG YOK: hemen serbest birak
                 }
                 CloseHandle(h);
@@ -1610,9 +1618,9 @@ static DWORD WINAPI ThreadSamplerProc(LPVOID param) {
         CloseHandle(snap);
 
         std::stringstream ss;
-        ss << "[THREAD-ORNEK #" << std::dec << round << "] " << samples.size()
+        ss << "[THREAD-ORNEK #" << std::dec << round << "] " << nsample
            << " thread:";
-        for (const auto& s : samples) {
+        for (int si = 0; si < nsample; si++) { const Sample& s = samples[si];
             ss << "\n    TID=" << std::dec << s.tid << "  RIP=0x" << std::hex << s.rip;
             if (s.rip >= g_base_addr && s.rip < g_base_addr + g_module_size)
                 ss << "  (misafir RVA 0x" << (s.rip - g_base_addr) << ")";
@@ -2126,6 +2134,19 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     uint64_t* sp = reinterpret_cast<uint64_t*>(ctx->Rsp + k * 8);
                     if (!SafeReadable(sp, 8)) break;
                     bs << " +" << std::dec << (k * 8) << "=0x" << std::hex << *sp;
+                }
+                // Isaretci gibi duran argumanlarin ICERIGINI de dok: "yapi
+                // geldi ama alanlari bos mu?" sorusunu ancak boyle
+                // cevaplayabiliyoruz.
+                {
+                    const char* nm[3] = {"RDI", "RSI", "RDX"};
+                    uint64_t rv[3] = {ctx->Rdi, ctx->Rsi, ctx->Rdx};
+                    for (int a = 0; a < 3; a++) {
+                        uint64_t* q = reinterpret_cast<uint64_t*>(rv[a]);
+                        if (rv[a] < 0x10000 || !SafeReadable(q, 64)) continue;
+                        bs << "\n     [" << nm[a] << "]->";
+                        for (int k = 0; k < 8; k++) bs << " 0x" << std::hex << q[k];
+                    }
                 }
                 LOG_INFO(bs.str());
             }
