@@ -7631,8 +7631,11 @@ void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t tex
             }
             if (parts.size() < 2) return 0;
             SYSTEM_INFO si; GetSystemInfo(&si);
-            for (int i = 0; i < 900; i++) {
-                Sleep(500);
+            // SIK YOKLA: hedef nesne olusturulur olusturulmaz korumayi
+            // takmak gerekiyor. 500 ms ile tablo girdisi zaten doldurulmus
+            // oluyordu ve yazan yakalanamiyordu (olculdu).
+            for (int i = 0; i < 30000; i++) {
+                Sleep(10);
                 uint64_t p = 0;
                 uint8_t* g = reinterpret_cast<uint8_t*>(g_base_addr) + parts[0];
                 if (!SafeReadable(g, 8)) continue;
