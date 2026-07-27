@@ -18,6 +18,7 @@
 #include <mutex>
 #include <memory>  // tembel tani stringstream'i icin unique_ptr
 #include <deque>    // direct memory havuzu kilidi
+#include <tlhelp32.h> // ThreadSamplerProc: surecteki tum thread'leri gezmek icin
 #include "nids.h"
 #include "game_profile.h"
 #include "video.h"
@@ -1409,6 +1410,99 @@ static const int kWatchdogMaxDumps = 15;           // en fazla bu kadar dok (spa
 // Ana misafir thread'i (ExecutionThread). Worker yokken watchdog bunu izler.
 static HANDLE g_exec_thread = nullptr;
 
+// ---------------------------------------------------------------------------
+// TUM THREAD'LERI ORNEKLE  (PSEMU_THREAD_SAMPLE=<saniye>)
+//
+// Mevcut watchdog yalnizca TEK bir thread'e bakiyor. Astro Bot artik 19
+// misafir thread'i aciyor ve log filtresi tekrarlari susturdugu icin
+// "sessizlik" neyin bekledigini soylemiyor. Bu ornekleyici periyodik olarak
+// SURECTEKI TUM thread'lerin RIP'ini RVA olarak doker; boylece hangi
+// thread'in nerede dondugunu/bekledigini goruyoruz.
+//
+// Kilitlenmeyi onlemek icin once hepsi ornekleniyor ve HEMEN devam
+// ettiriliyor; loglama ancak butun thread'ler serbest birakildiktan sonra
+// yapiliyor (askidayken log kilidini beklemek olumcul olurdu).
+// ---------------------------------------------------------------------------
+// Her thread'in EN SON girdigi HLE fonksiyonu. Ornekleyici baska bir
+// thread'in thread_local'ini okuyamaz, o yuzden kucuk bir global tablo.
+// Kilit yok: yazan tek thread kendi slotudur, okuyan sadece raporlar.
+struct ThreadHle { std::atomic<DWORD> tid{0}; std::atomic<int> plt{-1}; };
+static ThreadHle g_thread_hle[64];
+
+// SICAK YOL: saniyede yuz binlerce kez calisiyor, bu yuzden sadece TEK bir
+// tam sayi yaziyor. Slot bir kez alinip thread_local'da saklaniyor (her
+// cagrida 64'luk tabloyu taramak oyunu belirgin sekilde yavaslatiyordu).
+// Isim burada tutulmuyor; ornekleyici PLT indeksini basar, indeks->isim
+// cevirisi tools/scripts/plt_entry.py ile yapilir.
+static thread_local int t_hle_slot = -1;
+
+static inline void RecordThreadHle(int plt_index) {
+    if (t_hle_slot < 0) {
+        const DWORD tid = GetCurrentThreadId();
+        for (int i = 0; i < 64; i++) {
+            DWORD expected = 0;
+            if (g_thread_hle[i].tid.compare_exchange_strong(expected, tid,
+                                                            std::memory_order_relaxed)) {
+                t_hle_slot = i;
+                break;
+            }
+        }
+        if (t_hle_slot < 0) return; // tablo dolu
+    }
+    g_thread_hle[t_hle_slot].plt.store(plt_index, std::memory_order_relaxed);
+}
+
+static const ThreadHle* FindThreadHle(DWORD tid) {
+    for (int i = 0; i < 64; i++)
+        if (g_thread_hle[i].tid.load(std::memory_order_relaxed) == tid)
+            return &g_thread_hle[i];
+    return nullptr;
+}
+
+static DWORD WINAPI ThreadSamplerProc(LPVOID param) {
+    const DWORD period_ms = static_cast<DWORD>(reinterpret_cast<uintptr_t>(param));
+    const DWORD self = GetCurrentThreadId();
+    const DWORD pid  = GetCurrentProcessId();
+    for (int round = 1;; round++) {
+        Sleep(period_ms);
+        struct Sample { DWORD tid; uint64_t rip; };
+        std::vector<Sample> samples;
+        HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if (snap == INVALID_HANDLE_VALUE) continue;
+        THREADENTRY32 te; te.dwSize = sizeof(te);
+        if (Thread32First(snap, &te)) {
+            do {
+                if (te.th32OwnerProcessID != pid || te.th32ThreadID == self) continue;
+                HANDLE h = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT,
+                                      FALSE, te.th32ThreadID);
+                if (h == nullptr) continue;
+                if (SuspendThread(h) != (DWORD)-1) {
+                    CONTEXT c; memset(&c, 0, sizeof(c));
+                    c.ContextFlags = CONTEXT_CONTROL;
+                    if (GetThreadContext(h, &c)) samples.push_back({te.th32ThreadID, c.Rip});
+                    ResumeThread(h); // ASKIDA LOG YOK: hemen serbest birak
+                }
+                CloseHandle(h);
+            } while (Thread32Next(snap, &te));
+        }
+        CloseHandle(snap);
+
+        std::stringstream ss;
+        ss << "[THREAD-ORNEK #" << std::dec << round << "] " << samples.size()
+           << " thread:";
+        for (const auto& s : samples) {
+            ss << "\n    TID=" << std::dec << s.tid << "  RIP=0x" << std::hex << s.rip;
+            if (s.rip >= g_base_addr && s.rip < g_base_addr + g_module_size)
+                ss << "  (misafir RVA 0x" << (s.rip - g_base_addr) << ")";
+            else
+                ss << "  (misafir disi)";
+            if (const ThreadHle* th = FindThreadHle(s.tid))
+                ss << "  son HLE: PLT#" << std::dec << th->plt.load(std::memory_order_relaxed);
+        }
+        LOG_ERROR(ss.str());
+    }
+}
+
 static DWORD WINAPI HangWatchdogProc(LPVOID) {
     // Cok agresif: worker sadece ~300ms sessiz kalirsa bile ornek al.
     // Sessiz olum (stack overflow) ihtimaline karsi hizli sampling gerekiyor.
@@ -2714,6 +2808,12 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             bool log_this = ShouldLogPlt(plt_index,
                                          readable_name.empty() ? func_name : readable_name);
 
+            // THREAD-ORNEK icin: bu thread SU AN hangi HLE'nin icinde?
+            // Ornekleyici baska thread'lerin TLS'ini okuyamadigi icin kucuk
+            // bir global tablo tutuyoruz. Log filtresinden BAGIMSIZ - takilan
+            // thread'i bulmak icin tam da susturulmus cagrilar gerekiyor.
+            RecordThreadHle(plt_index);
+
             if (log_this) {
                 std::stringstream hle_ss;
                 hle_ss << "[PLT-HLE] " << (readable_name.empty() ? func_name : readable_name)
@@ -2865,6 +2965,69 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     fflush(stdout);
                 }
                 ctx->Rax  = 0;
+                ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                ctx->Rsp += 8;
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+
+            // ========================================================
+            // sceUserService AILESI - ZINCIRDEN ONCE
+            // ========================================================
+            // Astro Bot'ta iki thread sceUserServiceGetEvent uzerinde SONSUZ
+            // donuyordu (thread ornekleyicisiyle olculdu). Sebep: hicbir
+            // karsiligi yoktu, genel stub 0 (=SCE_OK, "olay var") donuyordu
+            // ama olay yapisina HICBIR SEY yazmiyordu. Oyun her turda bos bir
+            // olay isleyip bekledigi LOGIN'i hic goremiyordu.
+            //
+            // Dogru davranis: bir kez LOGIN olayi ver, sonra NO_EVENT don.
+            if (readable_name.rfind("sceUserService", 0) == 0) {
+                const int32_t kUserId    = 1;          // tek yerel kullanici
+                const uint32_t kNoEvent  = 0x80960009; // SCE_USER_SERVICE_ERROR_NO_EVENT
+                uint64_t rax = 0;
+
+                if (readable_name == "sceUserServiceGetEvent") {
+                    // SceUserServiceEvent { int32 eventType; int32 userId; }
+                    // eventType: 0 = LOGIN, 1 = LOGOUT
+                    static std::atomic<int> s_login_sent{0};
+                    int32_t* ev = reinterpret_cast<int32_t*>(ctx->Rdi);
+                    if (ev != nullptr && SafeWritable(ev, 8) &&
+                        s_login_sent.fetch_add(1) == 0) {
+                        ev[0] = 0;        // LOGIN
+                        ev[1] = kUserId;
+                        rax = 0;
+                        printf("[USERSERVICE] LOGIN olayi verildi (userId=%d)\n", kUserId);
+                        fflush(stdout);
+                    } else {
+                        rax = kNoEvent;   // baska olay yok
+                    }
+                } else if (readable_name == "sceUserServiceGetInitialUser") {
+                    int32_t* out = reinterpret_cast<int32_t*>(ctx->Rdi);
+                    if (out != nullptr && SafeWritable(out, 4)) *out = kUserId;
+                } else if (readable_name == "sceUserServiceGetLoginUserIdList") {
+                    // SceUserServiceLoginUserIdList { int32 userId[4]; }
+                    int32_t* list = reinterpret_cast<int32_t*>(ctx->Rdi);
+                    if (list != nullptr && SafeWritable(list, 16)) {
+                        list[0] = kUserId;
+                        list[1] = list[2] = list[3] = -1; // SCE_USER_SERVICE_USER_ID_INVALID
+                    }
+                } else if (readable_name == "sceUserServiceGetUserName") {
+                    // (userId, char* buf, size_t size)
+                    char*  buf = reinterpret_cast<char*>(ctx->Rsi);
+                    size_t sz  = static_cast<size_t>(ctx->Rdx);
+                    if (buf != nullptr && sz > 0 && SafeWritable(buf, sz)) {
+                        snprintf(buf, sz, "psemu");
+                    }
+                }
+                // Geri kalan sceUserService* cagrilari (Initialize, Terminate,
+                // GetUserColor, ...) icin 0 = basarili yeterli.
+
+                static std::atomic<int> s_us{0};
+                if (s_us.fetch_add(1) < 16) {
+                    printf("[USERSERVICE] %s -> 0x%llx\n", readable_name.c_str(),
+                           (unsigned long long)rax);
+                    fflush(stdout);
+                }
+                ctx->Rax  = rax;
                 ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
                 ctx->Rsp += 8;
                 return EXCEPTION_CONTINUE_EXECUTION;
@@ -7010,6 +7173,17 @@ void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t tex
 
     // Hang watchdog thread'ini baslat (worker takilirsa RIP'ini doksun)
     CreateThread(NULL, 0, HangWatchdogProc, nullptr, 0, NULL);
+
+    // Tum thread'leri periyodik ornekle: PSEMU_THREAD_SAMPLE=<saniye>
+    if (const char* tse = std::getenv("PSEMU_THREAD_SAMPLE")) {
+        unsigned long secs = std::strtoul(tse, nullptr, 0);
+        if (secs > 0) {
+            CreateThread(NULL, 0, ThreadSamplerProc,
+                         reinterpret_cast<LPVOID>(static_cast<uintptr_t>(secs * 1000)),
+                         0, NULL);
+            LOG_INFO("[THREAD-ORNEK] ornekleyici acildi (" + std::to_string(secs) + " sn)");
+        }
+    }
 
     {
         std::stringstream ss;
