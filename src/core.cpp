@@ -513,7 +513,16 @@ static volatile long g_n_strtod   = 0;
 // Boylece ayni phys her zaman ayni belleye dusuyor.
 static uint8_t*        g_dmem_base = nullptr;
 static std::mutex      g_dmem_mutex;
-static const uint64_t  kDmemSize   = 0x100000000ULL; // 4 GB adres alani rezervi
+// PS5'te 16 GB birlesik bellek var ve Astro Bot fiziksel adres alaninda
+// hizla yukari cikiyor: olculdu, T+48'de tahsis toplami 10349 MB'a ulasti
+// (phys=0x282d00000). Rezerv 4 GB iken bu esigi asan her esleme yedek yola
+// dusuyordu: "phys ile iliskisiz TAZE VirtualAlloc". Bu, dosyadaki
+// "ayni phys -> ayni sanal adres" degismezini kiriyor ve daha kotusu, AGC
+// modulu descriptor'lardaki FIZIKSEL adresi "CPU = g_dmem_base_addr + phys"
+// ile ceviriyor - yani GPU o tamponlari HIC goremiyordu.
+// Rezervasyon sadece adres alanidir (MEM_RESERVE), fiziksel bellek
+// tuketmez; ihtiyac halinde commit ediliyor.
+static const uint64_t  kDmemSize   = 0x400000000ULL; // 16 GB adres alani rezervi
 
 // AGC (GPU) modulunun descriptor'lardaki FIZIKSEL adresleri CPU'ya cevirebilmesi
 // icin havuz tabanini disari veriyoruz (CPU = g_dmem_base_addr + phys).
