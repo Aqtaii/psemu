@@ -5277,26 +5277,33 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 // sarmalayicilar isaretci bicimini bekliyor olabilir; C2
                 // runtime'inin "Wait" zamanlayicisi bu saate bagli oldugu icin
                 // yanlis bicim beklemeleri sonsuza kilitler.
+                // RDI'YE YAZMA KALDIRILDI (2026-07-27). Yukaridaki not zaten
+                // riski soyluyordu ("RDI COPTUR") ama yazma yine de
+                // yapiliyordu. Astro Bot'ta bu TAM OLARAK gerceklesti:
+                //   0x70390d2  mov r13, rdi        ; r13 = INDEKS TAMPONU
+                //   0x70390dd  call sceKernelGetProcessTime
+                // yani RDI = indeks tamponu ve biz oraya 8 bayt zaman damgasi
+                // yaziyorduk. Olculen bozulma:
+                //   [R13] = D2 BC 04 07 00 00 00 00  = (uint64_t)117489362
+                // ki bu cokme anindaki islem suresine (T+117 sn, mikrosaniye)
+                // birebir oturuyor. Iki ayri kosuda deger degisti, ikisi de
+                // o kosunun suresine denk geldi. Sonrasindaki indeks verisi
+                // ise iki kosuda da AYNIYDI - yani veri dogru yukleniyor,
+                // sadece basi bizim tarafimizdan eziliyordu.
+                // Gercek API argumansizdir; dogru davranis yalnizca RAX.
                 {
-                    uint64_t us = MonotonicNs() / 1000ull;
-                    ctx->Rax    = us;
-                    uint64_t* out = reinterpret_cast<uint64_t*>(ctx->Rdi);
-                    if (out != nullptr && ctx->Rdi > 0x10000ULL && SafeWritable(out, 8)) {
-                        *out = us;
-                    }
+                    ctx->Rax = MonotonicNs() / 1000ull;
                 }
                 special_return_set = true;
             } else if (readable_name == "sceKernelGetProcessTimeCounter") {
                 // GERCEK API: uint64_t sceKernelGetProcessTimeCounter(void)
                 // (argumansiz, sayaci RAX'ta dondurur - yukaridaki ile ayni gerekce)
+                // RDI'ye yazma burada da KALDIRILDI - GetProcessTime ile ayni
+                // hata: fonksiyon argumansiz oldugu icin RDI cop, oraya yazmak
+                // rastgele bellegi eziyor.
                 {
                     LARGE_INTEGER now; QueryPerformanceCounter(&now);
-                    uint64_t v = static_cast<uint64_t>(now.QuadPart);
-                    ctx->Rax   = v;
-                    uint64_t* out = reinterpret_cast<uint64_t*>(ctx->Rdi);
-                    if (out != nullptr && ctx->Rdi > 0x10000ULL && SafeWritable(out, 8)) {
-                        *out = v;
-                    }
+                    ctx->Rax = static_cast<uint64_t>(now.QuadPart);
                 }
                 special_return_set = true;
             } else if (readable_name == "sceKernelReadTsc") {
