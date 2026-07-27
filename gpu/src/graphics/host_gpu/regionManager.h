@@ -259,10 +259,19 @@ public:
 			}
 		}
 		if constexpr (source == DirtySource::Cpu && clear) {
+			// TANI: Astro Bot burada donuyor. ApplyProtection misafir
+			// sayfalarinin korumasini degistiriyor (VirtualProtect) - bizim
+			// VEH'imizle kesisen tek yer burasi. ForEachRange ise sadece
+			// bitmap geziyor. Hangisi oldugunu ayirt ediyoruz.
+			const bool trace = (size >= (1u << 20));
+			if (trace) { printf("[RM-MARK] ApplyProtection oncesi\n"); fflush(stdout); }
 			auto changed = m_cpu_dirty ^ m_writable;
 			m_writable   = m_cpu_dirty;
 			ApplyProtection(changed, true);
+			if (trace) { printf("[RM-MARK] ApplyProtection BITTI; ForEachRange oncesi\n");
+			             fflush(stdout); }
 			ForEachRange(mask, std::forward<Func>(func));
+			if (trace) { printf("[RM-MARK] ForEachRange BITTI\n"); fflush(stdout); }
 			return changed;
 		}
 		ForEachRange(mask, std::forward<Func>(func));

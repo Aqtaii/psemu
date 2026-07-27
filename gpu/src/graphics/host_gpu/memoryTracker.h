@@ -114,10 +114,14 @@ public:
 		Iterate<false>(vaddr, size, [&](RegionManager* manager, uint64_t offset, uint64_t bytes) {
 			if (trace) { printf("[MT-MARK] manager->lock oncesi\n"); fflush(stdout); }
 			manager->lock.lock();
-			if (trace) { printf("[MT-MARK] manager->lock ALINDI\n"); fflush(stdout); }
+			if (trace) { printf("[MT-MARK] manager->lock ALINDI; Track oncesi (0x%llx bayt)\n",
+			                    (unsigned long long)bytes); fflush(stdout); }
 			manager->Track(manager->GetCpuAddr() + offset, bytes);
+			if (trace) { printf("[MT-MARK] Track BITTI; ForEachModifiedRange oncesi\n");
+			             fflush(stdout); }
 			manager->ForEachModifiedRange<DirtySource::Cpu, true>(manager->GetCpuAddr() + offset,
 			                                                      bytes, range_func);
+			if (trace) { printf("[MT-MARK] ForEachModifiedRange BITTI\n"); fflush(stdout); }
 			if (!is_written) {
 				manager->lock.unlock();
 			}
