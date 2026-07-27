@@ -519,6 +519,25 @@ static const uint64_t  kDmemSize   = 0x100000000ULL; // 4 GB adres alani rezervi
 // icin havuz tabanini disari veriyoruz (CPU = g_dmem_base_addr + phys).
 uint64_t g_dmem_base_addr = 0;
 
+// mspace tutamaci -> kapasite. sceLibcMspaceCreate'in 3. argumani, daha
+// sonra sceLibcMspaceMallocStats ile oyuna geri bildirilir.
+static std::mutex g_mspace_mtx;
+static std::map<uint64_t, uint64_t> g_mspace_cap;
+
+static void MspaceRememberCapacity(uint64_t handle, uint64_t cap) {
+    std::lock_guard<std::mutex> lock(g_mspace_mtx);
+    g_mspace_cap[handle] = cap;
+}
+
+static uint64_t MspaceCapacity(uint64_t handle) {
+    std::lock_guard<std::mutex> lock(g_mspace_mtx);
+    auto it = g_mspace_cap.find(handle);
+    // Bilinmeyen tutamac icin comert bir varsayilan: "yer var" demek,
+    // "yer yok" demekten cok daha guvenli (oyun yoksa hic denemiyor).
+    return (it != g_mspace_cap.end() && it->second != 0) ? it->second
+                                                         : (256ull * 1024 * 1024);
+}
+
 static uint8_t* DmemBase() {
     std::lock_guard<std::mutex> lock(g_dmem_mutex);
     if (g_dmem_base == nullptr) {
@@ -3099,6 +3118,8 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 return EXCEPTION_CONTINUE_EXECUTION;
             }
 
+            // sceLibcMspaceCreate ile verilen kapasiteyi tutamaca bagli
+            // sakliyoruz; MallocStats bunu bildirmek zorunda.
             // ========================================================
             // sceLibcMspace* (Sony mspace ayiricisi) - ZINCIRDEN ONCE
             // ========================================================
@@ -3148,12 +3169,41 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     // Create(name, base, capacity, flag) -> mspace tutamaci.
                     // Sifir olmayan sahte bir tutamac yeter; gercek havuzu
                     // kullanmiyoruz. Oyun bunu sadece geri veriyor.
+                    // KAPASITEYI SAKLIYORUZ: MallocStats bunu bildirmek
+                    // zorunda (asagiya bkz).
                     static uint64_t s_fake_mspace = 0x4D53504100000001ull; // "MSPA..."
                     rv = ++s_fake_mspace;
-                } else if (readable_name == "sceLibcMspaceDestroy" ||
-                           readable_name == "sceLibcMspaceMallocStats" ||
+                    MspaceRememberCapacity(rv, static_cast<uint64_t>(ctx->Rdx));
+                } else if (readable_name == "sceLibcMspaceMallocStats" ||
                            readable_name == "sceLibcMspaceMallocStatsFast") {
-                    rv = 0; // istatistik yapisini dokunmadan basarili don
+                    // (SceLibcMspace msp, SceLibcMallocManagedSize* out)
+                    //
+                    // Eskiden yapiya HIC DOKUNMADAN 0 donuyorduk. Astro Bot
+                    // GPU ayiricisi tahsisten ONCE bu istatistige bakip
+                    // "bos yer = system - inuse" hesapliyor; sifir yapiyla bu
+                    // 0 cikiyor ve hicbir sey tahsis edilmeden reddediliyordu:
+                    //     Out of graphics memory [Onion].
+                    //     size = 2097152, used 0/192937984, count 1
+                    // ("used 0" tam da doldurulmamis inuse alanidir.)
+                    //
+                    // SceLibcMallocManagedSize (Sony libc):
+                    //   uint16 size; uint16 version; uint32 reserved;
+                    //   size_t maxSystemSize, currentSystemSize,
+                    //          maxInuseSize,  currentInuseSize;
+                    uint8_t* st = reinterpret_cast<uint8_t*>(ctx->Rsi);
+                    if (st != nullptr && SafeWritable(st, 40)) {
+                        const uint64_t cap = MspaceCapacity(ctx->Rdi);
+                        *reinterpret_cast<uint16_t*>(st + 0) = 40; // size
+                        *reinterpret_cast<uint16_t*>(st + 2) = 0;  // version
+                        *reinterpret_cast<uint32_t*>(st + 4) = 0;  // reserved
+                        *reinterpret_cast<uint64_t*>(st + 8)  = cap; // maxSystemSize
+                        *reinterpret_cast<uint64_t*>(st + 16) = cap; // currentSystemSize
+                        *reinterpret_cast<uint64_t*>(st + 24) = 0;   // maxInuseSize
+                        *reinterpret_cast<uint64_t*>(st + 32) = 0;   // currentInuseSize
+                    }
+                    rv = 0;
+                } else if (readable_name == "sceLibcMspaceDestroy") {
+                    rv = 0;
                 } else if (readable_name == "sceLibcMspaceIsHeapEmpty") {
                     rv = 0; // "bos degil"
                 } else if (readable_name == "sceLibcMspaceFree") {
@@ -3659,7 +3709,17 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                         LOG_INFO(am_ss.str());
                     }
                 }
-            } else if (readable_name == "sceKernelMapDirectMemory") {
+            // NOT: "Named" varyanti da BURAYA dusmeli. Astro Bot yalnizca
+            // sceKernelMapNamedDirectMemory cagiriyor; o ad islenmedigi icin
+            // genel stub RAX=0 ("basarili") donuyor ama *addr'a HICBIR SEY
+            // yazmiyordu. Oyunun GPU ayirici havuzu boyle tabansiz kaliyor ve
+            // 184 MB'lik Onion havuzunda "used 0" gorunmesine ragmen 240 bayt
+            // bile bulamiyordu:
+            //     ASSERT engine/app/Module/Gpu/GpuMemory.cpp:155
+            //     Out of graphics memory [Onion]. size=240, used 0/192937984
+            // Tek fark ek bir "name" parametresi (yalnizca hata ayiklama icin).
+            } else if (readable_name == "sceKernelMapDirectMemory" ||
+                       readable_name == "sceKernelMapNamedDirectMemory") {
                 // imza: (void** addr, len, prot, flags, direct_memory_start, alignment)
                 uint64_t len = ctx->Rsi;
                 uint64_t align = ctx->R9 ? ctx->R9 : 0x4000;
