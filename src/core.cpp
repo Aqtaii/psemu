@@ -5202,6 +5202,26 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 uint16_t*       dest = reinterpret_cast<uint16_t*>(ctx->Rdi);
                 const uint16_t* src  = reinterpret_cast<const uint16_t*>(ctx->Rsi);
                 size_t          n    = static_cast<size_t>(ctx->Rdx);
+                // TANI: metin ARTIK akiyor (tampon NUL degil) ama ekranda tek
+                // bir kutu glif cikiyor ve yigin "0" okunuyor - yani render
+                // edilen dizge 1 KARAKTER. Ayrimi yapan olcum: bu fonksiyon
+                // CUMLEYI mi tasiyor (sorun asagida, glif/cizim tarafinda)
+                // yoksa "0" mu (sorun yukarida, metin hic toplanmiyor)?
+                // 40 karaktere kadar icerik dokuyoruz. Sinir 120 cagri.
+                { static std::atomic<uint64_t> s_cp{0};
+                  uint64_t cp = s_cp.fetch_add(1, std::memory_order_relaxed) + 1;
+                  if (cp <= 120 && src != nullptr) {
+                    char t[41]; int k = 0;
+                    for (int i = 0; i < 40; i++) {
+                        if (!SafeReadable(src + i, 2)) break;
+                        uint16_t ch = src[i];
+                        t[k++] = (ch >= 0x20 && ch < 0x7f) ? static_cast<char>(ch) : '.';
+                    }
+                    t[k] = '\0';
+                    printf("[U16CPY] #%llu n=%zu dest=%p kaynak=\"%s\"\n",
+                           static_cast<unsigned long long>(cp), n, (void*)dest, t);
+                    fflush(stdout);
+                  } }
                 if (dest != nullptr && src != nullptr && n > 0 &&
                     SafeReadable(src, n * 2) && SafeWritable(dest, n * 2)) {
                     memmove(dest, src, n * 2);
@@ -5558,6 +5578,22 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                         if (f == nullptr && creat && acc != 0u) {
                             f = fopen(host.c_str(), acc == 2u ? "w+b" : "wb");
                         }
+                    }
+                }
+                // TANI: bu yol [VFS] logu BASMIYORDU, yani buradan acilan
+                // dosyalar tum aramalarda gorunmezdi. Diyalog metnini tasiyan
+                // lang*.json'un "hic istenmedigi" sonucuna bu yuzden guvenilemez.
+                // Construct2 olayi: AJAX "getFalas" -> "./lang" & varLang &
+                // ".json" -> loadDictionary. Istegin GELIP GELMEDIGINI gorelim.
+                {
+                    static std::atomic<int> s_ko{0};
+                    const bool interesting = (guest.find("lang") != std::string::npos) ||
+                                             (guest.find("json") != std::string::npos);
+                    if (interesting || s_ko.fetch_add(1, std::memory_order_relaxed) < 40) {
+                        printf("[VFS] sceKernelOpen(\"%s\") -> \"%s\" : %s%s\n",
+                               guest.c_str(), host.c_str(), f ? "ACILDI" : "BASARISIZ",
+                               interesting ? "   <== METIN/VERI DOSYASI" : "");
+                        fflush(stdout);
                     }
                 }
                 if (f) {
