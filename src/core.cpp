@@ -1296,7 +1296,9 @@ static const int kBpLogLimit = 8;   // her breakpoint icin en fazla bu kadar log
 // "RIP nereden bu cop adrese atladi" sorusu KESIN olarak cevaplanir.
 // Adim siniri asilirsa izleme kendini kapatir (oyun donmasin).
 // ---------------------------------------------------------------------------
-static const int kTraceRing = 64;
+// 64 yetmedi: assert'in kendi yazdirma kodu yuzlerce komut suruyor ve
+// ilgilendigimiz sanal cagri halkadan tasiyordu. 2048 girdi = 16 KB.
+static const int kTraceRing = 2048;
 static uint64_t  g_trace_from   = 0;     // izlemeyi baslatan fonksiyonun adresi
 static bool      g_trace_active = false;
 static uint64_t  g_trace_ring[kTraceRing] = {0};
