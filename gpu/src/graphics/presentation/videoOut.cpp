@@ -1179,6 +1179,19 @@ static int RegisterBuffersInternal(VideoOutConfig* ctx, int set_id, int start_in
 	}
 	printf("[VO-MARK] RegisterBuffers: RegisterVideoOutSurfaces oncesi (%d yuzey)\n",
 	       buffer_num);
+	// Yuzey TANIMLARINI dok: ayni kod Dreaming Sarah'ta tamamlaniyor, Astro
+	// Bot'ta donuyor - fark girdide olmali. Iki oyunu yan yana koyabilmek
+	// icin her alani basiyoruz.
+	for (size_t vi = 0; vi < infos.size(); vi++) {
+		const auto& in = infos[vi];
+		printf("[VO-INFO] #%zu  %ux%u pitch=%u bpe=%u fmt=%u(guest=0x%x) tile=%u "
+		       "dcc=0x%x boyut=0x%llx adres=0x%llx meta=0x%llx sikistirma=%d bgra16=%d\n",
+		       vi, in.width, in.height, in.pitch, in.bytes_per_element,
+		       static_cast<unsigned>(in.format), in.guest_format, in.tile_mode,
+		       in.dcc_control, (unsigned long long)in.size,
+		       (unsigned long long)in.address, (unsigned long long)in.metadata_address,
+		       static_cast<int>(in.compression), in.bgra16 ? 1 : 0);
+	}
 	fflush(stdout);
 	auto images =
 	    Graphics::g_render_ctx->GetTextureCache()->RegisterVideoOutSurfaces(graphic_ctx, infos);

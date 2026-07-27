@@ -2016,7 +2016,14 @@ TextureCache::RegisterVideoOutSurfaces(GraphicContext*                  ctx,
 			}
 		}
 	}
+	// TANI: Astro Bot burada kalici olarak bloke kaliyor (Dreaming Sarah ayni
+	// yoldan geciyor). Icerideki IKI kilitten hangisinde durdugunu tahmin
+	// etmemek icin isaretliyoruz.
+	printf("[TC-MARK] dogrulama OK; m_resource_mutex oncesi\n");
+	fflush(stdout);
 	std::lock_guard transaction(m_resource_mutex);
+	printf("[TC-MARK] m_resource_mutex ALINDI\n");
+	fflush(stdout);
 	for (const auto& info: infos) {
 		if (m_buffer_cache.HasPageOverlap(info.address, info.size)) {
 			EXIT("TextureCache: video-out surface aliases buffer pages, addr=0x%016" PRIx64
@@ -2024,7 +2031,11 @@ TextureCache::RegisterVideoOutSurfaces(GraphicContext*                  ctx,
 			     info.address, info.size);
 		}
 	}
+	printf("[TC-MARK] FaultSafeTextureLock oncesi\n");
+	fflush(stdout);
 	FaultSafeTextureLock lock(this, m_lock);
+	printf("[TC-MARK] FaultSafeTextureLock ALINDI\n");
+	fflush(stdout);
 	for (const auto& info: infos) {
 		RequireNoMetaOverlapLocked(info.address, info.size);
 		for (const auto& cached: m_images) {
