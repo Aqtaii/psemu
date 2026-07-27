@@ -7612,6 +7612,79 @@ void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t tex
         }
     }
 
+    // ISARETCI ZINCIRI IZLEME: PSEMU_WATCH_CHAIN=<rva>,<off1>,...,<offN>
+    //   p = *(base + rva)                    ; global tekil
+    //   p = *(p + off1) ... *(p + offN-1)    ; ara isaretciler
+    //   hedef = p + offN                     ; SON ofset dereference EDILMEZ
+    // Adres calisma aninda olustugu icin (yigin/heap) sabit bir adres
+    // veremiyoruz; zincir cozulene kadar yokluyoruz.
+    if (const char* wc = std::getenv("PSEMU_WATCH_CHAIN")) {
+        static std::string s_chain = wc;
+        CreateThread(NULL, 0, [](LPVOID) -> DWORD {
+            std::vector<uint64_t> parts;
+            const char* s = s_chain.c_str();
+            while (*s) {
+                char* end = nullptr;
+                parts.push_back(std::strtoull(s, &end, 0));
+                if (end == s) break;
+                s = (*end == ',') ? end + 1 : end;
+            }
+            if (parts.size() < 2) return 0;
+            SYSTEM_INFO si; GetSystemInfo(&si);
+            for (int i = 0; i < 900; i++) {
+                Sleep(500);
+                uint64_t p = 0;
+                uint8_t* g = reinterpret_cast<uint8_t*>(g_base_addr) + parts[0];
+                if (!SafeReadable(g, 8)) continue;
+                p = *reinterpret_cast<uint64_t*>(g);
+                bool ok = (p > 0x10000);
+                for (size_t j = 1; ok && j + 1 < parts.size(); j++) {
+                    uint8_t* q = reinterpret_cast<uint8_t*>(p) + parts[j];
+                    if (!SafeReadable(q, 8)) { ok = false; break; }
+                    p = *reinterpret_cast<uint64_t*>(q);
+                    ok = (p > 0x10000);
+                }
+                if (!ok) continue;
+                const uint64_t target = p + parts.back();
+                if (!SafeReadable(reinterpret_cast<void*>(target), 8)) continue;
+                g_wphys_target = target;
+                g_wphys_psize  = si.dwPageSize;
+                g_wphys_page   = reinterpret_cast<void*>(target & ~(uint64_t)(si.dwPageSize - 1));
+                std::stringstream ws;
+                ws << "[WATCH-CHAIN] zincir cozuldu -> 0x" << std::hex << target
+                   << " (mevcut deger 0x" << *reinterpret_cast<uint64_t*>(target)
+                   << "), sayfa 0x" << reinterpret_cast<uint64_t>(g_wphys_page);
+                LOG_ERROR(ws.str());
+                // Zincirin SON adiminda bir TABLO varsa, komsu girdileri de
+                // dok: "bu girdi mi yanlis, yoksa yanlis girdiyi mi seciyoruz"
+                // sorusu ancak digerlerini gorerek ayirt edilebiliyor.
+                // Her girdi 64 bayt; nesnenin ilk alani vtable isaretcisi.
+                {
+                    const uint64_t tbl = p; // son dereference edilmis isaretci
+                    std::stringstream ts;
+                    ts << "[WATCH-CHAIN] tablo girdileri (nesne -> vtable RVA):";
+                    for (int e = 0; e < 6; e++) {
+                        uint64_t* slot = reinterpret_cast<uint64_t*>(tbl + e * 64);
+                        if (!SafeReadable(slot, 8)) break;
+                        const uint64_t obj = *slot;
+                        ts << "\n    [" << std::dec << e << "] nesne=0x" << std::hex << obj;
+                        if (obj > 0x10000 && SafeReadable(reinterpret_cast<void*>(obj), 8)) {
+                            const uint64_t vt = *reinterpret_cast<uint64_t*>(obj);
+                            ts << "  vtable=0x" << vt;
+                            if (vt >= g_base_addr && vt < g_base_addr + g_module_size)
+                                ts << " (RVA 0x" << (vt - g_base_addr) << ")";
+                        }
+                    }
+                    LOG_ERROR(ts.str());
+                }
+                WPhysArm();
+                return 0;
+            }
+            LOG_ERROR("[WATCH-CHAIN] zincir cozulemedi.");
+            return 0;
+        }, nullptr, 0, NULL);
+    }
+
     // Tum thread'leri periyodik ornekle: PSEMU_THREAD_SAMPLE=<saniye>
     if (const char* tse = std::getenv("PSEMU_THREAD_SAMPLE")) {
         unsigned long secs = std::strtoul(tse, nullptr, 0);
