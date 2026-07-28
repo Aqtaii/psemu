@@ -29,6 +29,11 @@ bool IsAccessible(DWORD protect, HostMemoryAccess access) {
 
 } // namespace
 
+// Bolge yuruyusu ust siniri. 262144 tur ~1 GB'lik sayfa-granuler alani
+// kapsar; gercek kullanimda (bitisik yuzeyler) birkac tur yeter, yani bu
+// yalnizca patolojik parcalanmaya karsi bir emniyet supabi.
+static constexpr uint64_t KYTY_HOSTMEM_MAX_REGIONS = 262144;
+
 bool HostMemoryQueryRange(uint64_t addr, uint64_t requested_size, HostMemoryAccess access,
                           uint64_t* accessible_size) {
 	if (accessible_size == nullptr) {
@@ -42,7 +47,32 @@ bool HostMemoryQueryRange(uint64_t addr, uint64_t requested_size, HostMemoryAcce
 	const auto end     = UINT64_MAX - addr < requested_size ? UINT64_MAX : addr + requested_size;
 	uint64_t   current = addr;
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+	// TANI/SINIR: bu yuruyus BOLGE BOLGE ilerliyor. Bitisik bellekte 1-2 tur
+	// surer, AMA psemu misafir sayfalarini HATA ANINDA tek tek commit ediyor;
+	// boyle bir alanda her sayfa AYRI BIR BOLGE olur ve buyuk bir aralik
+	// milyonlarca VirtualQuery demektir. Ust siniri yoktu.
+	//
+	// Aralikli erken takilmanin watchdog imzasi tam bunu gosteriyor:
+	//   RIP=<ntdll> RCX=0xffffffffffffffff (NtQueryVirtualMemory'nin surec
+	//   tanitici argumani), RDX=<misafir adres> ve adres her orneklemede
+	//   MB'larca ILERLIYOR. Yani surec asili degil, dev bir araligi tariyor.
+	//   Cagiran yigin: Agc::Dispatch -> EnsureKytyGraphicsInit -> thread::join
+	//
+	// Once OLCUYORUZ: esik asilirsa durumu basiyoruz. Sinir asilirsa o ana
+	// kadar erisilebilir bulunan miktarla donuyoruz (kismi sonuc), boylece
+	// surec sonsuza kadar taramaz.
+	uint64_t iters = 0;
 	while (current < end) {
+		if (++iters > KYTY_HOSTMEM_MAX_REGIONS) {
+			static uint32_t s_n = 0;
+			if (s_n++ < 16) {
+				std::printf("[HOSTMEM-SINIR] QueryRange(addr=0x%" PRIx64 ", size=0x%" PRIx64
+				            ") %" PRIu64 " bolgede sinira takildi; erisilebilir=0x%" PRIx64 "\n",
+				            addr, requested_size, iters, current - addr);
+				std::fflush(stdout);
+			}
+			break;
+		}
 		MEMORY_BASIC_INFORMATION region {};
 		if (::VirtualQuery(reinterpret_cast<const void*>(static_cast<uintptr_t>(current)), &region,
 		                   sizeof(region)) == 0) {

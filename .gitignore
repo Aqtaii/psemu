@@ -45,3 +45,7 @@ log*.txt
 
 # Topluluk NID veritabanlari (indirilen, lisansi belirsiz - repoya girmez)
 tools/nid_db/
+
+# Linker MAP (yerel tani; buyuk ve makineye ozgu)
+loader.map
+loader.pdb

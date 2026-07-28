@@ -63,11 +63,40 @@ std::atomic<uint64_t> g_memcmp_bytes{0}; // memcmp'e verilen toplam n
 std::atomic<uint64_t> g_memcmp_max{0};   // gorulen en buyuk n
 std::atomic<uint64_t> g_veh_nested{0};   // VEH'in kendi icinden tekrar girilme sayisi
 
+// ============================================================================
+// BOLGE YURUYUSU UST SINIRI - aralikli erken takilmanin kaynagi
+// ----------------------------------------------------------------------------
+// Bu iki prob araligi BOLGE BOLGE yuruyor. Bitisik ve commit edilmis bellekte
+// bu 1-2 tur surer. AMA psemu misafir sayfalarini HATA ANINDA tek tek commit
+// ediyor; boyle bir alanda her sayfa AYRI BIR BOLGE olur ve buyuk bir aralik
+// milyonlarca VirtualQuery turu demektir. Ust sinir yoktu.
+//
+// Watchdog imzasi tam bunu gosteriyor:
+//   RIP=<ntdll> RCX=0xffffffffffffffff (GetCurrentProcess sahte tanitici)
+//   RDX=RSI=RDI=<misafir adres>, adres her orneklemede MB'larca ILERLIYOR
+// Yani surec asili degil, dev bir adres araligini tariyordu.
+//
+// Sinir asilirsa false donuyoruz (muhafazakar: cagiran islemi atlar) ve
+// DURUMU BASIYORUZ - sessizce yutmak tam da bu oturumda birkac hatanin
+// kaynagiydi. Sinir asilan yerler logdan gorulup ayrica ele alinabilir.
+static constexpr size_t kMaxProbeRegions = 8192;
+
+static void ProbeLimitHit(const char* who, const void* p, size_t n, size_t iters) {
+    static std::atomic<int> s_n{0};
+    if (s_n.fetch_add(1, std::memory_order_relaxed) < 16) {
+        printf("[PROBE-SINIR] %s(p=%p, n=%zu) %zu bolgede sinira takildi -> false\n",
+               who, p, n, iters);
+        fflush(stdout);
+    }
+}
+
 static bool SafeReadable(const void* p, size_t n) {
     if (p == nullptr || n == 0) return false;
     const uint8_t* cur = reinterpret_cast<const uint8_t*>(p);
     const uint8_t* end = cur + n;
+    size_t iters = 0;
     while (cur < end) {
+        if (++iters > kMaxProbeRegions) { ProbeLimitHit("SafeReadable", p, n, iters); return false; }
         MEMORY_BASIC_INFORMATION mbi;
         g_vq_calls.fetch_add(1, std::memory_order_relaxed);
         if (VirtualQuery(cur, &mbi, sizeof(mbi)) == 0) return false;
@@ -97,7 +126,11 @@ static bool SafeWritable(void* p, size_t n) {
     if (p == nullptr || n == 0) return false;
     uint8_t* cur       = reinterpret_cast<uint8_t*>(p);
     uint8_t* const end = cur + n;
+    size_t iters = 0;
     while (cur < end) {
+        // Bkz. SafeReadable'daki not: sinirsiz bolge yuruyusu aralikli erken
+        // takilmanin kaynagi.
+        if (++iters > kMaxProbeRegions) { ProbeLimitHit("SafeWritable", p, n, iters); return false; }
         MEMORY_BASIC_INFORMATION mbi;
         g_vq_calls.fetch_add(1, std::memory_order_relaxed);
         if (VirtualQuery(cur, &mbi, sizeof(mbi)) == 0) return false;
@@ -1744,15 +1777,35 @@ static DWORD WINAPI HangWatchdogProc(LPVOID) {
             // Mini stack backtrace: RSP'den yukari tarayip oyun modulune ait
             // donus adreslerini (RVA ile) topla. Ayni RVA'nin tekrar tekrar
             // gorunmesi = OZYINELEME (stack overflow) kaniti.
+            // KENDI MODULUMUZ DE TARANMALI: eskiden yalnizca MISAFIR modul
+            // araligi (g_base_addr..+g_module_size) kontrol ediliyordu. Ama
+            // aralikli erken takilma bizim HOST kodumuzda oluyor, bu yuzden
+            // liste HER ZAMAN BOS cikiyordu ve watchdog ise yaramiyordu.
+            // loader.exe araligini PE basligindan okuyoruz (psapi'ye gerek yok).
+            static uint64_t s_self_base = 0, s_self_size = 0;
+            if (s_self_base == 0) {
+                HMODULE self = GetModuleHandleW(nullptr);
+                if (self != nullptr) {
+                    auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(self);
+                    auto* nt  = reinterpret_cast<IMAGE_NT_HEADERS*>(
+                        reinterpret_cast<uint8_t*>(self) + dos->e_lfanew);
+                    s_self_base = reinterpret_cast<uint64_t>(self);
+                    s_self_size = nt->OptionalHeader.SizeOfImage;
+                }
+            }
             std::stringstream bt;
             bt << "  [stack donus adresleri]";
             uint64_t* sp = reinterpret_cast<uint64_t*>(c.Rsp);
             int found = 0;
-            for (int i = 0; i < 128 && found < 12; i++) {
+            for (int i = 0; i < 512 && found < 16; i++) {
                 if (!SafeReadable(sp + i, sizeof(uint64_t))) break;
                 uint64_t v = sp[i];
                 if (v >= g_base_addr && v < g_base_addr + g_module_size) {
-                    bt << " 0x" << std::hex << (v - g_base_addr) << std::dec;
+                    bt << " oyun+0x" << std::hex << (v - g_base_addr) << std::dec;
+                    found++;
+                } else if (s_self_size != 0 && v >= s_self_base &&
+                           v < s_self_base + s_self_size) {
+                    bt << " loader+0x" << std::hex << (v - s_self_base) << std::dec;
                     found++;
                 }
             }

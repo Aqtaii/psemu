@@ -46,6 +46,15 @@ endif()
 # yine de acikca belirtelim (CMake linkeri icin guvenli).
 target_link_libraries(loader PRIVATE user32 gdi32 winmm)  # winmm: timeBeginPeriod
 
+# --- Linker MAP: RVA -> fonksiyon adi -------------------------------------
+# Watchdog/backtrace "loader+0xRVA" basiyor. Release yapisi eslesen bir PDB
+# uretmiyor ve optimizasyon seviyesini degistirmek RISKLI (yukaridaki nota
+# bakin: -O2 emulatoru bozuyor, /Od bilerek zorlanıyor). MAP dosyasi duz
+# metindir, ek arac gerektirmez ve calisma zamanini HIC etkilemez.
+if(MSVC)
+    target_link_options(loader PRIVATE /MAP:${CMAKE_SOURCE_DIR}/loader.map)
+endif()
+
 # --- Vulkan (SU AN sadece bulunabilirligi dogrulaniyor; henuz linklenmiyor) --
 # Kyty graphics eklenince target'a baglanacak. Baseline'i kirmamak icin simdi
 # yalnizca tespit ediyoruz.
