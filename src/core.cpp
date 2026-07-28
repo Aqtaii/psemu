@@ -1643,6 +1643,26 @@ static HANDLE g_exec_thread = nullptr;
 // Her thread'in EN SON girdigi HLE fonksiyonu. Ornekleyici baska bir
 // thread'in thread_local'ini okuyamaz, o yuzden kucuk bir global tablo.
 // Kilit yok: yazan tek thread kendi slotudur, okuyan sadece raporlar.
+// loader.exe'nin adres araligi. Takilmalar HOST kodumuzda oluyor; yalnizca
+// misafir araligina bakan tanilar bu yuzden hep bos ciktI. PE basligindan
+// okuyoruz (psapi'ye gerek yok). RVA'lari isme cevirmek icin:
+//   python tools/scripts/map_lookup.py loader.map 0x<rva>
+static void GetSelfModuleRange(uint64_t* base, uint64_t* size) {
+    static uint64_t s_base = 0, s_size = 0;
+    if (s_base == 0) {
+        HMODULE self = GetModuleHandleW(nullptr);
+        if (self != nullptr) {
+            auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(self);
+            auto* nt  = reinterpret_cast<IMAGE_NT_HEADERS*>(
+                reinterpret_cast<uint8_t*>(self) + dos->e_lfanew);
+            s_base = reinterpret_cast<uint64_t>(self);
+            s_size = nt->OptionalHeader.SizeOfImage;
+        }
+    }
+    *base = s_base;
+    *size = s_size;
+}
+
 struct ThreadHle { std::atomic<DWORD> tid{0}; std::atomic<int> plt{-1}; };
 static ThreadHle g_thread_hle[64];
 
@@ -1688,7 +1708,12 @@ static DWORD WINAPI ThreadSamplerProc(LPVOID param) {
         // (Bu tam olarak yasandi: ornekleyici acikken kosular T+36'da
         // donuyordu ve "oyun takildi" gibi gorunuyordu.) Bu yuzden sabit
         // boyutlu dizi kullaniyoruz, std::vector degil.
-        struct Sample { DWORD tid; uint64_t rip; };
+        // Yalnizca RIP YETMIYOR: takilan thread bir bekleme fonksiyonunun
+        // icinde duruyor ve RIP yalnizca "ntdll'de bir yer" diyor. NEYI
+        // bekledigini ancak YIGIN soyluyor. Bu yuzden askidayken RSP'den
+        // yukari tarayip kendi modullerimize ait donus adreslerini
+        // topluyoruz. SABIT DIZI - askidayken bellek AYIRMAK yasak.
+        struct Sample { DWORD tid; uint64_t rip; uint64_t ret[10]; int nret; };
         Sample samples[128];
         int    nsample = 0;
         HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
@@ -1704,7 +1729,25 @@ static DWORD WINAPI ThreadSamplerProc(LPVOID param) {
                 if (SuspendThread(h) != (DWORD)-1) {
                     CONTEXT c; memset(&c, 0, sizeof(c));
                     c.ContextFlags = CONTEXT_CONTROL;
-                    if (GetThreadContext(h, &c)) { samples[nsample].tid = te.th32ThreadID; samples[nsample].rip = c.Rip; nsample++; }
+                    if (GetThreadContext(h, &c)) {
+                        Sample& s = samples[nsample];
+                        s.tid  = te.th32ThreadID;
+                        s.rip  = c.Rip;
+                        s.nret = 0;
+                        uint64_t self_base = 0, self_size = 0;
+                        GetSelfModuleRange(&self_base, &self_size);
+                        const uint64_t* sp = reinterpret_cast<const uint64_t*>(c.Rsp);
+                        for (int k = 0; k < 512 && s.nret < 10; k++) {
+                            if (!SafeReadable(sp + k, sizeof(uint64_t))) break;
+                            const uint64_t v = sp[k];
+                            const bool in_guest = (v >= g_base_addr &&
+                                                   v < g_base_addr + g_module_size);
+                            const bool in_self  = (self_size != 0 && v >= self_base &&
+                                                   v < self_base + self_size);
+                            if (in_guest || in_self) s.ret[s.nret++] = v;
+                        }
+                        nsample++;
+                    }
                     ResumeThread(h); // ASKIDA LOG YOK: hemen serbest birak
                 }
                 CloseHandle(h);
@@ -1717,12 +1760,26 @@ static DWORD WINAPI ThreadSamplerProc(LPVOID param) {
            << " thread:";
         for (int si = 0; si < nsample; si++) { const Sample& s = samples[si];
             ss << "\n    TID=" << std::dec << s.tid << "  RIP=0x" << std::hex << s.rip;
+            uint64_t self_base = 0, self_size = 0;
+            GetSelfModuleRange(&self_base, &self_size);
             if (s.rip >= g_base_addr && s.rip < g_base_addr + g_module_size)
-                ss << "  (misafir RVA 0x" << (s.rip - g_base_addr) << ")";
+                ss << "  (oyun+0x" << (s.rip - g_base_addr) << ")";
+            else if (self_size != 0 && s.rip >= self_base && s.rip < self_base + self_size)
+                ss << "  (loader+0x" << (s.rip - self_base) << ")";
             else
-                ss << "  (misafir disi)";
+                ss << "  (sistem dll)";
             if (const ThreadHle* th = FindThreadHle(s.tid))
                 ss << "  son HLE: PLT#" << std::dec << th->plt.load(std::memory_order_relaxed);
+            if (s.nret > 0) {
+                ss << "\n        yigin:";
+                for (int k = 0; k < s.nret; k++) {
+                    const uint64_t v = s.ret[k];
+                    if (v >= g_base_addr && v < g_base_addr + g_module_size)
+                        ss << " oyun+0x" << std::hex << (v - g_base_addr);
+                    else
+                        ss << " loader+0x" << std::hex << (v - self_base);
+                }
+            }
         }
         LOG_ERROR(ss.str());
 
@@ -1750,68 +1807,96 @@ static DWORD WINAPI HangWatchdogProc(LPVOID) {
         ULONGLONG now = GetTickCount64();
         if (now - g_last_activity < 300) continue; // hala aktif
 
-        if (SuspendThread(target) == (DWORD)-1) continue;
-
+        // ====================================================================
+        // ASKIDAYKEN: HICBIR TAHSIS, HICBIR KILIT.
+        // --------------------------------------------------------------------
+        // BU WATCHDOG'UN KENDISI ARALIKLI TAKILMANIN SEBEBIYDI.
+        // Eski hali hedefi askiya aliyor, sonra std::stringstream kurup
+        // LOG_ERROR cagiriyor ve ResumeThread'i EN SONA birakiyordu. Askiya
+        // alinan thread o anda Logger'in kilidini (ya da CRT heap kilidini)
+        // tutuyorsa watchdog o kilidi SONSUZA KADAR bekler - ve hedef de
+        // askida kaldigi icin kilidi asla birakamaz. Klasik olumcul kucaklasma;
+        // tum surec kilitlenir.
+        //
+        // KANIT (PSEMU_THREAD_SAMPLE ile alinan takilma anindaki 23 thread):
+        //   TID=19752 (ana yurutme)  yigin: Logger::Info <- Core::StartExecution
+        //   TID=6732  (VEH icinde)   yigin: Logger::Info <- SyscallExceptionFilter
+        //   TID=13784                yigin: HangWatchdogProc + Logger::log_mutex
+        // Yani ucu de ayni log kilidinde bulusuyor.
+        //
+        // ThreadSamplerProc bu tuzagi zaten biliyor ve DOGRU yapiyor (bkz.
+        // oradaki not: "askidayken log kilidini beklemek olumcul olurdu").
+        // Watchdog ayni deseni izlemiyordu. Artik izliyor: veriyi SABIT
+        // tamponlara topla -> HEMEN devam ettir -> ondan sonra bicimlendir.
+        // ====================================================================
         CONTEXT c;
         memset(&c, 0, sizeof(c));
         c.ContextFlags = CONTEXT_FULL;
-        if (GetThreadContext(target, &c)) {
-            g_watchdog_dumps++;
-            std::stringstream ss;
-            ss << "[WATCHDOG #" << g_watchdog_dumps << "] Worker sessiz (>300ms). RIP=0x" << std::hex << c.Rip;
-            if (c.Rip >= g_base_addr && c.Rip < g_base_addr + g_module_size) {
-                ss << " (RVA 0x" << (c.Rip - g_base_addr) << ")";
-                const uint8_t* rb = reinterpret_cast<const uint8_t*>(c.Rip);
-                if (SafeReadable(rb, 16)) {
-                    ss << " | baytlar: ";
-                    for (int i = 0; i < 16; i++) {
-                        char b[4]; snprintf(b, sizeof(b), "%02X ", rb[i]); ss << b;
-                    }
-                }
-            }
-            ss << " | RSP=0x" << c.Rsp << " RBP=0x" << c.Rbp
-               << " RAX=0x" << c.Rax << " RBX=0x" << c.Rbx << " RCX=0x" << c.Rcx
-               << " RDX=0x" << c.Rdx << " RSI=0x" << c.Rsi << " RDI=0x" << c.Rdi << std::dec;
-            LOG_ERROR(ss.str());
 
-            // Mini stack backtrace: RSP'den yukari tarayip oyun modulune ait
-            // donus adreslerini (RVA ile) topla. Ayni RVA'nin tekrar tekrar
-            // gorunmesi = OZYINELEME (stack overflow) kaniti.
-            // KENDI MODULUMUZ DE TARANMALI: eskiden yalnizca MISAFIR modul
-            // araligi (g_base_addr..+g_module_size) kontrol ediliyordu. Ama
-            // aralikli erken takilma bizim HOST kodumuzda oluyor, bu yuzden
-            // liste HER ZAMAN BOS cikiyordu ve watchdog ise yaramiyordu.
-            // loader.exe araligini PE basligindan okuyoruz (psapi'ye gerek yok).
-            static uint64_t s_self_base = 0, s_self_size = 0;
-            if (s_self_base == 0) {
-                HMODULE self = GetModuleHandleW(nullptr);
-                if (self != nullptr) {
-                    auto* dos = reinterpret_cast<IMAGE_DOS_HEADER*>(self);
-                    auto* nt  = reinterpret_cast<IMAGE_NT_HEADERS*>(
-                        reinterpret_cast<uint8_t*>(self) + dos->e_lfanew);
-                    s_self_base = reinterpret_cast<uint64_t>(self);
-                    s_self_size = nt->OptionalHeader.SizeOfImage;
-                }
+        uint8_t  code[16];
+        bool     have_code = false;
+        uint64_t rets[16];
+        int      nret = 0;
+        bool     have_ctx = false;
+
+        uint64_t self_base = 0, self_size = 0;
+        GetSelfModuleRange(&self_base, &self_size); // askidan ONCE (bir kez hesaplanir)
+
+        if (SuspendThread(target) == (DWORD)-1) continue;
+        if (GetThreadContext(target, &c)) {
+            have_ctx = true;
+            const uint8_t* rb = reinterpret_cast<const uint8_t*>(c.Rip);
+            if (SafeReadable(rb, sizeof(code))) {
+                memcpy(code, rb, sizeof(code));
+                have_code = true;
             }
-            std::stringstream bt;
-            bt << "  [stack donus adresleri]";
-            uint64_t* sp = reinterpret_cast<uint64_t*>(c.Rsp);
-            int found = 0;
-            for (int i = 0; i < 512 && found < 16; i++) {
+            // Yigin: kendi modulumuz DE taranir. Eskiden yalnizca misafir
+            // araligina bakiliyordu, oysa takilma HOST kodumuzda - bu yuzden
+            // liste her zaman bos cikiyor ve watchdog ise yaramiyordu.
+            const uint64_t* sp = reinterpret_cast<const uint64_t*>(c.Rsp);
+            for (int i = 0; i < 512 && nret < 16; i++) {
                 if (!SafeReadable(sp + i, sizeof(uint64_t))) break;
-                uint64_t v = sp[i];
-                if (v >= g_base_addr && v < g_base_addr + g_module_size) {
-                    bt << " oyun+0x" << std::hex << (v - g_base_addr) << std::dec;
-                    found++;
-                } else if (s_self_size != 0 && v >= s_self_base &&
-                           v < s_self_base + s_self_size) {
-                    bt << " loader+0x" << std::hex << (v - s_self_base) << std::dec;
-                    found++;
-                }
+                const uint64_t v = sp[i];
+                const bool in_guest = (v >= g_base_addr && v < g_base_addr + g_module_size);
+                const bool in_self  = (self_size != 0 && v >= self_base &&
+                                       v < self_base + self_size);
+                if (in_guest || in_self) rets[nret++] = v;
             }
-            LOG_ERROR(bt.str());
         }
-        ResumeThread(target);
+        ResumeThread(target); // <<< BICIMLENDIRMEDEN ONCE SERBEST BIRAK
+
+        if (!have_ctx) continue;
+        g_watchdog_dumps++;
+
+        std::stringstream ss;
+        ss << "[WATCHDOG #" << g_watchdog_dumps << "] Worker sessiz (>300ms). RIP=0x"
+           << std::hex << c.Rip;
+        if (c.Rip >= g_base_addr && c.Rip < g_base_addr + g_module_size) {
+            ss << " (oyun+0x" << (c.Rip - g_base_addr) << ")";
+        } else if (self_size != 0 && c.Rip >= self_base && c.Rip < self_base + self_size) {
+            ss << " (loader+0x" << (c.Rip - self_base) << ")";
+        }
+        if (have_code) {
+            ss << " | baytlar: ";
+            for (int i = 0; i < 16; i++) {
+                char b[4]; snprintf(b, sizeof(b), "%02X ", code[i]); ss << b;
+            }
+        }
+        ss << " | RSP=0x" << c.Rsp << " RBP=0x" << c.Rbp
+           << " RAX=0x" << c.Rax << " RBX=0x" << c.Rbx << " RCX=0x" << c.Rcx
+           << " RDX=0x" << c.Rdx << " RSI=0x" << c.Rsi << " RDI=0x" << c.Rdi << std::dec;
+        LOG_ERROR(ss.str());
+
+        std::stringstream bt;
+        bt << "  [stack donus adresleri]";
+        for (int i = 0; i < nret; i++) {
+            const uint64_t v = rets[i];
+            if (v >= g_base_addr && v < g_base_addr + g_module_size)
+                bt << " oyun+0x" << std::hex << (v - g_base_addr) << std::dec;
+            else
+                bt << " loader+0x" << std::hex << (v - self_base) << std::dec;
+        }
+        LOG_ERROR(bt.str());
     }
     return 0;
 }
