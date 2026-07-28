@@ -3278,7 +3278,45 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             if (readable_name == "puts" || readable_name == "fputs") {
                 // puts(s): RDI=s | fputs(s, stream): RDI=s, RSI=stream
                 const std::string s = SafeReadCString(reinterpret_cast<const char*>(ctx->Rdi));
-                if (!s.empty()) LOG_INFO("[GAME-LOG] " + s);
+                // ============================================================
+                // KRITIK: fputs'un IKINCI argumani (RSI) bir FILE*'dir ve
+                // ONCEDEN TAMAMEN YOK SAYILIYORDU - her fputs cagrisi yalnizca
+                // loga yaziliyordu, hicbiri diske gitmiyordu.
+                //
+                // Oyun kendi mesajlarini da fputs ile yaziyor ("Mount requested",
+                // "Initializing Achievements"), o yuzden log davranisi KORUNMALI.
+                // Ayrimi akis yapiyor: bilinen bir dosya ise DOSYAYA yaz, degilse
+                // (stdout/stderr/bilinmeyen) eskisi gibi logla.
+                //
+                // BELIRTI: savedata/PPSA02929/saveData0/localStorage.json ve
+                // -saveindex diskte VAR ama 0 BAYT. localStorage bos kalinca
+                // "SYSLANGCC" anahtari yok -> langcode bos -> Construct2'nin
+                // dil yukleme dali hic calismiyor -> AJAX "getFalas" ("./lang" &
+                // varLang & ".json") HIC TETIKLENMIYOR -> diyalog ve menu metni
+                // bos. (sounddata.json kosulsuz bir yoldan yuklendigi icin
+                // calisiyor; degerini dogruladik: atten:speech = -2, oyun da
+                // "PLAY speech_01 with atten -2" basiyor.)
+                // ============================================================
+                bool wrote_to_file = false;
+                if (readable_name == "fputs") {
+                    FILE* f = reinterpret_cast<FILE*>(ctx->Rsi);
+                    if (f != nullptr) {
+                        std::lock_guard<std::mutex> vlk(g_vfs_mutex);
+                        if (g_open_files.count(f) != 0) {
+                            fputs(s.c_str(), f);
+                            wrote_to_file = true;
+                            static std::atomic<int> s_fp{0};
+                            if (s_fp.fetch_add(1, std::memory_order_relaxed) < 12) {
+                                auto it = g_open_names.find(f);
+                                printf("[VFS] fputs -> \"%s\" (%zu bayt) DOSYAYA yazildi\n",
+                                       it != g_open_names.end() ? it->second.c_str() : "?",
+                                       s.size());
+                                fflush(stdout);
+                            }
+                        }
+                    }
+                }
+                if (!wrote_to_file && !s.empty()) LOG_INFO("[GAME-LOG] " + s);
                 ctx->Rax  = 0;
                 ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
                 ctx->Rsp += 8;
@@ -6735,13 +6773,12 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 if (!s.empty()) LOG_INFO("[GAME-LOG] " + s);
                 ctx->Rax = static_cast<uint64_t>(s.size());
                 special_return_set = true;
-            } else if (readable_name == "fputs" || readable_name == "puts") {
-                // fputs(str, stream) / puts(str): her ikisinde de RDI=str
-                std::string s = SafeReadCString(reinterpret_cast<const char*>(ctx->Rdi));
-                while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
-                if (!s.empty()) LOG_INFO("[GAME-LOG] " + s);
-                ctx->Rax = 0;
-                special_return_set = true;
+            // SILINDI: ikinci bir fputs/puts dali buradaydi. OLU KODDU - ayni
+            // isimleri yakalayan dal zincirin cok basinda (bkz. "puts / fputs -
+            // ZINCIRDEN ONCE") olup dogrudan EXCEPTION_CONTINUE_EXECUTION ile
+            // donuyor, yani buraya hicbir zaman ulasilmiyordu. Ayni celiskiyi
+            // wmemchr/wmemmove'da da yasadik; iki uygulamayi birakmak, birini
+            // "duzeltmenin" digerini es gecmesine yol aciyor.
             } else if (readable_name == "printf") {
                 // printf(fmt, ...): RDI=fmt, degisken argumanlar RSI..R9 + stack
                 std::string s = FormatVariadicFromCtx(
