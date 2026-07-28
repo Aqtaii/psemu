@@ -146,6 +146,46 @@ static bool SafeWritable(void* p, size_t n) {
     return true;
 }
 
+// ============================================================================
+// SafeSpan: p'den itibaren KESINTISIZ okunabilir bayt sayisi (en fazla max).
+// ----------------------------------------------------------------------------
+// NEDEN: olcum (PLT-TOP) sicak yolun dizge fonksiyonlarinda oldugunu gosterdi:
+//     12756 ms  34733 cagri  0.367 ms/cagri  strncmp   (HLE suresinin %68'i)
+//      2458 ms   4314 cagri  0.570 ms/cagri  strtok    (%13)
+// Karsilastirma icin memchr 0.014 ms/cagri. Yani strncmp 26 KAT yavasti.
+//
+// Sebep: bu isleyiciler ya BAYT BASINA SafeReadable (yani bayt basina bir
+// VirtualQuery) yapiyor, ya da once tum araligi tarayip iki std::string
+// TAHSIS EDIYORDU. VirtualQuery ~mikrosaniye mertebesinde; bayt basina
+// yapinca 200 karakterlik bir tarama ~200 sorgu demek.
+//
+// Bu yardimci araligi BIR KEZ dogrular; cagiran icinde yerel (SIMD'li) libc
+// fonksiyonlariyla tarar. Ust sinir SafeReadable ile ayni gerekce
+// (kMaxProbeRegions): sayfa sayfa commit edilmis alanda yuruyus uzayabilir.
+// ============================================================================
+static size_t SafeSpan(const void* p, size_t max) {
+    if (p == nullptr || max == 0) return 0;
+    const uint8_t* const start = reinterpret_cast<const uint8_t*>(p);
+    const uint8_t*       cur   = start;
+    const uint8_t* const end   = start + max;
+    size_t iters = 0;
+    while (cur < end) {
+        if (++iters > kMaxProbeRegions) break;
+        MEMORY_BASIC_INFORMATION mbi;
+        g_vq_calls.fetch_add(1, std::memory_order_relaxed);
+        if (VirtualQuery(cur, &mbi, sizeof(mbi)) == 0) break;
+        if (mbi.State != MEM_COMMIT) break;
+        const DWORD prot = mbi.Protect & 0xFF;
+        if (prot == PAGE_NOACCESS || (mbi.Protect & PAGE_GUARD)) break;
+        const uint8_t* region_end =
+            reinterpret_cast<const uint8_t*>(mbi.BaseAddress) + mbi.RegionSize;
+        if (region_end <= cur) break; // ilerleme yoksa cik
+        cur = region_end;
+    }
+    if (cur > end) cur = end;
+    return static_cast<size_t>(cur - start);
+}
+
 static size_t SafeStrlen(const char* p, size_t max_len = SIZE_MAX) {
     if (p == nullptr) return 0;
     const uint8_t* cur = reinterpret_cast<const uint8_t*>(p);
@@ -941,6 +981,53 @@ extern "C" void* PsemuNativePltStub(int plt_index) {
     // suclu ilan etmek yanlis olur. Once o kararsizlik cozulmeli, sonra liste
     // tek tek ve her biri icin BIRDEN FAZLA kosuyla genisletilmeli.
     // Yukaridaki set 12 FPS ile dogrulanmis olan settir.
+    //
+    // ------------------------------------------------------------------
+    // 2026-07-28: libc_char_table TEKRAR DENENIYOR.
+    // Yukaridaki notun koydugu ON KOSUL ("once o kararsizlik cozulmeli")
+    // artik saglandi: aralikli erken takilmanin sebebi bulundu ve
+    // duzeltildi (hang watchdog hedefi askidayken LOG_ERROR cagirip log
+    // kilidinde kilitleniyordu; artik once ResumeThread ediliyor).
+    // Olcum: duzeltmeden sonra 8/8 kosu T+50'yi gecti, oncesinde 2/5 idi.
+    //
+    // Neden bu aday: Dreaming Sarah profilinde acik ara birinci -
+    // olcum araliginda 38.148 cagri. Isleyicisi zaten YOK, yani zincirin
+    // sonundaki varsayilan stub'a dusup 0 donuyor; NativeCharTable da
+    // nullptr donuyor. DAVRANIS BIREBIR AYNI, yalnizca exception
+    // maliyeti kalkiyor - bu, degisikligi saf performans olarak izole
+    // etmenin tek yolu.
+    //
+    // SONUC: KESIN OLARAK ELENDI. 4/4 kosu T+4.2'de COKTU (kayit dokumu
+    // var, yani takilma degil gercek cokme). Ayni derlemede bu satir
+    // olmadan kosular normal boot ediyor.
+    //
+    // Bu artik SAGLAM bir tespit: onceki oturumda ayni deneme geri
+    // alinmis ama "temel de kararsiz oldugu icin suclu ilan edemiyorum"
+    // notu dusulmustu. Kararsizlik cozuldukten sonra (8/8 kosu) tekrar
+    // denendi ve sonuc 4/4 cokme - artik atif net.
+    //
+    // NEDEN: davranisin "ayni" oldugu varsayimi YANLIS. VEH yolundaki
+    // varsayilan stub RAX=0 dondururken RET'i de SIMULE ediyor; ayrica
+    // oyun donen isaretciyi bir ctype tablosu sanip INDEKSLIYOR olabilir.
+    // Yani sorun exception maliyeti degil, nullptr'in kendisi - ve o
+    // nullptr VEH yolunda da donuyor ama oraya varmadan baska bir sey
+    // isi kurtariyor olmali. Once GERCEK ctype tablosunun duzeni
+    // cozulmeli (bkz. _Getpctype icin kurulan 257 girdili tablo),
+    // sonra bu fonksiyon DOGRU tabloyu dondurmeli. Ondan once native'e
+    // almak anlamsiz.
+    // if (n == "libc_char_table") return reinterpret_cast<void*>(&NativeCharTable);
+    //
+    // ------------------------------------------------------------------
+    // 2026-07-28: _Atomic_fetch_add_4 / _Atomic_fetch_sub_4
+    // Dreaming Sarah profilinde 2. ve 3. sirada (olcum araliginda 7.075 ve
+    // 7.207 cagri). Ikisinin de VEH'te ISLEYICISI YOK; zincirin sonundaki
+    // varsayilan stub'a dusup RAX=0 donuyorlar. NativeRet0 da 0 donuyor,
+    // yani davranis ayni ve degisiklik saf performans.
+    //
+    // DIKKAT: "davranis ayni" varsayimi libc_char_table'da YANLIS CIKTI
+    // (yukariya bakin), o yuzden bu da coklu kosuyla dogrulanmali.
+    if (n == "_Atomic_fetch_add_4" || n == "_Atomic_fetch_sub_4")
+        return reinterpret_cast<void*>(&NativeRet0);
     return nullptr;
 }
 
@@ -3342,21 +3429,33 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     cur = is_r ? (savep && SafeReadable(savep, 8) ? *savep : nullptr) : t_save;
                 }
 
+                // ============================================================
+                // SICAK YOL - olculdu: HLE suresinin %13'u burasiydi
+                //   2458 ms / 4314 cagri = 0.570 ms/cagri
+                // Sebep: asagidaki tarama dongulerinde BAYT BASINA
+                // SafeReadable, yani BAYT BASINA BIR VirtualQuery vardi.
+                // 200 karakterlik bir belirtec ~200 sistem sorgusu demekti.
+                // Artik araligi BIR KEZ dogrulayip (SafeSpan) icinde duz
+                // isaretci aritmetigiyle tariyoruz.
+                // ============================================================
                 char* result = nullptr;
                 if (cur != nullptr) {
+                    size_t span = SafeSpan(cur, 1u << 20); // 1 MB'a kadar tek dogrulama
+                    char* const lim = cur + span;
+
                     // Bastaki ayiricilari atla
-                    while (SafeReadable(cur, 1) && *cur != '\0' &&
+                    while (cur < lim && *cur != '\0' &&
                            isdelim[static_cast<unsigned char>(*cur)]) {
                         cur++;
                     }
-                    if (SafeReadable(cur, 1) && *cur != '\0') {
-                        result   = cur;
+                    if (cur < lim && *cur != '\0') {
+                        result = cur;
                         // Parcanin sonunu bul
-                        while (SafeReadable(cur, 1) && *cur != '\0' &&
+                        while (cur < lim && *cur != '\0' &&
                                !isdelim[static_cast<unsigned char>(*cur)]) {
                             cur++;
                         }
-                        if (SafeReadable(cur, 1) && *cur != '\0') {
+                        if (cur < lim && *cur != '\0') {
                             if (SafeWritable(cur, 1)) *cur = '\0';
                             cur++;
                         }
@@ -4611,10 +4710,38 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(r));
                 special_return_set = true;
             } else if (readable_name == "strncmp") {
-                size_t n = static_cast<size_t>(ctx->Rdx);
-                std::string a = SafeReadCString(reinterpret_cast<const char*>(ctx->Rdi), n);
-                std::string b = SafeReadCString(reinterpret_cast<const char*>(ctx->Rsi), n);
-                int r = strncmp(a.c_str(), b.c_str(), n);
+                // ============================================================
+                // SICAK YOL - olculdu: HLE suresinin %68'i buradaydi
+                //   12756 ms / 34733 cagri = 0.367 ms/cagri (memchr'in 26 kati)
+                //
+                // ESKI HALI: her iki isaretciden n bayta kadar TARAYIP iki
+                // std::string TAHSIS EDIYOR, sonra karsilastiriyordu. Oysa
+                // strncmp ILK FARKTA ya da ILK NUL'da durur - genelde birkac
+                // bayt okur. Yani cagri basina iki tam tarama + iki heap
+                // tahsisi bosunaydi.
+                //
+                // YENI: tahsis yok, on tarama yok. Blok blok bir kez dogrula,
+                // icinde YERLESIK strncmp/memchr (SIMD) ile karsilastir.
+                // Blok bitip fark yoksa VE NUL gorulmediyse devam et.
+                // ============================================================
+                const char* a = reinterpret_cast<const char*>(ctx->Rdi);
+                const char* b = reinterpret_cast<const char*>(ctx->Rsi);
+                const size_t n = static_cast<size_t>(ctx->Rdx);
+                int    r    = 0;
+                size_t done = 0;
+                while (done < n) {
+                    size_t want = n - done;
+                    if (want > 4096) want = 4096;
+                    const size_t sa = SafeSpan(a + done, want);
+                    const size_t sb = SafeSpan(b + done, want);
+                    const size_t k  = (sa < sb) ? sa : sb;
+                    if (k == 0) break; // okunamiyor: eski davranisla ayni (esit say)
+                    r = strncmp(a + done, b + done, k);
+                    if (r != 0) break;
+                    // Blok esit; NUL gorduysek her iki dizge de bitti demektir.
+                    if (memchr(a + done, 0, k) != nullptr) break;
+                    done += k;
+                }
                 ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(r));
                 special_return_set = true;
             } else if (readable_name == "memcmp" || readable_name == "bcmp") {
