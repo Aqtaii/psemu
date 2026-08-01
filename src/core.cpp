@@ -2447,10 +2447,14 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 // Isaretci gibi duran argumanlarin ICERIGINI de dok: "yapi
                 // geldi ama alanlari bos mu?" sorusunu ancak boyle
                 // cevaplayabiliyoruz.
+                // RCX/R8/R9 da SART: SysV'de 4./5./6. argumanlar bunlar ve
+                // Astro Bot'un kaynak tanimlayicisi 4. arguman olarak (RCX)
+                // geliyor - yalnizca ilk uce bakmak onu tamamen kaciriyordu.
                 {
-                    const char* nm[3] = {"RDI", "RSI", "RDX"};
-                    uint64_t rv[3] = {ctx->Rdi, ctx->Rsi, ctx->Rdx};
-                    for (int a = 0; a < 3; a++) {
+                    const char* nm[6] = {"RDI", "RSI", "RDX", "RCX", "R8", "R9"};
+                    uint64_t rv[6] = {ctx->Rdi, ctx->Rsi, ctx->Rdx,
+                                      ctx->Rcx, ctx->R8,  ctx->R9};
+                    for (int a = 0; a < 6; a++) {
                         uint64_t* q = reinterpret_cast<uint64_t*>(rv[a]);
                         if (rv[a] < 0x10000 || !SafeReadable(q, 64)) continue;
                         bs << "\n     [" << nm[a] << "]->";
