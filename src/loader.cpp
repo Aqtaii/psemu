@@ -894,6 +894,49 @@ bool LoadEboot(const std::string& filePath) {
         }
     }
 
+    // ========================================================================
+    // ASTRO BOT - DERINLIKSIZ VTABLE'IN SLOT 6'SINI YONLENDIR (PSEMU_AB_DEPTH_VT=1)
+    // ------------------------------------------------------------------------
+    // BRING-UP DENEMESI, KALICI DUZELTME DEGIL. Varsayilan KAPALI.
+    // Amac: assert'i gecip SONRAKI hatanin ne oldugunu gormek.
+    //
+    // Olculen durum: assert eden nesnenin ikincil vtable'i 0x88ea758 ve onun
+    // slot6'si RVA 0x459d20 = tam olarak "xor eax,eax; ret" (her zaman NULL).
+    // Derinlikli kardes vtable 0x88ea6c8'in slot6'si ise RVA 0x459fa0:
+    //     movsxd rax, esi ; shl rcx,7 ; lea rax,[rcx+rax*8]
+    //     lea rax,[rdi+rax+0x74]        -> this + idx*136 + 0x74
+    // yani NESNENIN ICINE gercek bir adres hesapliyor.
+    //
+    // ONCEKI DENEMEDEN FARKI: PSEMU_FAKE_DEPTH sahte bir isaretci veriyordu ve
+    // oyun gercek adresi kullanmaya calisinca 0x7410b6e'de (mov [rax],ecx,
+    // RAX=0) cokuyordu. Burada donen adres TAHSIS EDILMIS bellegin icinde.
+    //
+    // RISK (acikca): nesne derinliksiz varyant, yani o gomulu dizi orada
+    // OLMAYABILIR; bu durumda nesnenin baska alanlarinin uzerine yazilir.
+    // Bring-up amacli, sonraki hatayi gormek icin kabul ediyoruz.
+    if (Game::Current().name == "Astro Bot") {
+        const char* e = std::getenv("PSEMU_AB_DEPTH_VT");
+        if (e != nullptr && e[0] == '1') {
+            uint8_t* bp = reinterpret_cast<uint8_t*>(base_address);
+            uint64_t* slot = reinterpret_cast<uint64_t*>(bp + 0x88ea758 + 0x30);
+            const uint64_t want_old = reinterpret_cast<uint64_t>(bp) + 0x459d20;
+            const uint64_t want_new = reinterpret_cast<uint64_t>(bp) + 0x459fa0;
+            DWORD oldp = 0;
+            if (VirtualProtect(slot, 8, PAGE_READWRITE, &oldp)) {
+                if (*slot == want_old) {
+                    *slot = want_new;
+                    std::cout << "[AB-DEPTH-VT] vtable 0x88ea758 slot6: 0x459d20 -> 0x459fa0 "
+                                 "(DENEME)" << std::endl;
+                } else {
+                    std::cout << "[AB-DEPTH-VT] slot6 beklenen deger degil (0x"
+                              << std::hex << (*slot - reinterpret_cast<uint64_t>(bp))
+                              << std::dec << "), yama uygulanmadi." << std::endl;
+                }
+                VirtualProtect(slot, 8, oldp, &oldp);
+            }
+        }
+    }
+
     if (Game::Current().quirk_c2_type_registration_overflow) {
         uint8_t* base_ptr2 = reinterpret_cast<uint8_t*>(base_address);
         uint64_t target = reinterpret_cast<uint64_t>(base_ptr2) + 0x2dfff0;
