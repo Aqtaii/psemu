@@ -1372,6 +1372,24 @@ static uint8_t  g_diag_bp_orig    = 0;
 static bool     g_diag_bp_pending = false; // single-step sonrasi 0xCC'yi geri koy
 
 // ---------------------------------------------------------------------------
+// FONKSIYON-ORTASI BREAKPOINT  (PSEMU_MBP=<rva>, virgulle en fazla 4 tane)
+//
+// Mevcut PSEMU_BP yalnizca "push rbp" (0x55) ile baslayan FONKSIYON BASLARINDA
+// calisiyor. Ama ilgilendigimiz degerler cogu zaman fonksiyonun ORTASINDA
+// olusuyor: ornegin Astro Bot'ta kaynak aramasinin (call 0x4538d0) donen
+// indeksi ve o indeksin gosterdigi nesnenin vtable'i. Bunlari gormeden
+// "arama hangi girdiyi donduruyor?" sorusu cevaplanamiyor.
+//
+// Calisma sekli g_diag_bp ile ayni: 0xCC koy -> vurdugunda kayitlari dok ->
+// orijinal bayti geri koy, RIP'i geri sar, TF ile tek adim at -> sonra
+// 0xCC'yi geri koy. Prologue sartı YOK, her adrese konabilir.
+static uint64_t g_mbp_addr[4]    = {0, 0, 0, 0};
+static uint8_t  g_mbp_orig[4]    = {0, 0, 0, 0};
+static int      g_mbp_count      = 0;
+static int      g_mbp_hits[4]    = {0, 0, 0, 0};
+static int      g_mbp_pending    = -1;   // tek adim sonrasi yeniden kurulacak slot
+
+// ---------------------------------------------------------------------------
 // .init_array IZLEYICISI  (PSEMU_INIT_TRACE=<call rax RVA'si>, or. 0x62)
 //
 // Oyunun CRT'sindeki .init_array yuruyucusu su sekilde:
@@ -2364,6 +2382,50 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         g_diag_bp_pending = true;
         return EXCEPTION_CONTINUE_EXECUTION;
     }
+    // Fonksiyon-ortasi breakpoint: kayitlari dok, sonra tek adimla re-arm et.
+    if (code == EXCEPTION_BREAKPOINT && g_mbp_count > 0) {
+        for (int i = 0; i < g_mbp_count; i++) {
+            if (ctx->Rip != g_mbp_addr[i] && ctx->Rip != g_mbp_addr[i] + 1) continue;
+            if (g_mbp_hits[i]++ < kBpLogLimit) {
+                std::stringstream ms;
+                ms << "[MBP] RVA 0x" << std::hex << (g_mbp_addr[i] - g_base_addr)
+                   << " #" << std::dec << g_mbp_hits[i] << std::hex
+                   << "\n     RAX=0x" << ctx->Rax << " RBX=0x" << ctx->Rbx
+                   << " RCX=0x" << ctx->Rcx << " RDX=0x" << ctx->Rdx
+                   << " RSI=0x" << ctx->Rsi << " RDI=0x" << ctx->Rdi
+                   << "\n     R8=0x" << ctx->R8 << " R9=0x" << ctx->R9
+                   << " R12=0x" << ctx->R12 << " R13=0x" << ctx->R13
+                   << " R14=0x" << ctx->R14 << " R15=0x" << ctx->R15
+                   << " RBP=0x" << ctx->Rbp;
+                // Isaretci gibi duran kayitlarin ICERIGI: "hangi nesne geldi"
+                // sorusu ancak boyle cevaplanıyor (or. vtable isaretcisi).
+                const char* nm[6] = {"RAX", "RCX", "RDX", "RSI", "RDI", "R13"};
+                uint64_t rv[6] = {ctx->Rax, ctx->Rcx, ctx->Rdx,
+                                  ctx->Rsi, ctx->Rdi, ctx->R13};
+                for (int a = 0; a < 6; a++) {
+                    uint64_t* q = reinterpret_cast<uint64_t*>(rv[a]);
+                    // 8 qword: nesnenin kendi tanimlayicisi +0x8'de duruyor,
+                    // yani format alani (+0x30) nesne+0x38 = q[7]. 4 qword
+                    // dokmek onu tam da disarida birakiyordu.
+                    if (rv[a] < 0x10000 || !SafeReadable(q, 64)) continue;
+                    ms << "\n     [" << nm[a] << "]->";
+                    for (int k = 0; k < 8; k++) {
+                        ms << " 0x" << std::hex << q[k];
+                        // Misafir moduldeyse RVA'sini da yaz (vtable tespiti).
+                        if (q[k] >= g_base_addr && q[k] < g_base_addr + g_module_size)
+                            ms << "(rva 0x" << (q[k] - g_base_addr) << ")";
+                    }
+                }
+                LOG_INFO(ms.str());
+            }
+            *reinterpret_cast<uint8_t*>(g_mbp_addr[i]) = g_mbp_orig[i];
+            ctx->Rip = g_mbp_addr[i];
+            ctx->EFlags |= 0x100; // TF
+            g_mbp_pending = i;
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+    }
+
     // .init_array izleyicisi: "call rax" yerine konan 0xCC
     // NOT: Windows EXCEPTION_BREAKPOINT'te ctx->Rip'i INT3'un USTUNDE verir
     // (asagidaki syscall yolu da bu yuzden "Rip += 1" yapiyor).
@@ -2597,6 +2659,15 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         g_diag_bp_pending = false;
         ctx->EFlags &= ~0x100;
         *reinterpret_cast<uint8_t*>(g_diag_bp_addr) = 0xCC; // re-arm
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
+    // Fonksiyon-ortasi breakpoint'in tek adim sonrasi yeniden kurulmasi
+    if (code == EXCEPTION_SINGLE_STEP && g_mbp_pending >= 0) {
+        const int s = g_mbp_pending;
+        g_mbp_pending = -1;
+        ctx->EFlags &= ~0x100;
+        *reinterpret_cast<uint8_t*>(g_mbp_addr[s]) = 0xCC; // re-arm
         return EXCEPTION_CONTINUE_EXECUTION;
     }
 
@@ -7986,6 +8057,32 @@ void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t tex
                 bs << "[BP] RVA 0x" << std::hex << rva
                    << " 'push rbp' (0x55) degil, kurulmadi.";
                 LOG_ERROR(bs.str());
+            }
+            s = (*end == ',') ? end + 1 : end;
+        }
+    }
+
+    // Fonksiyon-ortasi breakpoint'ler: PSEMU_MBP=<rva>[,<rva>...]
+    // PSEMU_BP'den farki prologue sarti aramamasi - her adrese konabilir.
+    if (const char* mbe = std::getenv("PSEMU_MBP")) {
+        const char* s = mbe;
+        while (*s && g_mbp_count < 4) {
+            char* end = nullptr;
+            uint64_t rva = std::strtoull(s, &end, 0);
+            if (end == s) break;
+            if (rva != 0) {
+                uint8_t* p = reinterpret_cast<uint8_t*>(base_addr + rva);
+                DWORD oldp = 0;
+                if (VirtualProtect(p, 1, PAGE_EXECUTE_READWRITE, &oldp)) {
+                    const int k = g_mbp_count++;
+                    g_mbp_addr[k] = base_addr + rva;
+                    g_mbp_orig[k] = p[0];
+                    p[0] = 0xCC;
+                    std::stringstream bs;
+                    bs << "[MBP] RVA 0x" << std::hex << rva << " kuruldu (orijinal bayt 0x"
+                       << static_cast<int>(g_mbp_orig[k]) << ").";
+                    LOG_INFO(bs.str());
+                }
             }
             s = (*end == ',') ? end + 1 : end;
         }
