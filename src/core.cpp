@@ -2405,17 +2405,32 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                    << " RBP=0x" << ctx->Rbp;
                 // Isaretci gibi duran kayitlarin ICERIGI: "hangi nesne geldi"
                 // sorusu ancak boyle cevaplanıyor (or. vtable isaretcisi).
-                const char* nm[6] = {"RAX", "RCX", "RDX", "RSI", "RDI", "R13"};
-                uint64_t rv[6] = {ctx->Rax, ctx->Rcx, ctx->Rdx,
-                                  ctx->Rsi, ctx->Rdi, ctx->R13};
-                for (int a = 0; a < 6; a++) {
+                // R14/R15 de dokuluyor: "this" isaretcisi cogu zaman bu iki
+                // kayitta tasiniyor (RVA 0x41034f'deki null callback cagrisinda
+                // nesne R14'teydi ve icerigini goremiyorduk).
+                const char* nm[8] = {"RAX", "RCX", "RDX", "RSI",
+                                     "RDI", "R13", "R14", "R15"};
+                uint64_t rv[8] = {ctx->Rax, ctx->Rcx, ctx->Rdx, ctx->Rsi,
+                                  ctx->Rdi, ctx->R13, ctx->R14, ctx->R15};
+                // Derinlik ayarlanabilir: varsayilan 8 qword yalnizca +0x38'e
+                // kadar gidiyor; ilgilendigimiz alan +0x128/+0x130 gibi ILERIDE
+                // olabiliyor. PSEMU_MBP_QWORDS=40 -> +0x138'e kadar.
+                static const int kQw = [] {
+                    const char* e = std::getenv("PSEMU_MBP_QWORDS");
+                    int v = (e != nullptr) ? atoi(e) : 8;
+                    if (v < 4) v = 4;
+                    if (v > 64) v = 64;
+                    return v;
+                }();
+                for (int a = 0; a < 8; a++) {
                     uint64_t* q = reinterpret_cast<uint64_t*>(rv[a]);
                     // 8 qword: nesnenin kendi tanimlayicisi +0x8'de duruyor,
                     // yani format alani (+0x30) nesne+0x38 = q[7]. 4 qword
                     // dokmek onu tam da disarida birakiyordu.
-                    if (rv[a] < 0x10000 || !SafeReadable(q, 64)) continue;
+                    if (rv[a] < 0x10000 ||
+                        !SafeReadable(q, static_cast<size_t>(kQw) * 8)) continue;
                     ms << "\n     [" << nm[a] << "]->";
-                    for (int k = 0; k < 8; k++) {
+                    for (int k = 0; k < kQw; k++) {
                         ms << " 0x" << std::hex << q[k];
                         // Misafir moduldeyse RVA'sini da yaz (vtable tespiti).
                         if (q[k] >= g_base_addr && q[k] < g_base_addr + g_module_size)
@@ -7312,6 +7327,38 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 }
                 ctx->Rax = static_cast<uint64_t>(n);
                 special_return_set = true;
+            }
+            else if (readable_name == "clock") {
+                // clock(): surec baslangicindan beri gecen CPU zamani.
+                // SABIT 0 donmek en tehlikeli hatalardan biri: "while
+                // (clock() - t0 < X)" bicimindeki her bekleme SONSUZ olur.
+                // [HLE-EKSIK] tanisinda bu isim cikti (cagiran RVA 0x400ae9).
+                // POSIX'te CLOCKS_PER_SEC = 1000000, yani mikrosaniye.
+                static const LARGE_INTEGER s_freq = [] {
+                    LARGE_INTEGER f; QueryPerformanceFrequency(&f); return f;
+                }();
+                static const LARGE_INTEGER s_t0 = [] {
+                    LARGE_INTEGER t; QueryPerformanceCounter(&t); return t;
+                }();
+                LARGE_INTEGER now;
+                QueryPerformanceCounter(&now);
+                ctx->Rax = s_freq.QuadPart != 0
+                    ? static_cast<uint64_t>((now.QuadPart - s_t0.QuadPart) *
+                                            1000000LL / s_freq.QuadPart)
+                    : 0;
+                special_return_set = true;
+            } else if (readable_name == "rand") {
+                // rand(): hep 0 donmek kaynak/ornek secimlerini tek noktaya
+                // kilitliyor. Standart LCG yeterli (oyun kalitesi beklemiyor).
+                // FreeBSD/POSIX'te RAND_MAX = 0x7fffffff.
+                static std::atomic<uint64_t> s_seed{1};
+                uint64_t s = s_seed.load(std::memory_order_relaxed);
+                s = s * 6364136223846793005ULL + 1442695040888963407ULL;
+                s_seed.store(s, std::memory_order_relaxed);
+                ctx->Rax = static_cast<uint32_t>(s >> 33) & 0x7FFFFFFFu;
+                special_return_set = true;
+            } else if (readable_name == "srand") {
+                special_return_set = true; // tohum sabit: tekrarlanabilir kosu
             }
             // ============================================================
             // Annex K KOPYALAMA fonksiyonlari (_s ailesi)
