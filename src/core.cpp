@@ -7314,6 +7314,68 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 special_return_set = true;
             }
             // ============================================================
+            // Annex K KOPYALAMA fonksiyonlari (_s ailesi)
+            // ------------------------------------------------------------
+            // sprintf_s ile AYNI sinifta hatalar: adlari nids.h'ta vardi,
+            // govdeleri yoktu. Bunlarda tuzak daha sinsi: hepsi BASARIDA 0
+            // doner, yani stub'in RAX=0'i "basarili" gibi gorunuyordu - ama
+            // hedefe HICBIR SEY YAZILMIYORDU. Cagiran, kopyalandigini sanip
+            // bos/eski buffer'i kullaniyor.
+            // [HLE-EKSIK] tanisi bunlari tek kosuda ortaya cikardi.
+            else if (readable_name == "strcpy_s") {
+                // errno_t strcpy_s(char* d, rsize_t dsz, const char* s)
+                char* d = reinterpret_cast<char*>(ctx->Rdi);
+                size_t dsz = static_cast<size_t>(ctx->Rsi);
+                std::string s = SafeReadCString(reinterpret_cast<const char*>(ctx->Rdx));
+                ctx->Rax = 22; // EINVAL: asagida basarirsak 0 yapiyoruz
+                if (d != nullptr && dsz > 0 && SafeWritable(d, dsz)) {
+                    if (s.size() < dsz) {
+                        memcpy(d, s.c_str(), s.size() + 1);
+                        ctx->Rax = 0;
+                    } else {
+                        d[0] = 0;       // Annex K: hata halinde hedefi bosalt
+                        ctx->Rax = 34;  // ERANGE
+                    }
+                }
+                special_return_set = true;
+            } else if (readable_name == "strncpy_s") {
+                // errno_t strncpy_s(char* d, rsize_t dsz, const char* s, rsize_t n)
+                char* d = reinterpret_cast<char*>(ctx->Rdi);
+                size_t dsz = static_cast<size_t>(ctx->Rsi);
+                size_t n = static_cast<size_t>(ctx->Rcx);
+                std::string s = SafeReadCString(reinterpret_cast<const char*>(ctx->Rdx));
+                if (s.size() > n) s.resize(n);
+                ctx->Rax = 22;
+                if (d != nullptr && dsz > 0 && SafeWritable(d, dsz)) {
+                    if (s.size() < dsz) {
+                        memcpy(d, s.c_str(), s.size() + 1);
+                        ctx->Rax = 0;
+                    } else {
+                        d[0] = 0;
+                        ctx->Rax = 34;
+                    }
+                }
+                special_return_set = true;
+            } else if (readable_name == "memcpy_s") {
+                // errno_t memcpy_s(void* d, rsize_t dsz, const void* s, rsize_t n)
+                void* d = reinterpret_cast<void*>(ctx->Rdi);
+                size_t dsz = static_cast<size_t>(ctx->Rsi);
+                const void* s = reinterpret_cast<const void*>(ctx->Rdx);
+                size_t n = static_cast<size_t>(ctx->Rcx);
+                ctx->Rax = 22;
+                if (n == 0) {
+                    ctx->Rax = 0;
+                } else if (d != nullptr && s != nullptr && n <= dsz &&
+                           SafeWritable(d, n) && SafeReadable(s, n)) {
+                    memmove(d, s, n); // ortusme olursa da dogru kalsin
+                    ctx->Rax = 0;
+                } else if (d != nullptr && dsz > 0 && SafeWritable(d, dsz)) {
+                    memset(d, 0, dsz); // Annex K: hata halinde hedefi sifirla
+                    ctx->Rax = 34;
+                }
+                special_return_set = true;
+            }
+            // ============================================================
             // SILINDI: wmemchr/wmemmove'un "wchar_t = 4 BAYT" surumleri
             // ------------------------------------------------------------
             // Burada ayni NID'ler (fnUEjBCNRVU, Noj9PsJrsa8) icin 4 baytlik
@@ -7412,6 +7474,38 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     // icin RAX'a zaten dokunulmus, onu ezmiyoruz.
                     if (!special_return_set) {
                         ctx->Rax = 0;
+                        // ================================================
+                        // [HLE-EKSIK]: ADI BILINEN ama GOVDESI OLMAYAN cagri
+                        // ------------------------------------------------
+                        // Bu tam olarak sprintf_s'in durumuydu: nids.h'ta adi
+                        // vardi, core.cpp'de dali YOKTU, sessizce RAX=0 donuyordu.
+                        // Sonucu 0 sanan oyun kaynak adlarindaki sayiyi kaybetti,
+                        // tum hedefler ayni ada dusup cakisti ve RENDER ALT AGACI
+                        // hic calismadi (bkz. commit 27ed20b). Sessiz oldugu icin
+                        // aylarca gorunmedi - artik gorunur.
+                        //
+                        // Isimsiz NID'lerde bunu YAPMIYORUZ: onlarin bir govdesi
+                        // olamaz, gurultu olurdu. Yalnizca ISIMLI olanlar sorun.
+                        //
+                        // Maliyet: PLT basina bir kez. Bayrak dizisine kilitsiz
+                        // yaziyoruz - yaris olursa en kotu ihtimalle satir iki kez
+                        // basilir, yanlis bilgi uretmez.
+                        if (!readable_name.empty() && plt_index < kPltCacheMax) {
+                            static bool s_unimpl_reported[kPltCacheMax] = {};
+                            if (!s_unimpl_reported[plt_index]) {
+                                s_unimpl_reported[plt_index] = true;
+                                uint64_t* rsp_p = reinterpret_cast<uint64_t*>(ctx->Rsp);
+                                uint64_t  ret   = SafeReadable(rsp_p, 8) ? *rsp_p : 0;
+                                std::stringstream us;
+                                us << "[HLE-EKSIK] " << readable_name
+                                   << " -> govdesi yok, RAX=0 donuluyor";
+                                if (ret >= g_base_addr && ret < g_base_addr + g_module_size) {
+                                    us << " | cagiran RVA 0x" << std::hex
+                                       << (ret - g_base_addr);
+                                }
+                                LOG_ERROR(us.str());
+                            }
+                        }
                         // HIZLI YOL isaretleme: bu PLT'yi HICBIR handler
                         // sahiplenmedi (sonuc sadece RAX=0). Isimsiz NID'ler
                         // icin bunu onbellege alip sonraki cagrilarda tum
