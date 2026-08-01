@@ -4070,7 +4070,16 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     } else {
                         rc = -2147352575; // SCE_KERNEL_ERROR_ENOMEM benzeri
                     }
-                    printf("[SEMA] create -> handle=%p init=%d max=%d\n", h, init, maxv);
+                    // CAGIRAN RVA sart: 8 semafor yaratiliyor, binlerce kez
+                    // bekleniyor ve HIC sinyallenmiyor. "Kim yaratti, kim
+                    // sinyallemeliydi" sorusunu ancak cagiran koda bakarak
+                    // cevaplayabiliriz. Donus adresi PLT cagrisindan [RSP]'de.
+                    uint64_t cret = 0;
+                    if (SafeReadable(reinterpret_cast<void*>(ctx->Rsp), 8))
+                        cret = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                    printf("[SEMA] create -> handle=%p init=%d max=%d  CAGIRAN RVA 0x%llx\n",
+                           h, init, maxv,
+                           static_cast<unsigned long long>(cret - g_base_addr));
                     fflush(stdout);
                 } else if (readable_name == "sceKernelSignalSema") {
                     HANDLE    h = reinterpret_cast<HANDLE>(ctx->Rdi);
@@ -4109,10 +4118,15 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     const uint64_t wn = s_w.fetch_add(1) + 1;
                     if (wr != WAIT_OBJECT_0) s_to.fetch_add(1, std::memory_order_relaxed);
                     if (wn <= 6 || (wn % 500ull) == 0) {
+                        uint64_t wret = 0;
+                        if (SafeReadable(reinterpret_cast<void*>(ctx->Rsp), 8))
+                            wret = *reinterpret_cast<uint64_t*>(ctx->Rsp);
                         printf("[SEMA] wait #%llu handle=%p need=%d timeout_arg=%d ms=%lu "
+                               "CAGIRAN RVA 0x%llx "
                                "sonuc=%s (zaman asimi orani %llu/%llu)\n",
                                static_cast<unsigned long long>(wn), h,
                                static_cast<int>(ctx->Rsi), had_timeout_arg ? 1 : 0, ms,
+                               static_cast<unsigned long long>(wret - g_base_addr),
                                (wr == WAIT_OBJECT_0) ? "SINYAL" : "zaman-asimi",
                                static_cast<unsigned long long>(s_to.load()),
                                static_cast<unsigned long long>(wn));
