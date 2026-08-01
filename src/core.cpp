@@ -1406,7 +1406,18 @@ uint64_t        g_expected_argv  = 0;   // module_start'a gecirilen argv (args_b
 static uint64_t g_bp_addr[4] = {0, 0, 0, 0};
 static int      g_bp_count = 0;
 static int      g_bp_hits[4] = {0, 0, 0, 0};
-static const int kBpLogLimit = 8;   // her breakpoint icin en fazla bu kadar log
+// Her breakpoint icin en fazla bu kadar log. 8 SABITTI ve bu YANILTICIYDI:
+// Astro Bot'un kaynak yoneticisi (RVA 0x74100e0) 8'den cok cagriliyor, ama
+// log 8'de kesildigi icin "toplam 8 cagri var" sanip yanlis sonuca varmak
+// isten degil - ilgilendigimiz cagri (format alani 0x29 olan) 8'den sonra
+// geliyor olabilir. PSEMU_BP_LIMIT=<n> ile ayarlanabilir.
+static const int kBpLogLimit = [] {
+    if (const char* e = std::getenv("PSEMU_BP_LIMIT")) {
+        const int v = std::atoi(e);
+        if (v > 0) return v;
+    }
+    return 8;
+}();
 
 // ---------------------------------------------------------------------------
 // TEK ADIM IZLEME  (PSEMU_TRACE_FROM=<rva>)
