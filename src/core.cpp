@@ -23,6 +23,7 @@
 #include "game_profile.h"
 #include "video.h"
 #include "audio.h"   // sceAudioOut* -> waveOut arka ucu
+#include "fiber.h"   // sceFiber* -> Windows fiber'lari (Astro Bot'un is sistemi)
 #include "kernel/eventQueue.h"
 #include "graphics/presentation/videoOut.h"
 #include "libs/controller.h"
@@ -6366,6 +6367,62 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     }
                     ctx->Rax = static_cast<uint64_t>(slen);
                 }
+                special_return_set = true;
+            // ============================================================
+            // sceFiber* - Astro Bot'un IS SISTEMI
+            // ------------------------------------------------------------
+            // Bunlar UYGULANMAMISTI ve varsayilan stub'a dusup RAX=0
+            // donuyordu; yani sceFiberRun "basarili" gorunuyor ama hicbir
+            // is calismiyordu. Olculen sonuc: 8 semafor yaratiliyor,
+            // binlerce kez bekleniyor, sceKernelSignalSema HIC cagrilmiyor
+            // (zaman asimi orani 1500/1500) - isci thread'leri sonsuza
+            // kadar park. Isciye birakilan kaynaklar (0x29 formatli
+            // 1920x1080 derinlik hedefi dahil) hic olusmuyor ve oyun
+            // "depthTarget != nullptr" ile oluyordu.
+            // ============================================================
+            } else if (readable_name == "_sceFiberInitializeImpl" ||
+                       readable_name == "sceFiberInitialize") {
+                if (!Psemu::Fiber::Enabled()) {
+                    ctx->Rax = 0;
+                } else {
+                    // (fiber RDI, name RSI, entry RDX, argOnInitialize RCX,
+                    //  addrContext R8, sizeContext R9, ...)
+                    const char* nm = reinterpret_cast<const char*>(ctx->Rsi);
+                    if (nm != nullptr && !SafeReadable(nm, 1)) nm = nullptr;
+                    ctx->Rax = static_cast<uint64_t>(static_cast<uint32_t>(
+                        Psemu::Fiber::Initialize(reinterpret_cast<void*>(ctx->Rdi), nm,
+                                                 ctx->Rdx, ctx->Rcx,
+                                                 reinterpret_cast<void*>(ctx->R8),
+                                                 static_cast<size_t>(ctx->R9))));
+                }
+                special_return_set = true;
+            } else if (readable_name == "sceFiberRun") {
+                uint64_t* out = reinterpret_cast<uint64_t*>(ctx->Rdx);
+                if (out != nullptr && !SafeWritable(out, 8)) out = nullptr;
+                ctx->Rax = !Psemu::Fiber::Enabled() ? 0
+                         : static_cast<uint64_t>(static_cast<uint32_t>(
+                               Psemu::Fiber::Run(reinterpret_cast<void*>(ctx->Rdi),
+                                                 ctx->Rsi, out)));
+                special_return_set = true;
+            } else if (readable_name == "sceFiberSwitch") {
+                uint64_t* out = reinterpret_cast<uint64_t*>(ctx->Rdx);
+                if (out != nullptr && !SafeWritable(out, 8)) out = nullptr;
+                ctx->Rax = !Psemu::Fiber::Enabled() ? 0
+                         : static_cast<uint64_t>(static_cast<uint32_t>(
+                               Psemu::Fiber::Switch(reinterpret_cast<void*>(ctx->Rdi),
+                                                    ctx->Rsi, out)));
+                special_return_set = true;
+            } else if (readable_name == "sceFiberReturnToThread") {
+                uint64_t* out = reinterpret_cast<uint64_t*>(ctx->Rsi);
+                if (out != nullptr && !SafeWritable(out, 8)) out = nullptr;
+                ctx->Rax = !Psemu::Fiber::Enabled() ? 0
+                         : static_cast<uint64_t>(static_cast<uint32_t>(
+                               Psemu::Fiber::ReturnToThread(ctx->Rdi, out)));
+                special_return_set = true;
+            } else if (readable_name == "sceFiberFinalize") {
+                ctx->Rax = !Psemu::Fiber::Enabled() ? 0
+                         : static_cast<uint64_t>(static_cast<uint32_t>(
+                               Psemu::Fiber::Finalize(reinterpret_cast<void*>(ctx->Rdi))));
                 special_return_set = true;
             } else if (readable_name == "sceAudioOutInit") {
                 ctx->Rax = static_cast<uint64_t>(Psemu::Audio::Init());
