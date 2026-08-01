@@ -201,10 +201,28 @@ static RegisterDefaults* get_register_defaults(CompactRegisterDefaults* compact,
 	return &storage->defaults;
 }
 
+// BILINMEYEN (DAHA YENI) SURUM ICIN EN YENI TABLOYU VER, ESKISINI DEGIL.
+// ----------------------------------------------------------------------------
+// Eski hali: ver > MAX(12) ise FALLBACK(11)'e dusuyordu. Yani Astro Bot
+// "version = 13" isterken ona SURUM 11'in tablosu veriliyordu - elimizde 12
+// dururken. Bu sessiz ve yanlis bir geri dusus: daha yeni bir SDK'ya daha
+// ESKI varsayilanlar donuyor.
+//
+// Olculdu (Astro Bot, PPSA21564): Kyty'nin kendi logu "version = 13" basiyor,
+// yani oyun gercekten 13 istiyor ve biz 11 veriyoruz.
+//
+// Referans: SharpEmu (GPL-2.0-or-later, ayni lisans ailesi) surum 13'u
+// GECERLI sayiyor - surume ozel ayri tablo tutmuyor, tek varsayilan kumesini
+// donduruyor (IsSupportedRegisterDefaultsVersion: 7/8/10/13). Yani "13 icin
+// eski bir tabloya dusmek" gerekli degil; en yenisini vermek dogru davranis.
+//
+// Bu, elimizdeki en yakin tabloyu (12) verir. 13'un GERCEK tablosu degildir;
+// tam dogruluk icin 13'un verisi cikarilmali. Ama 11 yerine 12 vermek her
+// durumda daha dogru.
 static uint32_t normalize_register_defaults_version(uint32_t ver) {
 	return ver <= GRAPHICS_REGISTER_DEFAULTS_MAX_VERSION
 	           ? ver
-	           : GRAPHICS_REGISTER_DEFAULTS_FALLBACK_VERSION;
+	           : GRAPHICS_REGISTER_DEFAULTS_MAX_VERSION;
 }
 
 static RegisterDefaults* get_public_register_defaults(uint32_t ver) {
