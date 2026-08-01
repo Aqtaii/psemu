@@ -7,6 +7,8 @@
 #include <atomic>
 #include <thread>
 #include <cstdint>
+#include <mutex>   // [AGC-YOK] tanisi
+#include <set>     // [AGC-YOK] tanisi
 
 // Kyty graphics init: gpu/adapter/init.cpp icinde (Kyty header'lariyla). Kyty
 // subsystem'lerini baslatir + WindowInit/WindowRun (VulkanCreate) yapar. psemu
@@ -193,6 +195,30 @@ bool Dispatch(const std::string& nid, const std::string& name, CONTEXT* ctx) {
         return true;
     }
 
+    // ========================================================================
+    // TANI: KYTY'DE OLMAYAN GRAFIK FONKSIYONLARI SESSIZCE 0 DONUYOR
+    // ------------------------------------------------------------------------
+    // Bu dala dusen her fonksiyon "basarili" gorunup RAX=0 donduruyor. Bir
+    // KAYNAK OLUSTURMA cagrisi buraya duserse cagiran nullptr alir ve bunu
+    // ancak cok sonra fark eder. Astro Bot tam boyle oluyor:
+    //   Assertion failed: depthTarget != nullptr
+    //   GfxRenderPipelineResourceManager.cpp:113
+    // Ayni "sessizce hicbir sey yapma" deseni bu oturumda iki kez daha kok
+    // neden cikti (eksik wmemcpy -> bos konusma metni; fputs'un akis
+    // argumanini yok saymasi -> 0 baytlik kayit dosyalari).
+    //
+    // Her ISIM icin YALNIZCA BIR KEZ basiyoruz: liste sinirli ve tekrar
+    // eden cagrilar logu bogardi.
+    {
+        static std::mutex              s_m;
+        static std::set<std::string>   s_seen;
+        std::lock_guard<std::mutex>    lk(s_m);
+        if (s_seen.insert(name).second) {
+            printf("[AGC-YOK] %s (NID %s) Kyty'de yok -> sessizce RAX=0\n",
+                   name.c_str(), kyty_nid.c_str());
+            fflush(stdout);
+        }
+    }
     ctx->Rax = 0;
     return true;
 }
