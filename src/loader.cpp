@@ -881,11 +881,19 @@ bool LoadEboot(const std::string& filePath) {
         if (e != nullptr && e[0] == '1') {
             uint8_t* p = reinterpret_cast<uint8_t*>(base_address) + 0x456fe4;
             DWORD oldp = 0;
+            // 2026-07-28 GUNCELLEME: taban 0x26 yerine 0x24.
+            // Gerekce (olcumle): paylasilan hash girdisini KURAN istek #3'tur
+            // ve formati 0x24'tur (3840x2160). Adsiz kaynaklarin hepsi ayni
+            // anahtara dustugu icin girdiyi ILK kuran kazaniyor; dolayisiyla
+            // derinlik yetenegi #3'un formatina bagli. 0x24 derinlik
+            // araliginin (0x27-0x29) bir altinda kaldigi icin girdi
+            // derinliksiz kuruluyor ve sonraki 0x29 istegi eli bos kaliyor.
+            // Tabani 0x24'e cekince #3 DERINLIKLI varyantla kurulur.
             if (p[0] == 0x41 && p[1] == 0x8D && p[2] == 0x42 && p[3] == 0xD9 &&
                 VirtualProtect(p, 4, PAGE_EXECUTE_READWRITE, &oldp)) {
-                p[3] = 0xDA; // -0x27 -> -0x26
+                p[3] = 0xDC; // -0x27 -> -0x24
                 VirtualProtect(p, 4, oldp, &oldp);
-                std::cout << "[AB-DEPTH] 0x456fe4: lea eax,[r10-0x27] -> [r10-0x26] "
+                std::cout << "[AB-DEPTH] 0x456fe4: lea eax,[r10-0x27] -> [r10-0x24] "
                              "(DENEME, kalici duzeltme degil)" << std::endl;
             } else {
                 std::cout << "[AB-DEPTH] 0x456fe4 beklenen baytlar (41 8D 42 D9) "
