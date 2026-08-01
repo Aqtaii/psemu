@@ -853,6 +853,47 @@ bool LoadEboot(const std::string& filePath) {
     // kirpilmasiyla hesaplandigi icin cagri modulun ortasinda rastgele bir
     // adrese atliyor, komut ortasina dusup "gecersiz komut" ile cokuyordu.
     // Adres her kosuda degistigi icin cokme de gezici gorunuyordu.
+    // ========================================================================
+    // ASTRO BOT - DERINLIK VARYANTI DENEMESI  (PSEMU_AB_DEPTH_SHIFT=1)
+    // ------------------------------------------------------------------------
+    // BU BIR BRING-UP DENEMESIDIR, KALICI DUZELTME DEGIL. Varsayilan KAPALI.
+    //
+    // Olculen zincir:
+    //   - assert kosulu: format==0x29 && [desc+0x3a]==1  (calisma aninda dogru)
+    //   - kaynak fabrikasi (RVA 0x456f40) derinlik varyantini yalnizca
+    //     "format - 0x27 <= 2" oldugunda kuruyor:
+    //         0x456fe4: lea eax, [r10 - 0x27]      (41 8D 42 D9)
+    //   - 49 yaratmanin HICBIRI 0x29 formatinda degil; 1920x1080'lik kaynak
+    //     0x26 formatiyla yaratiliyor (derinlik araliginin bir altinda)
+    //   - sorgu 1920x1080/0x29 istiyor, arama gecerli bir indeks donduruyor
+    //     ama donen girdi derinliksiz varyant -> slot6 "xor eax,eax; ret"
+    //
+    // Deneme: tabani bir kaydirip (-0x27 -> -0x26) 0x26'lik kaynagin da
+    // derinlikli varyantla kurulmasini saglamak. Boylece slot6 GERCEK bir
+    // gomulu nesne adresi doner. Onceki PSEMU_FAKE_DEPTH denemesinden farki
+    // bu: orada sahte bir isaretci vardi ve oyun gercek GPU adresini
+    // kullanmaya calisinca cokuyordu.
+    // Yan etki: 0x29 artik araligin disinda kalir - ama zaten hic 0x29
+    // yaratilmadigi icin kaybimiz yok. 0x456fec'teki "cmp ax,3 / setb"
+    // de kayar; ongoremedigimiz etkisi olabilir, bu yuzden opt-in.
+    if (Game::Current().name == "Astro Bot") {
+        const char* e = std::getenv("PSEMU_AB_DEPTH_SHIFT");
+        if (e != nullptr && e[0] == '1') {
+            uint8_t* p = reinterpret_cast<uint8_t*>(base_address) + 0x456fe4;
+            DWORD oldp = 0;
+            if (p[0] == 0x41 && p[1] == 0x8D && p[2] == 0x42 && p[3] == 0xD9 &&
+                VirtualProtect(p, 4, PAGE_EXECUTE_READWRITE, &oldp)) {
+                p[3] = 0xDA; // -0x27 -> -0x26
+                VirtualProtect(p, 4, oldp, &oldp);
+                std::cout << "[AB-DEPTH] 0x456fe4: lea eax,[r10-0x27] -> [r10-0x26] "
+                             "(DENEME, kalici duzeltme degil)" << std::endl;
+            } else {
+                std::cout << "[AB-DEPTH] 0x456fe4 beklenen baytlar (41 8D 42 D9) "
+                             "degil, yama uygulanmadi." << std::endl;
+            }
+        }
+    }
+
     if (Game::Current().quirk_c2_type_registration_overflow) {
         uint8_t* base_ptr2 = reinterpret_cast<uint8_t*>(base_address);
         uint64_t target = reinterpret_cast<uint64_t>(base_ptr2) + 0x2dfff0;
