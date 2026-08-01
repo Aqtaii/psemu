@@ -2961,6 +2961,18 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     << " | RIP: 0x" << ctx->Rip;
             if (ctx->Rip >= g_base_addr && ctx->Rip < g_base_addr + g_module_size) {
                 *ss_ptr << " (RVA 0x" << (ctx->Rip - g_base_addr) << ")";
+            } else {
+                // Cokme MISAFIRDE degil BIZDE olabilir; oyle olunca RIP ham
+                // sayi olarak basiliyordu ve hangi fonksiyonumuzun coktugu
+                // anlasilmiyordu (olculdu: 0x7ff6458b9b06 -> "modul disi"nden
+                // baska bilgi yok). loader.exe araligini da etiketle; RVA'yi
+                // isme cevirmek icin:
+                //   python tools/scripts/map_lookup.py loader.map 0x<rva>
+                uint64_t sb = 0, sz = 0;
+                GetSelfModuleRange(&sb, &sz);
+                if (sz != 0 && ctx->Rip >= sb && ctx->Rip < sb + sz) {
+                    *ss_ptr << " (loader+0x" << (ctx->Rip - sb) << ")";
+                }
             }
             if (code == 0xC00000FD) {
                 *ss_ptr << " [STACK OVERFLOW]";
@@ -7249,6 +7261,56 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     buf[n] = 0;
                 }
                 ctx->Rax = static_cast<uint64_t>(s.size());
+                special_return_set = true;
+            } else if (readable_name == "sprintf_s") {
+                // sprintf_s(buf, size, fmt, ...): RDI=buf, RSI=size, RDX=fmt
+                // (Annex K; imza snprintf ile ayni - 3 sabit GP argumani.)
+                //
+                // NEDEN EKLENDI (Astro Bot, olculdu): bu isim nids.h'ta VARDI
+                // ama govdesi YOKTU, yani zincirin sonundaki varsayilan stub'a
+                // dusup RAX=0 donuyordu. Sonuc, RVA 0xc51051'deki cagrida
+                // olculdu:
+                //     sprintf_s(buf, 0x15, "%d", 0)  ->  RAX=0, buffer'a hicbir
+                //     sey yazilmiyor
+                // Cagiran hemen ardindan "movsxd rdx, eax" ile 0 UZUNLUKTA bir
+                // std::string kuruyor ve onu "Geometry_" sonuna ekliyor. Yani
+                // kaynak adindaki SAYI KAYBOLUYOR: her hedef "Geometry_" adini
+                // aliyor. Ayni ada sahip kaynaklar ayni hash anahtarina dusup
+                // tek bir dugumde cakisiyor - daha once "30 isimsiz tanimlayici
+                // tek anahtari paylasiyor" diye olctugumuz sey bu.
+                char* buf = reinterpret_cast<char*>(ctx->Rdi);
+                size_t size = static_cast<size_t>(ctx->Rsi);
+                std::string s = FormatVariadicFromCtx(
+                    reinterpret_cast<const char*>(ctx->Rdx), ctx, 3);
+                size_t n = 0;
+                if (size > 0 && SafeWritable(buf, size)) {
+                    n = s.size() < (size - 1) ? s.size() : (size - 1);
+                    memcpy(buf, s.data(), n);
+                    buf[n] = 0;
+                }
+                // snprintf "yazilacak olan" uzunlugu doner; _s varyanti ise
+                // GERCEKTEN yazilani (C11 K.3.5.3.6). Fark yalnizca kirpilma
+                // durumunda ortaya cikar ve orada dogru olan _s davranisi:
+                // cagiran bu sayiyi string uzunlugu olarak kullaniyor, fazlasini
+                // dondurursek yazilmamis baytlari okur.
+                ctx->Rax = static_cast<uint64_t>(n);
+                special_return_set = true;
+            } else if (readable_name == "vsprintf_s") {
+                // vsprintf_s(buf, size, fmt, va): RDI=buf, RSI=size, RDX=fmt,
+                // RCX=va_list. vsnprintf ile ayni; bu da yalnizca isim olarak
+                // vardi, govdesi yoktu (bkz. yukaridaki sprintf_s notu).
+                char* buf = reinterpret_cast<char*>(ctx->Rdi);
+                size_t size = static_cast<size_t>(ctx->Rsi);
+                std::string s = FormatSysVPrintf(
+                    reinterpret_cast<const char*>(ctx->Rdx),
+                    reinterpret_cast<uint8_t*>(ctx->Rcx));
+                size_t n = 0;
+                if (size > 0 && SafeWritable(buf, size)) {
+                    n = s.size() < (size - 1) ? s.size() : (size - 1);
+                    memcpy(buf, s.data(), n);
+                    buf[n] = 0;
+                }
+                ctx->Rax = static_cast<uint64_t>(n);
                 special_return_set = true;
             }
             // ============================================================
