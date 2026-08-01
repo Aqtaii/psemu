@@ -2388,8 +2388,13 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             if (ctx->Rip != g_mbp_addr[i] && ctx->Rip != g_mbp_addr[i] + 1) continue;
             if (g_mbp_hits[i]++ < kBpLogLimit) {
                 std::stringstream ms;
+                // TID SART: cok thread'li cagrilarda BP ve MBP satirlari IC ICE
+                // GECER. Bir olcumde tam bu yuzden 128 girisi sirayla 1:1
+                // esledim ve "26 alakasiz kaynak ayni anahtari paylasiyor" gibi
+                // anlamsiz bir sonuc cikti. TID olmadan korelasyon KURULAMAZ.
                 ms << "[MBP] RVA 0x" << std::hex << (g_mbp_addr[i] - g_base_addr)
-                   << " #" << std::dec << g_mbp_hits[i] << std::hex
+                   << " #" << std::dec << g_mbp_hits[i]
+                   << " TID=" << GetCurrentThreadId() << std::hex
                    << "\n     RAX=0x" << ctx->Rax << " RBX=0x" << ctx->Rbx
                    << " RCX=0x" << ctx->Rcx << " RDX=0x" << ctx->Rdx
                    << " RSI=0x" << ctx->Rsi << " RDI=0x" << ctx->Rdi
@@ -2486,8 +2491,11 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 if (SafeReadable(reinterpret_cast<void*>(ctx->Rsp), 8))
                     ret = *reinterpret_cast<uint64_t*>(ctx->Rsp);
                 std::stringstream bs;
+                // TID: bkz. MBP'deki not - cok thread'li cagrilarda satirlar
+                // ic ice gecer ve TID olmadan BP<->MBP korelasyonu kurulamaz.
                 bs << "[BP] RVA 0x" << std::hex << (g_bp_addr[i] - g_base_addr)
-                   << " #" << std::dec << g_bp_hits[i] << std::hex
+                   << " #" << std::dec << g_bp_hits[i]
+                   << " TID=" << GetCurrentThreadId() << std::hex
                    << "  CAGIRAN RVA 0x" << (ret - g_base_addr)
                    << "\n     RDI=0x" << ctx->Rdi << " RSI=0x" << ctx->Rsi
                    << " RDX=0x" << ctx->Rdx << " RCX=0x" << ctx->Rcx
