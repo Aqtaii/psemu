@@ -7459,6 +7459,27 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     cmd[4] = static_cast<uint32_t>(arg & 0xffffffffu);
                     cmd[5] = static_cast<uint32_t>(arg >> 32u);
                 }
+                // TANI: paketi NEREYE yazdik? [SUBMIT-DCB] ile karsilastirilir.
+                // Flip paketi hic ayristirilmiyor; gonderilen aralik disinda
+                // kaliyor olabilir.
+                {
+                    static std::atomic<int> s_sf{0};
+                    if (s_sf.fetch_add(1, std::memory_order_relaxed) < 8) {
+                        const uint8_t* b = reinterpret_cast<const uint8_t*>(ctx->Rdi);
+                        uint64_t bottom = 0, top = 0, cur = 0;
+                        if (SafeReadable(b, 0x20)) {
+                            bottom = *reinterpret_cast<const uint64_t*>(b + 0x00);
+                            top    = *reinterpret_cast<const uint64_t*>(b + 0x08);
+                            cur    = *reinterpret_cast<const uint64_t*>(b + 0x10);
+                        }
+                        std::stringstream fs;
+                        fs << "[SETFLIP] buf=0x" << std::hex << ctx->Rdi
+                           << " bottom=0x" << bottom << " top=0x" << top
+                           << " cursor_sonra=0x" << cur
+                           << " paket=0x" << reinterpret_cast<uint64_t>(cmd);
+                        LOG_INFO(fs.str());
+                    }
+                }
                 ctx->Rax = reinterpret_cast<uint64_t>(cmd);
                 special_return_set = true;
             } else if (readable_name == "GraphicsCbSetShRegisterRangeDirect") {

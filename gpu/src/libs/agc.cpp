@@ -3922,6 +3922,22 @@ int KYTY_SYSV_ABI GraphicsDriverSubmitDcb(const Packet* packet) {
 	     "\t dw_num = 0x%08" PRIx32 "\n",
 	     reinterpret_cast<uint64_t>(packet->addr), packet->dw_num);
 
+	// psemu tanisi: flip paketi ayristiriciya HIC ulasmiyor ([FLIP] satiri
+	// bir kez bile basilmadi) - oysa paket dogru kuruluyor ve bu fonksiyon
+	// cagriliyor. Gonderilen ARALIGI yaziyoruz ki SetFlip'in yazdigi konumla
+	// karsilastirabilelim: paket aralik DISINDA kaliyor olabilir.
+	{
+		static std::atomic<uint32_t> s_sub {0};
+		const uint32_t n = s_sub.fetch_add(1) + 1;
+		if (n <= 24) {
+			const auto a = reinterpret_cast<uint64_t>(packet->addr);
+			printf("[SUBMIT-DCB] #%u addr=0x%llx dw=%u  -> bitis=0x%llx\n", n,
+			       static_cast<unsigned long long>(a), packet->dw_num,
+			       static_cast<unsigned long long>(a + static_cast<uint64_t>(packet->dw_num) * 4));
+			fflush(stdout);
+		}
+	}
+
 	submit_dcb(packet->addr, packet->dw_num);
 
 	return OK;

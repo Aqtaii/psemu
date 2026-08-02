@@ -2872,6 +2872,21 @@ KYTY_CP_OP_PARSER(CpOpNop) {
 		return KYTY_PM4_LEN(cmd_id) - 1;
 	}
 
+	// psemu tanisi: flip paketi (R_FLIP=0x17) ayristiriciya ulasiyor mu?
+	// Paketin gonderilen aralikta OLDUGUNU olctuk (0x2375600a7e8, submit
+	// araligi [0x23756002500, 0x2375600a800)) ama CpOpFlip hic calismadi.
+	// Burada hangi alt-opkodlarin GORULDUGUNU sayiyoruz: R_FLIP listede
+	// yoksa ayristirici o pakete hic varmiyor demektir.
+	{
+		static std::atomic<uint32_t> s_seen[Pm4::R_NUM] {};
+		if (r < Pm4::R_NUM && s_seen[r].fetch_add(1) == 0) {
+			printf("[NOP-R] ilk kez alt-opkod 0x%02x (konum 0x%05x / 0x%05x)\n",
+			       static_cast<unsigned>(r), static_cast<unsigned>(num_dw - dw),
+			       static_cast<unsigned>(num_dw));
+			fflush(stdout);
+		}
+	}
+
 	auto cp_op = g_cp_op_custom_func[r];
 
 	if (cp_op != nullptr) {

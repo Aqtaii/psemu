@@ -966,6 +966,19 @@ void CommandProcessor::Run(uint32_t* data, uint32_t num_dw) {
 		CommandProcessor* prev;
 	} run_scope(this);
 
+	// psemu tanisi: flip paketi gonderilen aralikta (son 6 dword) ama
+	// CpOpFlip hic calismiyor ve R_FLIP hic dagitilmiyor. Bu satir, hangi
+	// tamponun GERCEKTEN ayristirildigini soyler: flip'i tasiyan 8384
+	// dword'luk tampon listede yoksa, ayristiriciya hic girmiyor demektir.
+	{
+		static std::atomic<uint32_t> s_run {0};
+		if (s_run.fetch_add(1) < 32) {
+			printf("[CP-RUN] ayristiriliyor: addr=0x%llx num_dw=%u\n",
+			       static_cast<unsigned long long>(reinterpret_cast<uint64_t>(data)), num_dw);
+			fflush(stdout);
+		}
+	}
+
 	auto* cmd = data;
 	auto  dw  = num_dw;
 	for (;;) {
