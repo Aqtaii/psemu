@@ -7619,7 +7619,16 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             // durduruyoruz (asagida normal CRASH/STACK DUMP raporuna dusuyoruz).
             static uint64_t s_recent_fault_addrs[2] = { 0, 0 };
             static int s_stuck_counter = 0;
-            constexpr int STUCK_LIMIT = 200;
+            // SABIT DEGILDI: 200'de vazgecmek "oyun takildi" gibi gorunmesine
+            // yol aciyor; oysa olculdu ki ana thread hala ilklendirme yapiyor
+            // (0xb3a7e0 icinde 1811 ogelik bir dongu) ve isci thread'i onun
+            // bitmesini bekliyor. Sinir dusuk oldugu icin sureci ERKEN
+            // olduruyorduk. PSEMU_STUCK_LIMIT ile ayarlanabilir.
+            static const int STUCK_LIMIT = [] {
+                const char* e = std::getenv("PSEMU_STUCK_LIMIT");
+                int v = (e != nullptr) ? atoi(e) : 200;
+                return v > 0 ? v : 200;
+            }();
 
             bool seen_recently = (access_addr == s_recent_fault_addrs[0] || access_addr == s_recent_fault_addrs[1]);
             if (access_addr != s_recent_fault_addrs[0]) {
