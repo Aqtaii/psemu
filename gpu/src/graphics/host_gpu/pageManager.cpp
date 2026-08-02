@@ -499,9 +499,47 @@ void PageManager::BeginBackingWrite(uint64_t vaddr, uint64_t size) noexcept {
 		}
 		auto&     page = m_impl->GetPage(*region, address);
 		SpinGuard lock(page.lock);
-		if (page.mappings == 0 || page.resolving || page.backing_writer != 0 ||
-		    page.access_watchers == 0) {
-			Fatal("backing write races page resolution at 0x%016" PRIx64, address);
+		// "mappings == 0" ARTIK OLUMCUL DEGIL.
+		// ------------------------------------------------------------------
+		// Olculdu (Astro Bot, ilk kare gonderildikten hemen sonra):
+		//   sebep: mappings==0 | mappings=0 resolving=0 backing_writer=0
+		//   access_watchers=1 | istek vaddr=0x212b5030000 size=0x800000
+		// Yani sayfa GERCEKTEN bir yaris icinde degil: kimse cozumlemiyor,
+		// baska yazar yok, izleyicisi de var. Tek uyusmazlik bizim harita
+		// defterimizde: psemu misafirin ISTEDIGI adresleri her zaman
+		// onurlandirmiyor ("Map ISTENEN adres=... onurlandirilmiyor!"), bu
+		// yuzden mappings sayaci 0 kalabiliyor. Kyty'de bu invaryant her zaman
+		// tutuyordu, bizde tutmuyor.
+		// Bunun bedeli agirdi: Fatal sureci oldurdugu icin GPU is parcaciği
+		// kalan komut tamponlarini ISLEYEMIYOR ve ekran bos kaliyordu
+		// (olculdu: 5 gonderim, 4 ayristirma, flip HIC islenmiyor).
+		// Diger uc kosul GERCEK protokol ihlali; onlar olumcul kaliyor.
+		if (page.mappings == 0 && !page.resolving && page.backing_writer == 0 &&
+		    page.access_watchers != 0) {
+			static std::atomic<uint32_t> s_unmapped {0};
+			if (s_unmapped.fetch_add(1) < 8) {
+				printf("[PAGEMAN] mappings==0 (harita defteri uyusmazligi) @ 0x%016llx "
+				       "- olumcul sayilmiyor, devam ediliyor\n",
+				       static_cast<unsigned long long>(address));
+				fflush(stdout);
+			}
+		} else if (page.resolving || page.backing_writer != 0 || page.access_watchers == 0) {
+			// psemu: DORT ayri kosul tek mesaja dusuyordu ve hangisinin
+			// tetiklendigi anlasilmiyordu. Astro Bot ilk karesini gonderdikten
+			// hemen sonra tam burada oluyor (1024x1024 doku, 0x23c360f0000) ve
+			// GPU is parcaciği kalan komut tamponlarini ISLEYEMIYOR - ekranin
+			// bos kalmasinin dogrudan sebebi bu. Hangi kosul oldugunu ve sayfa
+			// durumunu yazdirmadan dogru duzeltmeyi secmek mumkun degil.
+			Fatal("backing write races page resolution at 0x%016" PRIx64
+			      " | sebep: %s%s%s%s | mappings=%u resolving=%u backing_writer=%u "
+			      "access_watchers=%u | istek vaddr=0x%016" PRIx64 " size=0x%" PRIx64,
+			      address, (page.mappings == 0 ? "mappings==0 " : ""),
+			      (page.resolving ? "resolving " : ""),
+			      (page.backing_writer != 0 ? "backing_writer!=0 " : ""),
+			      (page.access_watchers == 0 ? "access_watchers==0 " : ""),
+			      static_cast<unsigned>(page.mappings), static_cast<unsigned>(page.resolving),
+			      static_cast<unsigned>(page.backing_writer),
+			      static_cast<unsigned>(page.access_watchers), vaddr, size);
 		}
 		page.resolving            = true;
 		page.resolving_read_write = true;

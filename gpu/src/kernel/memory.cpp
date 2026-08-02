@@ -911,11 +911,43 @@ bool TryReadBacking(uint64_t vaddr, void* data, uint64_t size) {
 }
 
 void WriteBacking(uint64_t vaddr, const void* data, uint64_t size) noexcept {
-	if (!TryWriteBacking(vaddr, data, size)) {
-		EXIT("Memory: required direct-backing write failed, addr=0x%016" PRIx64
-		     " size=0x%016" PRIx64 "\n",
-		     vaddr, size);
+	if (TryWriteBacking(vaddr, data, size)) {
+		return;
 	}
+#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+	// TALEP UZERINE COMMIT EDIP BIR KEZ DAHA DENE.
+	// ------------------------------------------------------------------
+	// TryWriteBacking araliktaki HER sayfanin MEM_COMMIT olmasini sart
+	// kosuyor; olmayinca burada EXIT ile surec oluyordu. psemu'da bu
+	// invaryant tutmuyor: misafirin ISTEDIGI harita adresleri her zaman
+	// onurlandirilmiyor ("Map ISTENEN adres=... onurlandirilmiyor!"), bu
+	// yuzden doku/hedef arka bellegi kismen commit edilmemis olabiliyor.
+	// psemu zaten baska yerlerde "Otomatik Sayfa Commit" yapiyor; ayni
+	// yaklasimi burada da uyguluyoruz. Sureci oldurmek en kotu secenekti:
+	// GPU is parcaciği kalan komut tamponlarini isleyemiyor ve ekran bos
+	// kaliyordu.
+	{
+		auto* base = reinterpret_cast<void*>(vaddr & ~static_cast<uint64_t>(0xFFF));
+		const auto len =
+		    static_cast<SIZE_T>(((vaddr + size + 0xFFF) & ~static_cast<uint64_t>(0xFFF)) -
+		                        reinterpret_cast<uint64_t>(base));
+		if (VirtualAlloc(base, len, MEM_COMMIT, PAGE_READWRITE) != nullptr &&
+		    TryWriteBacking(vaddr, data, size)) {
+			static std::atomic<uint32_t> s_fix {0};
+			if (s_fix.fetch_add(1) < 8) {
+				printf("[BACKING] commit edilmemis arka bellek talep uzerine commit edildi "
+				       "@ 0x%016llx size=0x%llx\n",
+				       static_cast<unsigned long long>(vaddr),
+				       static_cast<unsigned long long>(size));
+				fflush(stdout);
+			}
+			return;
+		}
+	}
+#endif
+	EXIT("Memory: required direct-backing write failed, addr=0x%016" PRIx64
+	     " size=0x%016" PRIx64 "\n",
+	     vaddr, size);
 }
 
 struct PrtAperture {
