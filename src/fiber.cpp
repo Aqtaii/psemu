@@ -163,6 +163,19 @@ int Run(void* fiber, uint64_t arg_on_run_to, uint64_t* arg_on_return) {
         gf->started = true;
     }
 
+    // TID SART: fiber'ler artik GERCEKTEN calisiyor (sceFiberRun 0 -> 4) ve
+    // bu noktadan sonraki cokmelerin bir fiber uzerinde mi yoksa normal bir
+    // thread'de mi oldugunu ayirt edebilmemiz gerekiyor. Windows fiber'i KENDI
+    // yiginini ayirdigi icin (bkz. dosya basindaki sinirlama notu) misafirin
+    // addrContext'ini de yaziyoruz: cokme adresi o araliktaysa sinirlama
+    // gercekten isiriyor demektir.
+    static std::atomic<int> s_run{0};
+    if (s_run.fetch_add(1, std::memory_order_relaxed) < 16) {
+        printf("[FIBER] run TID=%lu entry=0x%llx (Windows yigini kullaniliyor)\n",
+               GetCurrentThreadId(),
+               static_cast<unsigned long long>(gf->entry));
+        fflush(stdout);
+    }
     GuestFiber* prev = t_current;
     SwitchToFiber(gf->win_fiber);
     // Buraya fiber ReturnToThread/Switch ile geri dondugunde geliyoruz.
