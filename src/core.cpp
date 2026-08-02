@@ -8510,6 +8510,35 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
          << " R14=0x" << ctx->R14 << " R15=0x" << ctx->R15;
     LOG_ERROR(regs.str());
 
+    // ISARETCI GIBI DURAN KAYITLARIN ICERIGI.
+    // ------------------------------------------------------------------
+    // Cokme aninda calisir, yani ZAMANLAMAYI ETKILEMEZ. Bu sart: RVA
+    // 0x37f34c'deki cokme bir YARIS ve MBP koyunca kayboluyor (enstrumante
+    // kosuda alan gecerli bir isaretciydi, cokmede ise tutarli sekilde
+    // 0xB4). Nesnenin cokme anindaki halini baska turlu goremiyoruz.
+    {
+        const char* nm[10] = {"RAX", "RBX", "RCX", "RDX", "RSI",
+                              "RDI", "R12", "R13", "R14", "R15"};
+        const uint64_t rv[10] = {ctx->Rax, ctx->Rbx, ctx->Rcx, ctx->Rdx, ctx->Rsi,
+                                 ctx->Rdi, ctx->R12, ctx->R13, ctx->R14, ctx->R15};
+        std::stringstream ps;
+        ps << "[TANI] isaretci icerikleri:" << std::hex;
+        bool any = false;
+        for (int a = 0; a < 10; a++) {
+            auto* q = reinterpret_cast<const uint64_t*>(rv[a]);
+            if (rv[a] < 0x10000 || !SafeReadable(q, 8 * 8)) continue;
+            any = true;
+            ps << "\n    [" << nm[a] << "]->";
+            for (int k = 0; k < 8; k++) {
+                ps << " 0x" << q[k];
+                if (q[k] >= g_base_addr && q[k] < g_base_addr + g_module_size) {
+                    ps << "(rva 0x" << (q[k] - g_base_addr) << ")";
+                }
+            }
+        }
+        if (any) LOG_ERROR(ps.str());
+    }
+
     // Tip-kayit fonksiyonu (0x2dfff0) kac kez cagrildi? Sayac 4-slot
     // tabloyu tasiriyorsa, bu deger beklenenden (<=4) fazla olmali.
     if (g_reg_call_count_ptr != nullptr) {
