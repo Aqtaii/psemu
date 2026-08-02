@@ -5571,10 +5571,51 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 ctx->Xmm0.Low = low; ctx->Xmm0.High = 0;
                 ctx->ContextFlags |= CONTEXT_FLOATING_POINT;
                 special_return_set = true;
+            } else if (readable_name == "fmodf" || readable_name == "atan2f" ||
+                       readable_name == "hypotf" || readable_name == "copysignf") {
+                // IKI argumanli float matematik: XMM0 ve XMM1 giris, XMM0 cikis.
+                // fmodf/atan2f [HLE-EKSIK] ile yakalandi - ikisi de 0 donuyordu.
+                // fmodf'in 0 donmesi aci sarmalamayi ve dongusel animasyonlari
+                // bozar; atan2f yon hesaplarinin tamamini bozar.
+                float x, y;
+                std::memcpy(&x, &ctx->Xmm0.Low, sizeof(x));
+                std::memcpy(&y, &ctx->Xmm1.Low, sizeof(y));
+                float r;
+                if      (readable_name == "fmodf")     r = fmodf(x, y);
+                else if (readable_name == "atan2f")    r = atan2f(x, y);
+                else if (readable_name == "hypotf")    r = hypotf(x, y);
+                else                                   r = copysignf(x, y);
+                uint64_t low = 0; std::memcpy(&low, &r, sizeof(r));
+                ctx->Xmm0.Low = low; ctx->Xmm0.High = 0;
+                ctx->ContextFlags |= CONTEXT_FLOATING_POINT;
+                special_return_set = true;
+            } else if (readable_name == "__isnanf" || readable_name == "__isinff" ||
+                       readable_name == "__isfinitef") {
+                // Bunlar float ALIR ama INT DONER (RAX). Hep 0 donmeleri
+                // "hicbir sey NaN degil" demekti; oyunun gecersiz deger
+                // kontrolleri tamamen devre disi kaliyordu.
+                float x;
+                std::memcpy(&x, &ctx->Xmm0.Low, sizeof(x));
+                int r;
+                if      (readable_name == "__isnanf") r = std::isnan(x) ? 1 : 0;
+                else if (readable_name == "__isinff") r = std::isinf(x) ? 1 : 0;
+                else                                  r = std::isfinite(x) ? 1 : 0;
+                ctx->Rax = static_cast<uint64_t>(static_cast<uint32_t>(r));
+                special_return_set = true;
             } else if (readable_name == "cosf" || readable_name == "logf" ||
                        readable_name == "log2f" || readable_name == "expf" ||
                        readable_name == "sqrtf" || readable_name == "fabsf" ||
-                       readable_name == "floorf" || readable_name == "ceilf") {
+                       readable_name == "floorf" || readable_name == "ceilf" ||
+                       // ASAGIDAKILER [HLE-EKSIK] ILE YAKALANDI - hepsi 0 donuyordu.
+                       // tanf ozellikle kritik: projeksiyon matrisi 1/tan(fov/2)
+                       // ile kuruluyor, 0 donmesi matrisi bozup sahnenin hic
+                       // cizilmemesine yol acar.
+                       readable_name == "tanf" || readable_name == "atanf" ||
+                       readable_name == "asinf" || readable_name == "acosf" ||
+                       readable_name == "roundf" || readable_name == "truncf" ||
+                       readable_name == "exp2f" || readable_name == "log10f" ||
+                       readable_name == "sinhf" || readable_name == "coshf" ||
+                       readable_name == "tanhf") {
                 // Tek-argumanli float->float matematik (XMM0 giris/cikis).
                 // cosf/logf su an TAHMIN; digerleri gerekirse hazir dursun.
                 float x;
@@ -5587,7 +5628,18 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 else if (readable_name == "sqrtf")  r = sqrtf(x);
                 else if (readable_name == "fabsf")  r = fabsf(x);
                 else if (readable_name == "floorf") r = floorf(x);
-                else                                r = ceilf(x);
+                else if (readable_name == "ceilf")  r = ceilf(x);
+                else if (readable_name == "tanf")   r = tanf(x);
+                else if (readable_name == "atanf")  r = atanf(x);
+                else if (readable_name == "asinf")  r = asinf(x);
+                else if (readable_name == "acosf")  r = acosf(x);
+                else if (readable_name == "roundf") r = roundf(x);
+                else if (readable_name == "truncf") r = truncf(x);
+                else if (readable_name == "exp2f")  r = exp2f(x);
+                else if (readable_name == "log10f") r = log10f(x);
+                else if (readable_name == "sinhf")  r = sinhf(x);
+                else if (readable_name == "coshf")  r = coshf(x);
+                else                                r = tanhf(x);
                 uint64_t low = 0; std::memcpy(&low, &r, sizeof(r));
                 ctx->Xmm0.Low = low; ctx->Xmm0.High = 0;
                 ctx->ContextFlags |= CONTEXT_FLOATING_POINT;
@@ -7699,6 +7751,79 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     // yeterli; yazmadan birakmak her zaman guvenli.
                     ctx->Rax = 34; // ERANGE
                 }
+                special_return_set = true;
+            } else if (readable_name == "strncat_s") {
+                // errno_t strncat_s(char* d, rsize_t dsz, const char* s, rsize_t n)
+                // strcpy_s ailesiyle ayni: [HLE-EKSIK] ile yakalandi, 0
+                // (basarili) donup hicbir sey EKLEMIYORDU.
+                char* d = reinterpret_cast<char*>(ctx->Rdi);
+                size_t dsz = static_cast<size_t>(ctx->Rsi);
+                size_t n = static_cast<size_t>(ctx->Rcx);
+                std::string s = SafeReadCString(reinterpret_cast<const char*>(ctx->Rdx));
+                if (s.size() > n) s.resize(n);
+                ctx->Rax = 22;
+                if (d != nullptr && dsz > 0 && SafeWritable(d, dsz)) {
+                    const size_t cur = strnlen(d, dsz);
+                    if (cur < dsz && cur + s.size() < dsz) {
+                        memcpy(d + cur, s.c_str(), s.size() + 1);
+                        ctx->Rax = 0;
+                    } else {
+                        d[0] = 0;
+                        ctx->Rax = 34; // ERANGE
+                    }
+                }
+                special_return_set = true;
+            }
+            // ============================================================
+            // POSIX SEMAFORLARI (sem_*)
+            // ------------------------------------------------------------
+            // Besi de govdesizdi: sem_init "basardim" diyor ama semafor yok,
+            // sem_wait aninda 0 (aldim) donuyor, sem_post kimseyi uyandirmiyor.
+            // sceKernelWaitSema'daki hatanin ayni sinifi - bekleyene hazir
+            // olmadigi halde "hazir" demek. FreeBSD'de sem_t bir isaretcidir
+            // (8 bayt), o yuzden Windows tutamacini dogrudan oraya yaziyoruz.
+            else if (readable_name == "sem_init" || readable_name == "sem_wait" ||
+                     readable_name == "sem_trywait" || readable_name == "sem_post" ||
+                     readable_name == "sem_destroy" || readable_name == "sem_getvalue") {
+                auto* slot = reinterpret_cast<uint64_t*>(ctx->Rdi);
+                int rc = -1;
+                if (readable_name == "sem_init") {
+                    // sem_init(sem, pshared, value)
+                    const LONG init = static_cast<LONG>(ctx->Rdx);
+                    HANDLE h = CreateSemaphoreW(nullptr, init, 0x7FFFFFFF, nullptr);
+                    if (slot != nullptr && SafeWritable(slot, 8) && h != nullptr) {
+                        *slot = reinterpret_cast<uint64_t>(h);
+                        rc = 0;
+                    }
+                } else if (slot != nullptr && SafeReadable(slot, 8)) {
+                    HANDLE h = reinterpret_cast<HANDLE>(*slot);
+                    if (h != nullptr) {
+                        if (readable_name == "sem_wait") {
+                            // sceKernelWaitSema ile ayni gerekce: sonsuz
+                            // beklemiyoruz ama zaman asiminda BASARI DA
+                            // donmuyoruz (-1), yoksa cagiran elde etmedigi
+                            // kaynakla ilerler.
+                            static const DWORD cap = [] {
+                                const char* e = std::getenv("PSEMU_SEMA_WAIT_MS");
+                                int v = (e != nullptr) ? atoi(e) : 5000;
+                                return static_cast<DWORD>(v > 0 ? v : 5000);
+                            }();
+                            rc = (WaitForSingleObject(h, cap) == WAIT_OBJECT_0) ? 0 : -1;
+                        } else if (readable_name == "sem_trywait") {
+                            rc = (WaitForSingleObject(h, 0) == WAIT_OBJECT_0) ? 0 : -1;
+                        } else if (readable_name == "sem_post") {
+                            rc = ReleaseSemaphore(h, 1, nullptr) ? 0 : -1;
+                        } else if (readable_name == "sem_getvalue") {
+                            auto* out = reinterpret_cast<int*>(ctx->Rsi);
+                            if (out != nullptr && SafeWritable(out, 4)) { *out = 0; rc = 0; }
+                        } else { // sem_destroy
+                            // Tutamaci KAPATMIYORUZ: baska thread hala bekliyor
+                            // olabilir (mutex/sema tarafiyla ayni yaklasim).
+                            rc = 0;
+                        }
+                    }
+                }
+                ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(rc));
                 special_return_set = true;
             } else if (readable_name == "memmove_s") {
                 // errno_t memmove_s(void* d, rsize_t dsz, const void* s, rsize_t n)
