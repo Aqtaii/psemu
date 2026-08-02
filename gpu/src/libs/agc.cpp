@@ -1832,13 +1832,19 @@ uint32_t* KYTY_SYSV_ABI GraphicsCbReleaseMem(CommandBuffer* buf, uint8_t action,
 	//
 	// 119 & 0x7 = 7 ve PM4 isleyicisi 7'yi tanimiyor
 	// ("unknown interrupt_selector", graphicsRun.cpp:1531 - desteklenen
-	// degerler 0,1,2,3). Bu yuzden taninmayan degerleri 2'ye esliyoruz:
-	//   0,3 -> kesme yok
+	// degerler 0,1,2,3):
+	//   0,3 -> yazar, kesme YOK  (with_interrupt = false)
 	//   1   -> EOP olayini tetikler ama BELLEGE YAZMAZ (erken return)
-	//   2   -> hem yazar hem kesme verir
-	// Cagrida data_sel=3 ("64 bit veri + yazma onayi") oldugu icin oyun
-	// etiketin YAZILMASINI bekliyor; 1 secmek onu askida birakirdi.
-	const uint8_t int_sel = (interrupt <= 4) ? interrupt : static_cast<uint8_t>(2);
+	//   2   -> yazar, kesme VAR  (with_interrupt = true)
+	//
+	// ONCE 2 DENENDI ve OLMADI: WriteAtEndOfPipe64 icindeki olay-tipi
+	// dallarinin cogu acikca "!with_interrupt" sarti tasiyor, dolayisiyla
+	// hicbiri tutmadi ve "unknown event type" (graphicsRun.cpp:1694) ile
+	// durduk. 0 secmek hem YAZMAYI yapiyor (data_sel=3, oyunun bekledigi
+	// etiket yazilir) hem de o dallarin bekledigi with_interrupt=false
+	// durumunu veriyor. Oyun etiketi bellekten YOKLUYORSA bu yeterli;
+	// gercekten kesme bekliyorsa burada takilir ve tekrar bakariz.
+	const uint8_t int_sel = (interrupt <= 4) ? interrupt : static_cast<uint8_t>(0);
 
 	buf->DbgDump();
 

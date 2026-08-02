@@ -7853,6 +7853,39 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     ctx->Rax = 34; // ERANGE
                 }
                 special_return_set = true;
+            } else if (readable_name == "strnstr") {
+                // char* strnstr(const char* s, const char* find, size_t slen)
+                // BSD fonksiyonu: "find"i s'in ILK slen baytinda arar.
+                //
+                // GOVDESI YOKTU -> hep 0 ("bulunamadi") donuyordu. Ada gore
+                // arama yapan her kod yanlis sonuca dusuyordu; olculen etkisi:
+                // oyunun kendi assert'i
+                //   "JsParticle: RendererType[20] is not supported"
+                //   (JsParticleShader.cpp:176), cagiran RVA 0x74e3228.
+                const char* hay = reinterpret_cast<const char*>(ctx->Rdi);
+                const char* nee = reinterpret_cast<const char*>(ctx->Rsi);
+                const size_t slen = static_cast<size_t>(ctx->Rdx);
+                uint64_t res = 0;
+                if (hay != nullptr && nee != nullptr && SafeReadable(hay, 1)) {
+                    const std::string needle = SafeReadCString(nee);
+                    if (needle.empty()) {
+                        res = ctx->Rdi; // bos arama: bastaki konum
+                    } else if (needle.size() <= slen && SafeReadable(hay, slen)) {
+                        // s NUL ile erken bitebilir; slen yalnizca UST sinir.
+                        const size_t hlen = strnlen(hay, slen);
+                        if (needle.size() <= hlen) {
+                            const size_t last = hlen - needle.size();
+                            for (size_t i = 0; i <= last; i++) {
+                                if (memcmp(hay + i, needle.data(), needle.size()) == 0) {
+                                    res = ctx->Rdi + i;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+                ctx->Rax = res;
+                special_return_set = true;
             } else if (readable_name == "strncat_s") {
                 // errno_t strncat_s(char* d, rsize_t dsz, const char* s, rsize_t n)
                 // strcpy_s ailesiyle ayni: [HLE-EKSIK] ile yakalandi, 0
