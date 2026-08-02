@@ -1796,7 +1796,25 @@ uint32_t* KYTY_SYSV_ABI GraphicsCbReleaseMem(CommandBuffer* buf, uint8_t action,
 	EXIT_NOT_IMPLEMENTED(dst > 1);
 	EXIT_NOT_IMPLEMENTED(data_sel != 0 && data_sel != 1 && data_sel != 2 && data_sel != 3 &&
 	                     data_sel != 5);
-	EXIT_NOT_IMPLEMENTED(interrupt > 4);
+	// psemu: sinir 4'tu ve Astro Bot burada oluyordu ("Not implemented
+	// (interrupt > 4)", sceAgcCbReleaseMem cagrisinda). Oysa INT_SEL alani
+	// PM4 RELEASE_MEM paketinde 3 BIT genisliginde ve bu fonksiyonun kendisi
+	// zaten her kullanimda 0x7 ile maskeliyor:
+	//     if ((interrupt & 0x7u) == 4u) ...
+	//     cmd[2] |= (interrupt & 0x7u) << 24u
+	// Yani paket kurulumu 0..7'nin tamamini DOGRU isliyor; 4'luk sinir
+	// yalnizca "bu degeri hic gormedim" varsayimiydi. Alanin gercek
+	// genisligine cekildi. (Ayni kalip daha once register-defaults surumunde
+	// yasandi: oyun 13 istiyordu, Kyty 11'de duruyordu.)
+	if (interrupt > 4) {
+		static std::atomic<uint32_t> s_seen {0};
+		if (s_seen.fetch_add(1) < 4) {
+			printf("[AGC] ReleaseMem interrupt=%u (eski sinir 4'tu; INT_SEL 3 bit, izin veriliyor)\n",
+			       static_cast<unsigned>(interrupt));
+			fflush(stdout);
+		}
+	}
+	EXIT_NOT_IMPLEMENTED(interrupt > 7);
 
 	buf->DbgDump();
 
