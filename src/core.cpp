@@ -1659,6 +1659,69 @@ static uint64_t  g_r15_prev = 0;
 // ---------------------------------------------------------------------------
 static uint64_t g_watchw_addr  = 0;
 static bool     g_watchw_armed = false;
+
+// ============================================================================
+// DINAMIK YAZMA IZLEMESI  (PSEMU_WATCH_DYN=<KAYIT>+<ofset>)
+// ----------------------------------------------------------------------------
+// NEDEN: PSEMU_WATCH_WRITE yalnizca MISAFIR MODULUNDEKI sabit bir RVA'yi
+// izleyebiliyordu. Aradigimiz alan ise kosudan kosuya degisen bir HEAP
+// adresi (RVA 0x37f34c cokmesinde "nesne+0x28" hep NULL kaliyor ve hangi
+// kodun orayi doldurmasi gerektigini bulamiyoruz). Bu yuzden adresi CALISMA
+// ANINDA bir MBP tetiklendiginde ilgili yazmactan hesaplayip izlemeyi ORAYA
+// kuruyoruz.
+//
+// NEDEN DONANIM (DR0-DR3), sayfa korumasi degil: VirtualProtect ile sayfa
+// korumaya alsak AYNI SAYFADAKI her yazmada kesme yerdik - hem gurultu hem
+// ciddi yavaslama. DR yazmaci tam 8 baytlik tek bir adrese kurulur ve CPU
+// yalnizca o alan degisince tetiklenir.
+//
+// TUM THREAD'LERE KURULUYOR: donanim izlemesi Windows'ta THREAD BASINADIR ve
+// alani dolduracak kod buyuk olasilikla BASKA bir thread (asenkron yukleyici
+// / GPU senkronizasyonu). Yalnizca mevcut thread'e kurmak sessizce hicbir sey
+// yakalamamak demekti.
+static uint64_t g_watchdyn_off = 0;
+static char     g_watchdyn_reg[8] = {0};
+static bool     g_watchdyn_done = false;
+
+static void ArmWriteWatchAllThreads(uint64_t addr) {
+    addr &= ~7ull; // LEN=8 icin 8 bayt hizali olmali
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE) return;
+    THREADENTRY32 te{};
+    te.dwSize = sizeof(te);
+    const DWORD pid = GetCurrentProcessId();
+    const DWORD me  = GetCurrentThreadId();
+    int n = 0;
+    if (Thread32First(snap, &te)) {
+        do {
+            if (te.th32OwnerProcessID != pid || te.th32ThreadID == me) continue;
+            HANDLE h = OpenThread(THREAD_GET_CONTEXT | THREAD_SET_CONTEXT |
+                                      THREAD_SUSPEND_RESUME,
+                                  FALSE, te.th32ThreadID);
+            if (h == nullptr) continue;
+            if (SuspendThread(h) != static_cast<DWORD>(-1)) {
+                CONTEXT c{};
+                c.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+                if (GetThreadContext(h, &c)) {
+                    c.Dr0 = addr;
+                    c.Dr6 = 0;
+                    // L0=1, R/W0=01 (yalnizca YAZMA), LEN0=11 (8 bayt)
+                    c.Dr7 = (c.Dr7 & ~0xF00FFull) | 1ull | (0x1ull << 16) |
+                            (0x3ull << 18);
+                    c.ContextFlags = CONTEXT_DEBUG_REGISTERS;
+                    if (SetThreadContext(h, &c)) n++;
+                }
+                ResumeThread(h);
+            }
+            CloseHandle(h);
+        } while (Thread32Next(snap, &te));
+    }
+    CloseHandle(snap);
+    std::stringstream ws;
+    ws << "[WATCH-DYN] 0x" << std::hex << addr << " adresine yazma izlemesi "
+       << std::dec << n << " thread'e kuruldu";
+    LOG_ERROR(ws.str());
+}
 static int      g_watchw_hits  = 0;
 
 // ---------------------------------------------------------------------------
@@ -2713,6 +2776,34 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     }
                 }
                 LOG_INFO(ms.str());
+            }
+            // DINAMIK YAZMA IZLEMESI: adresi BU ANDA yazmactan hesapla ve
+            // tum thread'lere kur (bkz. ArmWriteWatchAllThreads).
+            if (!g_watchdyn_done && g_watchdyn_reg[0] != 0) {
+                uint64_t base = 0;
+                const char* r = g_watchdyn_reg;
+                if      (_stricmp(r, "RAX") == 0) base = ctx->Rax;
+                else if (_stricmp(r, "RBX") == 0) base = ctx->Rbx;
+                else if (_stricmp(r, "RCX") == 0) base = ctx->Rcx;
+                else if (_stricmp(r, "RDX") == 0) base = ctx->Rdx;
+                else if (_stricmp(r, "RSI") == 0) base = ctx->Rsi;
+                else if (_stricmp(r, "RDI") == 0) base = ctx->Rdi;
+                else if (_stricmp(r, "R12") == 0) base = ctx->R12;
+                else if (_stricmp(r, "R13") == 0) base = ctx->R13;
+                else if (_stricmp(r, "R14") == 0) base = ctx->R14;
+                else if (_stricmp(r, "R15") == 0) base = ctx->R15;
+                if (base >= 0x10000) {
+                    g_watchdyn_done = true;
+                    g_watchw_addr   = (base + g_watchdyn_off) & ~7ull;
+                    g_watchw_armed  = true;
+                    ArmWriteWatchAllThreads(g_watchw_addr);
+                    // Bu thread'e de kur (baglamdan).
+                    ctx->ContextFlags |= CONTEXT_DEBUG_REGISTERS;
+                    ctx->Dr0 = g_watchw_addr;
+                    ctx->Dr6 = 0;
+                    ctx->Dr7 = (ctx->Dr7 & ~0xF00FFull) | 1ull | (0x1ull << 16) |
+                               (0x3ull << 18);
+                }
             }
             *reinterpret_cast<uint8_t*>(g_mbp_addr[i]) = g_mbp_orig[i];
             ctx->Rip = g_mbp_addr[i];
@@ -9199,6 +9290,23 @@ void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t tex
                 LOG_ERROR("[WATCH-W] PSEMU_BP gerekli (izleme orada kuruluyor).");
             else
                 g_watchw_addr = base_addr + rva;
+        }
+    }
+
+    // Dinamik yazma izlemesi: PSEMU_WATCH_DYN=<KAYIT>+<ofset>
+    // Ornek: PSEMU_WATCH_DYN=RDX+0x28  (ilk MBP tetiklendiginde kurulur)
+    if (const char* wd = std::getenv("PSEMU_WATCH_DYN")) {
+        const char* plus = strchr(wd, '+');
+        if (plus != nullptr && (plus - wd) < 7) {
+            memcpy(g_watchdyn_reg, wd, static_cast<size_t>(plus - wd));
+            g_watchdyn_reg[plus - wd] = 0;
+            g_watchdyn_off = std::strtoull(plus + 1, nullptr, 0);
+            std::stringstream ds;
+            ds << "[WATCH-DYN] istek: " << g_watchdyn_reg << "+0x" << std::hex
+               << g_watchdyn_off << " (ilk MBP tetiklendiginde kurulacak)";
+            LOG_ERROR(ds.str());
+        } else {
+            LOG_ERROR("[WATCH-DYN] bicim hatali; ornek: PSEMU_WATCH_DYN=RDX+0x28");
         }
     }
 
