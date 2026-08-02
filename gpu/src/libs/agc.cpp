@@ -1808,13 +1808,37 @@ uint32_t* KYTY_SYSV_ABI GraphicsCbReleaseMem(CommandBuffer* buf, uint8_t action,
 	// yasandi: oyun 13 istiyordu, Kyty 11'de duruyordu.)
 	if (interrupt > 4) {
 		static std::atomic<uint32_t> s_seen {0};
-		if (s_seen.fetch_add(1) < 4) {
-			printf("[AGC] ReleaseMem interrupt=%u (eski sinir 4'tu; INT_SEL 3 bit, izin veriliyor)\n",
-			       static_cast<unsigned>(interrupt));
+		if (s_seen.fetch_add(1) < 8) {
+			// Astro Bot'ta OLCULEN deger: interrupt = 119 (0x77). Bu, 3 bitlik
+			// INT_SEL alanina sigmiyor. Iki ihtimal var ve ayirt edebilmek icin
+			// KOMSU parametreleri de basiyoruz: (a) Sony'nin API'sinde bu alan
+			// bir bayrak kumesi, (b) Kyty'nin imzasi Sony'ninkiyle birebir
+			// ortusmuyor ve yigindan yanlis ofset okunuyor. data_sel ve dst
+			// kontrolleri GECTIGI icin yigin hizasi dogru gorunuyor.
+			printf("[AGC] ReleaseMem: dst=%u cache_policy=%u data_sel=%u "
+			       "gds_off=%u gds_size=%u interrupt=%u ctx_id=%u\n",
+			       static_cast<unsigned>(dst), static_cast<unsigned>(cache_policy),
+			       static_cast<unsigned>(data_sel), static_cast<unsigned>(gds_offset),
+			       static_cast<unsigned>(gds_size), static_cast<unsigned>(interrupt),
+			       static_cast<unsigned>(interrupt_ctx_id));
 			fflush(stdout);
 		}
 	}
-	EXIT_NOT_IMPLEMENTED(interrupt > 7);
+	// UST SINIR KALDIRILDI, ama ham degeri PAKETE YAZMIYORUZ.
+	// Olculen: interrupt=119, interrupt_ctx_id=3171159 - ikisi de bu alanlar
+	// icin anlamsiz, oysa AYNI cagridaki dst/cache_policy/data_sel/gds_*
+	// degerleri makul. Bu, Kyty'nin imzasinin Sony'ninkinden FAZLA parametre
+	// beklediginin ve son iki argumanin yigin copu okudugunun isareti.
+	//
+	// 119 & 0x7 = 7 ve PM4 isleyicisi 7'yi tanimiyor
+	// ("unknown interrupt_selector", graphicsRun.cpp:1531 - desteklenen
+	// degerler 0,1,2,3). Bu yuzden taninmayan degerleri 2'ye esliyoruz:
+	//   0,3 -> kesme yok
+	//   1   -> EOP olayini tetikler ama BELLEGE YAZMAZ (erken return)
+	//   2   -> hem yazar hem kesme verir
+	// Cagrida data_sel=3 ("64 bit veri + yazma onayi") oldugu icin oyun
+	// etiketin YAZILMASINI bekliyor; 1 secmek onu askida birakirdi.
+	const uint8_t int_sel = (interrupt <= 4) ? interrupt : static_cast<uint8_t>(2);
 
 	buf->DbgDump();
 
@@ -1832,7 +1856,7 @@ uint32_t* KYTY_SYSV_ABI GraphicsCbReleaseMem(CommandBuffer* buf, uint8_t action,
 
 	auto address_value = reinterpret_cast<uint64_t>(address);
 	auto packet_data   = data;
-	if ((interrupt & 0x7u) == 4u) {
+	if ((int_sel & 0x7u) == 4u) {
 		address_value = 0;
 		packet_data   = 0;
 	} else if ((data_sel & 0x7u) == 5u) {
@@ -1846,7 +1870,7 @@ uint32_t* KYTY_SYSV_ABI GraphicsCbReleaseMem(CommandBuffer* buf, uint8_t action,
 	cmd[1] = packet_action | (packet_event_index << 8u) | ((packet_gcr_cntl & 0xfffu) << 12u) |
 	         ((static_cast<uint32_t>(cache_policy) & 0x3u) << 25u);
 	cmd[2] = ((static_cast<uint32_t>(dst) & 0x3u) << 16u) |
-	         ((static_cast<uint32_t>(interrupt) & 0x7u) << 24u) |
+	         ((static_cast<uint32_t>(int_sel) & 0x7u) << 24u) |
 	         ((static_cast<uint32_t>(data_sel) & 0x7u) << 29u);
 	cmd[3] = static_cast<uint32_t>(address_value & 0xfffffffcu);
 	cmd[4] = static_cast<uint32_t>((address_value >> 32u) & 0xffffffffu);

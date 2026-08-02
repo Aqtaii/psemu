@@ -736,8 +736,45 @@ static void* MspaceBumpAlloc(uint64_t handle, size_t n, size_t align) {
     uint64_t p = (m.base + m.used + align - 1) & ~(uint64_t)(align - 1);
     uint64_t end = p + n;
     if (end > m.base + m.cap) return nullptr; // havuz doldu
+
+    // BOLGE GERCEKTEN YAZILABILIR MI? Taban misafirden geliyor
+    // (sceLibcMspaceCreate'e verdigi adres) ve psemu istenen adresleri her
+    // zaman ONURLANDIRMIYOR - loglarda "Map ISTENEN adres=0x600000000 ...
+    // onurlandirilmiyor!" satirlari var. Boyle bir havuzdan pointer
+    // dagitirsak cagiran ilk memset'te cokuyor (olculdu: font yolunda
+    // sceLibcMspaceMalloc icinde erisim ihlali).
+    // Yazilamiyorsa 0 donuyoruz; cagiran guvenli host yigin yoluna duser.
+    if (!SafeWritable(reinterpret_cast<void*>(p), n)) {
+        static std::atomic<int> s_bad{0};
+        if (s_bad.fetch_add(1, std::memory_order_relaxed) < 8) {
+            printf("[MSPACE] havuz YAZILAMIYOR: tutamac=0x%llx taban=0x%llx "
+                   "p=0x%llx n=%zu -> host yigina dusuluyor\n",
+                   (unsigned long long)handle, (unsigned long long)m.base,
+                   (unsigned long long)p, n);
+            fflush(stdout);
+        }
+        return nullptr;
+    }
     m.used = end - m.base;
     return reinterpret_cast<void*>(p);
+}
+
+// Bu isaretci misafirin mspace HAVUZUNDAN mi geldi (bump ile dagitildi mi)?
+// ---------------------------------------------------------------------------
+// GEREKCE: MspaceBumpAlloc havuzun ICINDEN adres dagitiyor - bunlar CRT'nin
+// _aligned_malloc'undan GELMIYOR. Free yolunda hepsine ayrimsiz _aligned_free
+// cagirmak, CRT'nin isaretcinin onundeki basligi okumasina yol aciyor ve
+// cokuyor (olculdu: sceLibcMspaceFree icinde erisim ihlali). Havuz icindeki
+// adresler icin free BIR ISLEM YAPMAMALI: havuz bump tabanli, geri verme yok.
+static bool IsInMspaceRegion(const void* p) {
+    if (p == nullptr) return false;
+    const uint64_t v = reinterpret_cast<uint64_t>(p);
+    std::lock_guard<std::mutex> lock(g_mspace_mtx);
+    for (const auto& kv : g_mspace) {
+        const MspaceInfo& m = kv.second;
+        if (m.base != 0 && m.cap != 0 && v >= m.base && v < m.base + m.cap) return true;
+    }
+    return false;
 }
 
 static uint8_t* DmemBase() {
@@ -2591,10 +2628,13 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 // R14/R15 de dokuluyor: "this" isaretcisi cogu zaman bu iki
                 // kayitta tasiniyor (RVA 0x41034f'deki null callback cagrisinda
                 // nesne R14'teydi ve icerigini goremiyorduk).
-                const char* nm[8] = {"RAX", "RCX", "RDX", "RSI",
-                                     "RDI", "R13", "R14", "R15"};
-                uint64_t rv[8] = {ctx->Rax, ctx->Rcx, ctx->Rdx, ctx->Rsi,
-                                  ctx->Rdi, ctx->R13, ctx->R14, ctx->R15};
+                // RBX ve R12 de eklendi: bu kod tabaninda "this" cok sik RBX'te
+                // tasiniyor (RVA 0x7051474'te nesne RBX'teydi ve icerigini
+                // goremedigimiz icin bir olcum bosa gitti).
+                const char* nm[10] = {"RAX", "RBX", "RCX", "RDX", "RSI",
+                                      "RDI", "R12", "R13", "R14", "R15"};
+                uint64_t rv[10] = {ctx->Rax, ctx->Rbx, ctx->Rcx, ctx->Rdx, ctx->Rsi,
+                                   ctx->Rdi, ctx->R12, ctx->R13, ctx->R14, ctx->R15};
                 // Derinlik ayarlanabilir: varsayilan 8 qword yalnizca +0x38'e
                 // kadar gidiyor; ilgilendigimiz alan +0x128/+0x130 gibi ILERIDE
                 // olabiliyor. PSEMU_MBP_QWORDS=40 -> +0x138'e kadar.
@@ -2605,7 +2645,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     if (v > 64) v = 64;
                     return v;
                 }();
-                for (int a = 0; a < 8; a++) {
+                for (int a = 0; a < 10; a++) {
                     uint64_t* q = reinterpret_cast<uint64_t*>(rv[a]);
                     // 8 qword: nesnenin kendi tanimlayicisi +0x8'de duruyor,
                     // yani format alani (+0x30) nesne+0x38 = q[7]. 4 qword
@@ -4059,7 +4099,8 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 readable_name == "_ZdlPvRKSt9nothrow_t" ||
                 readable_name == "_ZdaPvRKSt9nothrow_t") {
                 void* p = reinterpret_cast<void*>(ctx->Rdi);
-                if (p != nullptr) _aligned_free(p);
+                // Ayni gerekce: havuzdan gelen adres CRT'ye verilmez.
+                if (p != nullptr && !IsInMspaceRegion(p)) _aligned_free(p);
                 ctx->Rax  = 0;
                 ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
                 ctx->Rsp += 8;
@@ -4127,8 +4168,11 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     rv = 0; // "bos degil"
                 } else if (readable_name == "sceLibcMspaceFree") {
                     // Free(mspace, ptr)
+                    // HAVUZ ICINDEKI adresleri CRT'ye VERME (bkz.
+                    // IsInMspaceRegion): bump ile dagitildilar, _aligned_free
+                    // onlarin onunde bir baslik arar ve coker.
                     void* p = reinterpret_cast<void*>(ctx->Rsi);
-                    if (p != nullptr) _aligned_free(p);
+                    if (p != nullptr && !IsInMspaceRegion(p)) _aligned_free(p);
                     rv = 0;
                 } else if (readable_name == "sceLibcMspaceMallocUsableSize") {
                     rv = LookupAllocSize(reinterpret_cast<void*>(ctx->Rsi));
@@ -6358,6 +6402,63 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     }
                     ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(-1));
                 }
+                special_return_set = true;
+            } else if (readable_name == "sceKernelPread" || readable_name == "pread") {
+                // ssize_t pread(fd, buf, nbyte, offset)
+                // RDI=fd RSI=buf RDX=nbyte RCX=offset
+                //
+                // GOVDESI YOKTU: RAX=0 donuyordu, yani "0 bayt okudum". Oyun
+                // varliklarinin bir kismini KONUMLU OKUMAYLA aliyor (olculdu:
+                // sceKernelRead 16+, sceKernelPread 8+ cagri) ve bu yoldan
+                // gelen her sey BOS kaliyordu. Bunun sonucu, tamamen sifir
+                // dolu yapilar ve ilerideki null dereference'lar.
+                const int fd = static_cast<int>(ctx->Rdi);
+                void* buf = reinterpret_cast<void*>(ctx->Rsi);
+                const size_t nbyte = static_cast<size_t>(ctx->Rdx);
+                const long long off = static_cast<long long>(ctx->Rcx);
+                FILE* f = nullptr;
+                {
+                    std::lock_guard<std::mutex> vlk(g_vfs_mutex);
+                    auto it = g_fd_map.find(fd);
+                    if (it != g_fd_map.end()) f = it->second;
+                }
+                int64_t got = -1;
+                if (f != nullptr && buf != nullptr && nbyte > 0 &&
+                    SafeWritable(buf, nbyte) && off >= 0) {
+                    // pread dosya KONUMUNU DEGISTIRMEZ; kaydedip geri koyuyoruz.
+                    const long long cur = _ftelli64(f);
+                    if (_fseeki64(f, off, SEEK_SET) == 0) {
+                        got = static_cast<int64_t>(fread(buf, 1, nbyte, f));
+                    }
+                    if (cur >= 0) _fseeki64(f, cur, SEEK_SET);
+                }
+                if (got < 0) {
+                    static std::atomic<int> s_bad{0};
+                    if (s_bad.fetch_add(1, std::memory_order_relaxed) < 8) {
+                        std::stringstream ps;
+                        ps << "[KernelIO] pread(fd=" << fd << ", n=" << nbyte
+                           << ", off=" << off << ") BASARISIZ";
+                        LOG_ERROR(ps.str());
+                    }
+                }
+                ctx->Rax = static_cast<uint64_t>(got);
+                special_return_set = true;
+            } else if (readable_name == "sceKernelLseek" || readable_name == "lseek") {
+                // off_t lseek(fd, offset, whence): RDI=fd RSI=offset RDX=whence
+                const int fd = static_cast<int>(ctx->Rdi);
+                const long long off = static_cast<long long>(ctx->Rsi);
+                const int whence = static_cast<int>(ctx->Rdx);
+                FILE* f = nullptr;
+                {
+                    std::lock_guard<std::mutex> vlk(g_vfs_mutex);
+                    auto it = g_fd_map.find(fd);
+                    if (it != g_fd_map.end()) f = it->second;
+                }
+                int64_t pos = -1;
+                if (f != nullptr && _fseeki64(f, off, whence) == 0) {
+                    pos = static_cast<int64_t>(_ftelli64(f));
+                }
+                ctx->Rax = static_cast<uint64_t>(pos);
                 special_return_set = true;
             } else if (readable_name == "sceKernelWrite" || readable_name == "libc_write") {
                 // sceKernelWrite(fd, buf, nbyte): RDI=fd, RSI=buf, RDX=nbyte
