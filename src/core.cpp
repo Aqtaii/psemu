@@ -19,6 +19,7 @@
 #include <memory>  // tembel tani stringstream'i icin unique_ptr
 #include <deque>    // direct memory havuzu kilidi
 #include <tlhelp32.h> // ThreadSamplerProc: surecteki tum thread'leri gezmek icin
+#include <psapi.h>    // MemoryGuardProc: GetProcessMemoryInfo
 #include "nids.h"
 #include "game_profile.h"
 #include "video.h"
@@ -331,6 +332,21 @@ std::string g_game_root = ".";
 static std::set<FILE*> g_open_files;
 // Tani icin: hangi FILE* hangi dosyaya ait
 static std::map<FILE*, std::string> g_open_names;
+
+// sceKernelOpen'in verdigi fd -> FILE* tablosu.
+// ------------------------------------------------------------------
+// BURASI BIR HATAYDI: bu tablo eskiden sceKernelOpen / sceKernelRead /
+// sceKernelClose handler'larinin HER BIRINDE ayri bir "static" yerel
+// degiskendi. C++'ta farkli kapsamlardaki static'ler FARKLI NESNELERDIR,
+// yani Open'in yazdigi tabloyu Read hicbir zaman goremiyordu. Read'de
+// FILE* her zaman null kaliyor ve su yedek yol calisiyordu:
+//     memset(buf, 0, nbyte); bytes_read = nbyte;
+// Yani sceKernelOpen ile acilan HER DOSYA SIFIR olarak okunuyor ve bu
+// "tam basarili okuma" diye bildiriliyordu. Oyun cop veriyi ayristirip
+// yiginini bozuyordu (olculdu: audio_propagation_config.xml aciliyor,
+// hemen ardindan __stack_chk_fail).
+// Tek ve paylasilan tablo; erisim g_vfs_mutex ile korunuyor.
+static std::unordered_map<int, FILE*> g_fd_map;
 // VFS thread-guvenligi: oyun kaynaklari ARKA PLANDA cok thread'le yukluyor
 // (fadein_white-sheet0/sheet1 esZAMANLI aciliyor). g_open_files/g_open_names
 // std::set/std::map'leri kilitsiz eszamanli erisimde BOZULUYOR: bir thread'in
@@ -404,6 +420,44 @@ static bool ShouldLogPlt(uint32_t plt_index, const std::string& label) {
         LOG_INFO(ss.str());
     }
     return false;
+}
+
+// ========================================================
+// FreeBSD "struct stat" DOLDURUCUSU
+// ========================================================
+// Eskiden sceKernelStat sadece "memset(sb, 0, 128); return 0" yapiyordu.
+// IKI ayri hatasi vardi:
+//   1) BOYUT: FreeBSD'nin struct stat'i 120 BAYT. 128 yazmak misafirin
+//      tamponunu 8 bayt TASIRIYOR. Tampon yigindaysa dogrudan canary'ye
+//      denk geliyor - olculdu: RVA 0xf41640 (0x190'lik cerceve, canary
+//      [rbp-0x28]) "__stack_chk_fail" ile oldu.
+//   2) ICERIK: her sey sifir + "basarili" demek, oyuna "dosya var ama
+//      BOS ve normal dosya DEGIL" demektir (st_size=0, st_mode=0).
+//
+// FreeBSD 9 (PS SDK'sinin turedigi surum) yerlesimi:
+//   0 st_dev(4) 4 st_ino(4) 8 st_mode(2) 10 st_nlink(2) 12 st_uid(4)
+//   16 st_gid(4) 20 st_rdev(4) 24 atim(16) 40 mtim(16) 56 ctim(16)
+//   72 st_size(8) 80 st_blocks(8) 88 st_blksize(4) 92 st_flags(4)
+//   96 st_gen(4) 100 st_lspare(4) 104 birthtim(16)  = 120
+constexpr size_t kFreeBsdStatSize = 120;
+
+static void FillFreeBsdStat(void* sb, uint64_t size, bool is_dir, int64_t mtime) {
+    auto* p = static_cast<uint8_t*>(sb);
+    memset(p, 0, kFreeBsdStatSize);
+    auto put16 = [&](size_t o, uint16_t v) { memcpy(p + o, &v, 2); };
+    auto put32 = [&](size_t o, uint32_t v) { memcpy(p + o, &v, 4); };
+    auto put64 = [&](size_t o, uint64_t v) { memcpy(p + o, &v, 8); };
+
+    put32(0, 1);                                  // st_dev
+    put32(4, 1);                                  // st_ino
+    put16(8, is_dir ? 0x41EDu : 0x81A4u);         // S_IFDIR|0755 / S_IFREG|0644
+    put16(10, 1);                                 // st_nlink
+    for (size_t o : {size_t(24), size_t(40), size_t(56), size_t(104)}) {
+        put64(o, static_cast<uint64_t>(mtime));   // atim/mtim/ctim/birthtim .tv_sec
+    }
+    put64(72, size);                              // st_size
+    put64(80, (size + 511) / 512);                // st_blocks
+    put32(88, 512);                               // st_blksize
 }
 
 // ========================================================
@@ -497,6 +551,27 @@ static uint64_t RealtimeNs() {
 // NOT: free() kasitli olarak no-op oldugu icin kayitlar bayatlamaz.
 static std::mutex             g_alloc_size_mutex;
 static std::map<void*, size_t> g_alloc_sizes;
+
+// malloc/calloc/realloc'un istenen boyuta EKLEDIGI guvenlik payi.
+// ---------------------------------------------------------------------------
+// Sabit 65536'ydi ve tamami memset ediliyordu: yani 16 baytlik bir istek bile
+// 64 KB'lik GERCEK (commit edilmis) bellek harciyordu. free() de kasitli
+// no-op oldugu icin hicbiri geri gelmiyordu. Olculen sonuc saniyede ~250 MB
+// buyume ve uzun kosularda sistemin tamaminin ac kalmasi.
+// Pay muhtemelen oyunun istedigi boyutun otesine yazmasina karsi konmus bir
+// yamaydi; kaldirmak yerine KUCULTUP ayarlanabilir yaptik. Sorun cikarsa
+// PSEMU_ALLOC_PAD=65536 ile eski davranisa donulebilir.
+static size_t AllocPadBytes() {
+    static const size_t s_pad = [] {
+        const char* e = std::getenv("PSEMU_ALLOC_PAD");
+        if (e != nullptr) {
+            const long v = atol(e);
+            if (v >= 0 && v <= (1 << 20)) return static_cast<size_t>(v);
+        }
+        return static_cast<size_t>(4096);
+    }();
+    return s_pad;
+}
 
 static void RegisterAllocSize(void* p, size_t requested) {
     if (p == nullptr) return;
@@ -850,7 +925,8 @@ static PSEMU_SYSV void NativePureVirtual() {
     }
 }
 static PSEMU_SYSV void* NativeMalloc(size_t n) {
-    const size_t sz = n ? (n + 65536) : 65536;
+    const size_t pad = AllocPadBytes();
+    const size_t sz = n ? (n + pad) : (pad ? pad : 16);
     void*        p  = _aligned_malloc(sz, 16);
     if (p != nullptr) {
         memset(p, 0, sz);
@@ -1906,6 +1982,112 @@ static DWORD WINAPI ThreadSamplerProc(LPVOID param) {
         // varmiyor. Ornekleyici ayri bir thread oldugu icin sicak yolu
         // bozmadan buradan tetikliyoruz.
         PsemuDumpPltTop();
+    }
+}
+
+// ============================================================================
+// BELLEK GUVENLIK VALFI
+// ----------------------------------------------------------------------------
+// NEDEN: psemu Astro Bot'u yuklerken saniyede ~250 MB bellek buyutuyordu
+// (olculdu: t=10s 1.4 GB, t=20s 4.0 GB, t=30s 5.8 GB, durmadan). Uzun
+// kosularda bu SISTEMIN tamamini ac birakiyor; kullanicinin makinesi
+// donuyor ve ILGISIZ programlar oluyordu. Olay gunlugunde dogrulandi:
+// warp-svc, LogiPluginService, Intel Graphics Service, steamwebhelper,
+// SearchHost, Defender servisi - hepsi KERNELBASE.dll'de, ayni dakikalarda.
+// TDR/WHEA/bugcheck YOK, yani sorun GPU degil, bellek tukenmesi.
+//
+// Bir emulatorun hata ayiklanmasi kullanicinin isletim sistemini riske
+// atmamali. Bu izleyici iki siniri da bekliyor:
+//   - kendi surecimiz  : PSEMU_MEM_LIMIT_MB (varsayilan 4096)
+//   - sistemin bos RAM'i: PSEMU_MEM_FLOOR_MB (varsayilan 1536)
+// Ikisinden biri asilirsa NEDENI YAZIP duzgunce cikiyoruz. Sessizce devam
+// edip makineyi kilitlemektense, anlasilir bir hatayla durmak dogru.
+static DWORD WINAPI MemoryGuardProc(LPVOID) {
+    const char* e_lim   = std::getenv("PSEMU_MEM_LIMIT_MB");
+    const char* e_floor = std::getenv("PSEMU_MEM_FLOOR_MB");
+    // 4096 MB DENENDI ve COK DARDI: grafik ilklendirmesi (Vulkan + Kyty host
+    // bellek havuzlari) tek basina ~4.4 GB COMMIT ayirtiyor - bunun cogu
+    // rezerve, calisan kume degil. Asil makineyi koruyan sinir zaten asagidaki
+    // SISTEM TABANI; bu ust sinir yalnizca kacak durumlar icin emniyet freni.
+    const uint64_t limit_mb = (e_lim != nullptr && atoi(e_lim) > 0)
+                                  ? static_cast<uint64_t>(atoi(e_lim)) : 24576ull;
+    const uint64_t floor_mb = (e_floor != nullptr && atoi(e_floor) > 0)
+                                  ? static_cast<uint64_t>(atoi(e_floor)) : 1536ull;
+    uint64_t last_report_mb = 0;
+    for (;;) {
+        Sleep(500);
+        PROCESS_MEMORY_COUNTERS_EX pmc{};
+        pmc.cb = sizeof(pmc);
+        if (!GetProcessMemoryInfo(GetCurrentProcess(),
+                                  reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmc),
+                                  sizeof(pmc))) {
+            continue;
+        }
+        const uint64_t used_mb = static_cast<uint64_t>(pmc.PrivateUsage) / (1024ull * 1024ull);
+
+        MEMORYSTATUSEX ms{};
+        ms.dwLength = sizeof(ms);
+        uint64_t free_mb   = ~0ull; // sistemde bos FIZIKSEL RAM
+        uint64_t commit_mb = ~0ull; // sistemde kalan COMMIT butcesi
+        if (GlobalMemoryStatusEx(&ms)) {
+            free_mb   = static_cast<uint64_t>(ms.ullAvailPhys)     / (1024ull * 1024ull);
+            commit_mb = static_cast<uint64_t>(ms.ullAvailPageFile) / (1024ull * 1024ull);
+        }
+
+        // Her 1 GB'ta bir haber ver: buyume egrisi logda gorunsun.
+        if (used_mb >= last_report_mb + 1024) {
+            last_report_mb = used_mb - (used_mb % 1024);
+            std::stringstream ms_ss;
+            // COMMIT ve CALISAN KUME'yi ayri yaz: ikisi cok farkli olabiliyor
+            // (grafik init'inde commit 4.4 GB iken calisan kume 0.9 GB'di) ve
+            // yalnizca birine bakmak yanlis alarma yol aciyor.
+            const uint64_t ws_mb = static_cast<uint64_t>(pmc.WorkingSetSize) / (1024ull * 1024ull);
+            ms_ss << "[BELLEK] psemu commit=" << used_mb << " MB, calisan kume="
+                  << ws_mb << " MB (sinir " << limit_mb << " MB), sistemde bos "
+                  << free_mb << " MB";
+            LOG_INFO(ms_ss.str());
+        }
+
+        // SISTEM COMMIT BUTCESI en onemli sinir: diger surecler fiziksel RAM
+        // bitti diye degil, COMMIT ayiramadiklari icin oluyor. Olculdu -
+        // makine donunca warp-svc, LogiPluginService, Intel Graphics Service,
+        // steamwebhelper, SearchHost ve Defender servisi hep KERNELBASE.dll
+        // icinde coktu; bu, basarisiz tahsisin imzasidir.
+        // TABAN 3072 MB DENENDI ve YANLIS ALARM verdi: bu makinede commit
+        // limiti ~37.9 GB (23.9 GB RAM + 14 GB sayfa dosyasi) ve psemu 7.8 GB
+        // commit'teyken bile ullAvailPageFile 3055 MB gosterdi - yani bu deger
+        // burada gercek sistem butcesini yansitmiyor. Birincil koruma yukaridaki
+        // FIZIKSEL RAM tabani; bu kontrol yalnizca son care olarak kalsin.
+        static const uint64_t s_commit_floor_mb = [] {
+            const char* e = std::getenv("PSEMU_SYS_COMMIT_FLOOR_MB");
+            const long v = (e != nullptr) ? atol(e) : 0;
+            return (v > 0) ? static_cast<uint64_t>(v) : 512ull;
+        }();
+
+        const bool over_self   = used_mb >= limit_mb;
+        const bool over_system = free_mb <= floor_mb;
+        const bool over_commit = commit_mb <= s_commit_floor_mb;
+        if (over_self || over_system || over_commit) {
+            std::stringstream ss;
+            ss << "[BELLEK-DUR] "
+               << (over_commit ? "SISTEM COMMIT butcesi kritik (diger programlar "
+                                 "tahsis yapamaz hale gelir)"
+                  : over_system ? "SISTEM fiziksel bellegi kritik seviyede"
+                                : "psemu kendi sinirini asti")
+               << ": psemu=" << used_mb << " MB (sinir " << limit_mb << " MB), "
+               << "sistemde bos RAM=" << free_mb << " MB (taban " << floor_mb << " MB), "
+               << "kalan commit=" << commit_mb << " MB (taban "
+               << s_commit_floor_mb << " MB). "
+               << "Makineyi ac birakmamak icin duzgunce cikiliyor. "
+               << "Sinirlari PSEMU_MEM_LIMIT_MB / PSEMU_MEM_FLOOR_MB ile "
+                  "degistirebilirsin.";
+            LOG_ERROR(ss.str());
+            fflush(stdout);
+            fflush(stderr);
+            // TerminateProcess: atexit/destructor'lar bu noktada baska
+            // thread'lerle yarisir; amac hizli ve kesin durmak.
+            TerminateProcess(GetCurrentProcess(), 3);
+        }
     }
 }
 
@@ -3984,7 +4166,8 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     // Bolgesiz tutamac: host yigini. malloc yolundaki ayni
                     // comert tampon (oyun bazen istediginden fazlasina dokunuyor).
                     {
-                    const size_t alloc_sz = n ? (n + 65536) : 65536;
+                    const size_t pad = AllocPadBytes();
+                    const size_t alloc_sz = n ? (n + pad) : (pad ? pad : 16);
                     void*        p        = _aligned_malloc(alloc_sz, align);
                     if (p != nullptr) {
                         memset(p, 0, alloc_sz);
@@ -4632,7 +4815,8 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             else if (readable_name == "_Znwm" || readable_name == "_Znam" ||
                      readable_name == "operator new") {
                 const size_t size     = static_cast<size_t>(ctx->Rdi);
-                const size_t alloc_sz = size ? (size + 65536) : 65536;
+                const size_t pad = AllocPadBytes();
+                size_t alloc_sz = size ? (size + pad) : (pad ? pad : 16);
                 void*        p        = _aligned_malloc(alloc_sz, 16);
                 if (p) memset(p, 0, alloc_sz);
                 RegisterAllocSize(p, size);
@@ -4642,7 +4826,8 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             else if (readable_name == "malloc") {
                 // malloc(size): RDI=size
                 size_t size = static_cast<size_t>(ctx->Rdi);
-                size_t alloc_sz = size ? (size + 65536) : 65536;
+                const size_t pad = AllocPadBytes();
+                size_t alloc_sz = size ? (size + pad) : (pad ? pad : 16);
                 void* p = _aligned_malloc(alloc_sz, 16);
                 if (p) memset(p, 0, alloc_sz);
                 RegisterAllocSize(p, size); // realloc dogru kopyalayabilsin
@@ -4661,7 +4846,8 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 size_t nmemb = static_cast<size_t>(ctx->Rdi);
                 size_t size = static_cast<size_t>(ctx->Rsi);
                 size_t total = nmemb * size;
-                size_t alloc_sz = total ? (total + 65536) : 65536;
+                const size_t pad = AllocPadBytes();
+                size_t alloc_sz = total ? (total + pad) : (pad ? pad : 16);
                 void* p = _aligned_malloc(alloc_sz, 16);
                 if (p) memset(p, 0, alloc_sz);
                 RegisterAllocSize(p, total);
@@ -4671,7 +4857,8 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 // realloc(ptr, size): RDI=ptr, RSI=size
                 void* old_p = reinterpret_cast<void*>(ctx->Rdi);
                 size_t size = static_cast<size_t>(ctx->Rsi);
-                size_t alloc_sz = size ? (size + 65536) : 65536;
+                const size_t pad = AllocPadBytes();
+                size_t alloc_sz = size ? (size + pad) : (pad ? pad : 16);
                 void* p = _aligned_malloc(alloc_sz, 16);
                 if (p) {
                     memset(p, 0, alloc_sz);
@@ -4700,7 +4887,8 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 size_t align = static_cast<size_t>(ctx->Rdi);
                 size_t size = static_cast<size_t>(ctx->Rsi);
                 if (align < 16 || (align & (align - 1)) != 0) align = 16;
-                size_t alloc_sz = size ? (size + 65536) : 65536;
+                const size_t pad = AllocPadBytes();
+                size_t alloc_sz = size ? (size + pad) : (pad ? pad : 16);
                 void* p = _aligned_malloc(alloc_sz, align);
                 if (p) memset(p, 0, alloc_sz);
                 RegisterAllocSize(p, size);
@@ -4712,7 +4900,8 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 size_t align = static_cast<size_t>(ctx->Rsi);
                 size_t size = static_cast<size_t>(ctx->Rdx);
                 if (align < 16 || (align & (align - 1)) != 0) align = 16;
-                size_t alloc_sz = size ? (size + 65536) : 65536;
+                const size_t pad = AllocPadBytes();
+                size_t alloc_sz = size ? (size + pad) : (pad ? pad : 16);
                 void* p = _aligned_malloc(alloc_sz, align);
                 if (p) memset(p, 0, alloc_sz);
                 if (memptr != nullptr && SafeWritable(memptr, sizeof(void*))) {
@@ -6078,8 +6267,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     {
                         std::lock_guard<std::mutex> vlk(g_vfs_mutex);
                         // fd -> FILE* esleme tablosu
-                        static std::unordered_map<int, FILE*>& fd_map = *new std::unordered_map<int, FILE*>();
-                        fd_map[fd] = f;
+                        g_fd_map[fd] = f;
                     }
                     ctx->Rax = static_cast<uint64_t>(fd);
                     special_return_set = true;
@@ -6099,17 +6287,25 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 FILE* f = nullptr;
                 {
                     std::lock_guard<std::mutex> vlk(g_vfs_mutex);
-                    static std::unordered_map<int, FILE*>& fd_map = *new std::unordered_map<int, FILE*>();
-                    if (fd_map.count(fd)) f = fd_map[fd];
+                    auto it = g_fd_map.find(fd);
+                    if (it != g_fd_map.end()) f = it->second;
                 }
-                size_t bytes_read = 0;
-                if (f && buf && nbyte > 0 && SafeWritable(buf, nbyte)) {
-                    bytes_read = fread(buf, 1, nbyte, f);
-                } else if (buf && nbyte > 0 && SafeWritable(buf, nbyte)) {
-                    memset(buf, 0, nbyte);
-                    bytes_read = nbyte;
+                if (f != nullptr && buf != nullptr && nbyte > 0 && SafeWritable(buf, nbyte)) {
+                    ctx->Rax = static_cast<uint64_t>(fread(buf, 1, nbyte, f));
+                } else {
+                    // ESKIDEN: tamponu SIFIRLAYIP "nbyte bayt okudum" deniyordu.
+                    // Bu, dosyayi acamadigimizda oyuna cop veriyi GECERLI diye
+                    // vermek demekti (ayristirici cop uzerinde yigini bozuyor).
+                    // Artik hata donuyoruz ve tampona DOKUNMUYORUZ.
+                    static std::atomic<int> s_bad{0};
+                    if (s_bad.fetch_add(1, std::memory_order_relaxed) < 8) {
+                        std::stringstream rs;
+                        rs << "[KernelIO] read(fd=" << fd << ", " << nbyte
+                           << ") -> fd BILINMIYOR, -1 donuluyor";
+                        LOG_ERROR(rs.str());
+                    }
+                    ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(-1));
                 }
-                ctx->Rax = static_cast<uint64_t>(bytes_read);
                 special_return_set = true;
             } else if (readable_name == "sceKernelWrite" || readable_name == "libc_write") {
                 // sceKernelWrite(fd, buf, nbyte): RDI=fd, RSI=buf, RDX=nbyte
@@ -6122,10 +6318,10 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 int fd = static_cast<int>(ctx->Rdi);
                 {
                     std::lock_guard<std::mutex> vlk(g_vfs_mutex);
-                    static std::unordered_map<int, FILE*>& fd_map = *new std::unordered_map<int, FILE*>();
-                    if (fd_map.count(fd)) {
-                        fclose(fd_map[fd]);
-                        fd_map.erase(fd);
+                    auto it = g_fd_map.find(fd);
+                    if (it != g_fd_map.end()) {
+                        fclose(it->second);
+                        g_fd_map.erase(it);
                     }
                 }
                 ctx->Rax = 0;
@@ -6133,11 +6329,53 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             } else if (readable_name == "sceKernelStat" || readable_name == "libc_stat" ||
                        func_name.find("eV9wAD2riIA") != std::string::npos) {
                 // sceKernelStat(path, buf): RDI=path, RSI=buf
+                // Artik GERCEK dosyaya bakiyoruz ve TAM 120 bayt yaziyoruz
+                // (bkz. FillFreeBsdStat: 128 yazmak yigin canary'sini eziyordu).
+                std::string guest = SafeReadCString(reinterpret_cast<const char*>(ctx->Rdi));
+                std::string host  = TranslateGuestPath(guest);
                 void* sb = reinterpret_cast<void*>(ctx->Rsi);
-                if (sb && SafeWritable(sb, 128)) {
-                    memset(sb, 0, 128);
+                struct _stat64 hs;
+                const bool found = (_stat64(host.c_str(), &hs) == 0);
+                if (sb != nullptr && SafeWritable(sb, kFreeBsdStatSize) && found) {
+                    FillFreeBsdStat(sb, static_cast<uint64_t>(hs.st_size),
+                                    (hs.st_mode & _S_IFDIR) != 0,
+                                    static_cast<int64_t>(hs.st_mtime));
                 }
-                ctx->Rax = 0;
+                // SCE_KERNEL_ERROR_ENOENT: yoksa "var ve bos" demek yanlis.
+                ctx->Rax = found ? 0 : static_cast<uint64_t>(static_cast<int64_t>(
+                                          static_cast<int>(0x80020002)));
+                special_return_set = true;
+                std::stringstream st;
+                st << "[VFS] stat(\"" << guest << "\") -> "
+                   << (found ? "VAR boyut=" + std::to_string(hs.st_size) : "YOK");
+                LOG_INFO(st.str());
+            } else if (readable_name == "sceKernelFstat" || readable_name == "libc_fstat") {
+                // sceKernelFstat(fd, buf): RDI=fd, RSI=buf
+                // [HLE-EKSIK] ile yakalandi: govdesi YOKTU, RAX=0 (basarili)
+                // donuyordu ve tamponu HIC DOLDURMUYORDU - yani cagiran
+                // yigindaki COPU dosya boyutu saniyordu.
+                const int fd = static_cast<int>(ctx->Rdi);
+                void* sb = reinterpret_cast<void*>(ctx->Rsi);
+                FILE* f = nullptr;
+                {
+                    std::lock_guard<std::mutex> vlk(g_vfs_mutex);
+                    auto it = g_fd_map.find(fd);
+                    if (it != g_fd_map.end()) f = it->second;
+                }
+                bool ok = false;
+                if (f != nullptr && sb != nullptr && SafeWritable(sb, kFreeBsdStatSize)) {
+                    const long cur = ftell(f);
+                    if (cur >= 0 && fseek(f, 0, SEEK_END) == 0) {
+                        const long end = ftell(f);
+                        fseek(f, cur, SEEK_SET); // konumu BOZMA
+                        if (end >= 0) {
+                            FillFreeBsdStat(sb, static_cast<uint64_t>(end), false, 0);
+                            ok = true;
+                        }
+                    }
+                }
+                ctx->Rax = ok ? 0 : static_cast<uint64_t>(static_cast<int64_t>(
+                                        static_cast<int>(0x80020009))); // EBADF
                 special_return_set = true;
             } else if (readable_name == "fopen") {
                 std::lock_guard<std::mutex> vlk(g_vfs_mutex);
@@ -8576,6 +8814,8 @@ void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t tex
 
     // Hang watchdog thread'ini baslat (worker takilirsa RIP'ini doksun)
     CreateThread(NULL, 0, HangWatchdogProc, nullptr, 0, NULL);
+    // Bellek guvenlik valfi: makineyi ac birakmadan once duzgunce dur.
+    CreateThread(NULL, 0, MemoryGuardProc, nullptr, 0, NULL);
 
     // Fiziksel adres izleme: PSEMU_WATCH_PHYS=<dogrudan-bellek ofseti>
     // Hedef sayfa ancak oyun o bolgeyi esledikten sonra var olur, o yuzden
