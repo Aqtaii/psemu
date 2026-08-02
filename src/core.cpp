@@ -4218,8 +4218,18 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                         if (old_p != nullptr) {
                             const size_t old_n = LookupAllocSize(old_p);
                             const size_t cp    = (old_n < n) ? old_n : n;
-                            if (cp != 0) memcpy(p, old_p, cp);
-                            _aligned_free(old_p);
+                            // ESKI ISARETCIYI DOGRULA. Burada dogrudan
+                            // memcpy ediliyordu ve old_p cop oldugunda
+                            // cokuyorduk (olculdu: sceLibcMspaceMalloc icinde
+                            // "READ violation @ 0x1"). Realloc'un eski
+                            // isaretcisi misafirden geliyor; gecerli oldugunu
+                            // varsayamayiz.
+                            if (cp != 0 && SafeReadable(old_p, cp)) {
+                                memcpy(p, old_p, cp);
+                            }
+                            // Havuz icindeki adresi CRT'ye VERME
+                            // (bkz. IsInMspaceRegion).
+                            if (!IsInMspaceRegion(old_p)) _aligned_free(old_p);
                         }
                         RegisterAllocSize(p, n);
                     }
@@ -7851,6 +7861,42 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     // sonra "__stack_chk_fail" cikti. Hata kodunu donmek
                     // yeterli; yazmadan birakmak her zaman guvenli.
                     ctx->Rax = 34; // ERANGE
+                }
+                special_return_set = true;
+            } else if (readable_name == "sceFontOpenFontMemory" ||
+                       readable_name == "sceFontOpenFontFile" ||
+                       readable_name == "sceFontOpenFontSet" ||
+                       readable_name == "sceFontCreateLibraryWithEdition" ||
+                       readable_name == "sceFontCreateLibrary") {
+                // TUTAMAC URETEN font fonksiyonlari.
+                // ------------------------------------------------------------
+                // Hepsi govdesiz stub'di: RAX=0 (BASARI) donuyor ama cikti
+                // yuvasina HICBIR SEY yazmiyorlardi. Oyunun kendi kodu bunu
+                // yakaliyordu:
+                //   FontSystem.cpp:140  "Assertion failed: *pFontHandle != 0"
+                //
+                // ABI cagri yerinden OKUNDU (RVA 0xed67eb..0xed6802):
+                //     mov qword ptr [r15], 0     ; oyun cikti yuvasini sifirlar
+                //     mov r8, r15                ; arg5 = SceFontHandle* out
+                //     call sceFontOpenFontMemory
+                //     test eax, eax / je basari  ; 0 = basari
+                // CreateLibraryWithEdition icin (RVA 0xed71a5): arg4 = rcx.
+                //
+                // GERCEK bir font motoru DEGIL: yalnizca sifirdan farkli,
+                // benzersiz bir opak tutamac uretiyoruz ki oyun ilerleyebilsin.
+                // Glif ciziminin kendisi hala bos donuyor - yazilar gorunmez,
+                // ama font sistemi artik oyunu durdurmuyor.
+                const bool is_lib = (readable_name.rfind("sceFontCreateLibrary", 0) == 0);
+                auto* out = reinterpret_cast<uint64_t*>(is_lib ? ctx->Rcx : ctx->R8);
+                static std::atomic<uint64_t> s_font_h{0x50464E540000ull}; // "PFNT"
+                if (out != nullptr && SafeWritable(out, 8)) {
+                    *out = s_font_h.fetch_add(1, std::memory_order_relaxed) + 1;
+                    ctx->Rax = 0; // basari
+                } else {
+                    // Yuvayi bulamadiysak BASARI DEME: cagiran sifir tutamacla
+                    // ilerlemesin.
+                    ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(
+                        static_cast<int>(0x80990001))); // SCE_FONT_ERROR_*
                 }
                 special_return_set = true;
             } else if (readable_name == "strnstr") {
