@@ -2659,6 +2659,22 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                    << " R12=0x" << ctx->R12 << " R13=0x" << ctx->R13
                    << " R14=0x" << ctx->R14 << " R15=0x" << ctx->R15
                    << " RBP=0x" << ctx->Rbp;
+                // GERCEK DONUS ADRESI. psemu'nun "[backtrace RVA]" ciktisi
+                // yiginda kod adresine BENZEYEN degerleri tarayan bir SEZGI;
+                // bayat degerler icerebiliyor ve bir kez yanlis cagri zinciri
+                // kurmama yol acti (0x50fd39 orada gorundu ama o kod HIC
+                // calismiyor - MBP 0 vurus verdi). Fonksiyon GIRISINE konan
+                // MBP'de [rsp] kesin dogru donus adresidir.
+                {
+                    auto* sp = reinterpret_cast<const uint64_t*>(ctx->Rsp);
+                    if (SafeReadable(sp, 8)) {
+                        const uint64_t ret = *sp;
+                        ms << "\n     donus=0x" << ret;
+                        if (ret >= g_base_addr && ret < g_base_addr + g_module_size) {
+                            ms << " (oyun RVA 0x" << (ret - g_base_addr) << ")";
+                        }
+                    }
+                }
                 // Isaretci gibi duran kayitlarin ICERIGI: "hangi nesne geldi"
                 // sorusu ancak boyle cevaplanıyor (or. vtable isaretcisi).
                 // R14/R15 de dokuluyor: "this" isaretcisi cogu zaman bu iki
