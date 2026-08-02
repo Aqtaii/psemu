@@ -24,6 +24,7 @@
 #include "video.h"
 #include "audio.h"   // sceAudioOut* -> waveOut arka ucu
 #include "fiber.h"   // sceFiber* -> Windows fiber'lari (Astro Bot'un is sistemi)
+#include "evflag.h"  // sceKernel*EventFlag -> gercek olay bayraklari
 #include "kernel/eventQueue.h"
 #include "graphics/presentation/videoOut.h"
 #include "libs/controller.h"
@@ -4131,13 +4132,25 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     // korunmus ama saniyede 42.000 yerine en fazla 20 kez
                     // calisan hali. Sinira kac kez carptigimizi sayiyoruz:
                     // sifira yakinsa sinyalleme calisiyor demektir.
-                    DWORD ms = 50;
+                    // TAVAN 50 ms COK KISAYDI: oyun zaman asimi ARGUMANI
+                    // VERMEDIGINDE (sonsuz bekleme istedi demektir) biz 50 ms
+                    // sonra donuyorduk ve oyun bunu beklenmedik hata sayip
+                    // logluyordu ("[GAME-LOG] sceKernelWaitSema 0x8002003c").
+                    // Isci thread'lerini bloke etmek DOGRU davranis; ana thread
+                    // calismaya devam ediyor. Yine de sonsuz beklemiyoruz -
+                    // kilitlenmeyi tani edilebilir tutmak icin ust sinir var.
+                    static const DWORD kWaitCapMs = [] {
+                        const char* e = std::getenv("PSEMU_SEMA_WAIT_MS");
+                        int v = (e != nullptr) ? atoi(e) : 5000;
+                        return static_cast<DWORD>(v > 0 ? v : 5000);
+                    }();
+                    DWORD ms = kWaitCapMs;
                     bool  had_timeout_arg = false;
                     if (tp != nullptr && SafeReadable(tp, 4)) {
                         had_timeout_arg = true;
                         const uint32_t us = *tp;
                         ms = static_cast<DWORD>(us / 1000u);
-                        if (ms > 50) ms = 50;
+                        if (ms > kWaitCapMs) ms = kWaitCapMs;
                     }
                     const DWORD wr = (h != nullptr) ? WaitForSingleObject(h, ms) : WAIT_TIMEOUT;
 
@@ -4159,7 +4172,30 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                                static_cast<unsigned long long>(wn));
                         fflush(stdout);
                     }
-                    rc = 0; // zaman asiminda da basarili: eski davranis korunuyor
+                    // ZAMAN ASIMINDA ARTIK HATA DONUYORUZ.
+                    //
+                    // Eskiden zaman asiminda da 0 (basarili) donuyorduk. Bu,
+                    // HIC SINYALLENMEMIS bir semaforda bekleyen thread'e
+                    // "is geldi" demek anlamina geliyor ve olculen sonucu su:
+                    // isci thread'i (RVA 0x4101b0) kuyrugu bosaltmaya giriyor,
+                    // ama kuyrugun handler'i (+0x128) hic kaydedilmedigi icin
+                    // NULL fonksiyon isaretcisini cagiriyor -> "Non-PLT EXEC
+                    // Violation @ 0x0" dongusu ve surecin olumu.
+                    // Gercek donanimda bekleme sinyal gelene kadar surer, yani
+                    // isci o noktaya HIC gelmez.
+                    //
+                    // 50 ms tavani KALIYOR (sonsuz bekleme kilitlenme riski);
+                    // yalnizca donus degeri duzeliyor, boylece cagiran kendi
+                    // dongusunde yeniden bekliyor.
+                    // Kacis kapisi: PSEMU_SEMA_TIMEOUT_OK=1 -> eski davranis.
+                    static const bool s_timeout_ok = [] {
+                        const char* e = std::getenv("PSEMU_SEMA_TIMEOUT_OK");
+                        return e != nullptr && e[0] == '1';
+                    }();
+                    // SCE_KERNEL_ERROR_ETIMEDOUT = 0x80020000 | ETIMEDOUT(60)
+                    rc = (wr == WAIT_OBJECT_0 || s_timeout_ok)
+                             ? 0
+                             : static_cast<int>(0x8002003C);
                 }
                 // DeleteSema/CancelSema: tutamaci kapatmiyoruz (baska thread
                 // hala bekliyor olabilir) - scePthreadMutexDestroy ile ayni yaklasim.
@@ -7416,10 +7452,80 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                            SafeWritable(d, n) && SafeReadable(s, n)) {
                     memmove(d, s, n); // ortusme olursa da dogru kalsin
                     ctx->Rax = 0;
+                } else {
+                    // Annex K hata halinde hedefin TAMAMINI sifirlamayi soyler.
+                    // BURADA YAPMIYORUZ: dsz misafirden geliyor ve gercek
+                    // tampon boyundan buyuk olursa o memset komsu bellegi -
+                    // yigin canary'si dahil - eziyor. Olculdu: eklendikten
+                    // sonra "__stack_chk_fail" cikti. Hata kodunu donmek
+                    // yeterli; yazmadan birakmak her zaman guvenli.
+                    ctx->Rax = 34; // ERANGE
+                }
+                special_return_set = true;
+            } else if (readable_name == "memmove_s") {
+                // errno_t memmove_s(void* d, rsize_t dsz, const void* s, rsize_t n)
+                // memcpy_s ile ayni; ilerleyen kod yolunda [HLE-EKSIK] ile
+                // yakalandi (cagiran RVA 0xdfd2f8).
+                void* d = reinterpret_cast<void*>(ctx->Rdi);
+                size_t dsz = static_cast<size_t>(ctx->Rsi);
+                const void* s = reinterpret_cast<const void*>(ctx->Rdx);
+                size_t n = static_cast<size_t>(ctx->Rcx);
+                ctx->Rax = 22;
+                if (n == 0) {
+                    ctx->Rax = 0;
+                } else if (d != nullptr && s != nullptr && n <= dsz &&
+                           SafeWritable(d, n) && SafeReadable(s, n)) {
+                    memmove(d, s, n);
+                    ctx->Rax = 0;
                 } else if (d != nullptr && dsz > 0 && SafeWritable(d, dsz)) {
-                    memset(d, 0, dsz); // Annex K: hata halinde hedefi sifirla
+                    memset(d, 0, dsz);
                     ctx->Rax = 34;
                 }
+                special_return_set = true;
+            }
+            // ============================================================
+            // OLAY BAYRAKLARI (sceKernel*EventFlag)
+            // ------------------------------------------------------------
+            // Yedisinin de adi nids.h'ta vardi, govdesi YOKTU: Create
+            // "basardim" diyordu ama bayrak yoktu, Wait aninda "kosul saglandi"
+            // donuyordu, Set kimseyi uyandirmiyordu. Semafordaki hatanin ayni
+            // sinifi. Uygulama src/evflag.cpp'de.
+            else if (Psemu::EvFlag::Enabled() &&
+                     readable_name.compare(0, 9, "sceKernel") == 0 &&
+                     readable_name.find("EventFlag") != std::string::npos) {
+                using namespace Psemu::EvFlag;
+                int rc = kErrInval;
+                if (readable_name == "sceKernelCreateEventFlag") {
+                    // (out, name, attr, initPattern, optParam)
+                    auto* out = reinterpret_cast<uint64_t*>(ctx->Rdi);
+                    rc = (out != nullptr && SafeWritable(out, 8))
+                             ? Create(out, SafeReadCString(
+                                          reinterpret_cast<const char*>(ctx->Rsi)).c_str(),
+                                      static_cast<uint32_t>(ctx->Rdx), ctx->Rcx)
+                             : kErrInval;
+                } else if (readable_name == "sceKernelDeleteEventFlag") {
+                    rc = Delete(ctx->Rdi);
+                } else if (readable_name == "sceKernelSetEventFlag") {
+                    rc = Set(ctx->Rdi, ctx->Rsi);
+                } else if (readable_name == "sceKernelClearEventFlag") {
+                    rc = Clear(ctx->Rdi, ctx->Rsi);
+                } else if (readable_name == "sceKernelPollEventFlag") {
+                    auto* res = reinterpret_cast<uint64_t*>(ctx->Rcx);
+                    if (res != nullptr && !SafeWritable(res, 8)) res = nullptr;
+                    rc = Poll(ctx->Rdi, ctx->Rsi, static_cast<uint32_t>(ctx->Rdx), res);
+                } else if (readable_name == "sceKernelWaitEventFlag") {
+                    // (ef, bitPattern, waitMode, pResultPat, pTimeoutUs)
+                    auto* res = reinterpret_cast<uint64_t*>(ctx->Rcx);
+                    if (res != nullptr && !SafeWritable(res, 8)) res = nullptr;
+                    auto* tmo = reinterpret_cast<const uint32_t*>(ctx->R8);
+                    if (tmo != nullptr && !SafeReadable(tmo, 4)) tmo = nullptr;
+                    rc = Wait(ctx->Rdi, ctx->Rsi, static_cast<uint32_t>(ctx->Rdx), res, tmo);
+                } else if (readable_name == "sceKernelCancelEventFlag") {
+                    auto* nw = reinterpret_cast<int*>(ctx->Rdx);
+                    if (nw != nullptr && !SafeWritable(nw, 4)) nw = nullptr;
+                    rc = Cancel(ctx->Rdi, ctx->Rsi, nw);
+                }
+                ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(rc));
                 special_return_set = true;
             }
             // ============================================================
