@@ -2499,6 +2499,19 @@ KYTY_CP_OP_PARSER(CpOpFlip) {
 	f.flip_mode = static_cast<int>(buffer[2]);
 	f.flip_arg  = static_cast<int64_t>(buffer[3] | (static_cast<uint64_t>(buffer[4]) << 32u));
 
+	// psemu tanisi: "ekranda hicbir sey yok" sorusunu kesin cevaplamak icin.
+	// Oyun cizim yapiyor, flip paketi DOGRU kuruluyor ve DCB gonderiliyor;
+	// ama sunum olup olmadigini gorecek bir izimiz yoktu. Bu satir, flip
+	// paketinin GERCEKTEN ayristirilip Flip()'e ulastigini soyler.
+	{
+		static std::atomic<uint32_t> s_flips {0};
+		const uint32_t n = s_flips.fetch_add(1) + 1;
+		if (n <= 8 || n % 60 == 0) {
+			printf("[FLIP] #%u handle=%d index=%d mode=%d arg=%lld -> Flip()\n", n, f.handle,
+			       f.index, f.flip_mode, static_cast<long long>(f.flip_arg));
+			fflush(stdout);
+		}
+	}
 	cp->SetFlip(f);
 	cp->Flip();
 	return 5;

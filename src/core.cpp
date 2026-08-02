@@ -4100,7 +4100,20 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 readable_name == "_ZdaPvRKSt9nothrow_t") {
                 void* p = reinterpret_cast<void*>(ctx->Rdi);
                 // Ayni gerekce: havuzdan gelen adres CRT'ye verilmez.
-                if (p != nullptr && !IsInMspaceRegion(p)) _aligned_free(p);
+                //
+                // PSEMU_NO_DELETE=1: operator delete'i de free() gibi NO-OP
+                // yapar. Gerekce: free() zaten "oyunun allocator'u serbest
+                // birakilan bellege bayat pointer tutuyor" diye bilerek
+                // no-op'ti, ama operator delete GERCEKTEN birakiyordu.
+                // RVA 0x37f34c'deki ARALIKLI cokmede isaretci alaninda
+                // tutarli sekilde 0xB4 (180) gorunuyor - serbest birakilan
+                // bellegin yeniden kullanildigina isaret. Bu anahtar o
+                // hipotezi olcmek (ve gerekirse acik birakmak) icin.
+                static const bool s_no_delete = [] {
+                    const char* e = std::getenv("PSEMU_NO_DELETE");
+                    return e != nullptr && e[0] == '1';
+                }();
+                if (p != nullptr && !s_no_delete && !IsInMspaceRegion(p)) _aligned_free(p);
                 ctx->Rax  = 0;
                 ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
                 ctx->Rsp += 8;
