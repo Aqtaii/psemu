@@ -59,6 +59,34 @@ static VirtualMemory::Mode GetProtectionFlag(DWORD mode) {
 
 void SysVirtualInit() {}
 
+// psemu tanisi: commit ayak izi olcumu.
+// ---------------------------------------------------------------------------
+// psemu ~12.6 GB commit'e ulasinca "kalan commit" tabanina takiliyor ve
+// kosular erken bitiyor. Nereye gittigini TAHMIN etmeden gormek icin Kyty'nin
+// TUM tahsislerini burada topluyoruz - bu katmanda her tahsis
+// MEM_COMMIT|MEM_RESERVE ile yapiliyor, yani hepsi commit'e sayiliyor.
+namespace {
+std::atomic<uint64_t> g_psemu_committed {0};
+std::atomic<uint64_t> g_psemu_alloc_count {0};
+
+void PsemuTrackCommit(uint64_t size, const char* tag) {
+	const auto total = g_psemu_committed.fetch_add(size) + size;
+	const auto n     = g_psemu_alloc_count.fetch_add(1) + 1;
+	// Buyuk tekil tahsisleri ve her 512 MB'lik esigi bildir.
+	static std::atomic<uint64_t> s_next_report {512ull * 1024 * 1024};
+	if (size >= 64ull * 1024 * 1024 || total >= s_next_report.load()) {
+		if (total >= s_next_report.load()) {
+			s_next_report.store(((total / (512ull * 1024 * 1024)) + 1) * 512ull * 1024 * 1024);
+		}
+		printf("[COMMIT] %s +%llu MB -> toplam %llu MB (%llu tahsis)\n", tag,
+		       static_cast<unsigned long long>(size / (1024 * 1024)),
+		       static_cast<unsigned long long>(total / (1024 * 1024)),
+		       static_cast<unsigned long long>(n));
+		fflush(stdout);
+	}
+}
+} // namespace
+
 uint64_t SysVirtualAlloc(uint64_t address, uint64_t size, VirtualMemory::Mode mode) {
 	auto ptr = (address == 0 ? SysVirtualAllocAligned(address, size, mode, 1)
 	                         : reinterpret_cast<uintptr_t>(VirtualAlloc(
@@ -73,6 +101,10 @@ uint64_t SysVirtualAlloc(uint64_t address, uint64_t size, VirtualMemory::Mode mo
 		} else {
 			return SysVirtualAllocAligned(address, size, mode, 1);
 		}
+	}
+	// Sabit adresli yol: Aligned yolu kendi icinde sayiyor, cift saymayalim.
+	if (ptr != 0 && address != 0) {
+		PsemuTrackCommit(size, "SysVirtualAlloc(sabit)");
 	}
 	return ptr;
 }
@@ -149,6 +181,9 @@ uint64_t SysVirtualAllocAligned(uint64_t address, uint64_t size, VirtualMemory::
 		} else {
 			return SysVirtualAllocAligned(address, size, mode, alignment << 1u);
 		}
+	}
+	if (ptr != 0) {
+		PsemuTrackCommit(size, "SysVirtualAllocAligned");
 	}
 	return ptr;
 }

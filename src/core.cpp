@@ -777,6 +777,42 @@ static bool IsInMspaceRegion(const void* p) {
     return false;
 }
 
+// Dmem havuzunda bir araligi "pesin bir on-parca + gerisi talep uzerine"
+// seklinde commit eder ve baslangic adresini doner.
+// ---------------------------------------------------------------------------
+// GEREKCE (olculdu): hem sceKernelAllocateDirectMemory hem
+// sceKernelMapDirectMemory istenen uzunlugun TAMAMINI pesinen commit
+// ediyordu. Astro Bot ~10 GB dogrudan bellek istiyor; surec 13.3 GB commit'e
+// cikarken CALISAN KUME yalnizca 3.0 GB kaliyordu - yani ucte birine bile
+// dokunulmuyor. Bunun bedeli sistemin commit butcesinin tukenmesi ve
+// kosularin bellek valfinde erken bitmesiydi.
+// Havuz zaten MEM_RESERVE edilmis; dokunulan sayfalari commit eden mekanizma
+// VEH icinde ZATEN VAR ("Otomatik Sayfa Commit"). PSEMU_DMEM_EAGER_MB ile
+// ayarlanir (0 = hicbir sey pesinen commit etme).
+static void* DmemCommitLazy(uint8_t* dbase, uint64_t offset, size_t len, const char* tag) {
+    if (dbase == nullptr) return nullptr;
+    static const uint64_t kEagerBytes = [] {
+        const char* e = std::getenv("PSEMU_DMEM_EAGER_MB");
+        const long v = (e != nullptr) ? atol(e) : -1;
+        return static_cast<uint64_t>((v >= 0 ? v : 64)) * 1024ull * 1024ull;
+    }();
+    const size_t eager = static_cast<size_t>(len < kEagerBytes ? len : kEagerBytes);
+    void* mem = dbase + offset;
+    if (eager > 0) {
+        mem = VirtualAlloc(dbase + offset, eager, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+    }
+    if (mem != nullptr && len > eager) {
+        static std::atomic<int> s_lazy{0};
+        if (s_lazy.fetch_add(1, std::memory_order_relaxed) < 12) {
+            std::stringstream ls;
+            ls << "[MEMORY-HLE] tembel commit (" << tag << "): ofset=0x" << std::hex << offset
+               << " len=0x" << len << " (pesin 0x" << eager << ")";
+            LOG_INFO(ls.str());
+        }
+    }
+    return mem;
+}
+
 static uint8_t* DmemBase() {
     std::lock_guard<std::mutex> lock(g_dmem_mutex);
     if (g_dmem_base == nullptr) {
@@ -4734,8 +4770,9 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     uint8_t* dbase = DmemBase();
                     uint64_t need  = static_cast<uint64_t>(chosen) + len;
                     if (dbase != nullptr && need <= kDmemSize) {
-                        VirtualAlloc(dbase + chosen, static_cast<size_t>(len),
-                                     MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+                        // Tamamini pesinen commit ETME (bkz. DmemCommitLazy).
+                        DmemCommitLazy(dbase, static_cast<uint64_t>(chosen),
+                                       static_cast<size_t>(len), "allocate");
                     }
                 }
 
@@ -4802,8 +4839,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 void* mem = nullptr;
                 uint8_t* dbase = DmemBase();
                 if (dbase != nullptr && phys + alloc_size <= kDmemSize) {
-                    mem = VirtualAlloc(dbase + phys, alloc_size,
-                                       MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+                    mem = DmemCommitLazy(dbase, phys, alloc_size, "map");
                 }
                 if (mem == nullptr) {
                     // Havuz disi/basarisiz: eski davranisa dus (en azindan bellek ver)
