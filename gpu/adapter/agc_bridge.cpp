@@ -15,6 +15,8 @@
 // ============================================================================
 #include <windows.h>
 
+#include <cstdlib> // getenv (PSEMU_NO_KYTY_EXTRA)
+
 #include "common/abi.h"            // KYTY_SYSV_ABI
 #include "loader/symbolDatabase.h" // Loader::SymbolDatabase / FindByNid
 
@@ -25,7 +27,22 @@ namespace Libs {
 void InitGraphicsDriver_1(Loader::SymbolDatabase* s);
 void InitVideoOut_1(Loader::SymbolDatabase* s);
 void InitPad_1(Loader::SymbolDatabase* s);
+// Asagidakiler EKLENDI - gerekce icin EnsureDb()'deki nota bakiniz.
+void InitFont_1(Loader::SymbolDatabase* s);
+void InitAmpr_1(Loader::SymbolDatabase* s);
 } // namespace Libs
+
+// ----------------------------------------------------------------------------
+// avpriv_vga16_font: Kyty'nin libFont.cpp'si bunu FFmpeg'den (libavutil) aliyor
+// ve GERCEK font yuklenemedigi durumda YEDEK bitmap glif kaynagi olarak
+// kullaniyor (8x16, 256 karakter = 4096 bayt). Vendored agacimizda FFmpeg YOK.
+//
+// Tabloyu SIFIR biraktik. Bilerek: uydurma glif verisi uretmek yanlis
+// karakterler cizdirir ve "yazi tipi calisiyor" yanilgisi yaratir. Sifir
+// tabloda bu yedek yol BOS glif uretir - yani oyunun kendi fontlari
+// yuklendiginde metin normal cikar, yalnizca YEDEK yola dusuldugunde
+// gorunmez olur. Gercek tabloya ihtiyac olursa buraya konabilir.
+extern "C" const uint8_t avpriv_vga16_font[4096] = {};
 
 namespace {
 Loader::SymbolDatabase* g_kyty_db = nullptr;
@@ -38,6 +55,34 @@ void EnsureDb() {
 	Libs::InitGraphicsDriver_1(db); // AGC Dcb + Graphics + GraphicsDriver
 	Libs::InitVideoOut_1(db);       // sceVideoOut*
 	Libs::InitPad_1(db);            // scePad*
+
+	// ------------------------------------------------------------------
+	// libFont ve libAmpr DE KAYDEDILIYOR.
+	//
+	// Bu kopru yalnizca UC kutuphane kaydediyordu; oysa vendored Kyty
+	// agacinda libFont (70 fonksiyon) ve libAmpr (106) ZATEN UYGULANMIS.
+	// psemu onlara hic yonlendirmedigi icin ayni fonksiyonlar kendi bos
+	// stub'imiza dusuyor ve RAX=0 donuyordu. [HLE-EKSIK] tanisiyla olculdu:
+	//     sceFontOpenFontMemory / sceFontCreateLibraryWithEdition /
+	//     sceFontOpenFontSet      -> govdesi yok
+	//     sceAmprCommandBufferConstructor / AprCommandBufferConstructor /
+	//     CommandBufferSetBuffer / CommandBufferGetNumCommands -> govdesi yok
+	// Kyty'de bunlarin karsiliklari NID'leriyle kayitli (Font::FontOpenFontMemory,
+	// Ampr::CommandBufferConstructor, ...).
+	//
+	// Yonlendirme kapisi (src/agc.cpp) "Kyty DB'de NID varsa Kyty'ye ver"
+	// diyor ve HLE zincirinden ONCE calisiyor; dolayisiyla kayit yeterli,
+	// ayrica psemu'daki elle yazilmis font stub'i da otomatik devre disi
+	// kaliyor (o zincire hic girilmiyor).
+	//
+	// KACIS KAPISI: PSEMU_NO_KYTY_EXTRA=1 -> eski davranis (yalnizca uc
+	// kutuphane). Yeni bir yuzey aciyoruz; tek degiskenle geri alinabilmeli.
+	const char* no_extra = getenv("PSEMU_NO_KYTY_EXTRA");
+	if (no_extra == nullptr || no_extra[0] != '1') {
+		Libs::InitFont_1(db); // sceFont*
+		Libs::InitAmpr_1(db); // sceAmpr*
+	}
+
 	Libs::Controller::ControllerSubsystem::Instance()->Init(nullptr);
 	g_kyty_db = db;
 }

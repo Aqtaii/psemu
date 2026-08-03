@@ -24,6 +24,7 @@ set(GPU_INCLUDES
     ${GPU_TP}/cpuinfo/include        # cpuinfo.h (systemInfo.cpp)
     ${GPU_TP}/winpthread/include     # pthread.h (Windows pthread emulasyonu)
     ${GPU_TP}/nlohmann_json/single_include  # json.hpp (loader/systemContent.cpp)
+    ${GPU_TP}/stb                    # stb_truetype.h (libs/libFont.cpp)
     $ENV{VULKAN_SDK}/Include         # SPIRV-Tools C++ API (spirv-tools/...)
 )
 
@@ -55,6 +56,15 @@ set(GPU_LIBS_SRC
     ${GPU_SRC}/libs/libVideoOut.cpp
     ${GPU_SRC}/libs/libPad.cpp
     ${GPU_SRC}/libs/controller.cpp
+    # libAmpr: sceAmpr* (106 fonksiyon). Bunlar psemu'da govdesiz stub'di
+    # ([HLE-EKSIK] ile olculdu: CommandBufferConstructor / SetBuffer /
+    # GetNumCommands / AprCommandBufferConstructor) - oysa Kyty'de zaten
+    # uygulanmis. Derlenmedigi icin agc_bridge onlara yonlendiremiyordu.
+    ${GPU_SRC}/libs/libAmpr.cpp
+    # libFont: sceFont* (70 fonksiyon). Ayni durum - oyunun kendi assert'i
+    # "FontSystem.cpp:140 *pFontHandle != 0" ile yakalanmisti ve psemu'da
+    # elle sahte tutamac uretiyorduk; Kyty'nin gercek uygulamasi burada.
+    ${GPU_SRC}/libs/libFont.cpp
 )
 
 # loader/'den yalnizca graphics/libs'in ihtiyac duydugu yardimcilar (timer,
