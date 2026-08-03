@@ -44,6 +44,10 @@
 
 namespace Libs::Graphics {
 
+// Tani: GPU anlik goruntu isaretleri (govdeleri graphicsRun.cpp).
+void PsemuGpuMark(const char* site, uint64_t a, uint64_t b, uint64_t c);
+void PsemuGpuMarkIdle(const char* site, uint64_t a, uint64_t b, uint64_t c);
+
 struct ShaderBinaryInfo {
 	uint8_t  signature[7];
 	uint8_t  version;
@@ -1180,14 +1184,25 @@ bool ShaderCompileInfoCS(const HW::ComputeShaderInfo* regs, const HW::ShaderRegi
 	EXIT_IF(spirv == nullptr);
 	*spirv = {};
 
+	// TANI: anlik goruntu, hesaplama halkasinin render mutex'ini ALIP
+	// "pipeline/shader derleme" isaretine hic varamadigini gosterdi. O izsiz
+	// bolgedeki ilk agir adim bu fonksiyon. Asamalari tek tek isaretliyoruz;
+	// takilma nobetcisi hangisinde kalindigini dokecek.
+	PsemuGpuMark("ShaderCompileInfoCS: giris", regs->cs_regs.data_addr, 0, 0);
+
+	PsemuGpuMark("ShaderGetStaticInputInfoCS", regs->cs_regs.data_addr, 0, 0);
 	ShaderGetStaticInputInfoCS(regs, sh, info);
 	const auto shader_hash = regs->cs_regs.data_addr;
+	PsemuGpuMark("ShaderGetIdCS", shader_hash, 0, 0);
 	const auto program_id  = ShaderGetIdCS(regs, info, false);
 	const auto key         = MakeShaderStageProgramKey(ShaderType::Compute, shader_hash, program_id,
 	                                                   ShaderLaneMaskMode::NativeWave);
 
 	{
+		// Global onbellek kilidi: baska bir thread tutuyorsa BURADA bloke oluruz.
+		PsemuGpuMark("shader onbellek kilidi bekleniyor", shader_hash, 0, 0);
 		std::scoped_lock lock(g_shader_program_cache_mutex);
+		PsemuGpuMark("shader onbellek kilidi alindi", shader_hash, 0, 0);
 		if (auto iter = g_shader_program_cache.find(key); iter != g_shader_program_cache.end()) {
 			for (const auto& permutation: iter->second) {
 				if (TryUseComputePermutation(*permutation, regs, info, shader_hash)) {
@@ -1201,14 +1216,22 @@ bool ShaderCompileInfoCS(const HW::ComputeShaderInfo* regs, const HW::ShaderRegi
 	}
 
 	std::vector<uint32_t> compiled_spirv;
-	if (!ShaderCompileSpirvCS(regs, sh, info, &compiled_spirv)) {
+	// ASIL PSSL -> SPIR-V CEVIRISI: parser/generator sonsuz dongusu icin
+	// birinci suphelidir.
+	PsemuGpuMark("ShaderCompileSpirvCS -> giris", shader_hash, 0, 0);
+	const bool compiled_ok = ShaderCompileSpirvCS(regs, sh, info, &compiled_spirv);
+	PsemuGpuMark("ShaderCompileSpirvCS -> cikis", shader_hash, compiled_spirv.size(), 0);
+	if (!compiled_ok) {
+		PsemuGpuMark("ShaderCompileInfoCS: cikis (derleme basarisiz)", shader_hash, 0, 0);
 		return false;
 	}
 
 	ShaderProgramPermutation permutation {};
 	permutation.spirv   = std::move(compiled_spirv);
 	permutation.program = info->stage.program;
+	PsemuGpuMark("AddShaderProgramPermutation -> giris", shader_hash, 0, 0);
 	*spirv = AddShaderProgramPermutation("CS", shader_hash, key, std::move(permutation));
+	PsemuGpuMark("ShaderCompileInfoCS: cikis", shader_hash, 0, 0);
 	return true;
 }
 
@@ -1537,7 +1560,12 @@ bool ShaderCompileSpirvCS(const HW::ComputeShaderInfo* regs, const HW::ShaderReg
 
 	ShaderRecompiler::CompileResult result;
 	std::string                     error;
-	if (!ShaderRecompiler::TryRecompile(code, options, &result, &error)) {
+	// PSSL cozumleme + SPIR-V uretimi burada. Parser sonsuz dongusu bu
+	// cagrinin ICINDE olursa isaret "TryRecompile(CS) -> giris"te takili kalir.
+	PsemuGpuMark("TryRecompile(CS) -> giris", options.shader_hash, code.size(), 0);
+	const bool cs_recompiled = ShaderRecompiler::TryRecompile(code, options, &result, &error);
+	PsemuGpuMark("TryRecompile(CS) -> cikis", options.shader_hash, result.spirv.size(), 0);
+	if (!cs_recompiled) {
 		ExitShaderRecompilerFailure("ShaderRecompiler CS", options.shader_hash, error.c_str());
 	}
 	DumpShaderRecompilerOriginal("cs", options.shader_hash, code, result.decoded_dump);
