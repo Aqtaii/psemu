@@ -50,6 +50,14 @@ namespace Libs::LibKernel {
 void KYTY_SYSV_ABI KernelDispatchPendingSignalForCurrentThread() {}
 } // namespace Libs::LibKernel
 
+// --- RuntimeLinker::StackTrace ----------------------------------------------
+// libC'nin abort/hata yollari bunu cagiriyor. Kyty'nin runtimeLinker'i
+// DERLENMIYOR (psemu'nun kendi loader'iyla cakisir); psemu'nun kendi yigin
+// dokumu zaten var, burada no-op yeterli.
+namespace Loader {
+void RuntimeLinker::StackTrace(uint64_t /*frames*/) {}
+} // namespace Loader
+
 // --- RenderDoc (debug capture araci — bizde yok, hepsi no-op) ----------------
 namespace Libs::Graphics {
 void RenderDocInit() {}

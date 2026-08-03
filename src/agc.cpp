@@ -219,6 +219,22 @@ bool Dispatch(const std::string& nid, const std::string& name, CONTEXT* ctx) {
         for (const char* o : kOwned) {
             if (n == o) return true;
         }
+        // libC tarafi: psemu'nun SICAK YOLLARI ve bu oturumda olcup
+        // duzelttigimiz fonksiyonlar. memcpy/memset/memmove/memcmp native PLT
+        // dispatch'ten geciyor (GOT'a dogrudan host adresi yaziliyor); Kyty'ye
+        // yonlendirmek her cagriyi VEH turuna sokar ve olculmus hizlanmayi
+        // (FPS 5-7 -> 15) geri alir. printf ailesi ve _s ailesi de bizde
+        // duzeltildi (sprintf_s bos donuyordu, strnstr hep 0 donuyordu).
+        static const char* kOwnedLibc[] = {
+            "memcpy", "memset", "memmove", "memcmp", "strlen", "strcmp", "strncmp",
+            "strcpy", "strncpy", "strcat", "strstr", "strnstr", "strchr", "strrchr",
+            "sprintf", "snprintf", "vsnprintf", "printf", "libc_printf", "puts",
+            "fputs", "fflush", "sprintf_s", "vsprintf_s", "strcpy_s", "strncpy_s",
+            "strncat_s", "memcpy_s", "memmove_s",
+        };
+        for (const char* o : kOwnedLibc) {
+            if (n == o) return true;
+        }
         // Aile bazinda: semafor, olay bayragi, olay kuyrugu, thread/pthread.
         return n.find("Sema") != std::string::npos ||
                n.find("EventFlag") != std::string::npos ||
