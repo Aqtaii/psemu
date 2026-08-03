@@ -565,7 +565,11 @@ void RenderDispatchDirect(uint64_t submit_id, CommandBuffer* buffer, HW::Context
 		                pipeline->pipeline_layout, input_info.stage,
 		                vk::ShaderStageFlagBits::eCompute, DescriptorCache::Stage::Compute);
 		rdd("BindDescriptors -> cikis");
+		// Uc satirlik bosluk: her adimi ayri isaretliyoruz ki "son olum"
+		// hangisiymis kesinlessin.
+		rdd("generation check yapiliyor");
 		if (buffer->GetRecordingGeneration() != recording_generation) {
+			rdd("generation degisti, baslangica atlanacak");
 			if (++dispatch_retries <= 8 || (dispatch_retries % 1000) == 0) {
 				printf("[DISP-RETRY] tur=%llu kusak %llu -> %llu (BindDescriptors kusagi "
 				       "degistirdi, dongu bastan)\n",
@@ -583,7 +587,9 @@ void RenderDispatchDirect(uint64_t submit_id, CommandBuffer* buffer, HW::Context
 		}
 
 		// 3) DISPATCH KAYDI
+		rdd("FlushBounceCopies(pre) -> giris");
 		FlushBounceCopies(vk_buffer, false);
+		rdd("FlushBounceCopies(pre) -> cikis");
 		rdd("vkCmdDispatch -> giris");
 		vk_buffer.dispatch(thread_group_x, thread_group_y, thread_group_z);
 		rdd("vkCmdDispatch -> cikis");

@@ -81,7 +81,15 @@ static void BounceTrace(const char* what, size_t idx, uint64_t addr, uint64_t si
 }
 
 void FlushBounceCopies(vk::CommandBuffer vk_cmd, bool is_post) {
-    if (g_bounce_copies.empty()) return;
+    // IZ, ERKEN DONUSTEN ONCE: onceki surumde iz "if (empty) return;"
+    // SONRASINDAYDI, yani bos listeyle yapilan cagri log'da hic gorunmuyordu
+    // ve "iz yok = cagrilmadi" yanilgisi mumkundu.
+    BounceTrace(is_post ? "CAGRILDI (post)" : "CAGRILDI (pre)", g_bounce_copies.size(), 0, 0);
+    if (g_bounce_copies.empty()) {
+        BounceTrace(is_post ? "bos liste -> aninda cikis (post)" : "bos liste -> aninda cikis (pre)",
+                    0, 0, 0);
+        return;
+    }
     BounceTrace(is_post ? "giris (post)" : "giris (pre)", g_bounce_copies.size(), 0, 0);
     size_t bounce_index = 0;
     for (const auto& copy : g_bounce_copies) {
