@@ -22,6 +22,14 @@
 #include <span>
 #include <utility>
 
+
+// Tani: GPU anlik goruntu isaretleri (govdeleri graphicsRun.cpp).
+namespace Libs::Graphics {
+void PsemuGpuMark(const char* site, uint64_t a, uint64_t b, uint64_t c);
+void PsemuGpuMarkIdle(const char* site, uint64_t a, uint64_t b, uint64_t c);
+}
+using Libs::Graphics::PsemuGpuMark;
+using Libs::Graphics::PsemuGpuMarkIdle;
 namespace Libs::Graphics::ShaderRecompiler {
 
 namespace {
@@ -652,6 +660,7 @@ bool TryRecompile(std::span<const uint32_t> code, const CompileOptions& options,
 	     static_cast<uint64_t>(code.size()));
 
 	Decoder::Program decoded;
+	PsemuGpuMark("REC: DecodeProgram", options.shader_hash, code.size(), 0);
 	if (!Decoder::DecodeProgram(code, &decoded, error)) {
 		return false;
 	}
@@ -671,6 +680,7 @@ bool TryRecompile(std::span<const uint32_t> code, const CompileOptions& options,
 	CFG::Graph cfg;
 	LOGF("%s phase begin: stage=%s hash=0x%016" PRIx64 " CFG BuildGraph\n", GetDumpLabel(options),
 	     StageName(options.stage), options.shader_hash);
+	PsemuGpuMark("REC: CFG BuildGraph", options.shader_hash, decoded.instructions.size(), 0);
 	if (!CFG::BuildGraph(decoded, &cfg, error)) {
 		return false;
 	}
@@ -691,6 +701,7 @@ bool TryRecompile(std::span<const uint32_t> code, const CompileOptions& options,
 		const auto  unstructured_cfg = cfg;
 		LOGF("%s phase begin: stage=%s hash=0x%016" PRIx64 " CFG Structurize\n",
 		     GetDumpLabel(options), StageName(options.stage), options.shader_hash);
+		PsemuGpuMark("REC: CFG Structurize", options.shader_hash, cfg.blocks.size(), 0);
 		if (!CFG::Structurize(&cfg, &structure_error)) {
 			const auto diagnostic = FormatCfgFailure(cfg, options, structure_error);
 			LOGF("%s structured CFG bug/failure: %s\n", GetDumpLabel(options), diagnostic.c_str());
@@ -717,6 +728,7 @@ bool TryRecompile(std::span<const uint32_t> code, const CompileOptions& options,
 	IR::Program ir;
 	LOGF("%s phase begin: stage=%s hash=0x%016" PRIx64 " IR LowerProgram\n", GetDumpLabel(options),
 	     StageName(options.stage), options.shader_hash);
+	PsemuGpuMark("REC: IR LowerProgram", options.shader_hash, cfg.blocks.size(), 0);
 	if (!IR::LowerProgram(decoded, cfg, options.stage, options.wave_size, &ir, error)) {
 		return false;
 	}
@@ -742,10 +754,12 @@ bool TryRecompile(std::span<const uint32_t> code, const CompileOptions& options,
 			     rewritten);
 		}
 	}
+	PsemuGpuMark("REC: BuildScalarProvenance", options.shader_hash, 0, 0);
 	if (!IR::BuildScalarProvenance(&ir, error)) {
 		return false;
 	}
 	std::string srt_error;
+	PsemuGpuMark("REC: BuildSrtPlan", options.shader_hash, 0, 0);
 	if (!IR::BuildSrtPlan(&ir, &srt_error)) {
 		LOGF("%s SRT planning failed: %s\n", GetDumpLabel(options), srt_error.c_str());
 		if (error != nullptr) {
@@ -758,6 +772,7 @@ bool TryRecompile(std::span<const uint32_t> code, const CompileOptions& options,
 		ir.fallback_reason = dispatcher_reason;
 	}
 
+	PsemuGpuMark("REC: PatchSrtReads/TrackResources", options.shader_hash, 0, 0);
 	if (!IR::PatchSrtReads(&ir, error) || !IR::TrackResources(&ir, error)) {
 		return false;
 	}

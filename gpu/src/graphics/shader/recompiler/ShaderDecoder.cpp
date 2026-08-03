@@ -11,6 +11,12 @@
 #include <fmt/format.h>
 #include <set>
 
+
+// Tani: GPU anlik goruntu isareti (govdesi graphicsRun.cpp).
+namespace Libs::Graphics {
+void PsemuGpuMarkIdle(const char* site, uint64_t a, uint64_t b, uint64_t c);
+}
+using Libs::Graphics::PsemuGpuMarkIdle;
 namespace Libs::Graphics::ShaderRecompiler::Decoder {
 namespace {
 
@@ -351,9 +357,17 @@ bool DecodeProgram(std::span<const uint32_t> code, Program* program, std::string
 	program->code = code;
 
 	std::set<uint32_t> branch_targets;
+	// TANI: PSSL komut cozumleme ANA DONGUSU. word_index'i ilerletmek her
+	// Decode* fonksiyonunun sorumlulugunda; biri ilerletmezse burasi sonsuza
+	// kadar ayni komutu okur. Anlik goruntu bunu "tur sayaci cildirmis ama
+	// ofset sabit" olarak gosterir. Sessiz varyant: bos donen dongu global
+	// ilerleme sayilmasin.
+	uint64_t decode_round = 0;
 	for (uint32_t word_index = 0; word_index < code.size();) {
 		const uint32_t pc   = word_index * 4u;
 		const uint32_t word = code[word_index];
+
+		PsemuGpuMarkIdle("PSSL cozumleme dongusu", decode_round++, word_index, word);
 
 		Instruction inst;
 		bool        ok = false;

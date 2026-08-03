@@ -7,6 +7,12 @@
 #include <fmt/format.h>
 #include <map>
 
+
+// Tani: GPU anlik goruntu isareti (govdesi graphicsRun.cpp).
+namespace Libs::Graphics {
+void PsemuGpuMarkIdle(const char* site, uint64_t a, uint64_t b, uint64_t c);
+}
+using Libs::Graphics::PsemuGpuMarkIdle;
 namespace Libs::Graphics::ShaderRecompiler::IR {
 uint32_t ScalarValueArgCount(ScalarValueOp op) {
 	switch (op) {
@@ -229,8 +235,14 @@ public:
 			}
 		}
 		Queue(0);
+		// TANI: skaler-koken analizi bir IS LISTESI SABIT-NOKTA dongusu.
+		// Yalnizca degerler YAKINSARSA biter; transfer fonksiyonu monoton
+		// degilse (deger salinirsa) sonsuza kadar doner ve iterasyon SINIRI
+		// YOK. Anlik goruntu bunu "tur sayaci cildirmis" olarak gosterir.
+		uint64_t prov_round = 0;
 		while (!m_work.empty()) {
 			const auto block_index = m_work.front();
+			PsemuGpuMarkIdle("provenance is listesi", prov_round++, block_index, m_work.size());
 			m_work.pop_front();
 			m_queued[block_index] = false;
 
