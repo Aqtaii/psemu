@@ -580,9 +580,18 @@ static bool IsSupportedStorageTextureDescriptor(const ShaderRecompiler::IR::Imag
 	    descriptor.BaseArray5() <= descriptor.Depth();
 	const bool is_3d = resource.dimension == ShaderRecompiler::Decoder::ImageDimension::Dim3D &&
 	                   descriptor.Type() == Prospero::GpuEnumValue(Prospero::ImageType::kColor3D);
+	// kind kisiti StorageImageUint'ten StorageImage'i de kapsayacak sekilde
+	// genisletildi. Gerekce IsSupportedStorageDepthTile'daki notla ayni:
+	// derinlik dosemesi bir adres permutasyonudur, sayisal yorum (float/uint)
+	// doseme yolunu degistirmez. Format kisiti ORADA duruyor - yani bu
+	// gevsetme yalnizca oradaki beyaz listeyle birlikte etki eder, her
+	// storage goruntusune kapi acmaz.
+	const bool storage_image_kind =
+	    resource.kind == ShaderRecompiler::IR::ResourceKind::StorageImageUint ||
+	    resource.kind == ShaderRecompiler::IR::ResourceKind::StorageImage;
 	const bool supported_depth_tile =
 	    tile == Prospero::GpuEnumValue(Prospero::TileMode::kDepth) && !resource.read &&
-	    resource.kind == ShaderRecompiler::IR::ResourceKind::StorageImageUint &&
+	    storage_image_kind &&
 	    IsSupportedStorageDepthTile(descriptor.Format(), descriptor.Type(), width, height, depth);
 	const bool supported_tile = tile == Prospero::GpuEnumValue(Prospero::TileMode::kLinear) ||
 	                            tile == Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) ||

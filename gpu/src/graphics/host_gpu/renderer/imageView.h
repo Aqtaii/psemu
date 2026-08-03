@@ -17,11 +17,38 @@ namespace Libs::Graphics {
 	    format == Prospero::GpuEnumValue(Prospero::BufferFormat::k32UInt) ||
 	    format == Prospero::GpuEnumValue(Prospero::BufferFormat::k16Float) ||
 	    format == Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float);
+	// Iki kanalli formatlarin tamami (8_8 / 16_16 / 32_32 aileleri).
+	const bool two_channel =
+	    format == Prospero::GpuEnumValue(Prospero::BufferFormat::k8_8UNorm) ||
+	    format == Prospero::GpuEnumValue(Prospero::BufferFormat::k8_8SNorm) ||
+	    format == Prospero::GpuEnumValue(Prospero::BufferFormat::k8_8UScaled) ||
+	    format == Prospero::GpuEnumValue(Prospero::BufferFormat::k8_8SScaled) ||
+	    format == Prospero::GpuEnumValue(Prospero::BufferFormat::k8_8UInt) ||
+	    format == Prospero::GpuEnumValue(Prospero::BufferFormat::k8_8SInt) ||
+	    format == Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16UNorm) ||
+	    format == Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16SNorm) ||
+	    format == Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16UScaled) ||
+	    format == Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16SScaled) ||
+	    format == Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16UInt) ||
+	    format == Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16SInt) ||
+	    format == Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16Float) ||
+	    format == Prospero::GpuEnumValue(Prospero::BufferFormat::k32_32UInt) ||
+	    format == Prospero::GpuEnumValue(Prospero::BufferFormat::k32_32SInt) ||
+	    format == Prospero::GpuEnumValue(Prospero::BufferFormat::k32_32Float);
 	return swizzle == DstSel(4, 5, 6, 7) ||
 	       (single_channel && (swizzle == DstSel(4, 0, 0, 0) || swizzle == DstSel(4, 0, 0, 1) ||
 	                           swizzle == DstSel(4, 4, 4, 4))) ||
-	       (format == Prospero::GpuEnumValue(Prospero::BufferFormat::k32_32UInt) &&
-	        swizzle == DstSel(4, 5, 0, 1)) ||
+	       // DstSel(4,5,0,1) = "iki kanal var, z=0, w=1" - IKI KANALLI
+	       // formatlarin KANONIK eslemesi. Onceden yalnizca k32_32UInt icin
+	       // beyaz listedeydi ve oyun ayni swizzle'i baska iki-kanalli
+	       // formatlarla da kullaniyor: olcumde once k16_16Float (960x540),
+	       // sonra k8_8UNorm (1920x1080) ayni desenle geldi. Tek tek eklemek
+	       // ayni duvara tekrar tekrar toslamak olurdu.
+	       //
+	       // Swizzle bir KANAL ESLEMESIDIR; sayisal tip (unorm/uint/float)
+	       // eslemeyi degistirmez, yalnizca KANAL SAYISI onemlidir. Bu yuzden
+	       // kural iki kanalli formatlarin tamamina genellestirildi.
+	       (two_channel && swizzle == DstSel(4, 5, 0, 1)) ||
 	       ((format == Prospero::GpuEnumValue(Prospero::BufferFormat::k8_8_8_8UNorm) ||
 	         format == Prospero::GpuEnumValue(Prospero::BufferFormat::k8_8_8_8UInt)) &&
 	        (swizzle == DstSel(4, 5, 6, 1) || swizzle == DstSel(6, 5, 4, 7))) ||
@@ -36,6 +63,20 @@ namespace Libs::Graphics {
 	        type == Prospero::GpuEnumValue(Prospero::ImageType::kColor2DArray) && width != 0 &&
 	        height != 0 && depth == 1) ||
 	       (format == Prospero::GpuEnumValue(Prospero::BufferFormat::k32UInt) &&
+	        type == Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) && width != 0 &&
+	        height != 0 && depth == 1) ||
+	       // k32Float EKLENDI. Gerekce: derinlik dosemesi (Z-order) saf bir
+	       // ADRES PERMUTASYONUDUR - 32 bitin float mi uint mi oldugu
+	       // doseme matematigini DEGISTIRMEZ, yalnizca eleman boyutu onemli.
+	       // Yani k32Float + kColor2D, zaten desteklenen k32UInt + kColor2D
+	       // ile bit bit ayni adresleme kullanir.
+	       // Olculdu: Astro Bot 960x540 (1920x1080'in tam yarisi) k32Float
+	       // kDepth dosemeli bir yuzeye YALNIZCA YAZIYOR (read=0, written=1) -
+	       // yarim cozunurluklu derinlik tamponu. Yakinsamis provenance
+	       // analiziyle de ayni descriptor uretildigi dogrulandi, yani bu
+	       // oyunun gercek istegi.
+	       // NOT: R32_SFLOAT, Vulkan'da zorunlu storage-image formatlarindandir.
+	       (format == Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float) &&
 	        type == Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) && width != 0 &&
 	        height != 0 && depth == 1);
 }
