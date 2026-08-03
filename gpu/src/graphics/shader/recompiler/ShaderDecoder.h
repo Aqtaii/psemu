@@ -520,6 +520,7 @@ enum class Opcode {
 	VInterpMovF32,
 
 	SNop,
+	STrap,
 	SWaitcnt,
 	SBarrier,
 	SBranch,

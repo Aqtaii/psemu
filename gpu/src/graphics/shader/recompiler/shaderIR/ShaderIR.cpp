@@ -989,6 +989,7 @@ bool LowerControlInstruction(const Decoder::Instruction& decoded, BasicBlock* bl
                              std::string* error) {
 	switch (decoded.opcode) {
 		case Decoder::Opcode::SNop:
+		case Decoder::Opcode::STrap:
 			return LowerControlMarker(decoded, block, Opcode::ControlNop, true, error);
 		case Decoder::Opcode::SWaitcnt:
 			return LowerControlMarker(decoded, block, Opcode::Waitcnt, true, error);
@@ -1069,6 +1070,7 @@ bool LowerScalarSaveexec(const Decoder::Instruction& decoded, BasicBlock* block,
 bool IsControlOpcode(Decoder::Opcode opcode) {
 	switch (opcode) {
 		case Decoder::Opcode::SNop:
+		case Decoder::Opcode::STrap:
 		case Decoder::Opcode::SWaitcnt:
 		case Decoder::Opcode::SBarrier:
 		case Decoder::Opcode::SSendmsg:

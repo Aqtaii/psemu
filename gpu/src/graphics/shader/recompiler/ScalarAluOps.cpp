@@ -72,7 +72,20 @@ constexpr OpcodeMap SOPK_OPS[] = {
 };
 
 constexpr OpcodeMap SOPP_OPS[] = {
-    {0x00u, Opcode::SNop},          {0x01u, Opcode::SEndpgm},       {0x02u, Opcode::SBranch},
+    // 0x12 = s_trap. Numara tahmin degil: bu tablodaki mevcut girdiler GFX10
+// SOPP siralamasini dogruluyor (0x0a barrier, 0x0c waitcnt, 0x0e sleep,
+// 0x10 sendmsg, 0x16 ttracedata, 0x20 inst_prefetch) ve o siralamada
+// 0x11 sendmsghalt, 0x12 trap, 0x13 icache_inv gelir.
+// Olculen komut: pc 0x1f80, raw=0xbf920001 -> SIMM16 = 1, yani "s_trap 1".
+//
+// NO-OP olarak indirgeniyor (ControlNop). Gerekce: emulatorde trap
+// isleyicisi yok; gercek donanimda s_trap dalgayi durdurup hata ayiklayiciya
+// gecer, bizde boyle bir hedef bulunmuyor. Shipping shader'larda s_trap
+// tipik olarak ulasilmaz/hata-ayiklama yolunda durur.
+// DURUSTLUK NOTU: bu anlambilimi DEGISTIRIR - gercekten tetiklenen bir trap
+// artik sessizce yutulur. Alternatifi tum shader'i reddetmekti, ki o da
+// cizimi tamamen engelliyordu.
+{0x00u, Opcode::SNop},          {0x12u, Opcode::STrap},          {0x01u, Opcode::SEndpgm},       {0x02u, Opcode::SBranch},
     {0x04u, Opcode::SCbranchScc0},  {0x05u, Opcode::SCbranchScc1},  {0x06u, Opcode::SCbranchVccz},
     {0x07u, Opcode::SCbranchVccnz}, {0x08u, Opcode::SCbranchExecz}, {0x09u, Opcode::SCbranchExecnz},
     {0x0au, Opcode::SBarrier},      {0x0cu, Opcode::SWaitcnt},      {0x0eu, Opcode::SSleep},
@@ -265,7 +278,8 @@ bool DecodeSopp(uint32_t pc, std::span<const uint32_t> code, uint32_t word_index
 	inst->src0.kind       = OperandKind::LiteralConstant;
 	inst->src0.value      = simm;
 	inst->src0.signed_val = static_cast<int16_t>(simm);
-	inst->src_count = (inst->opcode == Opcode::SNop || inst->opcode == Opcode::SWaitcnt ||
+	inst->src_count = (inst->opcode == Opcode::SNop || inst->opcode == Opcode::STrap ||
+	                   inst->opcode == Opcode::SWaitcnt ||
 	                   inst->opcode == Opcode::SSleep || inst->opcode == Opcode::SSendmsg ||
 	                   inst->opcode == Opcode::STtraceData || inst->opcode == Opcode::SInstPrefetch)
 	                      ? 1
