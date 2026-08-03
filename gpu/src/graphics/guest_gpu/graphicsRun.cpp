@@ -29,6 +29,7 @@
 #include <atomic>
 #include <cstdio>
 #include <list>
+#include <chrono> // kademeli geri cekilme: sleep_for
 #include <thread>
 #include <vector>
 
@@ -601,6 +602,43 @@ static void YieldCommandProcessorWait(uint32_t poll_interval_cycles) noexcept {
 	std::this_thread::yield();
 }
 
+// ============================================================================
+// KADEMELI GERI CEKILME (exponential backoff) - bos spin'i uykuya cevirir
+// ----------------------------------------------------------------------------
+// OLCUM: wait_reg_mem el sikismalari CALISIYOR ama her tur SANIYELER suruyor
+// (bir etikette 3.400.000 spin; 497 dword'luk tampon 4 dakikada ancak 183.
+// ofsete geldi). std::this_thread::yield() isletim sistemine "bekliyorum"
+// demez, yalnizca "bu dilimi gec" der ve aninda geri doner - bekleyen
+// thread'ler CPU'yu doldurup YAZAN thread'i acikta birakiyor olabilir.
+//
+// Uc kademe: once saf yield (kisa el sikismalar bedava kalsin), sonra
+// mikro-uyku, sonra 1 ms. 1 ms CPU olceginde uzun bir sure; yazan tarafa
+// arasina girip etiketi yazmasi icin bol zaman verir.
+//
+// AYARLANABILIR: PSEMU_CP_SPIN_YIELD (varsayilan 50000) tur sayisindan
+// sonra uykuya gecilir. 0 -> eski davranis (hep yield), boylece degisiklik
+// tek degiskenle geri alinabilir ve A/B olculebilir.
+static void BackoffCommandProcessorWait(uint64_t spin_count, uint32_t poll_interval_cycles) noexcept {
+	static const uint64_t kYieldRounds = [] {
+		const char* e = std::getenv("PSEMU_CP_SPIN_YIELD");
+		if (e == nullptr) {
+			return static_cast<uint64_t>(50000);
+		}
+		const long long v = atoll(e);
+		return static_cast<uint64_t>(v < 0 ? 0 : v);
+	}();
+
+	if (kYieldRounds == 0 || spin_count < kYieldRounds) {
+		YieldCommandProcessorWait(poll_interval_cycles);
+		return;
+	}
+	if (spin_count < kYieldRounds * 2u) {
+		std::this_thread::sleep_for(std::chrono::microseconds(100));
+		return;
+	}
+	std::this_thread::sleep_for(std::chrono::milliseconds(1));
+}
+
 // Tani: asagida tanimli (gonderilen tamponlarda etiket aramasi).
 static void PsemuScanSubmittedForLabel(uint64_t label);
 
@@ -684,7 +722,7 @@ void CommandProcessor::WaitRegMem(uint32_t func, const T* addr, T ref, T mask, u
 				}
 			}
 		}
-		YieldCommandProcessorWait(poll);
+		BackoffCommandProcessorWait(spin_count, poll);
 	}
 }
 
@@ -2008,11 +2046,25 @@ void CommandProcessor::WriteAtEndOfPipe64(uint32_t cache_policy, uint32_t event_
 }
 
 void CommandProcessor::MemoryBarrier() {
+	{
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 40) {
+			printf("[MEM-BARIYER] giris (cp=%p)\n", static_cast<void*>(this));
+			fflush(stdout);
+		}
+	}
 	Common::LockGuard lock(m_mutex);
 
 	CheckBuffer();
 
 	GraphicsRenderMemoryBarrier(CurrentBuffer());
+	{
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 40) {
+			printf("[MEM-BARIYER] cikis (cp=%p)\n", static_cast<void*>(this));
+			fflush(stdout);
+		}
+	}
 }
 
 void CommandProcessor::TriggerEopEventAtEndOfPipe(uint32_t interrupt_context_id) {
@@ -2178,8 +2230,26 @@ void CommandProcessor::PrepareCpuFlip() {
 }
 
 void CommandProcessor::SynchronizeGpu() {
+	// TANI: iki komut islemcisi de ACQUIRE_MEM paketinde duruyor ve hicbiri
+	// wait_reg_mem'de degil. Bu fonksiyon TUM islemcileri bekliyor
+	// (FinishCommandProcessors); ikisi de birbirini beklerse karsilikli
+	// kilit olusur. Giris/cikis yazilirsa bu KANITLANIR ya da CURUTULUR.
+	{
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 40) {
+			printf("[SYNC-GPU] giris  (cp=%p)\n", static_cast<void*>(this));
+			fflush(stdout);
+		}
+	}
 	Common::LockGuard lock(m_mutex);
 	FinishCommandProcessors();
+	{
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 40) {
+			printf("[SYNC-GPU] cikis  (cp=%p)\n", static_cast<void*>(this));
+			fflush(stdout);
+		}
+	}
 }
 
 // psemu: adapter/metrics.cpp — canli performans metrikleri (pencere basligi).
