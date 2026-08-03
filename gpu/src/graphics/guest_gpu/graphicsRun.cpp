@@ -1006,6 +1006,20 @@ bool GraphicsRing::IsIdle() {
 GraphicsRing::CmdBatch GraphicsRing::GetCmdBatch() {
 	Common::LockGuard lock(m_mutex);
 
+	// TANI [CP-FETCH]: dispatcher'in "kuyruktan is cekme" adimi. Sorulan
+	// sorular: 497 bittikten sonra buraya GERI DONULUYOR mu, kuyrukta is
+	// var mi (derinlik), yoksa bos diye cond-var'da mi uyunuyor?
+	// Kuyruk sinirsiz bir std::list; derinlik >0 iken burada uyumak
+	// imkansiz olmali - oyleyse takilma bu fonksiyonun DISINDA demektir.
+	{
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 200000) {
+			printf("[CP-FETCH] cekme denemesi: kuyruk_derinligi=%zu %s\n", m_cmd_batches.size(),
+			       m_cmd_batches.empty() ? "-> BOS, cond-var'da uyunacak" : "-> is var");
+			fflush(stdout);
+		}
+	}
+
 	while (m_cmd_batches.empty()) {
 		m_idle = true;
 		m_idle_cond_var.Signal();
@@ -1017,6 +1031,15 @@ GraphicsRing::CmdBatch GraphicsRing::GetCmdBatch() {
 
 	CmdBatch buf = std::move(m_cmd_batches.front());
 	m_cmd_batches.pop_front();
+
+	{
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 200000) {
+			printf("[CP-FETCH] is alindi: draw_dw=%u const_dw=%u kalan_kuyruk=%zu\n",
+			       buf.draw_buffer.num_dw, buf.const_buffer.num_dw, m_cmd_batches.size());
+			fflush(stdout);
+		}
+	}
 
 	return buf;
 }
@@ -1036,9 +1059,11 @@ void GraphicsRing::ThreadBatchRun(void* data) {
 	// ayristirilmiyor. Kuyruk sinirsiz bir std::list oldugu icin Submit
 	// BLOKE OLAMAZ - demek ki bu thread bir asamada takiliyor. Asagidaki
 	// isaretler hangisinde durdugunu SOYLER (ilk 24 tur loglanir).
+	// NOT: bu sayac 24*6 = 144 ile sinirliydi; oturumda kirpilmis tani
+	// ciktisindan bes kez yanlis sonuc cikardigim icin sinir kaldirildi.
 	auto stage = [](const char* what, uint64_t n) {
 		static std::atomic<uint32_t> s_n {0};
-		if (s_n.fetch_add(1) < 24 * 6) {
+		if (s_n.fetch_add(1) < 200000) {
 			printf("[CP-ASAMA] %s (tur %llu)\n", what, static_cast<unsigned long long>(n));
 			fflush(stdout);
 		}
