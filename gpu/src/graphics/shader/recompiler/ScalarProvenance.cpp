@@ -177,6 +177,67 @@ bool ValueResolved(const ScalarProvenance& provenance, uint32_t id, std::vector<
 	return resolved;
 }
 
+// ============================================================================
+// TANI + EMNIYET SUBABI: skaler-koken analizi yakinsamiyor
+// ----------------------------------------------------------------------------
+// Olculdu: is-listesi sabit-nokta dongusu 15 saniyede ~1.1 MILYON tur atiyor,
+// blok indeksi 287-290 arasinda donuyor ve is listesi hic bosalmiyor. Yani
+// transfer fonksiyonu MONOTON DEGIL - deger salindigi icin
+// "next_exit == m_exit[block]" kosulu hic saglanmiyor ve dongude iterasyon
+// SINIRI YOK.
+//
+// Asagidaki yardimci, salinan durumun HANGI BILESENI oldugunu yazar
+// (regs[i], address_bases[i], scc, m0, vector_lanes). Sinir asildiginda bu
+// dokum alinir, kalan bloklar korumaci sekilde Unknown'a sabitlenir ve
+// dongu kirilir: analiz kalitesi duser ama sonsuz dongu biter.
+// ============================================================================
+void ReportScalarStateDiff(uint32_t block_index, const ScalarState& prev, const ScalarState& next) {
+	printf("[PROV-SALINIM] blok=%u : onceki -> yeni farklari\n", block_index);
+	int shown = 0;
+	for (uint32_t i = 0; i < ScalarRegisters && shown < 12; i++) {
+		if (prev.regs[i] != next.regs[i]) {
+			printf("    regs[%u]: %u -> %u\n", i, prev.regs[i], next.regs[i]);
+			shown++;
+		}
+	}
+	for (uint32_t i = 0; i < VectorRegisters && shown < 20; i++) {
+		if (prev.address_bases[i] != next.address_bases[i]) {
+			printf("    address_bases[%u]: %u -> %u\n", i, prev.address_bases[i],
+			       next.address_bases[i]);
+			shown++;
+		}
+	}
+	if (prev.scc != next.scc) {
+		printf("    scc: %u -> %u\n", prev.scc, next.scc);
+		shown++;
+	}
+	if (prev.m0 != next.m0) {
+		printf("    m0: %u -> %u\n", prev.m0, next.m0);
+		shown++;
+	}
+	if (prev.vector_lanes != next.vector_lanes) {
+		printf("    vector_lanes: %zu girdi -> %zu girdi\n", prev.vector_lanes.size(),
+		       next.vector_lanes.size());
+		int lane_shown = 0;
+		for (const auto& [key, value]: next.vector_lanes) {
+			auto it = prev.vector_lanes.find(key);
+			if (it == prev.vector_lanes.end() || it->second != value) {
+				printf("        lane 0x%016llx: %s -> %u\n", static_cast<unsigned long long>(key),
+				       it == prev.vector_lanes.end() ? "(yok)" : std::to_string(it->second).c_str(),
+				       value);
+				if (++lane_shown >= 8) {
+					break;
+				}
+			}
+		}
+		shown++;
+	}
+	if (shown == 0) {
+		printf("    (bilesen farki yok - salinim entry tarafinda olabilir)\n");
+	}
+	fflush(stdout);
+}
+
 class Builder {
 public:
 	explicit Builder(Program* program): m_program(program), m_graph(program->provenance) {}
@@ -239,6 +300,18 @@ public:
 		// Yalnizca degerler YAKINSARSA biter; transfer fonksiyonu monoton
 		// degilse (deger salinirsa) sonsuza kadar doner ve iterasyon SINIRI
 		// YOK. Anlik goruntu bunu "tur sayaci cildirmis" olarak gosterir.
+		// EMNIYET SUBABI: yakinsamayan analiz emulator'u kilitliyordu.
+		// Sinir PSEMU_PROV_MAX_ROUNDS ile ayarlanabilir (varsayilan 100000);
+		// 0 = sinirsiz (eski davranis).
+		static const uint64_t kMaxRounds = [] {
+			const char* e = std::getenv("PSEMU_PROV_MAX_ROUNDS");
+			if (e == nullptr) {
+				return static_cast<uint64_t>(100000);
+			}
+			const long long v = atoll(e);
+			return v < 0 ? static_cast<uint64_t>(0) : static_cast<uint64_t>(v);
+		}();
+
 		uint64_t prov_round = 0;
 		while (!m_work.empty()) {
 			const auto block_index = m_work.front();
@@ -252,6 +325,35 @@ public:
 
 			auto       next_exit = Execute(m_program->blocks[block_index], next_entry, false);
 			const bool was_ready = m_exit_ready[block_index];
+
+			if (kMaxRounds != 0 && prov_round > kMaxRounds) {
+				printf("\n[PROV-SINIR] skaler-koken analizi YAKINSAMADI: %llu tur asildi "
+				       "(blok=%u, is_listesi=%zu, entry_changed=%d, was_ready=%d)\n",
+				       static_cast<unsigned long long>(kMaxRounds), block_index, m_work.size(),
+				       entry_changed ? 1 : 0, was_ready ? 1 : 0);
+				ReportScalarStateDiff(block_index, m_exit[block_index], next_exit);
+
+				// KORUMACI CIKIS: yakinsamayan bloklarin durumunu Unknown'a
+				// sabitle. Unknown "bilmiyorum" demek, yani downstream salinan
+				// yarim veriye degil korumaci degere bakar. Analiz kalitesi
+				// duser; dogruluk bozulmaz.
+				auto force_unknown = [&](uint32_t idx) {
+					m_entry[idx].Fill(ScalarProvenance::Unknown);
+					m_exit[idx].Fill(ScalarProvenance::Unknown);
+					m_exit_ready[idx] = true;
+				};
+				force_unknown(block_index);
+				for (const auto pending: m_work) {
+					force_unknown(pending);
+				}
+				printf("[PROV-SINIR] %zu blok Unknown'a sabitlendi, dongu kiriliyor.\n",
+				       m_work.size() + 1);
+				fflush(stdout);
+				m_work.clear();
+				std::fill(m_queued.begin(), m_queued.end(), false);
+				break;
+			}
+
 			if (was_ready && !entry_changed && next_exit == m_exit[block_index]) {
 				continue;
 			}
