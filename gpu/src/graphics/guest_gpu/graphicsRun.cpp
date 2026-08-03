@@ -34,6 +34,10 @@
 
 namespace Libs::Graphics {
 
+// TANI koprusu (psemu src/core.cpp): sayfa durumu/korumasi + tahsisat tabani.
+extern "C" unsigned long long PsemuQueryProtect(unsigned long long addr,
+                                                unsigned long long* out_alloc_base);
+
 static thread_local CommandProcessor* g_current_run_cp         = nullptr;
 static thread_local uint32_t          g_submission_pause_depth = 0;
 static thread_local bool              g_gpu_mutex_owned        = false;
@@ -647,14 +651,17 @@ void CommandProcessor::WaitRegMem(uint32_t func, const T* addr, T ref, T mask, u
 			// bekledigini SOYLER - yani o degeri kimin yazmasi gerektigini.
 			static std::atomic<uint32_t> s_stuck {0};
 			const uint32_t               sn = s_stuck.fetch_add(1);
-			if (sn < 12) {
-				printf("[CP-BEKLIYOR] wait_reg_mem%u TAKILDI: addr=0x%016llx deger=0x%llx "
-				       "ref=0x%llx maske=0x%llx func=%u spin=%llu\n",
-				       bits, static_cast<unsigned long long>(addr_value),
+			if (sn < 400) {
+				unsigned long long ab = 0;
+				const unsigned long long pr = PsemuQueryProtect(addr_value, &ab);
+				printf("[CP-BEKLIYOR] wait_reg_mem%u TAKILDI: ptr=%p deger=0x%llx "
+				       "ref=0x%llx maske=0x%llx func=%u spin=%llu | state=0x%llx prot=0x%llx "
+				       "alloc_base=0x%llx\n",
+				       bits, static_cast<const void*>(addr),
 				       static_cast<unsigned long long>(value),
 				       static_cast<unsigned long long>(ref),
 				       static_cast<unsigned long long>(mask), func,
-				       static_cast<unsigned long long>(spin_count));
+				       static_cast<unsigned long long>(spin_count), pr >> 16, pr & 0xffffull, ab);
 				fflush(stdout);
 			}
 			// Her FARKLI etiket icin bir kez tara (ayni adresi tekrar
@@ -789,7 +796,7 @@ void CommandProcessor::WriteData(uint32_t* dst, const uint32_t* src, uint32_t dw
 	// bosluguydu, kapatiyoruz.
 	{
 		static std::atomic<uint32_t> s_wd {0};
-		if (s_wd.fetch_add(1) < 48) {
+		if (s_wd.fetch_add(1) < 400) {
 			printf("[WD-YAZ] dst=0x%016llx dw=%u ilk_deger=0x%08x dst_sel=%u\n",
 			       static_cast<unsigned long long>(reinterpret_cast<uint64_t>(dst)), dw_num,
 			       src[0], dst_sel);
@@ -1841,6 +1848,29 @@ void CommandProcessor::WriteAtEndOfPipe(uint32_t cache_policy, uint32_t event_wr
 				auto write64 = [&](bool with_writeback) {
 					auto* dst = static_cast<uint64_t*>(dst_gpu_addr);
 					std::memcpy(dst, &value, sizeof(value));
+
+					// TANI: memcpy'den HEMEN SONRA geri oku. Bekleyen taraf
+					// ayni adreste sonsuza kadar 0 goruyor; bu satir
+					// "yazma bellege dustu mu, yoksa golge/staging bir
+					// tampona mi gitti" sorusunu ayirir. Sayfa korumasi da
+					// yazilir: readonly bir sayfaya memcpy sessizce
+					// gecemez - geciyorsa hedef asil misafir bellek degildir.
+					{
+						static std::atomic<uint32_t> s_n {0};
+						if (s_n.fetch_add(1) < 64) {
+							const uint64_t back = *static_cast<const volatile uint64_t*>(dst);
+							unsigned long long ab = 0;
+							const unsigned long long pr =
+							    PsemuQueryProtect(reinterpret_cast<unsigned long long>(dst), &ab);
+							printf("[YAZ-DOGRULA] ptr=%p yazilan=0x%llx geri_okunan=0x%llx "
+							       "state=0x%llx prot=0x%llx alloc_base=0x%llx\n",
+							       static_cast<void*>(dst),
+							       static_cast<unsigned long long>(value),
+							       static_cast<unsigned long long>(back), pr >> 16, pr & 0xffffull,
+							       ab);
+							fflush(stdout);
+						}
+					}
 
 					if (with_interrupt) {
 						if (with_writeback) {

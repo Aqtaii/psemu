@@ -39,6 +39,29 @@
 // GPU sayfa hatasi koprusu (gpu/adapter/agc_bridge.cpp). Sayfa Kyty'nin
 // yazma-izlemesindeyse hatayi O isler; degilse false doner.
 extern "C" bool PsemuGpuHandleFault(uint64_t fault_addr, int is_write);
+
+// ============================================================================
+// TANI KOPRUSU: bir adresin sayfa korumasi/durumu
+// ----------------------------------------------------------------------------
+// GPU tarafi (gpu/...) windows.h icermiyor (vulkan basliklariyla catisiyor).
+// Etiket bilmecesinde "yazan ve okuyan ayni FIZIKSEL sayfayi mi goruyor,
+// sayfa yazilabilir mi" sorusunu cevaplamak icin VirtualQuery sonucunu
+// oraya tasiyoruz. Donus: (State << 16) | (Protect & 0xffff), 0 = sorgu
+// basarisiz. AllocationBase ayri parametreyle doner - iki adresin AYNI
+// tahsisata ait olup olmadigini gosterir.
+extern "C" unsigned long long PsemuQueryProtect(unsigned long long addr,
+                                                unsigned long long* out_alloc_base) {
+    MEMORY_BASIC_INFORMATION mbi;
+    if (VirtualQuery(reinterpret_cast<void*>(addr), &mbi, sizeof(mbi)) == 0) {
+        if (out_alloc_base != nullptr) *out_alloc_base = 0;
+        return 0;
+    }
+    if (out_alloc_base != nullptr) {
+        *out_alloc_base = reinterpret_cast<unsigned long long>(mbi.AllocationBase);
+    }
+    return (static_cast<unsigned long long>(mbi.State) << 16) |
+           static_cast<unsigned long long>(mbi.Protect & 0xffffu);
+}
 // Performans metrikleri (gpu/adapter/metrics.cpp) - pencere basliginda gosterilir.
 extern "C" void PsemuMetricAddTlsFault();
 extern "C" void PsemuMetricAddPltCall();
