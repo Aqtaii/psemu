@@ -895,7 +895,22 @@ private:
 			if (incoming.empty()) {
 				return ScalarProvenance::Undefined;
 			}
-			if (incoming.size() == 1) {
+			// MONOTONLUK: bir yuva bir kez Phi'ye donustuyse ORADA KALIR.
+			//
+			// Eski hal "incoming.size() == 1" oldugunda ham degeri donuyordu.
+			// Ama gelen kume turdan tura BUYUYUP KUCULEBILIYOR (geri-kenardan
+			// gelen deger bazen kumede oluyor, bazen dedup'la eriyor). Bu
+			// durumda ayni yuva bir tur HAM deger, bir tur PHI donuyor ve
+			// sabit nokta hicbir zaman olusmuyordu: olculen salinim tam buydu
+			//   blok 294/295, regs[29]: 458 <-> 748  (458 ham deger, 748 Phi)
+			// 50.000.000 turda bile yakinsamadi.
+			//
+			// Kafesin monoton olmasi icin gecis TEK YONLU olmali:
+			// ham -> Phi olur, Phi -> ham OLMAZ. Boylece deger-kimligi bir
+			// daha gerilemez ve iterasyon sonlanir. Tek argumanli (dejenere)
+			// Phi anlamsal olarak sorunsuzdur; ValueResolved zaten herhangi
+			// bir arguman sayisini isler.
+			if (incoming.size() == 1 && *phi == ScalarProvenance::Undefined) {
 				return incoming[0];
 			}
 			if (*phi == ScalarProvenance::Undefined) {
