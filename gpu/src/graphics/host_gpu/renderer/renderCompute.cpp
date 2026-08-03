@@ -373,7 +373,20 @@ void RenderDispatchDirect(uint64_t submit_id, CommandBuffer* buffer, HW::Context
 	                     thread_group_x, thread_group_y, thread_group_z, mode,
 	                     sh_ctx != nullptr ? sh_ctx->GetCs().cs_regs.data_addr : 0);
 
+	// TANI [RDD]: RenderDispatchDirect icinde hangi asamanin donmedigini
+	// bulmak icin asama izleri. Dengesiz (giris=N, cikis=N-1) kalan asama
+	// takilan asamadir.
+	auto rdd = [](const char* what) {
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 200000) {
+			printf("[RDD] %s\n", what);
+			fflush(stdout);
+		}
+	};
+
+	rdd("render-mutex bekleniyor");
 	Common::LockGuard lock(g_render_ctx->GetMutex());
+	rdd("render-mutex alindi");
 
 	if (sh_ctx->GetCs().cs_regs.data_addr == 0) {
 		LOGF("GraphicsRenderDispatchDirect: temporary: ignoring dispatch with null CS shader, "
@@ -527,24 +540,53 @@ void RenderDispatchDirect(uint64_t submit_id, CommandBuffer* buffer, HW::Context
 		return;
 	}
 
+	// TANI: komut islemcisi IT_DISPATCH_DIRECT'te sert takiliyor ama TUM
+	// fence/readback sayaclari dengeli - yani bir beklemede degil, CPU
+	// donuyor. Bu dongu birinci suphelидir: BindDescriptors kayit kusagini
+	// her seferinde degistiriyorsa "continue" sonsuza kadar tetiklenir.
+	// Oturumda olculmustu: descriptor kurulumu sirasinda ayni tamponun
+	// kayit kusagi 6 -> 14 oluyordu (tek kurulumda 8 flush).
+	uint64_t dispatch_retries = 0;
 	for (;;) {
 		const auto recording_generation = buffer->GetRecordingGeneration();
 		auto       vk_buffer            = buffer->Handle();
-		auto*      pipeline             = g_render_ctx->GetPipelineCache()->CreateComputePipeline(
+		// 1) SHADER CEVIRISI + PIPELINE (PSSL -> SPIR-V burada tetikleniyor)
+		rdd("pipeline/shader derleme -> giris");
+		auto* pipeline = g_render_ctx->GetPipelineCache()->CreateComputePipeline(
 		    &input_info, &sh_ctx->GetCs(), cs_shader);
+		rdd("pipeline/shader derleme -> cikis");
 
 		vk_buffer.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->pipeline);
 
 		ClearBounceCopies();
+		// 2) DESCRIPTOR KURULUMU
+		rdd("BindDescriptors -> giris");
 		BindDescriptors(submit_id, buffer, vk::PipelineBindPoint::eCompute,
 		                pipeline->pipeline_layout, input_info.stage,
 		                vk::ShaderStageFlagBits::eCompute, DescriptorCache::Stage::Compute);
+		rdd("BindDescriptors -> cikis");
 		if (buffer->GetRecordingGeneration() != recording_generation) {
+			if (++dispatch_retries <= 8 || (dispatch_retries % 1000) == 0) {
+				printf("[DISP-RETRY] tur=%llu kusak %llu -> %llu (BindDescriptors kusagi "
+				       "degistirdi, dongu bastan)\n",
+				       static_cast<unsigned long long>(dispatch_retries),
+				       static_cast<unsigned long long>(recording_generation),
+				       static_cast<unsigned long long>(buffer->GetRecordingGeneration()));
+				fflush(stdout);
+			}
 			continue;
 		}
+		if (dispatch_retries != 0) {
+			printf("[DISP-RETRY] %llu turdan sonra CIKILDI\n",
+			       static_cast<unsigned long long>(dispatch_retries));
+			fflush(stdout);
+		}
 
+		// 3) DISPATCH KAYDI
 		FlushBounceCopies(vk_buffer, false);
+		rdd("vkCmdDispatch -> giris");
 		vk_buffer.dispatch(thread_group_x, thread_group_y, thread_group_z);
+		rdd("vkCmdDispatch -> cikis");
 		FlushBounceCopies(vk_buffer, true);
 
 		bool has_storage_writes = HasShaderBufferWrites(input_info.stage);
