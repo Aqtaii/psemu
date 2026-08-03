@@ -63,9 +63,29 @@ void ClearBounceCopies() {
     g_bounce_copies.clear();
 }
 
+// TANI [BOUNCE-FLUSH]: RenderDispatchDirect'te "BindDescriptors -> cikis"
+// ile "vkCmdDispatch -> giris" arasinda TEK bir cagri asili kaliyor ve
+// aradaki tek kod bu fonksiyon. Icinde cond-var/fence/while yok - dongu
+// g_bounce_copies uzerinde sinirli. Bu yuzden supheli TEK adim
+// TryReadBacking: MISAFIR bellegini okuyor, yani GPU yazma-izlemesindeki
+// bir sayfaya dokunursa VEH -> Kyty HandleFault zinciri tetiklenir; ustelik
+// bu noktada g_render_ctx mutex'i BIZDE. Asagidaki izler hangi adimda
+// kalindigini gosterir.
+static void BounceTrace(const char* what, size_t idx, uint64_t addr, uint64_t size) {
+    static std::atomic<uint32_t> s_n {0};
+    if (s_n.fetch_add(1) < 200000) {
+        printf("[BOUNCE-FLUSH] %s (kopya=%zu cpu_addr=0x%016llx boyut=%llu)\n", what, idx,
+               static_cast<unsigned long long>(addr), static_cast<unsigned long long>(size));
+        fflush(stdout);
+    }
+}
+
 void FlushBounceCopies(vk::CommandBuffer vk_cmd, bool is_post) {
     if (g_bounce_copies.empty()) return;
+    BounceTrace(is_post ? "giris (post)" : "giris (pre)", g_bounce_copies.size(), 0, 0);
+    size_t bounce_index = 0;
     for (const auto& copy : g_bounce_copies) {
+        BounceTrace("kopya isleniyor", bounce_index++, copy.cpu_address, copy.size);
         if (!copy.bounce_buffer || !copy.original_buffer) continue;
         if (!is_post) {
             vk::BufferMemoryBarrier pre[2] = {};
@@ -88,8 +108,14 @@ void FlushBounceCopies(vk::CommandBuffer vk_cmd, bool is_post) {
                 // Boyut 4'un kati olmali, aksi halde padding yap
                 uint64_t update_size = (copy.size + 3) & ~3ull;
                 if (update_size <= 65536) {
-                    uint8_t temp[65536];
-                    if (Libs::LibKernel::Memory::TryReadBacking(copy.cpu_address, temp, copy.size)) {
+                    static uint8_t temp[65536]; // 64 KB'lik yigin dizisi yerine statik
+                    BounceTrace("TryReadBacking -> giris", bounce_index - 1, copy.cpu_address,
+                                copy.size);
+                    const bool read_ok =
+                        Libs::LibKernel::Memory::TryReadBacking(copy.cpu_address, temp, copy.size);
+                    BounceTrace("TryReadBacking -> cikis", bounce_index - 1, copy.cpu_address,
+                                copy.size);
+                    if (read_ok) {
                         vk_cmd.updateBuffer(copy.bounce_buffer, copy.bounce_offset, update_size, temp);
                     } else {
                         vk::BufferCopy region;
@@ -153,6 +179,7 @@ void FlushBounceCopies(vk::CommandBuffer vk_cmd, bool is_post) {
             }
         }
     }
+    BounceTrace(is_post ? "cikis (post)" : "cikis (pre)", g_bounce_copies.size(), 0, 0);
 }
 
 using TextureVariant = DescriptorCache::TextureVariant;
