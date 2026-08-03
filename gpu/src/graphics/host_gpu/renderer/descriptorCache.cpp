@@ -96,7 +96,22 @@ vk::DescriptorImageInfo MakeDescriptorImageInfo(const DescriptorCache::TextureBi
 	EXIT_IF(texture.image == nullptr || texture.view < 0 || texture.view >= VulkanImage::VIEW_MAX);
 	const auto view = texture.image_view != nullptr ? texture.image_view
 	                                                : texture.image->image_view[texture.view];
-	EXIT_IF(view == nullptr);
+	if (view == nullptr) {
+		// TANI: descriptors.cpp:867 tam bu kosulu BAGLAMA aninda kontrol edip
+		// geciyor; demek ki gorunum o an vardi. Ciplak EXIT_IF hangi durumun
+		// gerceklestigini soylemiyordu - hangi resim/gorunum oldugunu yaz.
+		EXIT("descriptor image view is missing: image=%p type=%d view=%d image_view=%p "
+		     "views=[%p %p %p %p] format=%d extent=%ux%u layers=%u mips=%u layout=%d\n",
+		     static_cast<const void*>(texture.image), static_cast<int>(texture.image->type),
+		     texture.view, static_cast<const void*>(texture.image_view),
+		     static_cast<void*>(texture.image->image_view[0]),
+		     static_cast<void*>(texture.image->image_view[1]),
+		     static_cast<void*>(texture.image->image_view[2]),
+		     static_cast<void*>(texture.image->image_view[3]),
+		     static_cast<int>(texture.image->format), texture.image->extent.width,
+		     texture.image->extent.height, texture.image->layers, texture.image->mip_levels,
+		     static_cast<int>(texture.image->layout));
+	}
 	return {nullptr, view, layout};
 }
 

@@ -128,12 +128,46 @@ extern "C" bool PsemuKytyAgcCall(const char* nid, CONTEXT* ctx) {
 #include "graphics/host_gpu/renderer/renderContext.h"
 #include "graphics/host_gpu/renderer/bufferCache.h"
 #include "graphics/host_gpu/renderer/textureCache.h"
+#include "graphics/host_gpu/renderer/gpuResourceManager.h" // HandleFault
+#include "graphics/host_gpu/pageManager.h"                 // PageFaultAccess
 
-extern "C" void PsemuMarkCpuModified(uint64_t vaddr, uint64_t size) {
-	if (Libs::Graphics::g_render_ctx != nullptr) {
-		auto* bc = Libs::Graphics::g_render_ctx->GetBufferCache();
-		if (bc != nullptr) {
-			bc->PublishImageBacking(vaddr, size);
-		}
+// ============================================================================
+// GPU SAYFA HATASI: psemu'nun VEH'inden Kyty'nin GERCEK isleyicisine
+// ----------------------------------------------------------------------------
+// Kyty, GPU'nun okudugu misafir sayfalarini yazma-izlemesi icin READONLY
+// yapar; misafir CPU oraya yazinca olusan hatayi kendi isleyicisi yakalayip
+// ilgili tampon/doku onbelleklerini gecersiz kilar ve sayfayi acar.
+//
+// psemu'da bu yol KOPUKTU: tek cagiran Kyty'nin runtimeLinker.cpp'siydi ve o
+// dosya derlenmiyor (psemu kendi loader'ini kullaniyor). Bizim VEH'imiz hatayi
+// once yakalayip sayfayi VirtualProtect ile RW yapiyor, yani Kyty'nin izlemesi
+// sessizce devre disi kaliyordu. Telafi olarak PublishImageBacking cagriliyordu
+// - ama o, DOKU YAYINLAMA API'si ve "temiz tampon sahipligi" sarti kosuyor.
+// Gercek render basladiginda tam da o sart patladi:
+//     "BufferCache: image backing requires clean buffer ownership ... cached=1"
+//
+// Dogrusu: hatayi Kyty'ye VER. IsMapped degilse ucuza false doner, o zaman
+// psemu kendi mantigina (commit / RO->RW) devam eder.
+extern "C" bool PsemuGpuHandleFault(uint64_t fault_addr, int is_write) {
+	if (Libs::Graphics::g_render_ctx == nullptr) {
+		return false;
 	}
+	auto* res = Libs::Graphics::g_render_ctx->GetGpuResources();
+	if (res == nullptr) {
+		return false;
+	}
+	// Yeniden-giris korumasi: Kyty ic ice HandleFault'u FailFast ile
+	// oldurur. Isleyicinin kendi icinde olusabilecek bir hata bizi
+	// oraya sokmasin.
+	static thread_local bool t_in_fault = false;
+	if (t_in_fault) {
+		return false;
+	}
+	t_in_fault = true;
+	const bool handled = res->HandleFault(
+	    is_write != 0 ? Libs::Graphics::PageFaultAccess::Write
+	                  : Libs::Graphics::PageFaultAccess::Read,
+	    fault_addr);
+	t_in_fault = false;
+	return handled;
 }

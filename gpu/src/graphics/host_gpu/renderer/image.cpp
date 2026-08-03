@@ -434,6 +434,14 @@ void Destroy(GraphicContext* ctx, VulkanImage* image) {
 	ImageViewOps::DestroyViews(ctx, image);
 	VulkanDeleteImage(ctx, image);
 
+	// TANI ISARETI: descriptorCache'te "image view is missing" hatasi, TUM
+	// gorunumleri bos ama extent/format/layout'u SAGLAM bir resim gosteriyordu -
+	// yani serbest birakilmis nesneye asili isaretci suphesi. DestroyViews
+	// gorunumleri sifirliyor, delete ise icerigi hemen bozmuyor. Silinmeden
+	// once 'layers'a imza yaziyoruz: tani ciktisinda bu deger gorulurse
+	// kullanim-sonrasi-serbest KANITLANMIS olur, gorulmezse suphe duser.
+	image->layers = 0xDEADBEEFu;
+
 	switch (image->type) {
 		case VulkanImageType::Texture: delete static_cast<TextureVulkanImage*>(image); break;
 		case VulkanImageType::StorageTexture:

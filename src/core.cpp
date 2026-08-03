@@ -16,6 +16,9 @@
 #include <cerrno>   // strtoull/strtod'un ERANGE bildirimi icin
 #include <cmath>    // isnan/isinf (fp_isfinite)
 #include <mutex>
+#include <condition_variable> // __cxa_guard_acquire: gercek bloke eden bekleme
+#include <chrono>             // guard bekleme siniri
+#include <atomic>
 #include <memory>  // tembel tani stringstream'i icin unique_ptr
 #include <deque>    // direct memory havuzu kilidi
 #include <tlhelp32.h> // ThreadSamplerProc: surecteki tum thread'leri gezmek icin
@@ -33,7 +36,9 @@
 #include <immintrin.h>
 #include <timeapi.h>  // timeBeginPeriod: Sleep granulerligi
 
-extern "C" void PsemuMarkCpuModified(uint64_t vaddr, uint64_t size);
+// GPU sayfa hatasi koprusu (gpu/adapter/agc_bridge.cpp). Sayfa Kyty'nin
+// yazma-izlemesindeyse hatayi O isler; degilse false doner.
+extern "C" bool PsemuGpuHandleFault(uint64_t fault_addr, int is_write);
 // Performans metrikleri (gpu/adapter/metrics.cpp) - pencere basliginda gosterilir.
 extern "C" void PsemuMetricAddTlsFault();
 extern "C" void PsemuMetricAddPltCall();
@@ -148,6 +153,116 @@ static bool SafeWritable(void* p, size_t n) {
     }
     return true;
 }
+
+// ============================================================================
+// __cxa_guard_* icin GERCEK kilit tablosu (C++11 "magic static" senkronizasyonu)
+// ----------------------------------------------------------------------------
+// Itanium C++ ABI'de fonksiyon-ici statik su sekilde kurulur:
+//     if (__cxa_guard_acquire(&guard)) { ...kurucu...; __cxa_guard_release(&guard); }
+// acquire'in SOZLESMESI uc durumludur:
+//     1 -> "sen kur"     0 -> "zaten kurulu, atla"     bekle -> baskasi kuruyor
+// Ucuncusu ZORUNLUDUR: acquire, baska bir thread kurmayi surdururken BLOKE
+// OLMALI, aksi halde bekleyen thread YARIM KURULMUS nesneyi kullanir.
+//
+// psemu'nun onceki hali yalnizca guard baytina bakiyordu (`*guard == 0 ? 1 : 0`).
+// Kurulum SIRASINDA bayt hala 0 oldugu icin ikinci thread de 1 aliyor ve ikisi
+// birden kuruyordu. Bu, olculen 0x37f34c cokmesinin tum ozelliklerini aciklar:
+// aralikli, MBP koyunca kayboluyor (zamanlama degisiyor) ve cokme izinde tam bu
+// iki fonksiyon yan yana goruluyor.
+//
+// Misafirin guard yapisinin ic duzenine DOKUNMUYORUZ (ABI'de +0 tamamlandi
+// bayragi, +1 "kuruluyor" bayragi platforma gore degisir); kendi yan tablomuzu
+// tutuyoruz: guard adresi -> (kuran thread, tamamlandi mi).
+// ============================================================================
+namespace {
+
+struct CxaGuardState {
+    DWORD owner = 0;      // kurulumu yapan thread (0 = kimse)
+    bool  done  = false;  // kurulum bitti mi
+};
+
+std::mutex                             g_cxa_guard_mtx;
+std::condition_variable                g_cxa_guard_cv;
+std::map<uint64_t, CxaGuardState>      g_cxa_guards;
+
+// Bekleme siniri. Sonsuz beklemiyoruz: guard'i hic release etmeyen bir yol
+// (bizim eksik bir HLE'miz yuzunden erken donen bir kurucu gibi) tum oyunu
+// kilitlemesin. Sinir dolarsa eski davranisa (=devam et) donuyoruz.
+std::chrono::milliseconds CxaGuardWaitCap() {
+    static const std::chrono::milliseconds cap = [] {
+        const char* e = std::getenv("PSEMU_GUARD_WAIT_MS");
+        const int   v = (e != nullptr) ? atoi(e) : 5000;
+        return std::chrono::milliseconds(v > 0 ? v : 5000);
+    }();
+    return cap;
+}
+
+// KACIS KAPISI: PSEMU_NO_CXA_GUARD=1 -> eski (bloke etmeyen) davranis.
+bool CxaGuardDisabled() {
+    static const bool off = [] {
+        const char* e = std::getenv("PSEMU_NO_CXA_GUARD");
+        return (e != nullptr && e[0] == '1');
+    }();
+    return off;
+}
+
+// acquire govdesi. Donus: 1 = caller kurmali, 0 = kurulu (veya kurulmus say).
+uint64_t CxaGuardAcquire(uint64_t guard_addr, const uint8_t* guard) {
+    const DWORD me = GetCurrentThreadId();
+    std::unique_lock<std::mutex> lk(g_cxa_guard_mtx);
+    CxaGuardState& g = g_cxa_guards[guard_addr];
+
+    if (g.done || *guard != 0) {
+        return 0; // zaten tamamlanmis
+    }
+    if (g.owner == 0) {
+        g.owner = me;
+        return 1; // kurma isi bizde
+    }
+    if (g.owner == me) {
+        // Ayni thread ozyineli olarak geldi. Bloke olursak KENDIMIZI kilitleriz;
+        // ABI'de bu tanimsiz davranis - kurmasina izin veriyoruz.
+        return 1;
+    }
+
+    // BASKA thread kuruyor -> BEKLE. Iste eksik olan senkronizasyon buydu.
+    const bool ok = g_cxa_guard_cv.wait_for(lk, CxaGuardWaitCap(),
+                                            [&] { return g.done || g.owner == 0; });
+    if (!ok) {
+        static std::atomic<int> s_timeouts{0};
+        if (s_timeouts.fetch_add(1, std::memory_order_relaxed) < 8) {
+            std::stringstream ss;
+            ss << "[CXA-GUARD] bekleme zaman asimi: guard=0x" << std::hex << guard_addr
+               << std::dec << " (kuran thread " << g.owner << " release/abort etmedi)";
+            LOG_ERROR(ss.str());
+        }
+        return 0; // kilitlenmektense devam et (eski davranisa esdeger)
+    }
+    if (g.done || *guard != 0) {
+        return 0;
+    }
+    // Kuran thread abort etti (guard 0'a dondu) -> sira bizde.
+    g.owner = me;
+    return 1;
+}
+
+// release (done=true) ve abort (done=false) icin ortak bitis yolu.
+void CxaGuardFinish(uint64_t guard_addr, bool done) {
+    {
+        std::lock_guard<std::mutex> lk(g_cxa_guard_mtx);
+        auto it = g_cxa_guards.find(guard_addr);
+        if (it == g_cxa_guards.end()) {
+            return; // acquire'dan gecmemis (or. kacis kapisi acik) - yapacak sey yok
+        }
+        it->second.owner = 0;
+        if (done) {
+            it->second.done = true;
+        }
+    }
+    g_cxa_guard_cv.notify_all();
+}
+
+} // namespace
 
 // ============================================================================
 // SafeSpan: p'den itibaren KESINTISIZ okunabilir bayt sayisi (en fazla max).
@@ -397,6 +512,95 @@ static std::string TranslateGuestPath(const std::string& guest) {
     }
     if (guest[0] == '/')                return g_game_root + guest;  // diger mutlak yollar
     return guest;                                                     // goreli yol
+}
+
+// ============================================================================
+// TANI DENEYI: kardes kategori dizinlerinde geri-dusus arama
+// ----------------------------------------------------------------------------
+// OLCUM: oyun "data/prein/effects/anim/ui_wipe_transitions_2.skel" istiyor ve
+// ENOENT aliyor; dosya GERCEKTE "data/prein/ui/anim/..." altinda duruyor.
+// Oyunun kendi logu da bunu yaziyor:
+//     "skel file not found [data/prein/effects/anim/ui_wipe_transitions_2.skel]"
+//     "Can't find model: data/prein/effects/gfx/ui_wipe_transitions_2.jxm"
+// Yani KATEGORI oneki yanlis uretiliyor ("ui" yerine "effects"). Ayni anda
+// yuklenen wipe_fx_bricks GERCEKTEN bir "effects" kaynagi - baglam karismis
+// gorunuyor.
+//
+// Bu yardimci o hatanin KOKUNU duzeltmez; yalnizca "eksik kaynak, 0x37f34c
+// cokmesinin sebebi mi?" sorusunu KAPATMAK icin var. Eksik dosya bulunabilir
+// hale gelince cokme kayboluyorsa neden-sonuc kanitlanmis olur; kaybolmuyorsa
+// bu iz olu demektir ve pesini birakiriz.
+//
+// VARSAYILAN KAPALI. Acmak icin: PSEMU_VFS_FALLBACK=1
+// Oyun dosyalarina DOKUNMAZ; yalnizca okuma yolunda baska bir dizine bakar.
+// ============================================================================
+static bool HostPathExists(const std::string& p) {
+    return GetFileAttributesA(p.c_str()) != INVALID_FILE_ATTRIBUTES;
+}
+
+static bool VfsFallbackEnabled() {
+    static const bool on = [] {
+        const char* e = std::getenv("PSEMU_VFS_FALLBACK");
+        return (e != nullptr && e[0] == '1');
+    }();
+    return on;
+}
+
+// "<root>/data/prein/effects/anim/x.skel" bulunamadiysa "effects" yerine
+// data/prein altindaki DIGER dizinleri dener ("anim/x.skel" sabit kalir).
+// Bulursa duzeltilmis host yolunu, bulamazsa bos dizge doner.
+static std::string VfsFindInSiblingCategory(const std::string& host_path) {
+    // Yolu bilesenlere ayir; son iki bilesen <alt_dizin>/<dosya> olarak kalir,
+    // ondan onceki bilesen degistirilecek KATEGORI, ondan onceki de ana dizin.
+    std::vector<size_t> seps;
+    for (size_t i = 0; i < host_path.size(); i++) {
+        if (host_path[i] == '/' || host_path[i] == '\\') seps.push_back(i);
+    }
+    if (seps.size() < 3) return std::string();
+    const size_t cat_beg = seps[seps.size() - 3] + 1;      // kategori adinin basi
+    const size_t cat_end = seps[seps.size() - 2];          // kategori adinin sonu
+    const std::string parent = host_path.substr(0, cat_beg - 1); // ".../data/prein"
+    const std::string tail   = host_path.substr(cat_end);        // "/anim/x.skel"
+    const std::string wrong  = host_path.substr(cat_beg, cat_end - cat_beg);
+
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA((parent + "/*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return std::string();
+    std::string found;
+    do {
+        if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) continue;
+        const std::string name = fd.cFileName;
+        if (name == "." || name == ".." || name == wrong) continue;
+        const std::string cand = parent + "/" + name + tail;
+        if (HostPathExists(cand)) { found = cand; break; }
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+    return found;
+}
+
+// Cagiran taraf icin tek giris noktasi: host yolu yoksa ve deney aciksa
+// kardes kategorilerde arar. Sonuclar onbellege alinir (dizin taramasi pahali).
+static std::string VfsResolve(const std::string& host_path) {
+    if (!VfsFallbackEnabled() || HostPathExists(host_path)) return host_path;
+
+    static std::mutex                             mtx;
+    static std::map<std::string, std::string>     cache;
+    {
+        std::lock_guard<std::mutex> lk(mtx);
+        auto it = cache.find(host_path);
+        if (it != cache.end()) return it->second.empty() ? host_path : it->second;
+    }
+    const std::string alt = VfsFindInSiblingCategory(host_path);
+    {
+        std::lock_guard<std::mutex> lk(mtx);
+        cache[host_path] = alt;
+    }
+    if (!alt.empty()) {
+        LOG_INFO("[VFS-FALLBACK] yanlis kategori duzeltildi:\n    istenen: " + host_path +
+                 "\n    bulunan: " + alt);
+        return alt;
+    }
+    return host_path;
 }
 
 // ========================================================
@@ -3498,21 +3702,34 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             // Bellekteki kodun dosyadakiyle ayni olup olmadigini KESIN
             // karsilastirmak icin. "Kod uzerine mi yazildi?" sorusunu
             // tahminle degil olcumle kapatiyoruz.
+            // Uzunluk PSEMU_DUMP_LEN ile ayarlanir (varsayilan 16, en fazla 64).
+            // 16 bayt kod baslangicini karsilastirmaya yeter ama VERI icin
+            // yetmiyor: karsilastirilan anahtarlar 32 BAYT (vpcmpeqb x2).
             if (const char* dr = std::getenv("PSEMU_DUMP_RVA")) {
+                int dlen = 16;
+                if (const char* dl = std::getenv("PSEMU_DUMP_LEN")) {
+                    const int v = atoi(dl);
+                    if (v > 0) dlen = (v > 64) ? 64 : v;
+                }
                 const char* s = dr;
                 for (int k = 0; k < 6 && *s; k++) {
                     char* end = nullptr;
                     uint64_t rva = std::strtoull(s, &end, 0);
                     if (end == s) break;
                     uint8_t* p = reinterpret_cast<uint8_t*>(g_base_addr + rva);
-                    if (SafeReadable(p, 16)) {
+                    if (SafeReadable(p, static_cast<size_t>(dlen))) {
                         *ss_ptr << "\n[-] [DUMP] RVA 0x" << std::hex << rva << ": ";
-                        for (int i = 0; i < 16; i++) {
+                        bool all_zero = true;
+                        for (int i = 0; i < dlen; i++) {
                             char b[4];
                             snprintf(b, sizeof(b), "%02X ", p[i]);
                             *ss_ptr << b;
+                            if (p[i] != 0) all_zero = false;
                         }
-                        *ss_ptr << std::dec;
+                        *ss_ptr << std::dec << (all_zero ? " (TAMAMEN SIFIR)" : "");
+                    } else {
+                        *ss_ptr << "\n[-] [DUMP] RVA 0x" << std::hex << rva
+                                << ": OKUNAMIYOR" << std::dec;
                     }
                     s = (*end == ',') ? end + 1 : end;
                 }
@@ -3549,6 +3766,19 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         if (access_type == 0 || access_type == 1) { // 0=READ, 1=WRITE
             if (access_addr >= 0x10000ULL && access_addr < 0x7FFFFFFFFFFFULL) {
                 bool handled = false;
+                // ONCE KYTY: bu sayfa GPU'nun yazma-izlemesinde olabilir.
+                // Kendi VirtualProtect'imizle acarsak izleme sessizce olur ve
+                // tampon/doku onbellekleri bayat kalir. Kyty eslenmemis adres
+                // icin ucuza false doner (bkz. PsemuGpuHandleFault).
+                if (PsemuGpuHandleFault(access_addr, access_type == 1 ? 1 : 0)) {
+                    static volatile LONG s_gpu_fix = 0;
+                    LONG gn = InterlockedIncrement(&s_gpu_fix);
+                    if (gn <= 12) {
+                        LOG_INFO("[GPU-FAULT] Kyty isledi @ 0x" +
+                            [](uint64_t v){ std::stringstream x; x<<std::hex<<v; return x.str(); }(access_addr));
+                    }
+                    return EXCEPTION_CONTINUE_EXECUTION;
+                }
                 MEMORY_BASIC_INFORMATION mbi;
                 if (VirtualQuery(reinterpret_cast<void*>(access_addr), &mbi, sizeof(mbi)) != 0 &&
                     mbi.State == MEM_COMMIT) {
@@ -3567,7 +3797,11 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                         if (VirtualProtect(reinterpret_cast<void*>(pg), 0x1000,
                                            PAGE_EXECUTE_READWRITE, &old_p) != 0) {
                             handled = true;
-                            PsemuMarkCpuModified(pg, 0x1000);
+                            // NOT: burada ARTIK PsemuMarkCpuModified YOK.
+                            // Kyty'nin izledigi sayfalar yukarida HandleFault
+                            // ile ele aliniyor; buraya duseni Kyty tanimiyor,
+                            // dolayisiyla onbellegine bildirmek anlamsizdi
+                            // (ve yanlis API ile yapiliyordu).
                             static volatile LONG s_ro_fix = 0;
                             LONG n = InterlockedIncrement(&s_ro_fix);
                             if (n <= 12) LOG_INFO("[MEM-RO->RW] readonly guest sayfasi RW yapildi @ 0x" +
@@ -5122,29 +5356,55 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 // lazy-init statik) objelerinin gercekte HICBIR ZAMAN
                 // construct edilmemesine yol aciyordu - RVA 0x2c61b2
                 // cokmesindeki G global'i de boyle bir objenin bir alani.
+                // ------------------------------------------------------------
+                // ARTIK GERCEKTEN BEKLIYOR ("kuruluyor" durumu eklendi).
+                //
+                // ESKI HALI SADECE "bitti mi" bakiyordu:
+                //     RAX = (*guard == 0) ? 1 : 0;
+                // Bu, IKI THREAD ayni statige ayni anda geldiginde IKISINE DE
+                // 1 donuyordu ("sen kur") - cunku arada guard 0 kaliyor. Sonuc
+                // klasik yaris: biri nesneyi kurarken digeri YARIM nesneyi
+                // kullaniyor.
+                //
+                // Itanium C++ ABI'de acquire, baskasi kuruyorsa BLOKE OLMAK
+                // zorundadir. Olculen belirti: RVA 0x37f34c'de yarim kurulmus
+                // nesnenin +0x10 alani NULL okunuyor; cokme ARALIKLI ve MBP
+                // koyunca kayboluyor (MBP zamanlamayi degistiriyor). Cokme
+                // izinde de tam bu iki fonksiyon yan yana goruluyordu.
+                //
+                // Kilit tablosu ve gerekcesi icin dosya basindaki CxaGuard*
+                // yardimcilarina bakiniz.
                 uint8_t* guard = reinterpret_cast<uint8_t*>(ctx->Rdi);
-                if (ctx->Rdi != 0 && SafeReadable(guard, 1)) {
-                    ctx->Rax = (*guard == 0) ? 1 : 0;
+                if (ctx->Rdi == 0 || !SafeReadable(guard, 1)) {
+                    ctx->Rax = 1; // guvenli taraf: kurmasina izin ver
+                } else if (*guard != 0) {
+                    ctx->Rax = 0; // zaten tamamlanmis (kilide hic girmeden hizli yol)
+                } else if (CxaGuardDisabled()) {
+                    ctx->Rax = 1; // eski davranis (PSEMU_NO_CXA_GUARD=1)
                 } else {
-                    ctx->Rax = 1; // guvenli taraf: initialize etmesine izin ver
+                    ctx->Rax = CxaGuardAcquire(ctx->Rdi, guard);
                 }
                 special_return_set = true;
             } else if (readable_name == "__cxa_guard_release") {
                 // Initialize basariyla tamamlandi; ilk byte'i 1 yapip
-                // "tamamlandi" olarak isaretliyoruz.
+                // "tamamlandi" olarak isaretliyoruz VE bekleyenleri uyandiriyoruz
+                // (bkz. acquire'daki kilit tablosu).
                 uint8_t* guard = reinterpret_cast<uint8_t*>(ctx->Rdi);
                 if (ctx->Rdi != 0 && SafeWritable(guard, 1)) {
                     *guard = 1;
                 }
+                CxaGuardFinish(ctx->Rdi, /*done=*/true);
                 ctx->Rax = 0;
                 special_return_set = true;
             } else if (readable_name == "__cxa_guard_abort") {
                 // Initialize sirasinda istisna olustu; guard'i sifirla ki
-                // sonraki cagrida tekrar denenebilsin.
+                // sonraki cagrida tekrar denenebilsin. Sahiplik birakilir ve
+                // bekleyenler uyandirilir - biri kurulumu devralir.
                 uint8_t* guard = reinterpret_cast<uint8_t*>(ctx->Rdi);
                 if (ctx->Rdi != 0 && SafeWritable(guard, 1)) {
                     *guard = 0;
                 }
+                CxaGuardFinish(ctx->Rdi, /*done=*/false);
                 ctx->Rax = 0;
                 special_return_set = true;
             }
@@ -6640,6 +6900,11 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     if (!host.empty()) {
                         if (creat || acc != 0u) {
                             EnsureParentDirs(host); // kayit klasoru yoksa olustur
+                        } else {
+                            // SALT OKUMA: kategori onekinin yanlis uretildigi
+                            // olculdu (bkz. VfsResolve). Deney kapaliyken bu
+                            // cagri host'u AYNEN dondurur.
+                            host = VfsResolve(host);
                         }
                         f = fopen(host.c_str(), m);
                         // r+b istendi ama dosya yoksa ve O_CREAT verilmisse olustur
@@ -6796,6 +7061,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 std::string host  = TranslateGuestPath(guest);
                 void* sb = reinterpret_cast<void*>(ctx->Rsi);
                 struct _stat64 hs;
+                host = VfsResolve(host); // deney kapaliysa host degismez
                 const bool found = (_stat64(host.c_str(), &hs) == 0);
                 if (sb != nullptr && SafeWritable(sb, kFreeBsdStatSize) && found) {
                     FillFreeBsdStat(sb, static_cast<uint64_t>(hs.st_size),
