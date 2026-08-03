@@ -753,12 +753,48 @@ static void* MspaceBumpAlloc(uint64_t handle, size_t n, size_t align) {
     std::lock_guard<std::mutex> lock(g_mspace_mtx);
     auto it = g_mspace.find(handle);
     if (it == g_mspace.end() || it->second.base == 0 || it->second.cap == 0) {
+        // BOLGESIZ TUTAMAC -> cagiran host yigina duser. Havuz "dolmasa" bile
+        // buradan cikan bloklar misafirin havuz araliginin DISINDA kalir ve
+        // oyunun denetleyicisi "Pool possibly corrupt" basar. Bu yol
+        // sessizdi; ayirt edebilmek icin gorunur yapildi.
+        static std::atomic<int> s_noreg{0};
+        const int cnt = s_noreg.fetch_add(1, std::memory_order_relaxed);
+        if (cnt < 8) {
+            printf("[MSPACE] BOLGESIZ tutamac=0x%llx (kayit %s) istenen=0x%llx "
+                   "-> host yigina dusuluyor\n",
+                   (unsigned long long)handle,
+                   it == g_mspace.end() ? "YOK" : "var ama taban/kap 0",
+                   (unsigned long long)n);
+            fflush(stdout);
+        }
         return nullptr;
     }
     MspaceInfo& m = it->second;
     uint64_t p = (m.base + m.used + align - 1) & ~(uint64_t)(align - 1);
     uint64_t end = p + n;
-    if (end > m.base + m.cap) return nullptr; // havuz doldu
+    if (end > m.base + m.cap) {
+        // HAVUZ DOLDU -> cagiran host yigina duser. Bu SESSIZ bir donum
+        // noktasi: o andan sonra dagitilan bloklar misafirin havuz
+        // ARALIGININ DISINDA kalir ve oyunun kendi denetleyicisi
+        // "Pool possibly corrupt, block ..., doesn't belong to pool N"
+        // basar (olculdu: tek kosuda 48 kez; kontrol RVA 0x2942e'de basit
+        // bir base <= blok < base+size aralik testi).
+        // Kok neden: bu bir BUMP allocator, serbest birakma YOK - havuz
+        // eninde sonunda doluyor.
+        // DIKKAT: sayaci "n" adlandirmak fonksiyonun n parametresini
+        // (istenen boyut) golgeliyordu.
+        static std::atomic<int> s_full{0};
+        const int cnt = s_full.fetch_add(1, std::memory_order_relaxed);
+        if (cnt < 8) {
+            printf("[MSPACE] HAVUZ DOLDU: tutamac=0x%llx taban=0x%llx kap=0x%llx "
+                   "kullanilan=0x%llx istenen=0x%llx -> host yigina dusuluyor "
+                   "(oyun bunu havuz bozulmasi olarak gorecek)\n",
+                   (unsigned long long)handle, (unsigned long long)m.base,
+                   (unsigned long long)m.cap, (unsigned long long)m.used, (unsigned long long)n);
+            fflush(stdout);
+        }
+        return nullptr;
+    }
 
     // BOLGE GERCEKTEN YAZILABILIR MI? Taban misafirden geliyor
     // (sceLibcMspaceCreate'e verdigi adres) ve psemu istenen adresleri her
