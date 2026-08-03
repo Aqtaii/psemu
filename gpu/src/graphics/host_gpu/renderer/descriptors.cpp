@@ -1014,6 +1014,22 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 	auto       vk_buffer     = buffer->Handle();
 	const auto shader_stages = ShaderPipelineStages(vk_stage);
 
+	// TANI: baglamalar burada (asagidaki dongude) COZULUYOR ama ancak
+	// GetDescriptor'da KULLANILIYOR. Arada bir fence tamamlanip tutulan
+	// kaynaklar birakilirsa, cozulmus ham VulkanImage* isaretcileri
+	// kullanilmadan once silinebilir. Kurulum boyunca bunun olup olmadigini
+	// olcuyoruz (bkz. context.cpp'deki sayac).
+	const uint64_t fence_release_before =
+	    g_fence_release_count.load(std::memory_order_relaxed);
+	// Ayrica BIZIM komut tamponumuz mu gonderilip sifirlandi: kayit kusagi
+	// degistiyse bu tamponun tuttugu kaynaklar birakilmis demektir.
+	const uint64_t recording_generation_before = buffer->GetRecordingGeneration();
+
+	// Cozulmus ham isaretciler bu fonksiyonun SONUNA kadar gecerli kalmali.
+	// Kurulum ortasindaki flush'lar (olculdu: tek kurulumda 8 kez) aksi halde
+	// son guclu referansi dusurup nesneleri siliyor. Gerekce icin render.h.
+	const ResourceReleaseDeferral keep_resolved_resources_alive;
+
 	DescriptorCache::NativeDescriptors descriptors;
 	descriptors.buffers.reserve(program.info.buffers.size());
 	for (uint32_t i = 0; i < program.info.buffers.size(); i++) {
@@ -1092,6 +1108,25 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 			vk_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands, shader_stages,
 			                          vk::DependencyFlags {}, 0, nullptr, 0, nullptr, 1, &barrier);
 			image->layout = vk::ImageLayout::eGeneral;
+		}
+	}
+
+	{
+		const uint64_t after = g_fence_release_count.load(std::memory_order_relaxed);
+		const uint64_t gen   = buffer->GetRecordingGeneration();
+		if (after != fence_release_before || gen != recording_generation_before) {
+			static std::atomic<int> s_seen {0};
+			if (s_seen.fetch_add(1, std::memory_order_relaxed) < 8) {
+				printf("[DESC-FLUSH] descriptor kurulumu SIRASINDA fence birakildi: %llu kez "
+				       "(images=%zu) BIZIM_TAMPON=%s (kusak %llu->%llu) - cozulmus ham "
+				       "isaretciler bayatlamis olabilir\n",
+				       static_cast<unsigned long long>(after - fence_release_before),
+				       descriptors.images.size(),
+				       (gen != recording_generation_before) ? "EVET" : "hayir",
+				       static_cast<unsigned long long>(recording_generation_before),
+				       static_cast<unsigned long long>(gen));
+				fflush(stdout);
+			}
 		}
 	}
 

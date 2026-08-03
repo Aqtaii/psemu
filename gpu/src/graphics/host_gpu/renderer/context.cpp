@@ -85,7 +85,54 @@ void FenceResourceRetainer::Retain(std::shared_ptr<void> resource) {
 	}
 }
 
+// TANI SAYACI: descriptor kurulumu SIRASINDA bir fence tamamlanip tutulan
+// kaynaklar birakiliyor mu? Silinmis bir VulkanImage'a asili TextureBinding
+// (layers=0xDEADBEEF ile kanitlandi) icin iki aday mekanizma var:
+//   (A) o arama yolu kaynagi hic RETAIN etmiyor
+//   (B) retain ediliyor ama cizim ortasinda flush olup fence bitiyor
+// Bu sayac ikisini ayirir: descriptors.cpp kurulum oncesi/sonrasi okur.
+std::atomic<uint64_t> g_fence_release_count {0};
+
+// Ertelenmis birakma durumu. Kayit tek thread'de yapiliyor (g_command_pool
+// zaten thread_local), o yuzden thread basina tutmak yeterli ve kilitsiz.
+namespace {
+thread_local int                                t_defer_depth = 0;
+thread_local std::vector<std::shared_ptr<void>> t_parked_resources;
+} // namespace
+
+ResourceReleaseDeferral::ResourceReleaseDeferral() {
+	++t_defer_depth;
+}
+
+ResourceReleaseDeferral::~ResourceReleaseDeferral() {
+	if (--t_defer_depth == 0) {
+		// Kapsam bitti: park edilenleri birak. clear() son guclu referanslari
+		// dusurur ve ertelenen yikimlar burada gerceklesir.
+		t_parked_resources.clear();
+	}
+}
+
+bool ResourceReleaseDeferral::Active() noexcept {
+	return t_defer_depth > 0;
+}
+
+void ResourceReleaseDeferral::Park(std::vector<std::shared_ptr<void>>& resources) {
+	t_parked_resources.insert(t_parked_resources.end(),
+	                          std::make_move_iterator(resources.begin()),
+	                          std::make_move_iterator(resources.end()));
+	resources.clear();
+}
+
 void FenceResourceRetainer::ReleaseAfterFence() noexcept {
+	if (!m_resources.empty()) {
+		g_fence_release_count.fetch_add(1, std::memory_order_relaxed);
+	}
+	if (ResourceReleaseDeferral::Active()) {
+		// Descriptor kurulumu suruyor: cozulmus ham isaretcilerin isaret
+		// ettigi nesneler kurulum bitene kadar YASAMALI.
+		ResourceReleaseDeferral::Park(m_resources);
+		return;
+	}
 	m_resources.clear();
 }
 

@@ -6,6 +6,7 @@
 #include "graphics/host_gpu/renderer/streamBuffer.h"
 #include "graphics/host_gpu/vulkanCommon.h"
 
+#include <atomic> // g_fence_release_count (tani sayaci)
 #include <memory>
 #include <vector>
 
@@ -50,6 +51,48 @@ enum class CommandBufferDebugOp : uint32_t {
 	EopWriteBackFlip,
 	EopOnlyFlip,
 	Unknown,
+};
+
+// TANI SAYACI (bkz. context.cpp): bir fence tamamlanip TUTULAN kaynaklar
+// birakildiginda artar. descriptors.cpp bunu kurulum oncesi/sonrasi okuyup
+// "cizim ortasinda flush oldu mu?" sorusunu cevaplar.
+extern std::atomic<uint64_t> g_fence_release_count;
+
+// ============================================================================
+// ResourceReleaseDeferral - descriptor kurulumu boyunca kaynak birakmayi ertele
+// ----------------------------------------------------------------------------
+// SORUN (olculdu): descriptors.cpp once TUM baglamalari cozup ham VulkanImage*
+// saklıyor, sonra GetDescriptor'da kullaniyor. Kaynaklarin omru komut
+// tamponunun fence tutucusuna bagli (FindTexture/FindRenderTarget ->
+// RetainResourceUntilFence). Ama olcum gosterdi ki AYNI komut tamponu tek bir
+// kurulum sirasinda gonderilip sifirlaniyor - bir kosuda kayit kusagi 6'dan
+// 14'e cikti, yani 8 kez. Her sifirlamada tutucu bosaliyor, son guclu referans
+// dusuyor, CachedImage yikiliyor ve elimizdeki ham isaretci bayatliyor.
+// Belirti: descriptorCache'te "image view is missing" + silme imzasi
+// layers=0xDEADBEEF.
+//
+// COZUM: cipa'yi degistirmek yerine, kurulum SURESINCE birakmayi erteliyoruz.
+// Kapsam aktifken ReleaseAfterFence kaynaklari SILMEZ, bekleyen listeye
+// TASIR; kapsam bitince hepsi birakilir. Kaynaklar yalnizca DAHA UZUN yasar -
+// hicbir Vulkan degismezi bozulmaz, GPU'nun hala kullandigi bir sey erken
+// silinmez.
+//
+// Alternatifler ve neden secilmediler:
+//  - NativeDescriptors'a shared_ptr<CachedImage> tasitmak (gercek sahiplik):
+//    dogru ama 15 arama noktasinin imzasini degistiren buyuk bir refactor.
+//  - Kurulum ortasindaki flush'i yasaklamak: flush gercek is yapiyor
+//    (readback/transfer), bastirmak baska seyleri bozar.
+// ============================================================================
+class ResourceReleaseDeferral {
+public:
+	ResourceReleaseDeferral();
+	~ResourceReleaseDeferral();
+	KYTY_CLASS_NO_COPY(ResourceReleaseDeferral);
+
+	// Ertelenmis birakma su an etkin mi (FenceResourceRetainer sorar).
+	[[nodiscard]] static bool Active() noexcept;
+	// Kaynaklari bekleyen listeye tasir.
+	static void Park(std::vector<std::shared_ptr<void>>& resources);
 };
 
 class FenceResourceRetainer {
