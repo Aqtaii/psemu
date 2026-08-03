@@ -5,8 +5,14 @@
 
 namespace Libs::Graphics::ShaderRecompiler::Spirv {
 
-static constexpr size_t InitialSpirvSectionReserve         = 4096;
-static constexpr size_t InitialSpirvFunctionSectionReserve = 450000;
+static constexpr size_t InitialSpirvSectionReserve = 4096;
+// 450000 -> 1000000: skaler-koken analizi yakinsamayinca emniyet supabi
+// (bkz. ScalarProvenance.cpp) dort blogu Unknown'a dusuruyor; korumaci yol
+// cok daha genis kod urettigi icin functions bolumu 499898 word'e cikip
+// rezervi asiyordu. Bu YALNIZCA bir on-tahsis (reserve); asilmasi hata
+// degil, yalnizca yeniden tahsis ve uyari demek - siniri buyutmek guvenli.
+// Kok neden (s29 Phi salinimi) cozulunce bu deger tekrar dusurulebilir.
+static constexpr size_t InitialSpirvFunctionSectionReserve = 1000000;
 
 static void AppendInstructionWords(std::vector<uint32_t>* section, const uint32_t* words,
                                    size_t words_num) {
