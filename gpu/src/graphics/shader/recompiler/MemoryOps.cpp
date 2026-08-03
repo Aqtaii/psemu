@@ -442,11 +442,23 @@ bool DecodeDs(uint32_t pc, std::span<const uint32_t> code, uint32_t word_index, 
 	     inst->opcode == Opcode::DsReadAddtidB32)) {
 		SetUnsupported(inst, Family::DS, opcode, "DS swizzle/addtid is available only for LDS");
 	}
-	if (inst->gds && (inst->opcode == Opcode::DsAppend || inst->opcode == Opcode::DsConsume) &&
-	    inst->offset != 0u) {
-		SetUnsupported(inst, Family::DS, opcode,
-		               "GDS append/consume requires a zero instruction offset");
-	}
+	// KALDIRILDI: "GDS append/consume requires a zero instruction offset".
+	//
+	// Bu BAYAT bir korumaydi - yasakladigi yetenek zaten bastan sona
+	// uygulanmis durumda. Zincir dogrulandi:
+	//   1) Cozumleyici (burasi): inst->offset = offset0 | (offset1 << 8)
+	//   2) IR'a tasima (ShaderIR.cpp MemoryInfoFromDecoded):
+	//        mem.offset = decoded.offset
+	//   3) SPIR-V uretimi (spirvEmitterMemory.cpp EmitAppendConsumeAddress):
+	//        address   = (m0 >> 16) + inst.memory.offset
+	//        index     = address >> 2
+	//        in_bounds = (inst.memory.offset + 3) < (m0 & 0xffff)
+	//      yani hem adres hem SINIR KONTROLU ofseti zaten hesaba katiyor.
+	//
+	// Olculen komut: Astro Bot compute shader'i, pc 0x0bf4,
+	// raw=[0xd8fa0008 0x00000000] -> gds=1, offset0=8, offset1=0.
+	// Bu yalnizca "sayac GDS'te 8. bayttan itibaren" demek; ozel bir
+	// matematik gerektirmiyor.
 	if (inst->opcode == Opcode::DsWriteAddtidB32 && data1 != 0u) {
 		SetUnsupported(inst, Family::DS, opcode,
 		               "DS write addtid data1 operand is not implemented");
