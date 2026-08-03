@@ -509,8 +509,12 @@ void CommandProcessor::BufferInit() {
 }
 
 void CommandProcessor::BufferFlush() {
+	// TANI: kilitte mi, gonderimde mi, fence'te mi asili kaliyoruz?
+	CommandScheduler::SchedTrace("BufferFlush: m_mutex bekleniyor", -1);
 	Common::LockGuard lock(m_mutex);
+	CommandScheduler::SchedTrace("BufferFlush: m_mutex alindi", -1);
 	m_scheduler.Flush();
+	CommandScheduler::SchedTrace("BufferFlush: cikis", -1);
 }
 
 void CommandProcessor::BufferFlushAndWait() {

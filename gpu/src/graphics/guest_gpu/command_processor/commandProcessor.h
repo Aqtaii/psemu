@@ -8,7 +8,9 @@
 #include "graphics/host_gpu/renderer/renderContext.h"
 
 #include <array>
+#include <atomic> // SchedTrace tani sayaci
 #include <cstdint>
+#include <cstdio> // SchedTrace
 
 namespace Libs::Graphics {
 
@@ -43,9 +45,27 @@ public:
 		Current()->Begin();
 	}
 
+	// TANI [SCHED]: grafik halkasi cp->BufferFlush() icinde asili kaliyor
+	// ("BufferFlush bitti" hic gelmiyor). Flush iki adimdan olusuyor:
+	//   SubmitCurrent() = vkEndCommandBuffer + vkQueueSubmit
+	//   BeginNext()     = siradaki tampona gec + WaitForFenceAndReset (FENCE)
+	// Ikisini ayirmak, "CPU kilidi/gonderim sorunu" ile "GPU isi bitiremiyor"
+	// arasindaki farki KESIN belirler.
+	static void SchedTrace(const char* what, int queue) {
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 200000) {
+			std::printf("[SCHED] %s (kuyruk=%d)\n", what, queue);
+			std::fflush(stdout);
+		}
+	}
+
 	void Flush() {
+		SchedTrace("SubmitCurrent -> giris", m_queue);
 		SubmitCurrent();
+		SchedTrace("SubmitCurrent -> cikis", m_queue);
+		SchedTrace("BeginNext(fence) -> giris", m_queue);
 		BeginNext();
+		SchedTrace("BeginNext(fence) -> cikis", m_queue);
 	}
 
 	CommandBuffer* FlushAndGetSubmitted() {
