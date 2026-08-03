@@ -182,7 +182,52 @@ bool Dispatch(const std::string& nid, const std::string& name, CONTEXT* ctx) {
         name.rfind("sceAgc", 0) == 0 || name.rfind("Graphics", 0) == 0 ||
         name.rfind("sceVideoOut", 0) == 0;
 
-    if (!is_render && !kyty_nid.empty() && PsemuKytyHasNid(kyty_nid.c_str())) {
+    // ========================================================================
+    // PSEMU'NUN SAHIPLENDIGI ALANLAR - Kyty'ye DEVREDILMEZ
+    // ------------------------------------------------------------------------
+    // Kyty yonlendirmesi HLE zincirinden ONCE calisiyor; dolayisiyla Kyty
+    // veritabaninda bulunan HER NID psemu'nun kendi handler'ini GOLGELER.
+    // libKernel (365 fonksiyon) eklenince bu, bu oturumda olcup duzelttigimiz
+    // her seyi geri alma riski tasiyor:
+    //   - sceKernelPread/Lseek        (yoktu; varliklar BOS okunuyordu)
+    //   - sceKernelOpen/Read/Close    (paylasilan fd tablosu; her dosya
+    //                                  sifir okunuyordu)
+    //   - sceKernelStat/Fstat         (120 bayt yerine 128 yazip yigin
+    //                                  canary'sini eziyordu)
+    //   - sceKernel*Sema              (zaman asiminda BASARILI donuyordu)
+    //   - sceKernel*EventFlag         (govdesizdi; ses alt sistemi bunlarla
+    //                                  kalkti)
+    //   - sceKernelAllocate/MapDirectMemory (tembel commit; 13.3 -> 4.7 GB)
+    // DURUM: libKernel su an KAYITLI DEGIL (denendi, geri alindi - Kyty'nin
+    // libKernel'i RuntimeLinker/Elf64/ag yuzeyini de cekiyor ve o katman
+    // psemu'nun loader'iyla cakisiyor). Dolayisiyla bu koruma SU AN ETKISIZ;
+    // ilerideki bir denemede yanlislikla psemu'nun cekirdek HLE'sinin
+    // gölgelenmemesi icin BILEREK burada birakildi.
+    // Kacis kapisi: PSEMU_KYTY_KERNEL_ALL=1 -> koruma kapali.
+    static const bool s_kernel_all = [] {
+        const char* e = std::getenv("PSEMU_KYTY_KERNEL_ALL");
+        return e != nullptr && e[0] == '1';
+    }();
+    auto psemu_owns = [](const std::string& n) {
+        static const char* kOwned[] = {
+            "sceKernelOpen", "sceKernelRead", "sceKernelPread", "sceKernelWrite",
+            "sceKernelClose", "sceKernelLseek", "sceKernelStat", "sceKernelFstat",
+            "sceKernelAllocateDirectMemory", "sceKernelMapDirectMemory",
+            "sceKernelMapNamedDirectMemory", "sceKernelReleaseDirectMemory",
+            "sceKernelGetDirectMemorySize", "sceKernelMmap", "sceKernelMunmap",
+        };
+        for (const char* o : kOwned) {
+            if (n == o) return true;
+        }
+        // Aile bazinda: semafor, olay bayragi, olay kuyrugu, thread/pthread.
+        return n.find("Sema") != std::string::npos ||
+               n.find("EventFlag") != std::string::npos ||
+               n.find("Equeue") != std::string::npos ||
+               n.rfind("scePthread", 0) == 0;
+    };
+
+    if (!is_render && !kyty_nid.empty() && !(!s_kernel_all && psemu_owns(name)) &&
+        PsemuKytyHasNid(kyty_nid.c_str())) {
         is_render = true;
     }
 

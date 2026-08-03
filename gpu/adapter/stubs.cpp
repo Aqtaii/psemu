@@ -43,6 +43,9 @@ int* KYTY_SYSV_ABI GetErrorAddr() {
 } // namespace Libs::Posix
 
 // --- LibKernel: bekleyen sinyal gonderimi (bizde sinyal yok) ----------------
+// NOT: libs/libKernel.cpp DERLENMIYOR - denendi ve geri alindi. Kyty'nin
+// libKernel'i RuntimeLinker/Elf64/ag yuzeyini de cekiyor; o katman psemu'nun
+// kendi loader'iyla cakistigi icin bilerek disarida (bkz. gpu/CMakeLists).
 namespace Libs::LibKernel {
 void KYTY_SYSV_ABI KernelDispatchPendingSignalForCurrentThread() {}
 } // namespace Libs::LibKernel

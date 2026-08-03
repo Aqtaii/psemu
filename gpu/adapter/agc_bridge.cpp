@@ -81,6 +81,7 @@ void EnsureDb() {
 	if (no_extra == nullptr || no_extra[0] != '1') {
 		Libs::InitFont_1(db); // sceFont*
 		Libs::InitAmpr_1(db); // sceAmpr*
+
 	}
 
 	Libs::Controller::ControllerSubsystem::Instance()->Init(nullptr);
