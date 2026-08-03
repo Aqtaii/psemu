@@ -3036,6 +3036,11 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             ctx->Rip = g_bp_addr[i] + 1;
             if (g_watchw_addr != 0 && !g_watchw_armed) {
                 g_watchw_armed = true;
+                // TUM THREAD'LERE kur: donanim izlemesi thread basinadir ve
+                // alani yazan kod baska bir thread olabilir. Eskiden yalnizca
+                // bu thread'e kuruluyordu ve baska thread'in yazmasi sessizce
+                // kaciyordu (bkz. ArmWriteWatchAllThreads).
+                ArmWriteWatchAllThreads(g_watchw_addr);
                 ctx->ContextFlags |= CONTEXT_DEBUG_REGISTERS;
                 ctx->Dr0 = g_watchw_addr;
                 ctx->Dr7 = 0xD0001; // L0 + yazma + 4 bayt
@@ -4464,6 +4469,28 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                         n     = static_cast<size_t>(ctx->Rdx);
                     } else {
                         n = static_cast<size_t>(ctx->Rsi);
+                    }
+                    // TANI: tutamac 0 ("varsayilan yigin") ile gelen cagrilarin
+                    // CAGIRANI kim? Pool 0'in oyunun KENDI allocator'i
+                    // tarafindan yonetildigini olctuk (HeapInit RVA 0x45c9e0,
+                    // taban Map #1'in basi, 1408 MB). Karar bu olcume bagli:
+                    //  - cagiran oyunun kendi allocator'inin icindeyse, o
+                    //    bolgeden bump ile dagitmak AYNI BELLEGI IKI KEZ
+                    //    dagitmak olur (gercek bozulma) -> baglamamaliyiz.
+                    //  - bagimsiz bir yerden geliyorsa oyun libc'nin varsayilan
+                    //    yigininin o bolge olmasini bekliyor -> baglamaliyiz.
+                    if (ctx->Rdi == 0) {
+                        static std::atomic<int> s_h0{0};
+                        if (s_h0.fetch_add(1, std::memory_order_relaxed) < 12) {
+                            uint64_t* rsp_p = reinterpret_cast<uint64_t*>(ctx->Rsp);
+                            const uint64_t ret =
+                                SafeReadable(rsp_p, 8) ? *rsp_p : 0;
+                            std::stringstream hs;
+                            hs << "[MSPACE-H0] " << readable_name << " tutamac=0 boyut=0x"
+                               << std::hex << n << " | cagiran RVA 0x"
+                               << (ret - g_base_addr);
+                            LOG_ERROR(hs.str());
+                        }
                     }
                     // Tutamac GERCEK bir bolge uzerine kurulduysa (GPU Onion
                     // havuzu gibi) tahsisi ORADAN yap: oyun bu isaretcileri
