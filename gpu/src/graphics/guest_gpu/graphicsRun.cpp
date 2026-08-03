@@ -1140,6 +1140,67 @@ void CommandProcessor::DmaData(uint8_t engine, uint8_t dst_sel, uint8_t dst_cach
 	if (num_bytes == 0) {
 		return;
 	}
+	// TANI: 4'un kati olmayan DMA burada oluyordu. Once NE istendigini
+	// olcelim - boyut, adresler, seciciler ve hangi yola (sabit doldurma /
+	// bellek kopyasi) gidecegi. Kalan bayt destegini yazmadan once istegin
+	// gercekte ne oldugunu bilmek gerekiyor.
+	if ((num_bytes & 3u) != 0) {
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 64) {
+			const char* yol = (src_sel == 2)                        ? "FillBuffer (sabit deger)"
+			                  : (src_sel == 0 || src_sel == 3)      ? "CopyBuffer (bellek->bellek)"
+			                                                        : "desteklenmeyen kaynak";
+			printf("[DMA-KUSURAT] num_bytes=%u (kalan=%u) dst=0x%016llx src/imm=0x%016llx "
+			       "dst_sel=%u src_sel=%u engine=%u dst_cache=%u src_cache=%u wait=%u "
+			       "confirm=%u block=%u -> %s\n",
+			       num_bytes, num_bytes & 3u,
+			       static_cast<unsigned long long>(dst_address_or_offset),
+			       static_cast<unsigned long long>(src_address_or_offset_or_immediate), dst_sel,
+			       src_sel, engine, dst_cache_policy, src_cache_policy, wait_for_previous,
+			       write_confirm, block_engine, yol);
+			fflush(stdout);
+		}
+	}
+	// GUVENLIK: adres olarak YORUMLANAMAYACAK kadar kucuk degerler.
+	//
+	// Olculdu: oyun num_bytes=1, dst=0x2, src=0x4, dst_sel=src_sel=3,
+	// engine=1, write_confirm=1 ile bir DMA_DATA gonderiyor. Ham kelimeler
+	// elle cozuldu (control=0x60300001, control2=0x80000001) ve cozumleme
+	// TUTARLI - yani sel gercekten "adres" diyor ama degerler adres degil.
+	// PM4'te 1 baytlik, minik "adresli", write-confirm'li DMA klasik bir
+	// SENKRONIZASYON deyimidir; veri kopyasi degildir. Nitekim hemen
+	// yukarida Sony'ye ozel baska bir DMA_DATA kodlamasi (PrefetchL2) icin
+	// de ozel durum var.
+	//
+	// Bu istegi bayt kopyasi olarak uygulamak 0x2 adresine YAZMAK olurdu.
+	// Onun yerine atliyoruz: kopya yapilmadigi icin bellek bozulmaz, ve
+	// EXIT yerine devam edildigi icin boru hatti ilerleyebilir.
+	// Kacis kapisi: PSEMU_DMA_STRICT=1 -> eski davranis (EXIT).
+	{
+		constexpr uint64_t kMinPlausibleAddress = 0x10000;
+		const bool dst_is_addr = (dst_sel == 0 || dst_sel == 3);
+		const bool src_is_addr = (src_sel == 0 || src_sel == 3);
+		const bool bogus = (dst_is_addr && dst_address_or_offset < kMinPlausibleAddress) ||
+		                   (src_is_addr && src_sel != 2 &&
+		                    src_address_or_offset_or_immediate < kMinPlausibleAddress);
+		static const bool strict = [] {
+			const char* e = std::getenv("PSEMU_DMA_STRICT");
+			return e != nullptr && e[0] == '1';
+		}();
+		if (bogus && !strict) {
+			static std::atomic<uint32_t> s_n {0};
+			if (s_n.fetch_add(1) < 16) {
+				printf("[DMA-ATLA] adres olamayacak kadar kucuk deger -> istek atlandi "
+				       "(num_bytes=%u dst=0x%llx src=0x%llx dst_sel=%u src_sel=%u)\n",
+				       num_bytes, static_cast<unsigned long long>(dst_address_or_offset),
+				       static_cast<unsigned long long>(src_address_or_offset_or_immediate),
+				       dst_sel, src_sel);
+				fflush(stdout);
+			}
+			return;
+		}
+	}
+
 	EXIT_NOT_IMPLEMENTED((num_bytes & 3u) != 0);
 	EXIT_NOT_IMPLEMENTED(dst_cache_policy > 3);
 	EXIT_NOT_IMPLEMENTED(src_cache_policy > 3);

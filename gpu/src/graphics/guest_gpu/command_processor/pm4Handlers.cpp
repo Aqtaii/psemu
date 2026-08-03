@@ -2280,6 +2280,23 @@ KYTY_CP_OP_PARSER(CpOpDmaData) {
 	const uint8_t  write_confirm = static_cast<uint8_t>((control2 >> 31u) & 0x1u);
 	const uint32_t num_bytes     = control2 & 0x03ffffffu;
 
+	// TANI: 4'un kati olmayan DMA olculdu ve adresler anlamsiz cikti
+	// (num_bytes=1, dst=0x2, src=0x4). dst_sel/src_sel DAGINIK bitlerden
+	// birlestiriliyor; cikarim yanlissa sel=3 aslinda baska bir sey olabilir
+	// (or. GDS=1), o zaman 2 ve 4 GDS OFSETI olarak anlam kazanir.
+	// Ham kelimeleri yaziyoruz ki elde cozumlenebilsin.
+	if ((num_bytes & 3u) != 0) {
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 32) {
+			printf("[DMA-HAM] control=0x%08x control2=0x%08x | buffer[1..4]=%08x %08x %08x %08x "
+			       "-> src=0x%llx dst=0x%llx num_bytes=%u dst_sel=%u src_sel=%u\n",
+			       control, control2, buffer[1], buffer[2], buffer[3], buffer[4],
+			       static_cast<unsigned long long>(src), static_cast<unsigned long long>(dst),
+			       num_bytes, dst_sel, src_sel);
+			fflush(stdout);
+		}
+	}
+
 	cp->DmaData(engine, dst_sel, dst_cache_policy, dst, src_sel, src_cache_policy, src, num_bytes,
 	            wait_previous, write_confirm, block_engine);
 
