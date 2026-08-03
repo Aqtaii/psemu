@@ -190,6 +190,7 @@ std::string InstructionToString(const Instruction& inst) {
 		case Opcode::IAddU32: text += "IAddU32"; break;
 		case Opcode::IAddCarryU32: text += "IAddCarryU32"; break;
 		case Opcode::ISubBorrowU32: text += "ISubBorrowU32"; break;
+		case Opcode::ISubBorrowCarryU32: text += "ISubBorrowCarryU32"; break;
 		case Opcode::ScalarAddCarryU32: text += "ScalarAddCarryU32"; break;
 		case Opcode::ScalarSubBorrowU32: text += "ScalarSubBorrowU32"; break;
 		case Opcode::ScalarSubBorrowCarryU32: text += "ScalarSubBorrowCarryU32"; break;
@@ -289,6 +290,7 @@ std::string InstructionToString(const Instruction& inst) {
 		case Opcode::CompareLtU32: text += "CompareLtU32"; break;
 		case Opcode::CompareLeU32: text += "CompareLeU32"; break;
 		case Opcode::CompareNeU64: text += "CompareNeU64"; break;
+		case Opcode::CompareGtU64: text += "CompareGtU64"; break;
 		case Opcode::CompareMaskEqU32: text += "CompareMaskEqU32"; break;
 		case Opcode::CompareMaskNeU32: text += "CompareMaskNeU32"; break;
 		case Opcode::CompareMaskGtU32: text += "CompareMaskGtU32"; break;

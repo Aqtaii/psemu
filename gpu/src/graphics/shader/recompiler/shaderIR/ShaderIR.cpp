@@ -721,6 +721,34 @@ bool LowerVectorAddCarry(const Decoder::Instruction& decoded, BasicBlock* block,
 	return true;
 }
 
+// V_SUBREV_CO_CI_U32 (VOP2 opcode 0x2a): D = S1 - S0 - VCC_in, VCC_out=borrow.
+//
+// Opcode numarasi tahmin degil, VOP2 tablosundaki bosluktan turetildi:
+//   0x26 VSubNcU32 / 0x27 VSubrevNcU32  (tasimasiz cift)
+//   0x28 VAddcU32                        (toplamanin tasimalisi)
+//   0x29 <yok> 0x2a <yok>                (cikarmanin tasimalilari)
+//   0x2b VMacF32
+// Yani 0x29 = subb, 0x2a = subbrev. Bize gelen 0x2a.
+//
+// "rev" oldugu icin kaynaklar TERS: LowerVectorCarryOut'un VSubrevI32 icin
+// yaptigi takasin aynisi. Ucuncu kaynak tasima girisidir (VCC).
+bool LowerVectorSubBorrowCarryRev(const Decoder::Instruction& decoded, BasicBlock* block,
+                                  std::string* error) {
+	Instruction inst;
+	inst.pc        = decoded.pc;
+	inst.op        = Opcode::ISubBorrowCarryU32;
+	inst.src_count = 3;
+	if (!LowerRegisterOperand(decoded.dst, &inst.dst, error) ||
+	    !LowerRegisterOperand(decoded.dst2, &inst.dst2, error) ||
+	    !LowerSourceOperand(decoded.src1, &inst.src[0], error) || // ters: S1 - S0
+	    !LowerSourceOperand(decoded.src0, &inst.src[1], error) ||
+	    !LowerSourceOperand(decoded.src2, &inst.src[2], error)) {
+		return false;
+	}
+	block->instructions.push_back(inst);
+	return true;
+}
+
 bool LowerVectorCarryOut(const Decoder::Instruction& decoded, BasicBlock* block,
                          std::string* error) {
 	Instruction inst;
@@ -1099,6 +1127,7 @@ bool LowerDecodedInstruction(const Decoder::Instruction& inst, BasicBlock* block
 		case Decoder::Opcode::VMovreldB32: return LowerVectorMoveRelDestination(inst, block, error);
 		case Decoder::Opcode::VMovrelsB32: return LowerVectorMoveRelSource(inst, block, error);
 		case Decoder::Opcode::VAddcU32: return LowerVectorAddCarry(inst, block, error);
+		case Decoder::Opcode::VSubbrevU32: return LowerVectorSubBorrowCarryRev(inst, block, error);
 		case Decoder::Opcode::VMadU64U32: return LowerVectorMadU64U32(inst, block, error);
 		case Decoder::Opcode::VMacF32: return LowerVectorMacF32(inst, block, error);
 		case Decoder::Opcode::VPkFmacF16: return LowerVectorPkFmacF16(inst, block, error);

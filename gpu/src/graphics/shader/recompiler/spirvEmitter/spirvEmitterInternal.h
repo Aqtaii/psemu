@@ -167,6 +167,10 @@ enum : uint32_t {
 	OpUDiv                         = 134,
 	OpFDiv                         = 136,
 	OpIAddCarry                    = 149,
+	// SPIR-V cekirdek numaralandirmasi: 149 IAddCarry, 150 ISubBorrow,
+	// 151 UMulExtended, 152 SMulExtended. Buradaki 151/152 zaten bu sirayi
+	// dogruluyor, yani 150 tahmin degil.
+	OpISubBorrow                   = 150,
 	OpUMulExtended                 = 151,
 	OpSMulExtended                 = 152,
 	OpLogicalNotEqual              = 165,
@@ -1156,6 +1160,7 @@ void EmitPerInvocationMask(EmitterState* state, const IR::Operand& dst, uint32_t
 void EmitIAddCarryU32(EmitterState* state, const IR::Instruction& inst);
 
 void EmitISubBorrowU32(EmitterState* state, const IR::Instruction& inst);
+void EmitISubBorrowCarryU32(EmitterState* state, const IR::Instruction& inst);
 
 void EmitScalarAddCarryU32(EmitterState* state, const IR::Instruction& inst);
 
@@ -1293,6 +1298,7 @@ void EmitCompareI16(EmitterState* state, const IR::Instruction& inst, uint32_t o
 void EmitBitCompareB32(EmitterState* state, const IR::Instruction& inst, bool bit_set);
 
 void EmitCompareNeU64(EmitterState* state, const IR::Instruction& inst);
+void EmitCompareGtU64(EmitterState* state, const IR::Instruction& inst);
 
 void EmitCompareConstant(EmitterState* state, const IR::Instruction& inst, bool value);
 

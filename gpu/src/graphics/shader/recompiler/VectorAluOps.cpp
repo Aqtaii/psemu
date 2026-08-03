@@ -27,7 +27,7 @@ constexpr OpcodeMap VOP2_OPS[] = {
     {0x1fu, Opcode::VMacF32},        {0x20u, Opcode::VMadmkF32},
     {0x21u, Opcode::VMadakF32},      {0x22u, Opcode::VBcntU32B32},
     {0x23u, Opcode::VMbcntLoU32B32}, {0x24u, Opcode::VMbcntHiU32B32},
-    {0x25u, Opcode::VAddNcU32},      {0x28u, Opcode::VAddcU32},
+    {0x25u, Opcode::VAddNcU32},      {0x28u, Opcode::VAddcU32},   {0x2au, Opcode::VSubbrevU32},
     {0x26u, Opcode::VSubNcU32},      {0x27u, Opcode::VSubrevNcU32},
     {0x2bu, Opcode::VMacF32},        {0x2cu, Opcode::VMadmkF32},
     {0x2du, Opcode::VMadakF32},      {0x2fu, Opcode::VCvtPkrtzF16F32},
@@ -159,7 +159,7 @@ constexpr OpcodeMap VOPC_OPS[] = {
     {0xc5u, Opcode::VCmpNeU32},    {0xc6u, Opcode::VCmpGeU32},   {0xc7u, Opcode::VCmpTU32},
     {0xd1u, Opcode::VCmpxLtU32},   {0xd2u, Opcode::VCmpxEqU32},  {0xd3u, Opcode::VCmpxLeU32},
     {0xd4u, Opcode::VCmpxGtU32},   {0xd5u, Opcode::VCmpxNeU32},  {0xd6u, Opcode::VCmpxGeU32},
-    {0xe5u, Opcode::VCmpNeU64},    {0xc9u, Opcode::VCmpLtF16},   {0xcau, Opcode::VCmpEqF16},
+    {0xe4u, Opcode::VCmpGtU64},  {0xe5u, Opcode::VCmpNeU64},    {0xc9u, Opcode::VCmpLtF16},   {0xcau, Opcode::VCmpEqF16},
     {0xcbu, Opcode::VCmpLeF16},    {0xccu, Opcode::VCmpGtF16},   {0xcdu, Opcode::VCmpLgF16},
     {0xceu, Opcode::VCmpGeF16},    {0xedu, Opcode::VCmpNeqF16},  {0xd9u, Opcode::VCmpxLtF16},
     {0xdau, Opcode::VCmpxEqF16},   {0xdbu, Opcode::VCmpxLeF16},  {0xdcu, Opcode::VCmpxGtF16},
@@ -1582,7 +1582,17 @@ bool DecodeVop3(uint32_t pc, std::span<const uint32_t> code, uint32_t word_index
 	inst->opcode    = LookupVop3Opcode(opcode);
 	SetRawWords(inst, code, word_index, 2);
 
-	const bool addc                    = inst->opcode == Opcode::VAddcU32 && opcode == 0x128u;
+	// VOP3B duzeni: bu komutlarda bits[14:8] ABS DEGIL, SDST'tir (skaler
+	// tasima cikisi). VAddcU32 (VOP3 0x128) icin zaten boyle isaretlenmisti;
+	// VSubbrevU32 (VOP3 0x12a) onun birebir ikizidir - tasima girisi src2,
+	// tasima cikisi SDST.
+	// Olculen komut: pc 0xb88, raw=[0xd52a6a05 0x00123280]
+	//   bits[14:8]=106 (VCC_LO) -> SDST, src2=4 -> tasima girisi,
+	//   clamp=0 omod=0 neg=0 -> GERCEK degistirici yok.
+	// Bayrak eklenmeden once bu SDST alani "abs degistiricisi" sanilip
+	// "VOP3 source modifiers are not implemented" ile reddediliyordu.
+	const bool addc = (inst->opcode == Opcode::VAddcU32 && opcode == 0x128u) ||
+	                  (inst->opcode == Opcode::VSubbrevU32 && opcode == 0x12au);
 	const bool vop3b_carry_out         = IsVop3BCarryOutOpcode(inst->opcode);
 	const bool vop3b_mad_u64           = IsVop3BMadU64Opcode(inst->opcode);
 	const bool vop3b_uses_sdst         = addc || vop3b_carry_out || vop3b_mad_u64;

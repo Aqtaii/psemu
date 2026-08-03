@@ -590,6 +590,41 @@ void EmitISubBorrowU32(EmitterState* state, const IR::Instruction& inst) {
 	EmitLaneMaskPairFromBool(state, inst.dst2, borrow);
 }
 
+// V_SUBREV_CO_CI_U32: tasima GIRISLI cikarma. EmitIAddCarryU32'nin ikizi;
+// SPIR-V'de OpIAddCarry'nin karsiligi OpISubBorrow.
+//   diff0, borrow0 = ISubBorrow(lhs, rhs)
+//   diff1, borrow1 = ISubBorrow(diff0, borrow_in)
+//   borrow_out     = borrow0 | borrow1
+// Kaynak sirasi (ters cikarma) IR indirgemesinde zaten duzeltildi;
+// burada src[0] eksilen, src[1] cikan, src[2] tasima girisidir.
+void EmitISubBorrowCarryU32(EmitterState* state, const IR::Instruction& inst) {
+	const auto lhs             = EmitValueLoad(state, inst.src[0]);
+	const auto rhs             = EmitValueLoad(state, inst.src[1]);
+	const auto carry_in_active = EmitLaneMaskOperandActiveBool(state, inst.src[2]);
+	const auto borrow_in       = state->builder.AllocateId();
+	state->builder.AddFunction({OpSelect, state->uint_type, borrow_in, carry_in_active,
+	                            ConstantU32(state, 1), ConstantU32(state, 0)});
+	const auto pair0   = state->builder.AllocateId();
+	const auto diff0   = state->builder.AllocateId();
+	const auto borrow0 = state->builder.AllocateId();
+	const auto pair1   = state->builder.AllocateId();
+	const auto diff1   = state->builder.AllocateId();
+	const auto borrow1 = state->builder.AllocateId();
+	const auto borrow  = state->builder.AllocateId();
+	state->builder.AddFunction({OpISubBorrow, state->uint_pair_type, pair0, lhs, rhs});
+	state->builder.AddFunction({OpCompositeExtract, state->uint_type, diff0, pair0, 0});
+	state->builder.AddFunction({OpCompositeExtract, state->uint_type, borrow0, pair0, 1});
+	state->builder.AddFunction({OpISubBorrow, state->uint_pair_type, pair1, diff0, borrow_in});
+	state->builder.AddFunction({OpCompositeExtract, state->uint_type, diff1, pair1, 0});
+	state->builder.AddFunction({OpCompositeExtract, state->uint_type, borrow1, pair1, 1});
+	state->builder.AddFunction({OpBitwiseOr, state->uint_type, borrow, borrow0, borrow1});
+	const auto borrow_bool = state->builder.AllocateId();
+	state->builder.AddFunction(
+	    {OpINotEqual, state->bool_type, borrow_bool, borrow, ConstantU32(state, 0)});
+	EmitStoreU32(state, inst.dst, diff1);
+	EmitLaneMaskPairFromBool(state, inst.dst2, borrow_bool);
+}
+
 void EmitScalarAddCarryU32(EmitterState* state, const IR::Instruction& inst) {
 	const auto lhs      = EmitValueLoad(state, inst.src[0]);
 	const auto rhs      = EmitValueLoad(state, inst.src[1]);
@@ -1506,6 +1541,43 @@ void EmitCompareNeU64(EmitterState* state, const IR::Instruction& inst) {
 	state->builder.AddFunction({OpINotEqual, state->bool_type, ne_low, lhs_low, rhs_low});
 	state->builder.AddFunction({OpINotEqual, state->bool_type, ne_high, lhs_high, rhs_high});
 	state->builder.AddFunction({OpLogicalOr, state->bool_type, cond, ne_low, ne_high});
+	EmitCompareResult(state, inst.dst, cond);
+}
+
+// V_CMP_GT_U64 (VOP3 opcode 0xe4): isaretsiz 64-bit "buyuktur".
+//
+// Opcode numarasi TAHMIN DEGIL, VectorAluOps.cpp'deki tablodan turetildi.
+// VOPC blogu her tipte 8'erli ve ayni sirada:
+//     +0 F   +1 Lt   +2 Eq   +3 Le   +4 Gt   +5 Ne   +6 Ge   +7 T
+//   I32 blogu 0x80: 0x84 = VCmpGtI32, 0x85 = VCmpNeI32
+//   U32 blogu 0xc0: 0xc4 = VCmpGtU32, 0xc5 = VCmpNeU32
+//   U64 blogu 0xe0: 0xe5 = VCmpNeU64 (tabloda ZATEN vardi) => 0xe4 = Gt
+//
+// Olculen komut: pc 0x784, raw=[0xd4e4006a 0x0001006a]
+//   vdst=106 (VCC_LO), src0=106 (VCC_LO), src1=128 (satir-ici sabit 0)
+//   yani "VCC = (VCC_as_u64 > 0)" - maskenin sifirdan farkli olup
+//   olmadigini soran cok yaygin bir deyim.
+//
+// Uretim EmitCompareNeU64 ile ayni kalibi izler: bu emitter 64 biti iki
+// 32-bit yarim olarak tutuyor, dolayisiyla karsilastirma da iki yarimdan
+// kurulur:
+//     gt = (hi_l > hi_r) || (hi_l == hi_r && lo_l > lo_r)
+// Tum karsilastirmalar ISARETSIZ (OpUGreaterThan).
+void EmitCompareGtU64(EmitterState* state, const IR::Instruction& inst) {
+	const auto lhs_low   = EmitSequentialValueLoad(state, inst.src[0], 0);
+	const auto lhs_high  = EmitSequentialValueLoad(state, inst.src[0], 1);
+	const auto rhs_low   = EmitSequentialValueLoad(state, inst.src[1], 0);
+	const auto rhs_high  = EmitSequentialValueLoad(state, inst.src[1], 1);
+	const auto high_gt   = state->builder.AllocateId();
+	const auto high_eq   = state->builder.AllocateId();
+	const auto low_gt    = state->builder.AllocateId();
+	const auto tie_break = state->builder.AllocateId();
+	const auto cond      = state->builder.AllocateId();
+	state->builder.AddFunction({OpUGreaterThan, state->bool_type, high_gt, lhs_high, rhs_high});
+	state->builder.AddFunction({OpIEqual, state->bool_type, high_eq, lhs_high, rhs_high});
+	state->builder.AddFunction({OpUGreaterThan, state->bool_type, low_gt, lhs_low, rhs_low});
+	state->builder.AddFunction({OpLogicalAnd, state->bool_type, tie_break, high_eq, low_gt});
+	state->builder.AddFunction({OpLogicalOr, state->bool_type, cond, high_gt, tie_break});
 	EmitCompareResult(state, inst.dst, cond);
 }
 
