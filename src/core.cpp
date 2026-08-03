@@ -697,9 +697,32 @@ static void MspaceRemember(uint64_t handle, uint64_t base, uint64_t cap) {
     // hem cap=0xb800000 hem cap=0x200000 ile). Ikisine de ayni bolgeden
     // dagitsaydik birbirlerinin uzerine yazarlardi; bu durumda ikincisi
     // guvenli host yigin yoluna duser.
-    for (const auto& kv : g_mspace) {
+    for (auto& kv : g_mspace) {
         if (kv.second.base == base && base != 0) {
-            g_mspace[handle] = MspaceInfo{0, cap, 0};
+            // ESKIDEN: ikincisini BOLGESIZ birakiyorduk (host yigina duserdi).
+            // Bu, oyunun KENDI havuz denetleyicisini tetikliyor:
+            //     "Pool possibly corrupt, block 0x..., doesn't belong to pool 0"
+            // (olculdu: tek kosuda 48 kez). Cunku o mspace'ten dagitilan
+            // bloklar misafirin havuz ARALIGININ DISINDA kaliyor.
+            //
+            // Bunun yerine ic mspace'e ebeveynin KUYRUGUNDAN ayrik bir alt
+            // aralik veriyoruz: ikisi de misafir bellegi icinde kalir ve
+            // cakismaz. Ebeveyn bump'i ONDEN ilerledigi icin kuyrugu kesmek
+            // mevcut tahsisleri bozmaz; ebeveynin kapasitesini de o kadar
+            // kisiyoruz.
+            MspaceInfo& parent = kv.second;
+            if (cap != 0 && parent.cap > cap && (parent.cap - cap) > parent.used) {
+                parent.cap -= cap;                      // kuyrugu ebeveynden al
+                g_mspace[handle] = MspaceInfo{base + parent.cap, cap, 0};
+                printf("[MSPACE] ic ice havuz: taban=0x%llx -> alt aralik 0x%llx (0x%llx bayt), "
+                       "ebeveyn kapasitesi 0x%llx'e dusuruldu\n",
+                       (unsigned long long)base, (unsigned long long)(base + parent.cap),
+                       (unsigned long long)cap, (unsigned long long)parent.cap);
+                fflush(stdout);
+            } else {
+                // Sigmiyorsa eski guvenli yola dus.
+                g_mspace[handle] = MspaceInfo{0, cap, 0};
+            }
             return;
         }
     }
