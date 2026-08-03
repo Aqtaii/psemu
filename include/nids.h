@@ -3943,10 +3943,21 @@ inline std::unordered_map<std::string, std::string> g_nid_to_name = {
     {"12wOHk8ywb0#S#N", "sceKernelPollSema"},
     {"12wOHk8ywb0#T#N", "sceKernelPollSema"},
     {"12wOHk8ywb0#S#T", "sceKernelPollSema"},
-    {"4czppHBiriw#T#T", "sceKernelWaitSema"},
-    {"4czppHBiriw#S#N", "sceKernelWaitSema"},
-    {"4czppHBiriw#T#N", "sceKernelWaitSema"},
-    {"4czppHBiriw#S#T", "sceKernelWaitSema"},
+    // DUZELTME: bu NID sceKernelSignalSema'dir, WaitSema DEGIL. Yanlis etiket
+    // yuzunden oyunun HER sinyal cagrisi bekleme isleyicisine gidiyordu:
+    // semafor hic sinyallenmiyor, cagri 5000 ms bekleyip 0x8002003C
+    // (ETIMEDOUT) donuyor ve oyun "sceKernelSignalSema 0x8002003c" diye
+    // assert basiyordu (Semaphore.cpp:86). Bekleyen thread'ler ise sonsuza
+    // kadar park.
+    // Uc bagimsiz kaynak dogruladi:
+    //   1) oyunun kendi hata dizgesi: PLT 0x74ec280 -> "sceKernelSignalSema"
+    //      (sarmalayici RVA 0x1870, Semaphore.cpp:86)
+    //   2) Kyty'nin tablosu: gpu/src/libs/libKernel.cpp -> KernelSignalSema
+    //   3) sceKernelSignalSema bu dosyada HIC gecmiyordu (0 kayit)
+    {"4czppHBiriw#T#T", "sceKernelSignalSema"},
+    {"4czppHBiriw#S#N", "sceKernelSignalSema"},
+    {"4czppHBiriw#T#N", "sceKernelSignalSema"},
+    {"4czppHBiriw#S#T", "sceKernelSignalSema"},
     {"4DM06U2BNEY#T#T", "sceKernelCancelSema"},
     {"4DM06U2BNEY#S#N", "sceKernelCancelSema"},
     {"4DM06U2BNEY#T#N", "sceKernelCancelSema"},

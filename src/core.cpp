@@ -4919,9 +4919,55 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                         had_timeout_arg = true;
                         const uint32_t us = *tp;
                         ms = static_cast<DWORD>(us / 1000u);
-                        if (ms > kWaitCapMs) ms = kWaitCapMs;
                     }
-                    const DWORD wr = (h != nullptr) ? WaitForSingleObject(h, ms) : WAIT_TIMEOUT;
+                    // ------------------------------------------------------------
+                    // ZAMAN ASIMI ARGUMANI YOKSA GERCEKTEN SONSUZ BEKLE.
+                    //
+                    // Yukaridaki tavan, sinyallemenin HIC calismadigi donemde
+                    // konmus bir kacis kapisiydi: sceKernelSignalSema'nin NID'i
+                    // (4czppHBiriw) nids.h'de yanlislikla "sceKernelWaitSema"
+                    // etiketliydi, yani oyunun her sinyal cagrisi bekleme
+                    // isleyicisine gidiyordu ve hicbir semafor sinyallenmiyordu.
+                    // O etiket duzeltildikten sonra bekleyisler gercekten
+                    // SINYAL almaya basladi.
+                    //
+                    // Artik tavan ZARAR veriyor: oyun timeout=NULL ile "sinyal
+                    // gelene kadar bekle" diyor, biz 5 sn sonra ETIMEDOUT
+                    // donuyoruz ve oyun bunu hata sayip assert basiyor
+                    // (Semaphore.cpp:63, kosuda 383 kez).
+                    //
+                    // Cozum: sonsuz istekte DONGUYE gir. Kilitlenme yine
+                    // tani edilebilir kalsin diye her tur bir kez uyariyoruz -
+                    // sessizce asilmiyoruz. Misafir bir sure verdiyse ona
+                    // AYNEN uyuyoruz (kirpmiyoruz); zaman asimi onun kendi
+                    // istegidir ve ETIMEDOUT dogru cevaptir.
+                    // Kacis kapisi: PSEMU_SEMA_BOUNDED=1 -> eski (sinirli) hal.
+                    static const bool s_bounded = [] {
+                        const char* e = std::getenv("PSEMU_SEMA_BOUNDED");
+                        return e != nullptr && e[0] == '1';
+                    }();
+                    DWORD wr = WAIT_TIMEOUT;
+                    if (h != nullptr) {
+                        if (had_timeout_arg || s_bounded) {
+                            wr = WaitForSingleObject(h, ms);
+                        } else {
+                            uint64_t rounds = 0;
+                            do {
+                                wr = WaitForSingleObject(h, kWaitCapMs);
+                                if (wr == WAIT_TIMEOUT) {
+                                    ++rounds;
+                                    static std::atomic<int> s_stuck{0};
+                                    if (s_stuck.fetch_add(1, std::memory_order_relaxed) < 16) {
+                                        printf("[SEMA] sonsuz bekleme suruyor: handle=%p "
+                                               "tur=%llu (%lu ms/tur) - sinyal gelmedi\n",
+                                               h, static_cast<unsigned long long>(rounds),
+                                               kWaitCapMs);
+                                        fflush(stdout);
+                                    }
+                                }
+                            } while (wr == WAIT_TIMEOUT);
+                        }
+                    }
 
                     static std::atomic<uint64_t> s_w{0}, s_to{0};
                     const uint64_t wn = s_w.fetch_add(1) + 1;
