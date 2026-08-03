@@ -748,9 +748,54 @@ static uint64_t MspaceUsed(uint64_t handle) {
 // ICINDEN yap. Host yigininden vermek yanlisti: oyun bu isaretcileri GPU'ya
 // veriyor ve havuz araliginda olmalarini bekliyor. Bolge yoksa 0 don
 // (cagiran host yigin yoluna duser).
+// VARSAYILAN MSPACE (tutamac 0).
+// ---------------------------------------------------------------------------
+// Oyun sceLibcMspaceMalloc'u TUTAMAC 0 ile cagiriyor - Sony libc'de bu
+// "varsayilan yigin" anlamina geliyor. Bizde 0 icin kayitli bolge yoktu ve
+// bu tahsisler HOST YIGININA dusuyordu. Sonucu, oyunun kendi denetleyicisi:
+//     "Pool possibly corrupt, block 0x..., doesn't belong to pool 0"
+// (olculdu: tek kosuda 48 kez; kontrol RVA 0x2942e'de basit bir
+//  base <= blok < base+size aralik testi).
+//
+// Cozum: tutamac 0'a MISAFIR dogrudan bellegi icinden gercek bir havuz
+// veriyoruz. Nereye: dmem rezervinin UST UCUNA. Misafirin kendi
+// AllocateDirectMemory imleci 0x100000'dan yukari ilerliyor ve olculen
+// toplam kullanim ~10.1 GB; rezerv ise kDmemSize (16 GB). Ust uctan
+// ayirmak cakismaz.
+//
+// DIKKAT - BU TEK BASINA YETMEYEBILIR: oyunun kendi pool 0 araligi
+// (olculdu: taban 0x21de0d50000, Map #3'un icinde) BIZIM sectigimiz yer
+// DEGIL. Yani bloklar artik misafir bellegindedir ama oyunun bekledigi
+// araliga dusmeyebilir. Bu adim yine de dogru: host yigini kesinlikle
+// yanlisti, IsInMspaceRegion/free tutarliligini da duzeltiyor. Sonuc
+// olculecek; yetmezse aralik CALISMA ANINDA ogrenilip baglanacak.
+// Boyut PSEMU_DEFAULT_HEAP_MB ile ayarlanir (varsayilan 256 MB).
+static void* MspaceBumpAlloc(uint64_t handle, size_t n, size_t align);
+static uint8_t* DmemBase(); // asagida tanimli
+
+static void EnsureDefaultMspace() {
+    // g_mspace_mtx CAGIRAN tarafindan tutuluyor.
+    if (g_mspace.count(0) != 0) return;
+    uint8_t* dbase = DmemBase();
+    if (dbase == nullptr) return;
+    static const uint64_t kHeapBytes = [] {
+        const char* e = std::getenv("PSEMU_DEFAULT_HEAP_MB");
+        const long v = (e != nullptr) ? atol(e) : 0;
+        return static_cast<uint64_t>(v > 0 ? v : 256) * 1024ull * 1024ull;
+    }();
+    const uint64_t off = kDmemSize - kHeapBytes; // rezervin ust ucu
+    g_mspace[0] = MspaceInfo{reinterpret_cast<uint64_t>(dbase) + off, kHeapBytes, 0};
+    printf("[MSPACE] varsayilan havuz (tutamac 0) kuruldu: taban=0x%llx boyut=0x%llx "
+           "(dmem ust ucu, ofset 0x%llx)\n",
+           (unsigned long long)(reinterpret_cast<uint64_t>(dbase) + off),
+           (unsigned long long)kHeapBytes, (unsigned long long)off);
+    fflush(stdout);
+}
+
 static void* MspaceBumpAlloc(uint64_t handle, size_t n, size_t align) {
     if (align < 16) align = 16;
     std::lock_guard<std::mutex> lock(g_mspace_mtx);
+    if (handle == 0) EnsureDefaultMspace();
     auto it = g_mspace.find(handle);
     if (it == g_mspace.end() || it->second.base == 0 || it->second.cap == 0) {
         // BOLGESIZ TUTAMAC -> cagiran host yigina duser. Havuz "dolmasa" bile
@@ -803,6 +848,17 @@ static void* MspaceBumpAlloc(uint64_t handle, size_t n, size_t align) {
     // dagitirsak cagiran ilk memset'te cokuyor (olculdu: font yolunda
     // sceLibcMspaceMalloc icinde erisim ihlali).
     // Yazilamiyorsa 0 donuyoruz; cagiran guvenli host yigin yoluna duser.
+    //
+    // ONCE TALEP UZERINE COMMIT: dmem rezervi icindeki sayfalar basta
+    // REZERVE (commit degil). Varsayilan havuz (tutamac 0) rezervin ust
+    // ucunda oldugu icin bu kontrol onu her seferinde eleyip host yigina
+    // dusururdu - yani duzeltmenin kendisi ise yaramazdi. Commit edip
+    // yeniden bakiyoruz.
+    if (!SafeWritable(reinterpret_cast<void*>(p), n)) {
+        VirtualAlloc(reinterpret_cast<void*>(p & ~0xFFFull),
+                     static_cast<SIZE_T>(((p & 0xFFFull) + n + 0xFFF) & ~0xFFFull),
+                     MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+    }
     if (!SafeWritable(reinterpret_cast<void*>(p), n)) {
         static std::atomic<int> s_bad{0};
         if (s_bad.fetch_add(1, std::memory_order_relaxed) < 8) {
