@@ -39,6 +39,13 @@
 
 namespace Libs::Graphics {
 
+// GPU anlik goruntu (govdeleri asagida): sicak yol isareti, thread adi ve
+// takilma nobetcisi.
+void PsemuGpuMark(const char* site, uint64_t a, uint64_t b, uint64_t c);
+void PsemuGpuMarkIdle(const char* site, uint64_t a, uint64_t b, uint64_t c);
+void PsemuGpuThreadName(const char* name);
+void PsemuGpuStallWatchdogStart();
+
 // ============================================================================
 // TANI: m_mutex SAHIPLIK IZI
 // ----------------------------------------------------------------------------
@@ -313,6 +320,8 @@ void GraphicsRunInit() {
 
 	GraphicsInitJmpTables();
 
+	PsemuGpuStallWatchdogStart(); // takilma anlik goruntusu
+
 	g_gpu = new Gpu;
 }
 
@@ -575,11 +584,14 @@ void CommandProcessor::BufferFlush() {
 		       owner.site != nullptr ? owner.site : "(serbest)");
 		fflush(stdout);
 	}
+	PsemuGpuMark("BufferFlush: m_mutex bekleniyor", 0, 0, 0);
 	CommandScheduler::SchedTrace("BufferFlush: m_mutex bekleniyor", -1);
 	Common::LockGuard lock(m_mutex);
 	CpLockScope _cp_lock_scope(&m_mutex, __func__);
+	PsemuGpuMark("BufferFlush: m_mutex alindi", 0, 0, 0);
 	CommandScheduler::SchedTrace("BufferFlush: m_mutex alindi", -1);
 	m_scheduler.Flush();
+	PsemuGpuMark("BufferFlush: cikis", 0, 0, 0);
 	CommandScheduler::SchedTrace("BufferFlush: cikis", -1);
 }
 
@@ -749,6 +761,150 @@ static void BackoffCommandProcessorWait(uint64_t spin_count, uint32_t poll_inter
 }
 
 
+// ============================================================================
+// GPU ANLIK GORUNTU (stall snapshot)
+// ----------------------------------------------------------------------------
+// NEDEN: takilma noktasi kosudan kosuya DEGISIYOR (ayni 497 dw'lik tamponda
+// bir kosuda ofset 162/ACQUIRE_MEM, digerinde 427/EVENT_WRITE). Tek noktaya
+// iz koyup kovalamak bu yuzden her seferinde baska bir "suclu" gosteriyor -
+// bu oturumda yedi kez boyle yanildik.
+//
+// COZUM: her GPU thread'i kendi son konumunu KILITSIZ bir kayda yazar
+// (printf yok, yalnizca statik dizge isaretcisi + uc sayi). Ayri bir
+// nobetci thread ilerlemeyi izler; global sayac N saniye artmazsa TUM
+// thread'lerin konumunu TEK SEFERDE doker. Boylece degisken hedefi tek tek
+// izlerle kovalamak yerine, kilitlendigi ANIN tam fotografini aliriz.
+//
+// Ayarlar: PSEMU_GPU_STALL_SEC (varsayilan 10), PSEMU_GPU_STALL_DUMPS
+// (varsayilan 5 - kac kez doksun).
+// ============================================================================
+namespace {
+
+struct GpuCrumb {
+	unsigned long        tid       = 0;
+	const char*          thread_id = "?";   // statik dizge
+	std::atomic<const char*> site {"(baslangic)"}; // statik dizge
+	std::atomic<uint64_t>    a {0};
+	std::atomic<uint64_t>    b {0};
+	std::atomic<uint64_t>    c {0};
+	std::atomic<uint64_t>    seq {0};
+};
+
+std::mutex                              g_crumb_mtx;
+std::vector<std::unique_ptr<GpuCrumb>>  g_crumbs;
+std::atomic<uint64_t>                   g_crumb_global_seq {0};
+thread_local GpuCrumb*                  t_crumb = nullptr;
+
+GpuCrumb* CrumbSelf() {
+	if (t_crumb == nullptr) {
+		auto  owned = std::make_unique<GpuCrumb>();
+		auto* raw   = owned.get();
+		raw->tid    = static_cast<unsigned long>(GetCurrentThreadId());
+		{
+			std::lock_guard<std::mutex> lk(g_crumb_mtx);
+			g_crumbs.push_back(std::move(owned));
+		}
+		t_crumb = raw;
+	}
+	return t_crumb;
+}
+
+} // namespace
+
+// Sicak yol: kilit yok, yalnizca birkac atomik yazma.
+void PsemuGpuMark(const char* site, uint64_t a, uint64_t b, uint64_t c) {
+	auto* cr = CrumbSelf();
+	cr->site.store(site, std::memory_order_relaxed);
+	cr->a.store(a, std::memory_order_relaxed);
+	cr->b.store(b, std::memory_order_relaxed);
+	cr->c.store(c, std::memory_order_relaxed);
+	cr->seq.fetch_add(1, std::memory_order_relaxed);
+	g_crumb_global_seq.fetch_add(1, std::memory_order_relaxed);
+}
+
+// SESSIZ isaret: konumu gunceller ama GLOBAL ILERLEME sayacini ARTIRMAZ.
+// Bos donen bekleme dongulerinde sart - aksi halde spin "ilerleme" sayilir
+// ve takilma nobetcisi kilitlenmeyi hic goremez (ilk surumde tam bu oldu:
+// wait_reg_mem her turda isaret koydugu icin nobetci hic tetiklenmedi).
+void PsemuGpuMarkIdle(const char* site, uint64_t a, uint64_t b, uint64_t c) {
+	auto* cr = CrumbSelf();
+	cr->site.store(site, std::memory_order_relaxed);
+	cr->a.store(a, std::memory_order_relaxed);
+	cr->b.store(b, std::memory_order_relaxed);
+	cr->c.store(c, std::memory_order_relaxed);
+	cr->seq.fetch_add(1, std::memory_order_relaxed);
+}
+
+// Bu thread'e okunabilir bir ad ver (bir kez).
+void PsemuGpuThreadName(const char* name) {
+	CrumbSelf()->thread_id = name;
+}
+
+namespace {
+
+void GpuSnapshotDump(const char* reason) {
+	std::lock_guard<std::mutex> lk(g_crumb_mtx);
+	printf("\n=============== GPU ANLIK GORUNTU (%s) ===============\n", reason);
+	printf("%-22s %-8s %-34s %12s %12s %12s %10s\n", "thread", "tid", "konum", "a", "b", "c",
+	       "adim");
+	for (const auto& cr: g_crumbs) {
+		printf("%-22s %-8lu %-34s %12llu %12llu %12llu %10llu\n", cr->thread_id, cr->tid,
+		       cr->site.load(std::memory_order_relaxed),
+		       static_cast<unsigned long long>(cr->a.load(std::memory_order_relaxed)),
+		       static_cast<unsigned long long>(cr->b.load(std::memory_order_relaxed)),
+		       static_cast<unsigned long long>(cr->c.load(std::memory_order_relaxed)),
+		       static_cast<unsigned long long>(cr->seq.load(std::memory_order_relaxed)));
+	}
+	printf("=====================================================================\n\n");
+	fflush(stdout);
+}
+
+void GpuStallWatchdog(void* /*unused*/) {
+	const int stall_sec = [] {
+		const char* e = std::getenv("PSEMU_GPU_STALL_SEC");
+		const int   v = (e != nullptr) ? atoi(e) : 10;
+		return v > 0 ? v : 10;
+	}();
+	const int max_dumps = [] {
+		const char* e = std::getenv("PSEMU_GPU_STALL_DUMPS");
+		const int   v = (e != nullptr) ? atoi(e) : 5;
+		return v > 0 ? v : 5;
+	}();
+
+	uint64_t last_seq   = 0;
+	int      quiet_sec  = 0;
+	int      dumps_done = 0;
+	for (;;) {
+		std::this_thread::sleep_for(std::chrono::seconds(1));
+		const uint64_t now = g_crumb_global_seq.load(std::memory_order_relaxed);
+		if (now != last_seq) {
+			last_seq  = now;
+			quiet_sec = 0;
+			continue;
+		}
+		// Hicbir GPU thread'i ilerlemedi.
+		if (++quiet_sec >= stall_sec && dumps_done < max_dumps) {
+			char reason[96];
+			snprintf(reason, sizeof(reason), "%d sn ilerleme yok, dokum #%d", quiet_sec,
+			         dumps_done + 1);
+			GpuSnapshotDump(reason);
+			dumps_done++;
+			quiet_sec = 0;
+		}
+	}
+}
+
+} // namespace
+
+void PsemuGpuStallWatchdogStart() {
+	static std::atomic_bool started {false};
+	if (started.exchange(true)) {
+		return;
+	}
+	Common::Thread t(GpuStallWatchdog, nullptr);
+	t.Detach();
+}
+
 // Tani: asagida tanimli (gonderilen tamponlarda etiket aramasi).
 static void PsemuScanSubmittedForLabel(uint64_t label);
 
@@ -832,6 +988,7 @@ void CommandProcessor::WaitRegMem(uint32_t func, const T* addr, T ref, T mask, u
 				}
 			}
 		}
+		PsemuGpuMarkIdle("CP: wait_reg_mem bekliyor", addr_value, static_cast<uint64_t>(value), spin_count);
 		BackoffCommandProcessorWait(spin_count, poll);
 	}
 }
@@ -1134,6 +1291,7 @@ void GraphicsRing::ThreadBatchRun(void* data) {
 
 	static std::atomic_uint64_t seq = 0;
 
+	PsemuGpuThreadName("Grafik-Halkasi");
 	auto* ring = static_cast<GraphicsRing*>(data);
 	auto* cp   = ring->m_cp;
 
@@ -1147,6 +1305,7 @@ void GraphicsRing::ThreadBatchRun(void* data) {
 	// NOT: bu sayac 24*6 = 144 ile sinirliydi; oturumda kirpilmis tani
 	// ciktisindan bes kez yanlis sonuc cikardigim icin sinir kaldirildi.
 	auto stage = [](const char* what, uint64_t n) {
+		PsemuGpuMark(what, n, 0, 0);
 		static std::atomic<uint32_t> s_n {0};
 		if (s_n.fetch_add(1) < 200000) {
 			printf("[CP-ASAMA] %s (tur %llu)\n", what, static_cast<unsigned long long>(n));
@@ -1210,6 +1369,7 @@ void Gpu::ResumeSubmissions() {
 void ComputeRing::ThreadRun(void* data) {
 	EXIT_IF(data == nullptr);
 
+	PsemuGpuThreadName("Hesaplama-Halkasi");
 	auto* ring = static_cast<ComputeRing*>(data);
 	auto* cp   = ring->m_cp;
 
@@ -1420,7 +1580,13 @@ void CommandProcessor::Run(uint32_t* data, uint32_t num_dw) {
 			}
 		}
 
+		// Anlik goruntu icin ekmek kirintisi: hangi tamponun hangi
+		// ofsetindeki hangi pakette oldugumuz. Kilitsiz, printf'siz.
+		PsemuGpuMark("CP: paket isleniyor", num_dw - dw, cmd_id, num_dw);
+
 		auto s = pfunc(this, cmd_id & ~1u, cmd, dw, num_dw);
+
+		PsemuGpuMark("CP: paket bitti", num_dw - dw, cmd_id, num_dw);
 
 		// LOGF("\t %05" PRIx32 ": %u\n", num_dw - dw, s);
 

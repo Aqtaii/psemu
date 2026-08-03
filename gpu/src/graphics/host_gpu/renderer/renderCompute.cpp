@@ -42,6 +42,9 @@
 #include <vector>
 
 namespace Libs::Graphics {
+
+// Tani: GPU anlik goruntu isareti (govdesi graphicsRun.cpp).
+void PsemuGpuMark(const char* site, uint64_t a, uint64_t b, uint64_t c);
 static uint64_t BufferDescriptorSize(const ShaderBufferResource& descriptor) {
 	const uint64_t records = descriptor.NumRecords();
 	const uint64_t stride  = descriptor.Stride();
@@ -377,6 +380,7 @@ void RenderDispatchDirect(uint64_t submit_id, CommandBuffer* buffer, HW::Context
 	// bulmak icin asama izleri. Dengesiz (giris=N, cikis=N-1) kalan asama
 	// takilan asamadir.
 	auto rdd = [](const char* what) {
+		PsemuGpuMark(what, 0, 0, 0); // anlik goruntu icin ekmek kirintisi
 		static std::atomic<uint32_t> s_n {0};
 		if (s_n.fetch_add(1) < 200000) {
 			printf("[RDD] %s\n", what);
