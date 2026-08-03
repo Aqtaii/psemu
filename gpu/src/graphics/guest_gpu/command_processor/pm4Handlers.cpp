@@ -2979,6 +2979,30 @@ KYTY_CP_OP_PARSER(CpOpReleaseMem) {
 		}
 	};
 
+	// TANI: halka segment etiketi 0x...2540'a yazmasi gereken RELEASE_MEM
+	// paketi (DCB 497, ofset 30) DAGITILIYOR ama hicbir [EOP-YAZ] uretmiyor -
+	// yani asagidaki erken-donuslerden birine giriyor. Hangisi oldugunu
+	// isimlendirelim; alan cozumlemesi (ozellikle 3 bitlik INT_SEL) bu
+	// dosyada daha once de sorun cikarmisti.
+	{
+		// NOT: ilk surumde sinir 24'tu ve hedef tampona sira gelmeden dolduydu -
+		// "o etikete hic ulasilmadi" sonucu YANLIS olurdu. Sinir buyutuldu ve
+		// adressiz (dst=0, data_sel=0 - saf onbellek olayi) paketler
+		// filtrelendi; boylece gercek etiket yazimlari log'da kalir.
+		static std::atomic<uint32_t> s_n {0};
+		if (dst_gpu_addr != nullptr && s_n.fetch_add(1) < 200) {
+			printf("[RM] dst=0x%016llx data_sel=%u int_sel=%u release_dst=%u eop_event=0x%02x "
+			       "gcr=0x%08x -> %s\n",
+			       static_cast<unsigned long long>(reinterpret_cast<uint64_t>(dst_gpu_addr)),
+			       data_sel, interrupt_selector, release_dst, eop_event_type, gcr_cntl,
+			       (data_sel == 0 || interrupt_selector == 4)
+			           ? "ATLANDI (data_sel==0 || int_sel==4)"
+			           : ((release_dst == 0 && dst_gpu_addr == nullptr) ? "ATLANDI (dst NULL)"
+			                                                           : "yazacak"));
+			fflush(stdout);
+		}
+	}
+
 	if (data_sel == 0 || interrupt_selector == 4) {
 		if (eop_event_type != 0x28 || gcr_cntl != 0) {
 			cp->MemoryBarrier();

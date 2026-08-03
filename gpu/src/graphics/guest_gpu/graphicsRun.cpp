@@ -597,6 +597,9 @@ static void YieldCommandProcessorWait(uint32_t poll_interval_cycles) noexcept {
 	std::this_thread::yield();
 }
 
+// Tani: asagida tanimli (gonderilen tamponlarda etiket aramasi).
+static void PsemuScanSubmittedForLabel(uint64_t label);
+
 template <typename T>
 void CommandProcessor::WaitRegMem(uint32_t func, const T* addr, T ref, T mask, uint32_t poll,
                                   uint32_t wait_op) {
@@ -609,9 +612,25 @@ void CommandProcessor::WaitRegMem(uint32_t func, const T* addr, T ref, T mask, u
 	const auto log_width  = static_cast<int>(sizeof(T) * 2u);
 	const auto bits       = static_cast<unsigned>(sizeof(T) * 8u);
 
+	// Bu deger BASKA bir thread tarafindan yaziliyor (release-mem'i isleyen
+	// komut islemcisi), dolayisiyla yoklama yuklemesi volatile OLMALI. AGC
+	// API'sinde adres 'const volatile void*' olarak geliyordu ama bu katmanda
+	// volatile dusuyordu.
+	//
+	// DURUSTLUK NOTU: bu, asagidaki kilitlenmenin SEBEBI DEGILDI - denendi ve
+	// olculdu, davranis hic degismedi (1085 ve 497 dw'lik tamponlar yine
+	// bitmiyor). Yine de dogru oldugu icin birakildi.
+	//
+	// Cozulmemis olcum: [EOP-YAZ] etikete 0x1 yazildigini gosteriyor
+	// (cache_action=0x38 -> write64 -> memcpy calisiyor) ve bu yazim
+	// beklemeler BASLADIKTAN SONRA oluyor; buna ragmen [CP-BEKLIYOR] ayni
+	// adres icin spin 600000'e kadar "deger=0x0" raporluyor. Yani yazan ile
+	// okuyan ayni adresi kullandigi halde ayni BELLEGI gormuyor gibi.
+	const volatile T* vaddr = addr;
+
 	uint64_t spin_count = 0;
 	for (;;) {
-		const auto value = *addr;
+		const T value = *vaddr;
 		if (TestWaitRegMemValue(value, ref, mask, func)) {
 			break;
 		}
@@ -627,7 +646,8 @@ void CommandProcessor::WaitRegMem(uint32_t func, const T* addr, T ref, T mask, u
 			// kuyrukta bekliyor. Bu satir hangi adresin, hangi degeri
 			// bekledigini SOYLER - yani o degeri kimin yazmasi gerektigini.
 			static std::atomic<uint32_t> s_stuck {0};
-			if (s_stuck.fetch_add(1) < 12) {
+			const uint32_t               sn = s_stuck.fetch_add(1);
+			if (sn < 12) {
 				printf("[CP-BEKLIYOR] wait_reg_mem%u TAKILDI: addr=0x%016llx deger=0x%llx "
 				       "ref=0x%llx maske=0x%llx func=%u spin=%llu\n",
 				       bits, static_cast<unsigned long long>(addr_value),
@@ -636,6 +656,25 @@ void CommandProcessor::WaitRegMem(uint32_t func, const T* addr, T ref, T mask, u
 				       static_cast<unsigned long long>(mask), func,
 				       static_cast<unsigned long long>(spin_count));
 				fflush(stdout);
+			}
+			// Her FARKLI etiket icin bir kez tara (ayni adresi tekrar
+			// taramak bilgi vermiyordu; kilitlenme zincirini gormek icin
+			// takilan TUM adresler lazim).
+			{
+				static std::mutex             s_seen_mtx;
+				static std::vector<uint64_t>  s_seen;
+				bool                          first = false;
+				{
+					std::lock_guard<std::mutex> lk(s_seen_mtx);
+					if (std::find(s_seen.begin(), s_seen.end(), addr_value) == s_seen.end() &&
+					    s_seen.size() < 6) {
+						s_seen.push_back(addr_value);
+						first = true;
+					}
+				}
+				if (first) {
+					PsemuScanSubmittedForLabel(addr_value);
+				}
 			}
 		}
 		YieldCommandProcessorWait(poll);
@@ -646,6 +685,83 @@ template void CommandProcessor::WaitRegMem<uint32_t>(uint32_t, const uint32_t*, 
                                                      uint32_t, uint32_t);
 template void CommandProcessor::WaitRegMem<uint64_t>(uint32_t, const uint64_t*, uint64_t, uint64_t,
                                                      uint32_t, uint32_t);
+
+// ============================================================================
+// TANI: gonderilen DCB'leri kaydet, kilitlenince ICLERINDE etiketi ARA
+// ----------------------------------------------------------------------------
+// PM4 akisini elle yurumek hataya acikti (ilk denemem sifir paket buldu).
+// Bunun yerine gonderilen tamponlari saklayip, komut islemcisi bir etikette
+// kilitlendiginde o etiketin adresini tamponlarda DUZ TARAMA ile ariyoruz:
+// adres dusuk/yuksek dword'leri yan yana gecerse o tampon bu etikete
+// dokunuyor demektir. Boylece "yazan paket sonraki tamponlarda mi (sirali
+// halkada kilitlenme) yoksa oyunun akisinda HIC yok mu (surucunun yazmasi
+// gerekiyor)" sorusu kesin cevaplanir.
+// ============================================================================
+namespace {
+struct SubmittedBuffer {
+	const uint32_t* addr = nullptr;
+	uint32_t        dw   = 0;
+};
+constexpr size_t              kMaxRecordedSubmits = 16;
+SubmittedBuffer               g_recorded[kMaxRecordedSubmits] {};
+std::atomic<uint32_t>         g_recorded_n {0};
+} // namespace
+
+void PsemuRecordSubmittedDcb(const uint32_t* addr, uint32_t dw) {
+	const uint32_t i = g_recorded_n.fetch_add(1, std::memory_order_relaxed);
+	if (i < kMaxRecordedSubmits) {
+		g_recorded[i].addr = addr;
+		g_recorded[i].dw   = dw;
+	}
+}
+
+static void PsemuScanSubmittedForLabel(uint64_t label) {
+	const auto lo = static_cast<uint32_t>(label & 0xffffffffu);
+	const auto hi = static_cast<uint32_t>((label >> 32u) & 0x3ffffu);
+	const uint32_t n =
+	    std::min<uint32_t>(g_recorded_n.load(std::memory_order_relaxed), kMaxRecordedSubmits);
+	printf("[ETIKET-ARA] 0x%016llx icin %u gonderilen tampon taraniyor\n",
+	       static_cast<unsigned long long>(label), n);
+	for (uint32_t b = 0; b < n; b++) {
+		const auto& s = g_recorded[b];
+		if (s.addr == nullptr) {
+			continue;
+		}
+		uint32_t hits = 0;
+		for (uint32_t i = 0; i + 1 < s.dw; i++) {
+			if (s.addr[i] == lo && (s.addr[i + 1] & 0x3ffffu) == hi) {
+				// Paket turunu ayirt et: WAIT_MEM_64'te adres cmd[1..2]
+				// (yani cmd_id ofset-1'de), RELEASE_MEM'de cmd[3..4]
+				// (cmd_id ofset-3'te). "Kim bekliyor, kim yaziyor"
+				// sorusunu ancak boyle cevaplayabiliriz.
+				const char* kind = "?";
+				if (i >= 1) {
+					const uint32_t id = s.addr[i - 1];
+					if (((id >> 8u) & 0xffu) == Pm4::IT_NOP &&
+					    KYTY_PM4_R(id) == Pm4::R_WAIT_MEM_64) {
+						kind = "BEKLIYOR";
+					}
+				}
+				if (kind[0] == '?' && i >= 3) {
+					const uint32_t id = s.addr[i - 3];
+					if ((((id >> 8u) & 0xffu) == Pm4::IT_NOP &&
+					     KYTY_PM4_R(id) == Pm4::R_RELEASE_MEM) ||
+					    ((id >> 8u) & 0xffu) == Pm4::IT_RELEASE_MEM) {
+						kind = "YAZIYOR";
+					}
+				}
+				printf("[ETIKET-ARA]   tampon#%u (dw=%u) ofset %u: %s\n", b + 1, s.dw, i, kind);
+				if (++hits >= 4) {
+					break;
+				}
+			}
+		}
+		if (hits == 0) {
+			printf("[ETIKET-ARA]   tampon#%u (dw=%u): yok\n", b + 1, s.dw);
+		}
+	}
+	fflush(stdout);
+}
 
 void CommandProcessor::WriteData(uint32_t* dst, const uint32_t* src, uint32_t dw_num,
                                  uint32_t write_control) {
@@ -666,6 +782,19 @@ void CommandProcessor::WriteData(uint32_t* dst, const uint32_t* src, uint32_t dw
 	}
 	if (dw_num == 0) {
 		return;
+	}
+
+	// TANI: EOP yazimlarini ([EOP-YAZ]) logladik ama WRITE_DATA AYRI bir
+	// yol - beklenen etikete (0x...2540) belki buradan yaziliyor. Olcum
+	// bosluguydu, kapatiyoruz.
+	{
+		static std::atomic<uint32_t> s_wd {0};
+		if (s_wd.fetch_add(1) < 48) {
+			printf("[WD-YAZ] dst=0x%016llx dw=%u ilk_deger=0x%08x dst_sel=%u\n",
+			       static_cast<unsigned long long>(reinterpret_cast<uint64_t>(dst)), dw_num,
+			       src[0], dst_sel);
+			fflush(stdout);
+		}
 	}
 
 	memcpy(dst, src, static_cast<size_t>(dw_num) * sizeof(uint32_t));
@@ -1080,6 +1209,22 @@ void CommandProcessor::Run(uint32_t* data, uint32_t num_dw) {
 				LOGF("\t%05" PRIx32 "%s %08" PRIx32 "\n", i, (i == offset ? ":" : " "), data[i]);
 			}
 			EXIT("unknown op\n\t%05" PRIx32 ":\n\tcmd_id = %08" PRIx32 "\n", num_dw - dw, cmd_id);
+		}
+
+		// TANI: PSEMU_CP_TRACE_DW=<n> -> yalnizca num_dw'si n olan tamponun
+		// paketlerini tek tek yaz. Takilan tamponda EN SON hangi paketin
+		// gorundugu, bloke eden paketi dogrudan verir. (Butun tamponlari
+		// izlemek log'u bogar; tek tampon secmek olcumu temiz tutar.)
+		{
+			static const uint32_t kTraceDw = [] {
+				const char* e = std::getenv("PSEMU_CP_TRACE_DW");
+				return static_cast<uint32_t>((e != nullptr) ? atoi(e) : 0);
+			}();
+			if (kTraceDw != 0 && num_dw == kTraceDw) {
+				printf("[CP-IZ] ofset %5u cmd_id=0x%08x op=0x%02x R=0x%02x len=%u\n", num_dw - dw,
+				       cmd_id, op, KYTY_PM4_R(cmd_id), KYTY_PM4_LEN(cmd_id));
+				fflush(stdout);
+			}
 		}
 
 		auto s = pfunc(this, cmd_id & ~1u, cmd, dw, num_dw);
@@ -1544,8 +1689,31 @@ void CommandProcessor::DrawIndexAuto(uint32_t index_count, uint32_t flags,
 void CommandProcessor::WaitFlipDone(uint32_t video_out_handle, uint32_t display_buffer_index) {
 	BufferFlush();
 
+	// TANI: DCB(497) ayristirma sirasinda bitmiyor ama takilan wait_reg_mem
+	// etiketlerinden HICBIRINI beklemiyor - baska bir bloke edici paket var.
+	// Bu, oyunun sceAgcDcbWaitUntilSafeForRendering cagrisindan gelen
+	// R_WAIT_FLIP_DONE. Giris/cikis yazilirsa "burada mi asili kaldi"
+	// sorusu kesinlesir.
+	{
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 8) {
+			printf("[FLIP-BEKLE] giris: handle=%u tampon_index=%u\n", video_out_handle,
+			       display_buffer_index);
+			fflush(stdout);
+		}
+	}
+
 	VideoOut::VideoOutWaitFlipDone(static_cast<int>(video_out_handle),
 	                               static_cast<int>(display_buffer_index));
+
+	{
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 8) {
+			printf("[FLIP-BEKLE] cikis: handle=%u tampon_index=%u\n", video_out_handle,
+			       display_buffer_index);
+			fflush(stdout);
+		}
+	}
 }
 
 template <typename T>
@@ -1588,14 +1756,16 @@ void CommandProcessor::WriteAtEndOfPipe(uint32_t cache_policy, uint32_t event_wr
 	// yazmasi gereken yol BURASI. Hangi adrese, hangi degerin, hangi
 	// interrupt_selector ile yazildigini (ya da YAZILMADIGINI) gorelim.
 	{
+		// NOT: sinir once 40'ti ve dolabiliyordu; "su etikete hic yazilmadi"
+		// sonucu o yuzden ARTEFAKT olabilirdi. Buyutuldu.
 		static std::atomic<uint32_t> s_eop {0};
-		if (s_eop.fetch_add(1) < 40) {
+		if (s_eop.fetch_add(1) < 400) {
 			printf("[EOP-YAZ] dst=0x%016llx deger=0x%llx boyut=%u int_sel=%u ctx=%u "
-			       "event_index=%u src=%u\n",
+			       "event_index=0x%02x src=%u eop_event=0x%02x cache_action=0x%02x\n",
 			       static_cast<unsigned long long>(reinterpret_cast<uint64_t>(dst_gpu_addr)),
 			       static_cast<unsigned long long>(value),
 			       static_cast<unsigned>(sizeof(T) * 8u), interrupt_selector, interrupt_context_id,
-			       event_index, event_write_source);
+			       event_index, event_write_source, eop_event_type, cache_action);
 			fflush(stdout);
 		}
 	}

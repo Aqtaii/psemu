@@ -43,6 +43,11 @@
 
 namespace Libs::Graphics {
 
+// Tani: gonderilen DCB'yi kaydeder (govdesi graphicsRun.cpp icinde, ayni
+// ad alaninda). Komut islemcisi bir etikette kilitlenince bu tamponlar
+// taranir.
+void PsemuRecordSubmittedDcb(const uint32_t* addr, uint32_t dw);
+
 KYTY_SUBSYSTEM_INIT(Graphics) {
 	// Some games lock up if this is not called first
 	if (Config::RenderDocEnabled()) {
@@ -88,6 +93,7 @@ void GraphicsDbgDumpDcb(const char* type, uint32_t num_dw, uint32_t* cmd_buffer)
 }
 
 namespace Gen5 {
+
 
 LIB_NAME("Graphics5", "Graphics5");
 
@@ -3625,6 +3631,21 @@ uint32_t* KYTY_SYSV_ABI GraphicsDcbWaitRegMem(CommandBuffer* buf, uint8_t size,
 	bool wait32        = (size == 0);
 	auto poll          = wait_reg_mem_poll_cycles_to_packet(poll_cycles);
 
+	// TANI: komut islemcisinin kilitlendigi beklemeler BURADA kuruluyor
+	// (yama API'siyle degil - olculdu). Hepsini yazdiralim ki hangi
+	// etiketlerin beklendigi ve kimin yazmasi gerektigi eslesebilsin.
+	{
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 24) {
+			printf("[BEKLE-KUR] adres=0x%016llx ref=0x%llx maske=0x%llx func=%u boyut=%s\n",
+			       static_cast<unsigned long long>(address_value),
+			       static_cast<unsigned long long>(reference),
+			       static_cast<unsigned long long>(mask), compare_function,
+			       wait32 ? "32" : "64");
+			fflush(stdout);
+		}
+	}
+
 	auto* cmd = buf->AllocateDW(wait32 ? 7 : 9);
 
 	if (cmd == nullptr) {
@@ -3978,6 +3999,20 @@ int KYTY_SYSV_ABI GraphicsDriverSubmitDcb(const Packet* packet) {
 		}
 	}
 
+	// ------------------------------------------------------------------
+	// TANI: gonderilen akisi TARAYIP hangi tamponun hangi etiketi BEKLEDIGINI
+	// ve hangisinin YAZDIGINI cikar.
+	//
+	// Olcum su ana kadar sunu gosterdi: komut islemcisi 0x...2540 etiketinin
+	// 1 olmasini bekleyip kilitleniyor; ayni ailenin (0x2540/0x2580/0x25c0,
+	// 0x40 arayla) yalnizca 0x25c0'ina bir release-mem yaziyor. Bu tarama,
+	// "yazan paket sonraki tamponlarda mi, yoksa oyunun akisinda HIC yok mu"
+	// sorusunu kesin cevaplar - yani etiketi SURUCUNUN mu yazmasi gerektigini.
+	// PM4'u elle yurumek yerine tamponu KAYDEDIYORUZ; komut islemcisi bir
+	// etikette kilitlendiginde o etiketin adresi bu tamponlarda duz tarama
+	// ile aranir (bkz. graphicsRun.cpp PsemuScanSubmittedForLabel).
+	PsemuRecordSubmittedDcb(packet->addr, packet->dw_num);
+
 	submit_dcb(packet->addr, packet->dw_num);
 
 	return OK;
@@ -4103,6 +4138,12 @@ int KYTY_SYSV_ABI GraphicsDriverSubmitAcb(uint32_t queue, const Packet* packet) 
 	     "\t size  = 0x%08" PRIx32 "\n"
 	     "\t flags = 0x%02" PRIx8 "\n",
 	     reinterpret_cast<uint64_t>(packet->addr), packet->dw_num, packet->pad[0]);
+
+	// TANI: ACB'leri de kaydet. DCB taramasi 0x...2540 etiketine yazan
+	// hicbir grafik tamponu bulamadi; yazan taraf ASENKRON KUYRUKTA
+	// olabilir. Bu bosluk kapanmadan "surucunun yazmasi gerekiyor"
+	// sonucuna varmak erken olur.
+	PsemuRecordSubmittedDcb(packet->addr, packet->dw_num);
 
 	submit_acb(queue, packet->addr, packet->dw_num);
 
