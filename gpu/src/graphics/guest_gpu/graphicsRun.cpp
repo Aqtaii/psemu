@@ -443,10 +443,44 @@ void CommandProcessor::FinishCommandProcessors() {
 			continue;
 		}
 		processors[processor_count++] = processor;
+		// TANI: tek bir komut islemcisi SynchronizeGpu() icinde asili kaliyor
+		// ([SYNC-GPU] giris var, cikis yok). Asagidaki iki cagri, o
+		// fonksiyonun icindeki YEGANE bekleme adaylari. Hangisinin
+		// donmedigini giris/cikis ciftleriyle NOKTA ATISI belirliyoruz:
+		//   Submit asili  -> Vulkan kuyruguna gonderirken oluyoruz
+		//   Resume asili  -> GPU isi bitiremiyor (shader hang / fence)
+		{
+			static std::atomic<uint32_t> s_n {0};
+			if (s_n.fetch_add(1) < 200000) {
+				printf("[RB-SUBMIT] giris (cp=%p)\n", static_cast<void*>(processor));
+				fflush(stdout);
+			}
+		}
 		processor->m_scheduler.SubmitForReadback();
+		{
+			static std::atomic<uint32_t> s_n {0};
+			if (s_n.fetch_add(1) < 200000) {
+				printf("[RB-SUBMIT] cikis (cp=%p)\n", static_cast<void*>(processor));
+				fflush(stdout);
+			}
+		}
 	}
 	for (uint32_t i = 0; i < processor_count; i++) {
+		{
+			static std::atomic<uint32_t> s_n {0};
+			if (s_n.fetch_add(1) < 200000) {
+				printf("[RB-RESUME] giris (cp=%p)\n", static_cast<void*>(processors[i]));
+				fflush(stdout);
+			}
+		}
 		processors[i]->m_scheduler.ResumeAfterReadback();
+		{
+			static std::atomic<uint32_t> s_n {0};
+			if (s_n.fetch_add(1) < 200000) {
+				printf("[RB-RESUME] cikis (cp=%p)\n", static_cast<void*>(processors[i]));
+				fflush(stdout);
+			}
+		}
 	}
 }
 
@@ -1684,7 +1718,28 @@ void CommandProcessor::DispatchDirect(uint32_t thread_group_x, uint32_t thread_g
 	const uint64_t invocations =
 	    static_cast<uint64_t>(groups_x) * groups_y * groups_z * local_x * local_y * local_z;
 	if (invocations != 0) {
+		// TANI: komut islemcisi IT_DISPATCH_DIRECT paketinde (ofset 154)
+		// sert takiliyor, ama SYNC-GPU / RB-SUBMIT / RB-RESUME sayaclari
+		// DENGELI - yani readback yolunda degil. Geriye bu kaliyor:
+		// compute dispatch'ten sonraki fence beklemesi. Giris/cikis
+		// yazilirsa "GPU isi bitiremiyor" kesinlesir.
+		{
+			static std::atomic<uint32_t> s_n {0};
+			if (s_n.fetch_add(1) < 200000) {
+				printf("[DISP-BEKLE] giris (cp=%p gruplar=%ux%ux%u yerel=%ux%ux%u cagri=%llu)\n",
+				       static_cast<void*>(this), groups_x, groups_y, groups_z, local_x, local_y,
+				       local_z, static_cast<unsigned long long>(invocations));
+				fflush(stdout);
+			}
+		}
 		BufferFlushAndWait();
+		{
+			static std::atomic<uint32_t> s_n {0};
+			if (s_n.fetch_add(1) < 200000) {
+				printf("[DISP-BEKLE] cikis (cp=%p)\n", static_cast<void*>(this));
+				fflush(stdout);
+			}
+		}
 	}
 }
 
