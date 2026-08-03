@@ -620,6 +620,23 @@ void CommandProcessor::WaitRegMem(uint32_t func, const T* addr, T ref, T mask, u
 			     ", ref = 0x%0*" PRIx64 ", mask = 0x%0*" PRIx64 ", func = %" PRIu32 "\n",
 			     bits, addr_value, log_width, static_cast<uint64_t>(value), log_width,
 			     static_cast<uint64_t>(ref), log_width, static_cast<uint64_t>(mask), func);
+			// TANI: yukaridaki LOGF varsayilan gunluk yapilandirmasinda
+			// gorunmuyor, bu yuzden komut islemcisinin BURADA sonsuza kadar
+			// dondugu olculemedi. Olcum: CP, 497 dword'luk tamponu
+			// ayristirirken bitirmiyor ve flip tasiyan tampon (8384 dw)
+			// kuyrukta bekliyor. Bu satir hangi adresin, hangi degeri
+			// bekledigini SOYLER - yani o degeri kimin yazmasi gerektigini.
+			static std::atomic<uint32_t> s_stuck {0};
+			if (s_stuck.fetch_add(1) < 12) {
+				printf("[CP-BEKLIYOR] wait_reg_mem%u TAKILDI: addr=0x%016llx deger=0x%llx "
+				       "ref=0x%llx maske=0x%llx func=%u spin=%llu\n",
+				       bits, static_cast<unsigned long long>(addr_value),
+				       static_cast<unsigned long long>(value),
+				       static_cast<unsigned long long>(ref),
+				       static_cast<unsigned long long>(mask), func,
+				       static_cast<unsigned long long>(spin_count));
+				fflush(stdout);
+			}
 		}
 		YieldCommandProcessorWait(poll);
 	}
@@ -807,10 +824,27 @@ void GraphicsRing::ThreadBatchRun(void* data) {
 	EXIT_IF(ring == nullptr);
 	EXIT_IF(cp == nullptr);
 
+	// TANI ASAMALARI: flip tasiyan tampon (dw=8384) kuyruga giriyor ama hic
+	// ayristirilmiyor. Kuyruk sinirsiz bir std::list oldugu icin Submit
+	// BLOKE OLAMAZ - demek ki bu thread bir asamada takiliyor. Asagidaki
+	// isaretler hangisinde durdugunu SOYLER (ilk 24 tur loglanir).
+	auto stage = [](const char* what, uint64_t n) {
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 24 * 6) {
+			printf("[CP-ASAMA] %s (tur %llu)\n", what, static_cast<unsigned long long>(n));
+			fflush(stdout);
+		}
+	};
+
+	uint64_t round = 0;
 	for (;;) {
+		stage("kuyruktan is bekleniyor", round);
 		CmdBatch buf = ring->GetCmdBatch();
+		++round;
+		stage("is alindi -> RunLock", round);
 
 		cp->RunLock();
+		stage("RunLock alindi", round);
 		{
 			cp->BufferInit();
 			cp->SetSubmitId(++seq);
@@ -825,7 +859,9 @@ void GraphicsRing::ThreadBatchRun(void* data) {
 				    [cp, buf] { cp->Run(buf.const_buffer.data, buf.const_buffer.num_dw); });
 				ring->m_draw_job.Wait();
 				ring->m_constant_job.Wait();
+				stage("draw+const isleri bitti -> BufferFlush", round);
 				cp->BufferFlush();
+				stage("BufferFlush bitti", round);
 				if (buf.trigger_agc_interrupt_on_done) {
 					Sync::TriggerEopEvent(0);
 				}
@@ -1052,6 +1088,18 @@ void CommandProcessor::Run(uint32_t* data, uint32_t num_dw) {
 
 		cmd += s;
 		dw -= s + 1;
+	}
+
+	// TANI: [CP-RUN] yalnizca GIRISI bildiriyordu, o yuzden "497 ayristirildi"
+	// ile "497'yi ayristirmaya BASLADI ve icinde takildi" ayirt edilemiyordu.
+	// Cikisi da bildirelim: flip tasiyan tampon kuyrukta beklerken CP'nin
+	// nerede durdugunu ancak boyle daraltabiliriz.
+	{
+		static std::atomic<uint32_t> s_end {0};
+		if (s_end.fetch_add(1) < 32) {
+			printf("[CP-RUN-BITTI] num_dw=%u\n", num_dw);
+			fflush(stdout);
+		}
 	}
 }
 
@@ -1535,11 +1583,41 @@ void CommandProcessor::WriteAtEndOfPipe(uint32_t cache_policy, uint32_t event_wr
 	EXIT_NOT_IMPLEMENTED(cache_policy != 0x00000000);
 	EXIT_NOT_IMPLEMENTED(event_write_dest != 0x00000000);
 
+	// TANI: komut islemcisi wait_reg_mem64 ile 0x...2540 ve 0x...25c0
+	// adreslerinin 1 olmasini bekleyip sonsuza kadar donuyor. Etiketi
+	// yazmasi gereken yol BURASI. Hangi adrese, hangi degerin, hangi
+	// interrupt_selector ile yazildigini (ya da YAZILMADIGINI) gorelim.
+	{
+		static std::atomic<uint32_t> s_eop {0};
+		if (s_eop.fetch_add(1) < 40) {
+			printf("[EOP-YAZ] dst=0x%016llx deger=0x%llx boyut=%u int_sel=%u ctx=%u "
+			       "event_index=%u src=%u\n",
+			       static_cast<unsigned long long>(reinterpret_cast<uint64_t>(dst_gpu_addr)),
+			       static_cast<unsigned long long>(value),
+			       static_cast<unsigned>(sizeof(T) * 8u), interrupt_selector, interrupt_context_id,
+			       event_index, event_write_source);
+			fflush(stdout);
+		}
+	}
+
 	bool with_interrupt = false;
 	switch (interrupt_selector) {
 		case 0x00:
 		case 0x03: with_interrupt = false; break;
-		case 0x01: Sync::TriggerEopEventAtEndOfPipe(CurrentBuffer(), interrupt_context_id); return;
+		case 0x01:
+			// DIKKAT: bu yol etiketi YAZMADAN donuyor. Dogru mu, olcum
+			// gosterecek: beklenen adreslerden biri buraya dusuyorsa
+			// kilitlenmenin sebebi budur.
+			{
+				static std::atomic<uint32_t> s_skip {0};
+				if (s_skip.fetch_add(1) < 20) {
+					printf("[EOP-ATLA] int_sel=1 -> dst=0x%016llx ETIKET YAZILMADAN donuluyor\n",
+					       static_cast<unsigned long long>(reinterpret_cast<uint64_t>(dst_gpu_addr)));
+					fflush(stdout);
+				}
+			}
+			Sync::TriggerEopEventAtEndOfPipe(CurrentBuffer(), interrupt_context_id);
+			return;
 		case 0x02: with_interrupt = true; break;
 		default: EXIT("unknown interrupt_selector\n");
 	}

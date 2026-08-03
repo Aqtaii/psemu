@@ -1357,6 +1357,23 @@ int KYTY_SYSV_ABI GraphicsWriteDataPatchSetAddressOrOffset(uint32_t* cmd,
 	EXIT_NOT_IMPLEMENTED(cmd == nullptr);
 
 	auto op = (cmd[0] >> 8u) & 0xffu;
+	// TANI: komut islemcisi wait_reg_mem64 ile bir etiketin 1 olmasini
+	// bekleyip sonsuza kadar donuyor ve o etikete HICBIR yazma gitmiyor.
+	// Bekleme adresi bu ailenin kardes fonksiyonuyla (WaitRegMemPatchAddress)
+	// yamalaniyor ve O, Sony'nin NOP'a SARILMIS paketini (IT_NOP +
+	// R_WAIT_MEM_64) taniyor. QueueEndOfPipeActionPatchAddress da NOP+
+	// R_RELEASE_MEM'i taniyor. Bu fonksiyon ise YALNIZCA ciplak
+	// IT_WRITE_DATA'yi taniyor; NOP+R_WRITE_DATA (0x15) gelirse sessizce
+	// hata donup HICBIR SEY YAMALAMIYOR. Once bunu OLCELIM.
+	{
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 16) {
+			printf("[WD-YAMA] cmd[0]=0x%08x op=0x%02x R=0x%02x adres=0x%016llx -> %s\n", cmd[0],
+			       op, KYTY_PM4_R(cmd[0]), static_cast<unsigned long long>(address_or_offset),
+			       (op == Pm4::IT_WRITE_DATA) ? "YAMALANDI" : "YAMALANMADI (hata donuyor)");
+			fflush(stdout);
+		}
+	}
 	if (op == Pm4::IT_WRITE_DATA) {
 		cmd[2] = static_cast<uint32_t>(address_or_offset & 0xffffffffu);
 		cmd[3] = static_cast<uint32_t>((address_or_offset >> 32u) & 0xffffffffu);
@@ -3428,6 +3445,19 @@ int KYTY_SYSV_ABI GraphicsWaitRegMemPatchAddress(uint32_t* cmd, const volatile v
 	auto vaddr = reinterpret_cast<uint64_t>(address);
 	auto op    = (cmd[0] >> 8u) & 0xffu;
 
+	// TANI: hangi adreslerin BEKLENECEGI burada belirleniyor. Yazan tarafi
+	// (QueueEndOfPipeActionPatchAddress) da logluyoruz; iki liste
+	// karsilastirilinca "beklenen ama hic yazilmayan" etiketin yazicisinin
+	// TANIMLANIP tanimlanmadigi anlasilir.
+	{
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 24) {
+			printf("[BEKLE-YAMA] adres=0x%016llx cmd[0]=0x%08x R=0x%02x\n",
+			       static_cast<unsigned long long>(vaddr), cmd[0], KYTY_PM4_R(cmd[0]));
+			fflush(stdout);
+		}
+	}
+
 	if (op == Pm4::IT_NOP && KYTY_PM4_R(cmd[0]) == Pm4::R_WAIT_MEM_32) {
 		cmd[1] = static_cast<uint32_t>(vaddr) & ~0x3u;
 		cmd[2] = static_cast<uint32_t>(vaddr >> 32u) & 0x3ffffu;
@@ -3478,6 +3508,16 @@ int KYTY_SYSV_ABI GraphicsQueueEndOfPipeActionPatchAddress(uint32_t*            
 
 	auto vaddr = reinterpret_cast<uint64_t>(address);
 	auto op    = (cmd[0] >> 8u) & 0xffu;
+
+	// TANI: yazan tarafin hedefleri (bkz. WaitRegMemPatchAddress'teki not).
+	{
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 24) {
+			printf("[EOP-YAMA] adres=0x%016llx cmd[0]=0x%08x R=0x%02x\n",
+			       static_cast<unsigned long long>(vaddr), cmd[0], KYTY_PM4_R(cmd[0]));
+			fflush(stdout);
+		}
+	}
 
 	if ((op == Pm4::IT_NOP && KYTY_PM4_R(cmd[0]) == Pm4::R_RELEASE_MEM) ||
 	    op == Pm4::IT_RELEASE_MEM) {
