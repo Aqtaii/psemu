@@ -29,11 +29,64 @@
 #include <atomic>
 #include <cstdio>
 #include <list>
+#include <map>   // m_mutex sahiplik tablosu (tani)
+#include <mutex> // sahiplik tablosunun kendi kilidi (tani)
 #include <chrono> // kademeli geri cekilme: sleep_for
 #include <thread>
 #include <vector>
 
+#include <windows.h> // GetCurrentThreadId (tani: kilit sahibi)
+
 namespace Libs::Graphics {
+
+// ============================================================================
+// TANI: m_mutex SAHIPLIK IZI
+// ----------------------------------------------------------------------------
+// Olculdu: bir CommandProcessor::BufferFlush cagrisi m_mutex'i bekleyerek
+// sonsuza kadar asili kaliyor (bekleyen 24 / alan 23) ve surec ~170 sn
+// donuyor. Vulkan gonderimi ve fence beklemesi SAGLIKLI (23/23), yani sorun
+// CPU tarafinda: kilidi biri alip birakmiyor.
+//
+// Tek tek fonksiyon avlamak yerine (bu oturumda sayac farkindan yanlis
+// "takilma" sonucu cikarmak alti kez yanilttı) DOGRUDAN SAHIPLIK yaziyoruz:
+// her alim noktasi, kilidi alan thread'i ve fonksiyon adini kaydeder;
+// birakinca siler. BufferFlush beklemeye girerken "su an kim tutuyor"
+// sorusunu bu tablodan cevaplar. Sayac orani degil, sahiplik.
+//
+// Kayit mutex ADRESINE gore: her CommandProcessor'un kendi m_mutex'i var.
+// ============================================================================
+namespace {
+struct CpLockInfo {
+	unsigned long tid  = 0;
+	const char*   site = nullptr;
+};
+std::mutex                             g_cp_lock_mtx;
+std::map<const void*, CpLockInfo>      g_cp_lock_owner;
+
+void CpLockSet(const void* m, const char* site) {
+	std::lock_guard<std::mutex> lk(g_cp_lock_mtx);
+	g_cp_lock_owner[m] = CpLockInfo {static_cast<unsigned long>(GetCurrentThreadId()), site};
+}
+void CpLockClear(const void* m) {
+	std::lock_guard<std::mutex> lk(g_cp_lock_mtx);
+	g_cp_lock_owner.erase(m);
+}
+CpLockInfo CpLockGet(const void* m) {
+	std::lock_guard<std::mutex> lk(g_cp_lock_mtx);
+	auto it = g_cp_lock_owner.find(m);
+	return (it == g_cp_lock_owner.end()) ? CpLockInfo {} : it->second;
+}
+
+// LockGuard'dan SONRA kurulur (yani kilit alinmisken), ondan ONCE yikilir.
+struct CpLockScope {
+	explicit CpLockScope(const void* m, const char* site): m_m(m) { CpLockSet(m, site); }
+	~CpLockScope() { CpLockClear(m_m); }
+	CpLockScope(const CpLockScope&)            = delete;
+	CpLockScope& operator=(const CpLockScope&) = delete;
+	const void* m_m;
+};
+} // namespace
+
 
 // TANI koprusu (psemu src/core.cpp): sayfa durumu/korumasi + tahsisat tabani.
 extern "C" unsigned long long PsemuQueryProtect(unsigned long long addr,
@@ -347,6 +400,7 @@ void Gpu::Done() {
 
 int Gpu::GetFrameNum() {
 	// Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	return m_done_num;
 }
@@ -413,6 +467,7 @@ ComputeRing* Gpu::GetRing(uint32_t ring_id) {
 
 void CommandProcessor::SetQueue(int queue) {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 	if (queue < 0 || queue >= GraphicContext::QUEUES_NUM ||
 	    (m_processors[queue] != nullptr && m_processors[queue] != this)) {
 		EXIT("invalid command-processor queue registration: queue=%d owner=%p\n", queue,
@@ -488,6 +543,7 @@ void CommandProcessor::Reset() {
 	BufferWait();
 
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	Sync::DeleteBuffers();
 
@@ -505,13 +561,23 @@ void CommandProcessor::Reset() {
 
 void CommandProcessor::BufferInit() {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 	m_scheduler.Init();
 }
 
 void CommandProcessor::BufferFlush() {
 	// TANI: kilitte mi, gonderimde mi, fence'te mi asili kaliyoruz?
+	// Beklemeye girerken kilidi O AN kimin tuttugunu da yaz - asil soru bu.
+	{
+		const auto owner = CpLockGet(&m_mutex);
+		printf("[CP-KILIT] BufferFlush bekliyor (bu thread=%lu) | sahip thread=%lu site=%s\n",
+		       static_cast<unsigned long>(GetCurrentThreadId()), owner.tid,
+		       owner.site != nullptr ? owner.site : "(serbest)");
+		fflush(stdout);
+	}
 	CommandScheduler::SchedTrace("BufferFlush: m_mutex bekleniyor", -1);
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 	CommandScheduler::SchedTrace("BufferFlush: m_mutex alindi", -1);
 	m_scheduler.Flush();
 	CommandScheduler::SchedTrace("BufferFlush: cikis", -1);
@@ -522,6 +588,7 @@ void CommandProcessor::BufferFlushAndWait() {
 
 	{
 		Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 		submitted = m_scheduler.FlushAndGetSubmitted();
 	}
 
@@ -536,6 +603,7 @@ void CommandProcessor::BufferWait() {
 		std::array<CommandBuffer*, CommandScheduler::BuffersNum> buffers {};
 		{
 			Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 			m_scheduler.CopyBuffers(&buffers);
 		}
 
@@ -550,6 +618,7 @@ void CommandProcessor::BufferWait() {
 	BufferInit();
 
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 	m_scheduler.WaitAll();
 }
 
@@ -607,12 +676,14 @@ void CommandProcessor::IncremenetCe() {
 
 void CommandProcessor::WriteConstRam(uint32_t offset, const uint32_t* src, uint32_t dw_num) {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	memcpy(m_const_ram + offset / 4, src, static_cast<size_t>(dw_num) * 4);
 }
 
 void CommandProcessor::DumpConstRam(uint32_t* dst, uint32_t offset, uint32_t dw_num) {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	memcpy(dst, m_const_ram + offset / 4, static_cast<size_t>(dw_num) * 4);
 }
@@ -676,6 +747,7 @@ static void BackoffCommandProcessorWait(uint64_t spin_count, uint32_t poll_inter
 	}
 	std::this_thread::sleep_for(std::chrono::milliseconds(1));
 }
+
 
 // Tani: asagida tanimli (gonderilen tamponlarda etiket aramasi).
 static void PsemuScanSubmittedForLabel(uint64_t label);
@@ -849,6 +921,7 @@ static void PsemuScanSubmittedForLabel(uint64_t label) {
 void CommandProcessor::WriteData(uint32_t* dst, const uint32_t* src, uint32_t dw_num,
                                  uint32_t write_control) {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	const uint32_t dst_sel      = ((write_control >> 30u) & 0x1u) | ((write_control >> 7u) & 0x1eu);
 	const uint32_t cache_policy = (write_control >> 25u) & 0x3u;
@@ -885,6 +958,7 @@ void CommandProcessor::WriteData(uint32_t* dst, const uint32_t* src, uint32_t dw
 
 void CommandProcessor::WriteReferenceClock(uint64_t dst_address, uint32_t num_bytes) {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 	if (dst_address == 0 || (num_bytes != sizeof(uint32_t) && num_bytes != sizeof(uint64_t)) ||
 	    (dst_address & (num_bytes - 1u)) != 0) {
 		EXIT("invalid reference-clock copy, dst=0x%016" PRIx64 " size=%u\n", dst_address,
@@ -903,6 +977,7 @@ void CommandProcessor::DmaData(uint8_t engine, uint8_t dst_sel, uint8_t dst_cach
                                uint8_t wait_for_previous, uint8_t write_confirm,
                                uint8_t block_engine) {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	EXIT_NOT_IMPLEMENTED(engine > 1);
 	if (num_bytes == 0) {
@@ -939,6 +1014,7 @@ void GraphicsRing::Submit(OwnedCmdBuffer draw_buffer, OwnedCmdBuffer const_buffe
 	EXIT_IF(m_cp == nullptr);
 
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	WindowWaitForGraphicInitialized();
 	GraphicsRenderCreateContext();
@@ -968,6 +1044,7 @@ void GraphicsRing::Submit(OwnedCmdBuffer draw_buffer, OwnedCmdBuffer const_buffe
 void GraphicsRing::SubmitFlipPreparation() {
 	EXIT_IF(m_cp == nullptr);
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	WindowWaitForGraphicInitialized();
 	GraphicsRenderCreateContext();
@@ -987,6 +1064,7 @@ void GraphicsRing::SubmitFlipPreparation() {
 
 void GraphicsRing::Done() {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 	if (m_done) {
 		while (!m_idle) {
 			m_idle_cond_var.Wait(&m_mutex);
@@ -997,6 +1075,7 @@ void GraphicsRing::Done() {
 
 void GraphicsRing::WaitForIdle() {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 	while (!m_idle) {
 		m_idle_cond_var.Wait(&m_mutex);
 	}
@@ -1004,11 +1083,13 @@ void GraphicsRing::WaitForIdle() {
 
 bool GraphicsRing::IsIdle() {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 	return m_idle;
 }
 
 GraphicsRing::CmdBatch GraphicsRing::GetCmdBatch() {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	// TANI [CP-FETCH]: dispatcher'in "kuyruktan is cekme" adimi. Sorulan
 	// sorular: 497 bittikten sonra buraya GERI DONULUYOR mu, kuyrukta is
@@ -1192,6 +1273,7 @@ void ComputeRing::ThreadRun(void* data) {
 
 void ComputeRing::Submit(OwnedCmdBuffer buffer, bool trigger_agc_interrupt_on_done) {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	EXIT_IF(buffer.data == nullptr);
 	EXIT_IF(buffer.num_dw == 0);
@@ -1214,11 +1296,13 @@ void ComputeRing::Submit(OwnedCmdBuffer buffer, bool trigger_agc_interrupt_on_do
 
 void ComputeRing::Done() {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 	m_done = true;
 }
 
 void ComputeRing::WaitForIdle() {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 	while (!m_idle) {
 		m_idle_cond_var.Wait(&m_mutex);
 	}
@@ -1226,6 +1310,7 @@ void ComputeRing::WaitForIdle() {
 
 bool ComputeRing::IsIdle() {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 	return m_idle;
 }
 
@@ -1358,24 +1443,28 @@ void CommandProcessor::Run(uint32_t* data, uint32_t num_dw) {
 
 void CommandProcessor::SetIndexType(uint32_t index_type_and_size) {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	m_index_type_and_size = index_type_and_size & 0x3u;
 }
 
 void CommandProcessor::SetIndexBaseAddress(uint64_t index_base_addr) {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	m_index_base_addr = index_base_addr;
 }
 
 void CommandProcessor::SetIndexBufferSize(uint32_t index_buffer_size) {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	m_index_buffer_size = index_buffer_size;
 }
 
 void CommandProcessor::SetDrawIndirectArgsBaseAddress(uint64_t draw_indirect_args_base_addr) {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	m_draw_indirect_args_base_addr = draw_indirect_args_base_addr;
 }
@@ -1383,12 +1472,14 @@ void CommandProcessor::SetDrawIndirectArgsBaseAddress(uint64_t draw_indirect_arg
 void CommandProcessor::SetDispatchIndirectArgsBaseAddress(
     uint64_t dispatch_indirect_args_base_addr) {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	m_dispatch_indirect_args_base_addr = dispatch_indirect_args_base_addr;
 }
 
 void CommandProcessor::SetNumInstances(uint32_t num_instances) {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	if (num_instances == 0) {
 		num_instances = 1;
@@ -1404,6 +1495,7 @@ void CommandProcessor::SetPredication(uint32_t condition, uint32_t op, uint32_t 
 	}
 
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	(void)count_in_dwords;
 
@@ -1438,6 +1530,7 @@ void CommandProcessor::DrawIndex(uint32_t index_count, const void* index_addr, u
                                  uint32_t render_target_slice_offset, int32_t vertex_offset_add,
                                  uint32_t first_instance) {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	CheckBuffer();
 
@@ -1481,6 +1574,7 @@ void CommandProcessor::DrawIndex(uint32_t index_count, const void* index_addr, u
 void CommandProcessor::DrawIndexOffset(uint32_t index_offset, uint32_t index_count,
                                        uint32_t flags) {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	CheckBuffer();
 
@@ -1688,6 +1782,7 @@ void CommandProcessor::DispatchDirect(uint32_t thread_group_x, uint32_t thread_g
 
 	{
 		Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 		CheckBuffer();
 		frame_num = GraphicsRunGetFrameNum();
@@ -1791,6 +1886,7 @@ void CommandProcessor::DrawIndexAuto(uint32_t index_count, uint32_t flags,
                                      uint32_t render_target_slice_offset, uint32_t instance_count,
                                      uint32_t first_vertex, uint32_t first_instance) {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	CheckBuffer();
 	const auto frame_num = GraphicsRunGetFrameNum();
@@ -1854,6 +1950,7 @@ void CommandProcessor::WriteAtEndOfPipe(uint32_t cache_policy, uint32_t event_wr
 	static_assert(sizeof(T) == sizeof(uint32_t) || sizeof(T) == sizeof(uint64_t));
 
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	CheckBuffer();
 
@@ -2138,6 +2235,7 @@ void CommandProcessor::MemoryBarrier() {
 		}
 	}
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	CheckBuffer();
 
@@ -2153,6 +2251,7 @@ void CommandProcessor::MemoryBarrier() {
 
 void CommandProcessor::TriggerEopEventAtEndOfPipe(uint32_t interrupt_context_id) {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	CheckBuffer();
 
@@ -2161,6 +2260,7 @@ void CommandProcessor::TriggerEopEventAtEndOfPipe(uint32_t interrupt_context_id)
 
 void CommandProcessor::RenderTextureBarrier(uint64_t vaddr, uint64_t size) {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	CheckBuffer();
 
@@ -2169,6 +2269,7 @@ void CommandProcessor::RenderTextureBarrier(uint64_t vaddr, uint64_t size) {
 
 void CommandProcessor::DepthStencilBarrier(uint64_t vaddr, uint64_t size) {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	CheckBuffer();
 
@@ -2231,6 +2332,7 @@ void CommandProcessor::TriggerEvent(uint32_t event_type, uint32_t event_index) {
 
 void CommandProcessor::Flip() {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	CheckBuffer();
 
@@ -2248,6 +2350,7 @@ void CommandProcessor::Flip() {
 
 void CommandProcessor::Flip(void* dst_gpu_addr, uint32_t value) {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	CheckBuffer();
 
@@ -2271,6 +2374,7 @@ void CommandProcessor::Flip(void* dst_gpu_addr, uint32_t value) {
 void CommandProcessor::FlipWithInterrupt(uint32_t eop_event_type, uint32_t cache_action,
                                          void* dst_gpu_addr, uint32_t value) {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 
 	CheckBuffer();
 
@@ -2298,6 +2402,7 @@ void CommandProcessor::FlipWithInterrupt(uint32_t eop_event_type, uint32_t cache
 
 void CommandProcessor::PrepareCpuFlip() {
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 	CheckBuffer();
 	if (g_current_run_cp != nullptr) {
 		EXIT("invalid graphics-thread CPU flip preparation\n");
@@ -2326,6 +2431,7 @@ void CommandProcessor::SynchronizeGpu() {
 		}
 	}
 	Common::LockGuard lock(m_mutex);
+	CpLockScope _cp_lock_scope(&m_mutex, __func__);
 	FinishCommandProcessors();
 	{
 		static std::atomic<uint32_t> s_n {0};
