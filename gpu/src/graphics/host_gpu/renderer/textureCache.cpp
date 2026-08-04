@@ -487,6 +487,12 @@ struct TextureCache::ReadbackWorker {
 		const bool tiled_target = target && IsTiledRenderTarget(cached.target);
 		const bool tiled_storage =
 		    storage && info.tile_mode == Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget);
+		// DERINLIK doseli depolama dokusu: oyun ceyrek cozunurluklu compute
+		// ciktilarini Z-duzeni dosemesiyle tutuyor (olcum: 480x270 bpe=4
+		// pitch=512 tile=0x18). Yukleme yonu zaten destekleniyordu; eksik olan
+		// yalnizca geri okuma yoluydu.
+		const bool tiled_storage_depth =
+		    storage && info.tile_mode == Prospero::GpuEnumValue(Prospero::TileMode::kDepth);
 		bool single_layer_storage = false;
 		if (storage) {
 			switch (static_cast<Prospero::ImageType>(cached.info.type)) {
@@ -500,10 +506,10 @@ struct TextureCache::ReadbackWorker {
 		const bool basic_storage =
 		    !storage ||
 		    (single_layer_storage && cached.info.base_level == 0 && cached.info.levels == 1 &&
-		     cached.info.base_array == 0 && (linear || tiled_storage));
+		     cached.info.base_array == 0 && (linear || tiled_storage || tiled_storage_depth));
 		const auto layers = target ? cached.target.layers : 1u;
-		if ((!linear && !tiled_target && !tiled_storage) || !basic_storage || info.levels != 1 ||
-		    info.size > UINT32_MAX) {
+		if ((!linear && !tiled_target && !tiled_storage && !tiled_storage_depth) ||
+		    !basic_storage || info.levels != 1 || info.size > UINT32_MAX) {
 			EXIT("TextureCache: unsupported color-image readback layout, addr=0x%016" PRIx64
 			     " size=0x%016" PRIx64 " extent=%ux%u pitch=%u bpe=%u levels=%u tile=%u kind=%u\n",
 			     info.address, info.size, info.width, info.height, info.pitch,
@@ -541,7 +547,13 @@ struct TextureCache::ReadbackWorker {
 		                                                            info.width, info.height);
 		Transfer::DownloadImage(cached.ctx, download.data(), info.size, regions, cached.image,
 		                        cached.image->layout);
-		if (tiled_target || tiled_storage) {
+		if (tiled_storage_depth) {
+			// Indirmenin urettigi dogrusal duzeni oldugu gibi geri dosuyoruz;
+			// bolge duzeni yeniden hesaplanmadigi icin iki taraf ayrisamaz.
+			guest.resize(info.size);
+			cache.m_tiler.TileStorageDepthImage(guest.data(), download.data(), cached.info);
+			Libs::LibKernel::Memory::WriteBacking(info.address, guest.data(), info.size);
+		} else if (tiled_target || tiled_storage) {
 			guest.resize(info.size);
 			const RenderTargetInfo layout =
 			    target ? cached.target : RenderTargetInfo {info.address,
@@ -1584,6 +1596,7 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 	std::vector<CachedImage*>    retire;
 	std::vector<CachedImage*>    buffer_owned_depth_retire;
 	std::vector<CachedImage*>    buffer_owned_target_retire;
+	std::vector<CachedImage*>    flush_before_retire;
 	std::shared_ptr<CachedImage> native_image_source;
 	for (const auto& entry: m_images) {
 		auto& cached = *entry;
@@ -1630,6 +1643,15 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 				            native_image_source == nullptr;
 				if (supported) {
 					native_image_source = entry;
+				}
+				break;
+			case RenderTargetOverlap::FlushStorage:
+				// Yerinde korunamayan depolama dokusu: emeklilikten once
+				// bosaltilmasi gerekiyor. RetireImages gpu_modified bir
+				// goruntuyu kabul etmez, o yuzden bosaltma listesine aliyoruz.
+				supported = cached.kind == CachedImage::Kind::StorageTexture;
+				if (supported && cached.gpu_modified) {
+					flush_before_retire.push_back(&cached);
 				}
 				break;
 			case RenderTargetOverlap::ExpandTarget:
@@ -1681,6 +1703,35 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 		retire.push_back(&cached);
 	}
 	RequireRetirementIsolation(retire, "render target", info.address, info.size);
+	// Yerinde korunamayan depolama dokularini emeklilikten ONCE bosalt:
+	// GPU baytlari konuk belege iniyor, boylece dusurme kayipsiz oluyor.
+	// Yerlesik desen (bkz. ornekleme hedefi / depolama komsusu emeklilikleri):
+	// indir -> izleyiciyi temizle -> sahipligi devret -> gpu_modified=false.
+	if (!flush_before_retire.empty()) {
+		Transfer::WaitForGraphicsIdle(ctx);
+	}
+	for (auto* cached: flush_before_retire) {
+		if (!cached->gpu_modified) {
+			continue;
+		}
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 8) {
+			printf("[DEPOLAMA-BOSALT] render hedefiyle ortusen depolama dokusu bosaltiliyor "
+			       "(depolama=0x%016llx+0x%llx hedef=0x%016llx+0x%llx)\n",
+			       static_cast<unsigned long long>(cached->Address()),
+			       static_cast<unsigned long long>(cached->Size()),
+			       static_cast<unsigned long long>(info.address),
+			       static_cast<unsigned long long>(info.size));
+			fflush(stdout);
+		}
+		const auto transfer = m_readback->DownloadColorImage(*cached);
+		m_memory_tracker.ForEachDownloadRange<true>(transfer.address, transfer.size,
+		                                            [](uint64_t, uint64_t) noexcept {});
+		if (transfer.publish_backing) {
+			PublishReadbackBacking(transfer.address, transfer.size);
+		}
+		cached->gpu_modified = false;
+	}
 	for (auto* cached: buffer_owned_depth_retire) {
 		// The exact formatted buffer owns the current bytes. Clear the stale-image marker only
 		// after coherence validation so normal retirement can remove the obsolete Vulkan shape.

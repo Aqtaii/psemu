@@ -202,6 +202,23 @@ void Tiler::TileImage(void* dst, const void* src, const ImageInfo& info) const {
 	}
 }
 
+void Tiler::TileStorageDepthImage(void* dst, const void* src, const ImageInfo& info) const {
+	const bool image_2d =
+	    info.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) && info.depth == 1;
+	if (!image_2d || info.levels != 1 || info.base_level != 0 || info.base_array != 0 ||
+	    info.tile != Prospero::GpuEnumValue(Prospero::TileMode::kDepth)) {
+		EXIT("Tiler: unsupported depth-tiled storage texture, addr=0x%016" PRIx64 "+0x%016" PRIx64
+		     " extent=%ux%ux%u pitch=%u levels=%u base_level=%u base_array=%u tile=%u format=%u\n",
+		     info.address, info.size, info.width, info.height, info.depth, info.pitch, info.levels,
+		     info.base_level, info.base_array, info.tile, info.format);
+	}
+	// TileConvertLinearToTiledDepth blok duzenini kendisi dogruluyor (64 KiB
+	// blok, pitch ve size tutarliligi) ve uymayan bir sekilde yuksek sesle
+	// duruyor - sessizce bozuk piksel uretmiyor.
+	TileConvertLinearToTiledDepth(dst, src, info.format, info.width, info.height, info.pitch,
+	                              info.size);
+}
+
 void Tiler::TileImage(void* dst, const void* src, const DepthTargetInfo& info) const {
 	if (info.stencil_address != 0 || info.stencil_size != 0 ||
 	    info.tile_mode != Prospero::GpuEnumValue(Prospero::TileMode::kDepth) ||

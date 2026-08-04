@@ -26,6 +26,13 @@ public:
 	                   bool refresh, uint32_t base_layer = 0) const;
 	void TileImage(void* dst, const void* src, const RenderTargetInfo& info) const;
 	void TileImage(void* dst, const void* src, const ImageInfo& info) const;
+	// DERINLIK (Z-duzeni) doseli depolama dokusu icin geri-doseme (dogrusal
+	// -> konuk). Yukleme yonu zaten var (TileConvertTiledToLinearDepth,
+	// textureCommon.cpp); bu onun tersi. TileImage(ImageInfo) yalnizca
+	// kRenderTarget dosemesini biliyor ve kendi bolge duzenini yeniden
+	// hesapliyor; burada indirmenin URETTIGI dogrusal duzeni birebir
+	// kullaniyoruz ki iki taraf ayrisamasin.
+	void TileStorageDepthImage(void* dst, const void* src, const ImageInfo& info) const;
 	void TileImage(void* dst, const void* src, const DepthTargetInfo& info) const;
 };
 

@@ -342,6 +342,11 @@ enum class RenderTargetOverlap : uint8_t {
 	None,
 	RetireSampled,
 	PreserveStorage,
+	// Depolama dokusu render hedefiyle ortusuyor ve GPU'da konuk bellekte
+	// olmayan baytlar tutuyor: once BOSALT (indir), sonra emekliye ayir.
+	// PreserveStorage'dan farki, geometrilerin ayni olmamasi - yerinde
+	// korunamaz, ama icerigi kaybetmeden devredilebilir.
+	FlushStorage,
 	ExpandTarget,
 	RetireTarget,
 	Unsupported
@@ -887,10 +892,31 @@ ClassifyStorageRenderTargetOverlap(const ImageInfo& storage, vk::Format storage_
 	    storage.tile == target.tile_mode && storage.depth == 1 &&
 	    storage.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) &&
 	    storage.base_array == 0 && target.levels == 1 && target.layers == 1;
-	return exact_native_image && storage_gpu_modified && !storage_buffer_modified &&
-	               !storage_cpu_dirty && same_context
-	           ? RenderTargetOverlap::PreserveStorage
-	           : RenderTargetOverlap::Unsupported;
+	if (exact_native_image && storage_gpu_modified && !storage_buffer_modified &&
+	    !storage_cpu_dirty && same_context) {
+		return RenderTargetOverlap::PreserveStorage;
+	}
+	// GECICI BELLEK: depolama dokusu render hedefinin ICINDE yasiyor ama
+	// geometrileri ayni degil - yerinde korunamaz.
+	//
+	// Olculen sekil (Astro Bot): hedef 0x..40d20000+0xff0000 (1920x1088x8
+	// HDR), depolama 0x..40f60000+0xc0000 (480x270, 512x384x4 dolgulu,
+	// hedefin 0x240000 icinde) - ceyrek cozunurluklu bir compute ciktisi.
+	// Oyun ayni gecici yigini iki amac icin siralı olarak kullaniyor.
+	//
+	// Icerigi kaybetmeden devredebiliriz: once GPU baytlarini konuk belege
+	// INDIR, sonra goruntuyu dusur. Oyun o bolgeyi sonra ornekleyecek olursa
+	// onbellek konuk bellekten yeniden olusturur. Emeklilik yolunun kendisi
+	// gpu_modified bir goruntuyu kabul etmiyor (RetireImages), o yuzden
+	// bosaltma sart - ve zaten yerlesik desen (indir -> izleyiciyi temizle
+	// -> yayinla -> gpu_modified=false).
+	//
+	// CPU'nun kirlettigi ya da tamponun sahiplendigi bir depolama dokusunda
+	// temkinli kaliyoruz: orada sahiplik zaten baska bir tarafta.
+	if (!storage_buffer_modified && !storage_cpu_dirty && same_context) {
+		return RenderTargetOverlap::FlushStorage;
+	}
+	return RenderTargetOverlap::Unsupported;
 }
 
 [[nodiscard]] inline bool IsRgba8SrgbViewFormat(vk::Format format) noexcept {
