@@ -631,6 +631,42 @@ bool PageManager::HandleFault(PageFaultAccess access, uint64_t fault_vaddr) noex
 		}
 		if ((access != PageFaultAccess::Read && access != PageFaultAccess::Write) ||
 		    (access == PageFaultAccess::Read && page.access_watchers == 0)) {
+			// GECIKMIS (BAYAT) HATA - izleyicili sayfa surumu.
+			//
+			// Izleyicisi OLMAYAN sayfalar icin bu durum yukarida zaten ele
+			// aliniyor ve gerekcesi orada yazili: birden fazla CPU, koruma
+			// gecisi gorunur olmadan once fault'a girebilir; ilk gecikmis hata
+			// ipucu bitini tuketir, SONRAKILER de sayfa istenen erisime zaten
+			// izin veriyorsa devam etmelidir.
+			//
+			// Ayni sey izleyicili sayfalar icin de gecerliydi ama uygulanmiyordu.
+			// Olculen durum: [SAYFA-TANI] erisim=0 (Read) yazma_izleyici=1
+			// erisim_izleyici=0 izin_var=1 gec_okuma=0 - yani sayfa OKUNABILIR
+			// durumda ve yine de okuma hatasi geldi. Tanim geregi bayat.
+			//
+			// Kontrol kendi kendini sinirliyor: yazma-izlenen sayfa PAGE_READONLY
+			// oldugu icin AllowsAccess(Write) yanlis doner, yani GERCEK yazma
+			// hatalari yutulmaz - izleme calismaya devam eder.
+			if ((access == PageFaultAccess::Read || access == PageFaultAccess::Write) &&
+			    Impl::AllowsAccess(fault_vaddr, access)) {
+				return true;
+			}
+			// TANI: hangi ihlal oldugunu tahmin etmeden gorelim. Iki ayri
+			// durum ayni mesaja dusuyordu: (a) erisim Read/Write disinda
+			// (or. calistirma), (b) yalnizca YAZMA izleyicisi olan sayfada
+			// OKUMA hatasi.
+			std::fprintf(stderr,
+			             "[SAYFA-TANI] adres=0x%016llx erisim=%u (0=Read 1=Write digeri=?) "
+			             "yazma_izleyici=%u erisim_izleyici=%u cozuluyor=%d rw=%d "
+			             "gec_okuma=%d gec_yazma=%d izin_var=%d beklendi=%d\n",
+			             static_cast<unsigned long long>(fault_vaddr),
+			             static_cast<uint32_t>(access), page.write_watchers, page.access_watchers,
+			             static_cast<int>(page.resolving), static_cast<int>(page.resolving_read_write),
+			             static_cast<int>(page.late_read_pending),
+			             static_cast<int>(page.late_write_pending),
+			             static_cast<int>(Impl::AllowsAccess(fault_vaddr, access)),
+			             static_cast<int>(waited));
+			std::fflush(stderr);
 			FailFast("fault access is incompatible with active page watchers");
 		}
 		page.resolving            = true;

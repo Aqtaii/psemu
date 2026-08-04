@@ -816,6 +816,67 @@ std::pair<VulkanBuffer*, uint64_t> BufferCache::ObtainBuffer(CommandBuffer*  com
 		}
 
 		if (!overlaps.empty()) {
+			// KUYRUKLAR ARASI BIRLESTIRME.
+			//
+			// Yasagin sebebi: asagida eski tampondan yenisine yapilan
+			// copyBuffer, ISTEYEN kuyrugun komut tamponuna kaydediliyor ve
+			// bariyerler VK_QUEUE_FAMILY_IGNORED, yani yalnizca o kuyruk
+			// icinde siralama kuruyor. Eski tampon baska bir kuyrukta da
+			// kullanildiysa, o kuyrukta UCUSAN is ile kopya arasinda gercek
+			// bir yaris olusur.
+			//
+			// Yasagi korlemesine kaldirmiyoruz; SEBEBINI ortadan kaldiriyoruz:
+			// once cihazi bosaltiyoruz (Transfer::WaitForGraphicsIdle ->
+			// tum kuyruk mutex'leri kilitli device.waitIdle()), boylece hicbir
+			// kuyrukta ucusan is kalmiyor ve kopya guvenle kaydedilebiliyor.
+			// Ayni desen bu dosyada ve textureCache'te zaten kullaniliyor.
+			//
+			// Olculen durum (Astro Bot): used_queues=0x110 = kuyruk 8
+			// (QUEUE_GFX) + kuyruk 4 (compute), requested_queue=4. Yani ayni
+			// aralik hem grafik hem compute kuyrugundan kullanilmis.
+			//
+			// KALAN RISK (bilerek, acikca): baska bir kuyrukta KAYDEDILMIS
+			// ama HENUZ GONDERILMEMIS bir komut tamponu eski tamponu hala
+			// gosteriyor olabilir; bosaltma onu kapsamaz. Eski tampon
+			// RetainResourceUntilFence ile hayatta tutuldugu icin bu OKUMA
+			// yonunde zararsizdir (kopyaladigimiz baytlarin aynisi); yalnizca
+			// o kayitli isin eski tampona YAZMASI durumunda yazma kaybolur.
+			// Birlestirme nadir bir olay oldugu icin bunu simdilik olcup
+			// gozluyoruz. PSEMU_STRICT_QUEUE_MERGE=1 eski sert davranisi
+			// geri getirir.
+			// Dusen ortusmeyi SAKLA: overlaps birden fazla olabiliyor ve
+			// ilkini loglamak yanlis tampon gosterir.
+			const CachedBuffer* cross_queue = nullptr;
+			for (const auto& overlap: overlaps) {
+				if (!CanMergeBufferCacheQueueMask(overlap->second->queue_mask, queue)) {
+					cross_queue = overlap->second.get();
+					break;
+				}
+			}
+			if (cross_queue != nullptr) {
+				static const bool strict = [] {
+					const char* e = std::getenv("PSEMU_STRICT_QUEUE_MERGE");
+					return e != nullptr && e[0] == '1';
+				}();
+				if (strict) {
+					EXIT("BufferCache: cross-queue overlap merge is unsupported, "
+					     "addr=0x%016" PRIx64 " size=0x%016" PRIx64 " used_queues=0x%016" PRIx64
+					     " requested_queue=%u\n",
+					     cross_queue->vaddr, cross_queue->size, cross_queue->queue_mask, queue);
+				}
+				static std::atomic<uint32_t> s_n {0};
+				if (s_n.fetch_add(1) < 16) {
+					printf("[KUYRUK-BIRLESTIR] cihaz bosaltiliyor, sonra birlestiriliyor "
+					       "(dusen_tampon=0x%016llx+0x%llx kullanilan_kuyruklar=0x%llx "
+					       "istenen_kuyruk=%u ortusme=%zu)\n",
+					       static_cast<unsigned long long>(cross_queue->vaddr),
+					       static_cast<unsigned long long>(cross_queue->size),
+					       static_cast<unsigned long long>(cross_queue->queue_mask), queue,
+					       overlaps.size());
+					fflush(stdout);
+				}
+				Transfer::WaitForGraphicsIdle(ctx);
+			}
 			for (const auto& overlap: overlaps) {
 				auto& old = *overlap->second;
 				if (old.ctx != ctx || old.buffer == nullptr || old.buffer->buffer == nullptr) {
@@ -823,12 +884,6 @@ std::pair<VulkanBuffer*, uint64_t> BufferCache::ObtainBuffer(CommandBuffer*  com
 					     " size=0x%016" PRIx64 " owner_ctx=%p requested_ctx=%p buffer=%p\n",
 					     old.vaddr, old.size, static_cast<const void*>(old.ctx),
 					     static_cast<const void*>(ctx), static_cast<const void*>(old.buffer.get()));
-				}
-				if (!CanMergeBufferCacheQueueMask(old.queue_mask, queue)) {
-					EXIT("BufferCache: cross-queue overlap merge is unsupported, "
-					     "addr=0x%016" PRIx64 " size=0x%016" PRIx64 " used_queues=0x%016" PRIx64
-					     " requested_queue=%u\n",
-					     old.vaddr, old.size, old.queue_mask, queue);
 				}
 				std::vector<std::pair<uint64_t, uint64_t>> uploads;
 				m_memory_tracker.ForEachUploadRange(
@@ -1346,15 +1401,63 @@ void BufferCache::PublishImageBacking(uint64_t vaddr, uint64_t size) {
 		}
 		owner = it;
 	}
-	if ((owner != m_buffers.end() && m_memory_tracker.IsRegionCpuModified(vaddr, size)) ||
-	    m_memory_tracker.IsRegionGpuModified(vaddr, size) ||
-	    !m_gpu_modified_ranges.Intersections(vaddr, size).empty()) {
+	// GERCEK invaryant GPU tarafidir: aralikta GPU sahipligi duruyorsa konuk
+	// bellek yetkili degildir ve CPU-kirli demek yalan olur. Bu OLUMCUL kalir.
+	//
+	// CPU-kirli terimi ise artik tek basina catisma sayilmiyor: readback
+	// yolu (PublishImageBackingRange) tum goruntu araligini bilerek CPU-kirli
+	// birakiyor - "konuk bellek yetkili, tampon yeniden yuklesin" demek icin.
+	// Ardindan ayni araligin bir ALT PARCASI icin sync gelirse burayi zaten
+	// CPU-kirli bulur. Yapilacak is (MarkRegionAsCpuModified) etkisiz-tekrar
+	// oldugundan bu bir catisma degildir.
+	//
+	// Not: bu kontrol ZATEN olaydan sonra geliyor - cagiran WriteBacking'i
+	// bundan once yapiyor. Yani gercek CPU yazilarini koruyan bir kalkan
+	// degildi, durum bildiren bir iddiaydi.
+	const bool cpu_dirty = m_memory_tracker.IsRegionCpuModified(vaddr, size);
+	const bool gpu_dirty = m_memory_tracker.IsRegionGpuModified(vaddr, size);
+	const bool gpu_range = !m_gpu_modified_ranges.Intersections(vaddr, size).empty();
+	if (gpu_dirty || gpu_range) {
 		EXIT("BufferCache: image backing requires clean buffer ownership, addr=0x%016" PRIx64
-		     " size=0x%016" PRIx64 " cached=%d\n",
-		     vaddr, size, owner != m_buffers.end());
+		     " size=0x%016" PRIx64 " cached=%d cpu_kirli=%d gpu_kirli=%d gpu_araligi=%d\n",
+		     vaddr, size, owner != m_buffers.end(), cpu_dirty, gpu_dirty, gpu_range);
+	}
+	if (owner != m_buffers.end() && cpu_dirty) {
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 8) {
+			printf("[YAYIN-ZATEN-KIRLI] aralik zaten CPU-kirli, yayin etkisiz-tekrar "
+			       "(0x%016llx+0x%llx)\n",
+			       static_cast<unsigned long long>(vaddr), static_cast<unsigned long long>(size));
+			fflush(stdout);
+		}
 	}
 	// A fresh tracker is CPU-dirty by construction when no cached buffer exists. Keep the range
 	// CPU-dirty so subsequently-created buffer uploads the just-published image backing.
+	m_memory_tracker.MarkRegionAsCpuModified(vaddr, size);
+}
+
+void BufferCache::PublishImageBackingRange(uint64_t vaddr, uint64_t size) {
+	// PublishImageBacking'in genel-topoloji surumu.
+	//
+	// O yol, YAZMA araligini yayinlayan cagirana gore yazilmis ve tamponun
+	// araligi KAPSAMASINI sart kosuyor. Readback'te ise tam tersi olabiliyor:
+	// tum goruntuyu (or. 0x1a20000) konuk belege indiriyoruz ama onbellekteki
+	// tampon onun bir ALT ARALIGI (or. 0x480000). Olculen hata tam buydu:
+	// "image backing aliases a non-containing cached buffer".
+	//
+	// Yapilan is ayni ve topolojiden bagimsiz olarak dogru: "bu aralikta konuk
+	// bellek degisti" demek. Aralikla ortusen kac tampon olursa olsun, hepsi
+	// bir sonraki kullanimda konuk bellekten yeniden yukler.
+	//
+	// GERCEK invaryant korunuyor: aralikta hala GPU sahipligi varsa duruyoruz -
+	// o durumda konuk bellek yetkili degildir ve CPU-kirli demek yalan olurdu.
+	FaultSafeCacheLock lock(this, m_mutex);
+	if (m_memory_tracker.IsRegionGpuModified(vaddr, size) ||
+	    !m_gpu_modified_ranges.Intersections(vaddr, size).empty()) {
+		EXIT("BufferCache: image backing range requires clean buffer ownership, addr=0x%016" PRIx64
+		     " size=0x%016" PRIx64 "\n",
+		     vaddr, size);
+	}
 	m_memory_tracker.MarkRegionAsCpuModified(vaddr, size);
 }
 

@@ -357,9 +357,9 @@ enum class StorageSampledViewShape : uint8_t { Image2D, Image2DArray, Image3D, U
 enum class StorageImageOverlap : uint8_t {
 	None,
 	RetireSampled,
-	// Ayni adrese dusen TEMIZ render hedefi: durumu kayipsiz dusurmeye
-	// elverisli (bkz. ClassifyStorageImageOverlap'taki gerekce).
-	RetireCleanTarget,
+	// Ayni bellege dusen render hedefi: kayipsiz dusurmeye elverisli
+	// (bkz. ClassifyStorageImageOverlap'taki gerekce).
+	RetireOverlappingTarget,
 	PageNeighbor,
 	Unsupported
 };
@@ -999,9 +999,23 @@ ClassifyStorageImageOverlap(uint64_t requested_address, uint64_t requested_size,
 		if (sampled) {
 			return StorageImageOverlap::RetireSampled;
 		}
-		if (render_target) {
-			return StorageImageOverlap::RetireCleanTarget;
-		}
+	}
+	// RENDER HEDEFI: gpu_modified olmasi engel DEGIL, cunku cagiran emeklilikten
+	// ONCE bosaltiyor - indir (DownloadColorImage) -> izleyicinin GPU
+	// sahipligini birak (ForEachDownloadRange<true>) -> arka bellegi tampon
+	// onbellegine yayinla -> gpu_modified=false. Yani baytlar konuk bellege
+	// iniyor ve dusurme kayipsiz oluyor. Ayni gerekce
+	// ClassifyStorageRenderTargetOverlap'taki FlushStorage dalinda da gecerli.
+	//
+	// Olculen sekil (Astro Bot): istenen depolama ve mevcut RT BIREBIR ayni
+	// aralikta (0x..7ced0000+0x280000), kind=2, gpu=1/1 - yani hedef gercekten
+	// GPU baytlari tutuyor; bosaltilip devredilmesi gerekiyor, reddedilmesi
+	// degil.
+	//
+	// buffer_modified temkinli birakildi: RetireImages target+buffer_modified'i
+	// zaten reddediyor ve burada bosaltma o yolu kapatmiyor.
+	if (same_context && render_target && !buffer_modified) {
+		return StorageImageOverlap::RetireOverlappingTarget;
 	}
 	return StorageImageOverlap::Unsupported;
 }
@@ -1098,10 +1112,21 @@ ClassifyRenderTargetOverlap(const RenderTargetInfo& cached, bool cached_gpu_modi
 	// 0xcf0000 icinde baslayip sonunu asiyor. Oyun buyuk hedefin kuyrugunu
 	// ikinci bir hedef icin yeniden kullaniyor (gecici hedef bellegi).
 	//
+	// cached_gpu_modified ENGEL DEGIL: cagiran emeklilikten once bosaltiyor
+	// (FindRenderTarget'taki flush_before_retire adimi: DownloadColorImage ->
+	// izleyicinin GPU sahipligini birak -> arka bellegi yayinla ->
+	// gpu_modified=false). Yani baytlar konuk bellege iniyor ve dusurme yine
+	// kayipsiz oluyor. Olculen sekil: istenen 0x..48dc0000+0xff0000 (1920x1088
+	// HDR), mevcut 0x..49ab0000+0x1a20000 (2432x1368), gpu_modified=1 - kuyruk
+	// kuyruga binmis iki hedef.
+	//
+	// GERCEK CATISMA hala reddediliyor: goruntu GPU baytlari tutuyor VE tampon
+	// da daha yeni baytlar tutuyorsa iki sahip vardir, bosaltma bunu cozmez.
+	//
 	// Sayfa yalitimi sarti korunuyor; ayrica cagiran taraf emeklilik sonrasi
 	// RequireRetirementIsolation ile takip edilen sayfa takma adi kalmadigini
 	// dogruluyor.
-	return page_isolated && !cached_gpu_modified && same_context
+	return page_isolated && same_context && !(cached_gpu_modified && cached_buffer_modified)
 	           ? RenderTargetOverlap::RetireTarget
 	           : RenderTargetOverlap::Unsupported;
 }

@@ -78,6 +78,10 @@ public:
 	[[nodiscard]] bool IsRegionCpuModified(uint64_t vaddr, uint64_t size);
 	[[nodiscard]] bool IsRegionGpuModified(uint64_t vaddr, uint64_t size);
 	void               PublishImageBacking(uint64_t vaddr, uint64_t size);
+	// PublishImageBacking'in genel-topoloji surumu: onbellek tamponunun
+	// araligi kapsamasi gerekmez (readback tum goruntuyu yayinlar, tampon onun
+	// alt araligi olabilir).
+	void PublishImageBackingRange(uint64_t vaddr, uint64_t size);
 	void ValidateGpuAccess(uint64_t vaddr, uint64_t size, bool is_read, bool is_written) const;
 	void SetTextureCache(TextureCache& texture_cache);
 

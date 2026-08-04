@@ -695,7 +695,9 @@ void TextureCache::PublishReadbackBacking(uint64_t address, uint64_t size) {
 		       static_cast<unsigned long long>(address), static_cast<unsigned long long>(size));
 		fflush(stdout);
 	}
-	m_buffer_cache.PublishImageBacking(address, size);
+	// Genel-topoloji surumu: indirme TUM goruntuyu yayinlar, onbellekteki
+	// tampon onun bir ALT ARALIGI olabilir - kapsama sarti burada gecerli degil.
+	m_buffer_cache.PublishImageBackingRange(address, size);
 }
 
 void TextureCache::RequireRetirementIsolation(const std::vector<CachedImage*>& retire,
@@ -1085,11 +1087,12 @@ void TextureCache::ResolveStorageImageOverlaps(GraphicContext* ctx, const ImageI
 		    cached->gpu_modified, cached->buffer_modified, tracker_gpu)) {
 			case StorageImageOverlap::None: continue;
 			case StorageImageOverlap::RetireSampled: retire.push_back(cached); continue;
-			case StorageImageOverlap::RetireCleanTarget: {
+			case StorageImageOverlap::RetireOverlappingTarget: {
 				static std::atomic<uint32_t> s_n {0};
 				if (s_n.fetch_add(1) < 8) {
-					printf("[HEDEF-DUSUR] depolama goruntusuyle ayni adresteki TEMIZ render "
-					       "hedefi dusuruluyor (hedef=0x%016llx+0x%llx depolama=0x%016llx+0x%llx)\n",
+					printf("[HEDEF-DUSUR] depolama goruntusuyle ortusen render hedefi "
+					       "dusuruluyor%s (hedef=0x%016llx+0x%llx depolama=0x%016llx+0x%llx)\n",
+					       cached->gpu_modified ? " (once bosaltilacak)" : "",
 					       static_cast<unsigned long long>(cached->Address()),
 					       static_cast<unsigned long long>(cached->Size()),
 					       static_cast<unsigned long long>(requested.address),
@@ -1699,6 +1702,13 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 				    cached.buffer_modified && !cached.gpu_modified) {
 					buffer_owned_target_retire.push_back(&cached);
 				}
+				// GPU baytlari tutan render hedefi: emeklilikten once
+				// bosaltilmali (RetireImages gpu_modified'i kabul etmez).
+				// Depolama dokularindaki yolun aynisi.
+				if (supported && cached.kind == CachedImage::Kind::RenderTarget &&
+				    cached.gpu_modified) {
+					flush_before_retire.push_back(&cached);
+				}
 				break;
 			case RenderTargetOverlap::None:
 			case RenderTargetOverlap::Unsupported: break;
@@ -1731,8 +1741,10 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 		}
 		static std::atomic<uint32_t> s_n {0};
 		if (s_n.fetch_add(1) < 8) {
-			printf("[DEPOLAMA-BOSALT] render hedefiyle ortusen depolama dokusu bosaltiliyor "
-			       "(depolama=0x%016llx+0x%llx hedef=0x%016llx+0x%llx)\n",
+			printf("[DEPOLAMA-BOSALT] render hedefiyle ortusen %s bosaltiliyor "
+			       "(eski=0x%016llx+0x%llx hedef=0x%016llx+0x%llx)\n",
+			       cached->kind == CachedImage::Kind::RenderTarget ? "render hedefi"
+			                                                       : "depolama dokusu",
 			       static_cast<unsigned long long>(cached->Address()),
 			       static_cast<unsigned long long>(cached->Size()),
 			       static_cast<unsigned long long>(info.address),
