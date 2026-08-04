@@ -660,6 +660,41 @@ static bool PrepareDrawRenderState(uint64_t submit_id, CommandBuffer* buffer, HW
 			                         render_target_slice_offset, slot);
 			if (state->color_info[state->color_count].vulkan_buffer != nullptr) {
 				MarkRenderTargetGpuWritten(state->color_info[state->color_count]);
+				// TANI: EKRAN TAMPONUNA kac cizim gidiyor, hedef temizleme
+				// rengi ne, ve renk yazma maskesi acik mi?
+				//
+				// Basilan kare siyaha yakin ama TAM SIFIR DEGIL (0-11/255).
+				// Bu uc sayi "hic cizilmiyor" ile "ciziliyor ama kaynak bos
+				// oldugu icin siyah cikiyor" arasini kesin ayirir. Ikincisi
+				// cikarsa, atlanan 16 compute dispatch (MIMG 0xe6) dogrudan
+				// bas suphelidir.
+				{
+					const auto&                  ci   = state->color_info[state->color_count];
+					const auto                   mask = render_target_mask_slot(
+                        ctx->GetRenderTargetMask(), ci.target_slot);
+					static std::atomic<uint32_t> s_disp {0};
+					static std::atomic<uint32_t> s_tex {0};
+					const bool is_display = ci.type == RenderColorType::DisplayBuffer;
+					const auto n          = (is_display ? s_disp : s_tex).fetch_add(1);
+					if (is_display && n < 24) {
+						printf("[EKRAN-CIZIM] #%u hedef=0x%016llx %ux%u yuva=%u maske=0x%x "
+						       "yazma_acik=%d temizle=%d temizle_rengi=(%.3f,%.3f,%.3f,%.3f)\n",
+						       n + 1, static_cast<unsigned long long>(ci.base_addr),
+						       ci.extent.width, ci.extent.height, ci.target_slot, mask, mask != 0,
+						       ci.color_clear_enable,
+						       static_cast<double>(ci.color_clear_value.float32[0]),
+						       static_cast<double>(ci.color_clear_value.float32[1]),
+						       static_cast<double>(ci.color_clear_value.float32[2]),
+						       static_cast<double>(ci.color_clear_value.float32[3]));
+						fflush(stdout);
+					}
+					// Toplam sayimi da gorelim (ekran / diger hedef).
+					if (((n + 1) % 256) == 0) {
+						printf("[EKRAN-CIZIM] toplam: ekran=%u diger_hedef=%u\n", s_disp.load(),
+						       s_tex.load());
+						fflush(stdout);
+					}
+				}
 				state->color_count++;
 			}
 		}
