@@ -2266,11 +2266,43 @@ void TextureCache::RefreshVideoOut(VideoOutVulkanImage* image, bool render_targe
 		     static_cast<const void*>(image));
 	}
 	auto& cached = **it;
-	if (cached.gpu_modified || cached.kind == CachedImage::Kind::VideoOut) {
-		{ static std::atomic<uint64_t> c = 0; auto n = c.fetch_add(1);
-		  if (n < 40) std::fprintf(stderr, "[VO-REFRESH] addr=0x%016llx KEEP-GPU (VideoOut surface protected from black CPU reupload)\n",
-		                           static_cast<unsigned long long>(cached.video_out.address)); }
-		return;
+	// psemu kisayolu KOSULA BAGLANDI.
+	//
+	// Eskiden VideoOut icin bu yenileme KOSULSUZ atlaniyordu ("black CPU
+	// reupload" korkusu) - konuk bellek bos oldugu donemde dogruydu. Ama
+	// olculdu ki oyun son kareyi bir TAMPON uzerinden yaziyor
+	// ([TAMPON-DEVIR] tur=4, 0x1fe0000 = 3840x2176x4) ve devir adimi o
+	// baytlari konuk belege indiriyor. Kisayol yuzunden kare GORUNTUYE hic
+	// tasinmiyordu: 4 present basiliyor ama hepsi birebir ayni cikiyordu
+	// (her present yakalandi -> tek ayirt edilebilir kare).
+	//
+	// Artik yalnizca konuk tarafta DAHA YENI bayt yokken GPU icerigi
+	// korunuyor. Varsa yenileme calisiyor ve kare goruntuye yukleniyor.
+	{
+		const auto& vo         = cached.video_out;
+		const bool  guest_newer = cached.buffer_modified ||
+		                         m_memory_tracker.IsRegionCpuModified(vo.address, vo.size) ||
+		                         m_buffer_cache.IsRegionCpuModified(vo.address, vo.size) ||
+		                         m_buffer_cache.IsRegionGpuModified(vo.address, vo.size);
+		if ((cached.gpu_modified || cached.kind == CachedImage::Kind::VideoOut) && !guest_newer) {
+			static std::atomic<uint64_t> c = 0;
+			if (c.fetch_add(1) < 40) {
+				std::fprintf(stderr,
+				             "[VO-REFRESH] addr=0x%016llx KEEP-GPU (konuk tarafta daha yeni bayt "
+				             "yok)\n",
+				             static_cast<unsigned long long>(vo.address));
+			}
+			return;
+		}
+		static std::atomic<uint64_t> c2 = 0;
+		if (c2.fetch_add(1) < 40) {
+			std::fprintf(stderr,
+			             "[VO-REFRESH] addr=0x%016llx KONUK-YUKLE (gpu_modified=%d "
+			             "buffer_modified=%d)\n",
+			             static_cast<unsigned long long>(vo.address), cached.gpu_modified,
+			             cached.buffer_modified);
+			std::fflush(stderr);
+		}
 	}
 	const auto& info         = cached.video_out;
 	const bool  image_dirty  = m_memory_tracker.IsRegionCpuModified(info.address, info.size);
@@ -2665,14 +2697,30 @@ void TextureCache::MarkGpuWritten(VulkanImage* image) {
 		// Yalnizca VideoOut: bu gerekce (konuk bellek yetkili degil) diger
 		// turler icin gecerli degil, onlarda iki-sahip durumu OLUMCUL kaliyor.
 		if (cached->kind == CachedImage::Kind::VideoOut && cached->buffer_modified) {
-			static std::atomic<uint32_t> s_n {0};
-			if (s_n.fetch_add(1) < 8) {
-				printf("[VO-SAHIPLIK] VideoOut GPU tarafindan yazildi -> bayat buffer_modified "
-				       "isareti temizlendi (0x%016llx+0x%llx)\n",
-				       static_cast<unsigned long long>(cached->Address()),
-				       static_cast<unsigned long long>(cached->Size()));
-				fflush(stdout);
-			}
+			// KARE VERISINI GORUNTUYE TASI.
+			//
+			// Olculdu: oyun son kareyi bir TAMPON uzerinden yaziyor (VideoOut
+			// bellegi GPU-kirli bir tampon olarak goruluyor - [TAMPON-DEVIR]
+			// tur=4, 0x1fe0000 = 3840x2176x4). Devir adimi o baytlari konuk
+			// belege indiriyor, ama sunulan Vulkan GORUNTUSUNE hic yazmiyordu.
+			// Sonuc: 4 kare basiliyor ama ekran icerigi HIC DEGISMIYOR
+			// (her present yakalandi, 4 present -> 1 ayirt edilebilir kare).
+			//
+			// Eksik halka buydu: konuk bellekteki kareyi goruntuye YUKLE.
+			// RefreshVideoOut'un govdesi zaten bunu yapiyor
+			// (ImageOps::UploadVideoOut) ama ustundeki psemu kisayolu
+			// VideoOut icin kosulsuz atliyor - o kisayol konuk bellek BOSKEN
+			// dogruydu; artik kare orada.
+			// Yukleme BURADA yapilamaz: bu nokta zaten bir bellek-izleyici
+			// isleminin icinde ve ForEachUploadRange yeniden-giris korumasina
+			// takiliyor ("memory tracker re-entered from upload callback").
+			// Dogru yer RefreshVideoOut - sunumdan hemen once, izleyici
+			// geri cagrisi disinda cagriliyor (WindowPrepareFrame).
+			//
+			// Orasi durumu kendi basina tespit edebiliyor: devirdeki
+			// FlushGpuModifiedToBacking araligi tampon onbelleginde CPU-kirli
+			// birakiyor, yani "konuk bellekte daha yeni bayt var" bilgisi
+			// zaten okunabilir durumda.
 			cached->buffer_modified = false;
 		}
 		return;

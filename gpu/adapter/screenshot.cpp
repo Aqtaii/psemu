@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -164,7 +165,16 @@ void PsemuCaptureFrame(GraphicContext* ctx, const VulkanImage* image) {
 	if (image->format == vk::Format::eUndefined) return;
 
 	const uint64_t p = g_present_seq.fetch_add(1);
-	if ((p % 4ull) != 0) return;              // her 4 present'te bir readback
+	// Yakalama araligi ayarlanabilir: PSEMU_SHOT_EVERY=1 her present'i okur.
+	// TANI icin gerekli: kareler BIREBIR AYNI mi? Sahne-degisikligi tespiti
+	// ayni kareleri diske yazmadigi icin, N present'e karsilik kac BMP
+	// olustugu dogrudan "cizim oluyor mu" sorusunu yanitlar.
+	static const uint64_t s_every = [] {
+		const char*   e = std::getenv("PSEMU_SHOT_EVERY");
+		const uint64_t v = (e != nullptr) ? std::strtoull(e, nullptr, 10) : 4ull;
+		return v == 0 ? 1ull : v;
+	}();
+	if ((p % s_every) != 0) return;
 	if (g_shot_seq.load() >= 60) return;      // en fazla 60 DISTINCT sahne
 	if (p >= 40000ull) return;                // guvenlik ust siniri
 

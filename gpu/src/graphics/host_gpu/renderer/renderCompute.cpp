@@ -433,9 +433,20 @@ void RenderDispatchDirect(uint64_t submit_id, CommandBuffer* buffer, HW::Context
 		// yapilmaz (ilgili efekt eksik cikar) ama boru hatti akmaya devam
 		// eder ve ilerideki duvarlari gorebiliriz.
 		static std::atomic<uint32_t> s_n {0};
-		if (s_n.fetch_add(1) < 16) {
-			printf("[DISPATCH-ATLA] CS derlenemedi (shader=0x%016llx) -> bu dispatch atlandi\n",
-			       static_cast<unsigned long long>(cs_regs.cs_regs.data_addr));
+		if (s_n.fetch_add(1) < 64) {
+			// TANI: grup boyutlari, KAYBOLAN gecisin cozunurlugunu verir.
+			// Yerel boyut (COMPUTE_NUM_THREAD_*) ile carpilinca kac piksel/
+			// ogeye dokunuldugu cikar; boylece atlanan islerin hangi asama
+			// oldugunu (tam ekran kompozisyon mu, ceyrek cozunurluklu bir
+			// efekt mi) tahmin etmeden gorebiliriz.
+			const auto lx = cs_regs.cs_regs.num_thread_x;
+			const auto ly = cs_regs.cs_regs.num_thread_y;
+			const auto lz = cs_regs.cs_regs.num_thread_z;
+			printf("[DISPATCH-ATLA] CS derlenemedi (shader=0x%016llx) -> atlandi "
+			       "gruplar=%ux%ux%u yerel=%ux%ux%u toplam=%ux%ux%u\n",
+			       static_cast<unsigned long long>(cs_regs.cs_regs.data_addr), thread_group_x,
+			       thread_group_y, thread_group_z, lx, ly, lz, thread_group_x * lx,
+			       thread_group_y * ly, thread_group_z * lz);
 			fflush(stdout);
 		}
 		return;

@@ -1034,6 +1034,22 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 					     " extent=%ux%u size=0x%016" PRIx64 " pitch=%u\n",
 					     format, static_cast<int>(view_format), width, height, size.size, pitch);
 				}
+				// TANI: kompozisyon dispatch'i GERCEKTEN calisiyor mu? Ekrana
+				// basilan kare bozuk cikiyor ve iki ayri aciklama mumkun:
+				// (a) bu yazma hic olmuyor, (b) oluyor ama GIRDILERI bozuk
+				// (16 dispatch MIMG 0xe6 yuzunden atlaniyor). Bu sayac ikisini
+				// ayirir.
+				{
+					static std::atomic<uint32_t> s_n {0};
+					const auto                   n = s_n.fetch_add(1);
+					if (n < 12) {
+						printf("[VO-YAZ] #%u VideoOut yuzeyine depolama yazmasi baglandi "
+						       "(adres=0x%016llx %ux%u boyut=0x%llx)\n",
+						       n + 1, static_cast<unsigned long long>(address), width, height,
+						       static_cast<unsigned long long>(size.size));
+						fflush(stdout);
+					}
+				}
 				image = video.image;
 				view  = VulkanImage::VIEW_STORAGE;
 				g_render_ctx->GetTextureCache()->MarkGpuWritten(image);
