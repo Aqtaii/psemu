@@ -2646,6 +2646,35 @@ void TextureCache::MarkGpuWritten(VulkanImage* image) {
 			}
 			cached->gpu_modified = true;
 		}
+		// VideoOut: gpu_modified ile buffer_modified AYNI ANDA duramaz - o
+		// birlesim "goruntu daha yeni" ve "tampon daha yeni" demektir, yani
+		// iki sahip. Sonraki senkronizasyon bunu cozemeyip duruyordu
+		// (unsupported color-image buffer synchronization,
+		//  gpu_modified=1 buffer_modified=1).
+		//
+		// VideoOut icin yetkili olan GPU GORUNTUSUDUR: RefreshVideoOut bu
+		// yuzeyler icin konuk bellekten yeniden yuklemeyi ZATEN kosulsuz
+		// atliyor ("protected from black CPU reupload") - konuk bellek o
+		// kareyi tutmuyor.
+		//
+		// Sira da bunu soyluyor: buffer_modified, tampon yuzey bellegine
+		// yazdiginda (goruntu temizken) kuruluyor; ardindan shader goruntuyu
+		// yaziyor. Program sirasinda SONRAKI olan goruntudur. Dolayisiyla
+		// bayat olan isaret buffer_modified'dir, temizliyoruz.
+		//
+		// Yalnizca VideoOut: bu gerekce (konuk bellek yetkili degil) diger
+		// turler icin gecerli degil, onlarda iki-sahip durumu OLUMCUL kaliyor.
+		if (cached->kind == CachedImage::Kind::VideoOut && cached->buffer_modified) {
+			static std::atomic<uint32_t> s_n {0};
+			if (s_n.fetch_add(1) < 8) {
+				printf("[VO-SAHIPLIK] VideoOut GPU tarafindan yazildi -> bayat buffer_modified "
+				       "isareti temizlendi (0x%016llx+0x%llx)\n",
+				       static_cast<unsigned long long>(cached->Address()),
+				       static_cast<unsigned long long>(cached->Size()));
+				fflush(stdout);
+			}
+			cached->buffer_modified = false;
+		}
 		return;
 	}
 	EXIT("TextureCache: GPU-written image is not registered, image=%p\n",

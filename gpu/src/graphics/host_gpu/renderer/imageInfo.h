@@ -737,7 +737,20 @@ ClassifyBufferImageWrite(uint64_t buffer_address, uint64_t buffer_size, uint64_t
 	const bool image_page_aligned = ((image_address | image_size) & (TRACKER_PAGE_SIZE - 1)) == 0;
 	switch (binding) {
 		case BufferImageBinding::Texture:
-			return contained && image_page_aligned && !image_gpu_modified
+			// "contained" sarti gerekli DEGIL: gecersiz kilma zaten TUM
+			// goruntuyu bayat isaretliyor (buffer_modified=true), yani doku bir
+			// sonraki kullanimda konuk bellekten BASTAN yukleniyor. Yazmanin
+			// dokuyu tamamen kapsayip kapsamadigi bu sonucu degistirmez;
+			// kismi yazmada da dogru davranis "hepsini yeniden oku"dur.
+			//
+			// Olculen sekil (Astro Bot): yazma 0x..28900000+0x3c0000, doku
+			// 0x..28c80000+0x800000 - yazma dokunun BASINA biniyor, once
+			// basliyor ve icinde bitiyor.
+			//
+			// !image_gpu_modified sarti KORUNUYOR: goruntu GPU baytlari
+			// tutuyorsa onu gecersiz kilmak o baytlari kaybetmek olurdu.
+			// Sayfa hizasi da korunuyor.
+			return image_page_aligned && !image_gpu_modified
 			           ? BufferImageWrite::InvalidateTexture
 			           : BufferImageWrite::Unsupported;
 		case BufferImageBinding::VideoOut:
