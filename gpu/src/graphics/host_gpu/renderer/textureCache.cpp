@@ -1080,10 +1080,25 @@ void TextureCache::ResolveStorageImageOverlaps(GraphicContext* ctx, const ImageI
 		    m_memory_tracker.IsRegionGpuModified(cached->Address(), cached->Size());
 		switch (ClassifyStorageImageOverlap(
 		    requested.address, requested.size, cached->Address(), cached->Size(),
-		    cached->kind == CachedImage::Kind::Texture, cached->ctx == ctx, cached->gpu_modified,
-		    cached->buffer_modified, tracker_gpu)) {
+		    cached->kind == CachedImage::Kind::Texture,
+		    cached->kind == CachedImage::Kind::RenderTarget, cached->ctx == ctx,
+		    cached->gpu_modified, cached->buffer_modified, tracker_gpu)) {
 			case StorageImageOverlap::None: continue;
 			case StorageImageOverlap::RetireSampled: retire.push_back(cached); continue;
+			case StorageImageOverlap::RetireCleanTarget: {
+				static std::atomic<uint32_t> s_n {0};
+				if (s_n.fetch_add(1) < 8) {
+					printf("[HEDEF-DUSUR] depolama goruntusuyle ayni adresteki TEMIZ render "
+					       "hedefi dusuruluyor (hedef=0x%016llx+0x%llx depolama=0x%016llx+0x%llx)\n",
+					       static_cast<unsigned long long>(cached->Address()),
+					       static_cast<unsigned long long>(cached->Size()),
+					       static_cast<unsigned long long>(requested.address),
+					       static_cast<unsigned long long>(requested.size));
+					fflush(stdout);
+				}
+				retire.push_back(cached);
+				continue;
+			}
 			case StorageImageOverlap::PageNeighbor: continue;
 			case StorageImageOverlap::Unsupported:
 				EXIT("TextureCache: unsupported storage-image byte alias, requested=0x%016" PRIx64
@@ -2510,11 +2525,43 @@ void TextureCache::MarkGpuWritten(VulkanImage* image) {
 				    m_buffer_cache.IsRegionCpuModified(cached->Address(i), cached->Size(i));
 				const bool gpu_modified =
 				    m_buffer_cache.IsRegionGpuModified(cached->Address(i), cached->Size(i));
-				if (cpu_modified || gpu_modified) {
+				// SAHIPLIK CATISMASI yalnizca gpu_modified'dir: o durumda tampon
+				// konuk bellekte OLMAYAN baytlar tutuyor ve goruntu de sahiplenmek
+				// uzere - iki sahip. Bu olumcul kalir.
+				//
+				// cpu_modified ise catisma DEGIL: tamponun konuk bellege gore
+				// BAYAT oldugunu soyler. Bu bizim kendi devir yolumuzun normal
+				// ciktisi - PublishReadbackBacking, indirilen goruntu arka
+				// bellegini yayinlarken araligi bilerek CPU-kirli birakiyor ki
+				// tampon bir sonraki kullanimda konuk bellekten yeniden yuklesin
+				// (PublishImageBacking'in kendi notu da bunu soyluyor).
+				//
+				// Olculen zincir (Astro Bot): [READBACK-YAYIN] 0x..5c010000+0x480000
+				// yayinlaniyor, hemen ardindan ayni adreste 0x..5c010000+0x1a20000
+				// render hedefi olusup GPU-yazildi isaretleniyor.
+				//
+				// Bayatlik sessizce veri bozamaz, cunku ObtainBuffer bu araligi
+				// verirken goruntuyle ortusmeyi zaten ele aliyor: yazma icin
+				// InvalidateMemoryFromGPU ile goruntuyu once bosaltiyor, salt
+				// okuma icinse goruntu GPU-degistirilmisse "unsupported
+				// buffer/image alias" ile YUKSEK SESLE duruyor. Yani
+				// gevsettigimiz kosul asagi akistaki kontrolle zaten kapali.
+				if (gpu_modified) {
 					EXIT(
 					    "TextureCache: GPU-written image aliases a dirty buffer, addr=0x%016" PRIx64
 					    " size=0x%016" PRIx64 " cpu_modified=%d gpu_modified=%d\n",
 					    cached->Address(i), cached->Size(i), cpu_modified, gpu_modified);
+				}
+				if (cpu_modified) {
+					static std::atomic<uint32_t> s_n {0};
+					if (s_n.fetch_add(1) < 8) {
+						printf("[GPU-YAZ-BAYAT-TAMPON] GPU-yazilacak goruntunun araliginda konuk "
+						       "bellege gore bayat tampon var, devam ediliyor "
+						       "(0x%016llx+0x%llx)\n",
+						       static_cast<unsigned long long>(cached->Address(i)),
+						       static_cast<unsigned long long>(cached->Size(i)));
+						fflush(stdout);
+					}
 				}
 			}
 			if (m_memory_tracker.IsRegionCpuModified(cached->Address(i), cached->Size(i))) {

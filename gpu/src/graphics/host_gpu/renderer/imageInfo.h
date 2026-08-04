@@ -354,7 +354,15 @@ enum class RenderTargetOverlap : uint8_t {
 enum class SampledOverlap : uint8_t { None, ReadOnlyAlias, Unsupported };
 enum class StorageSampledOverlap : uint8_t { None, ExactImage, Unsupported };
 enum class StorageSampledViewShape : uint8_t { Image2D, Image2DArray, Image3D, Unsupported };
-enum class StorageImageOverlap : uint8_t { None, RetireSampled, PageNeighbor, Unsupported };
+enum class StorageImageOverlap : uint8_t {
+	None,
+	RetireSampled,
+	// Ayni adrese dusen TEMIZ render hedefi: durumu kayipsiz dusurmeye
+	// elverisli (bkz. ClassifyStorageImageOverlap'taki gerekce).
+	RetireCleanTarget,
+	PageNeighbor,
+	Unsupported
+};
 enum class HostWriteOverlap : uint8_t { None, InvalidateImage, Unsupported };
 enum class BufferImageBinding : uint8_t {
 	Texture,
@@ -962,17 +970,40 @@ ClassifySampledRenderTargetOverlap(const ImageInfo& sampled, const RenderTargetI
 [[nodiscard]] inline StorageImageOverlap
 ClassifyStorageImageOverlap(uint64_t requested_address, uint64_t requested_size,
                             uint64_t cached_address, uint64_t cached_size, bool sampled,
-                            bool same_context, bool gpu_modified, bool buffer_modified,
-                            bool tracker_gpu_modified) {
+                            bool render_target, bool same_context, bool gpu_modified,
+                            bool buffer_modified, bool tracker_gpu_modified) {
 	if (!ImagePageRangesOverlap(requested_address, requested_size, cached_address, cached_size)) {
 		return StorageImageOverlap::None;
 	}
 	if (!ImageRangeOverlaps(requested_address, requested_size, cached_address, cached_size)) {
 		return StorageImageOverlap::PageNeighbor;
 	}
-	return sampled && same_context && !gpu_modified && !buffer_modified && !tracker_gpu_modified
-	           ? StorageImageOverlap::RetireSampled
-	           : StorageImageOverlap::Unsupported;
+	// TEMIZ goruntuyu dusurmek KAYIPSIZDIR: GPU'da konuk bellekte olmayan
+	// bayt yok (!gpu_modified && !tracker_gpu_modified) ve tampon tarafinda
+	// da bekleyen yeni bayt yok (!buffer_modified).
+	//
+	// Kyty bu yolu yalnizca ORNEKLEME dokusuna acmisti. Ayni gecici bellek
+	// hikayesinde render hedefi de ayni adrese dusuyor:
+	//   istenen depolama 0x..e2dd0000+0x1a20000 (2432x1368)
+	//   mevcut RT        0x..e2dd0000+0x480000   kind=2, gpu=0/0 buffer=0
+	// Kosullar birebir ayni oldugu icin ayrimi TURE gore degil DURUMA gore
+	// yapiyoruz. Emeklilik makinesi zaten temiz hedef emekliligini acikca
+	// ongoruyor ve kendisi de doğruluyor (RetireImages: gpu_modified ya da
+	// target+buffer_modified reddedilir, izleyici GPU sahipligi tutuyorsa
+	// "clean target retirement retained tracker GPU ownership" ile durur),
+	// ustune cagiran RequireRetirementIsolation cagiriyor.
+	//
+	// VideoOut BILEREK disarida: RetireImages onu emekliye ayirmayi kabul
+	// etmiyor, izin vermek sessizce degil gurultuyle patlardi.
+	if (same_context && !gpu_modified && !buffer_modified && !tracker_gpu_modified) {
+		if (sampled) {
+			return StorageImageOverlap::RetireSampled;
+		}
+		if (render_target) {
+			return StorageImageOverlap::RetireCleanTarget;
+		}
+	}
+	return StorageImageOverlap::Unsupported;
 }
 
 [[nodiscard]] inline constexpr bool LayeredBackingContains(uint64_t container_size,
