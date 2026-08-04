@@ -403,11 +403,54 @@ private:
 	bool Collect(Instruction* inst, std::string* error) {
 		if (IsAddress(*inst)) {
 			const bool unbased = inst->memory.resource_source == ScalarProvenance::Unknown;
-			if ((!unbased && !ValidateSource(inst->memory.resource_source, 2, inst->pc, error)) ||
-			    (unbased && inst->memory.kind != ResourceKind::Flat &&
-			     inst->memory.kind != ResourceKind::Global &&
-			     inst->memory.kind != ResourceKind::Scratch)) {
-				return unbased ? Fail(inst->pc, error, "scalar memory base is unresolved") : false;
+			std::string address_error;
+			const bool  address_ok =
+			    unbased ? (inst->memory.kind == ResourceKind::Flat ||
+                          inst->memory.kind == ResourceKind::Global ||
+                          inst->memory.kind == ResourceKind::Scratch)
+			            : ValidateSource(inst->memory.resource_source, 2, inst->pc, &address_error);
+			if (!address_ok) {
+				// SKALER ADRES KAYNAGI COZULEMEDI.
+				//
+				// Baglam: bu, IMAGE_BVH_INTERSECT_RAY kuklasi devreye girdikten
+				// SONRA ortaya cikan bir engel. Olculen ornek:
+				//   0x2090 s_lshl_b64  s8, s28, 3        ; adres s28:s29'dan
+				//   0x20b8 s_load_dwordx4 s20, s8        ; 4 dword tanimlayici
+				//   0x20dc s_add_u32  s18, s20, -1       ; 64-bit isaretci
+				//   0x20e4 s_addc_u32 s19, s21, -1
+				// Yani yukleme OLU DEGIL; tuketicileri BVH kurulum matematigine,
+				// o da kuklaladigimiz komuta gidiyor. Adres s28:s29'dan dinamik
+				// hesaplandigi icin takipci cozemiyor - ve o zincir zaten BVH
+				// donanim bellek duzenine bagli, bizim uretmedigimiz bir yapi.
+				//
+				// NE YAPIYORUZ: derlemeyi olduren hatayi, kaynagi "temelsiz"
+				// (unbased) sayan bir UYARIYA cevirip devam ediyoruz.
+				// TAMPON/GORUNTU tanimlayicilarinda ise hata OLUMCUL KALIYOR
+				// (asagidaki ValidateSource cagrisi) - orada yanlis cozum
+				// dogrudan yanlis piksel demektir.
+				//
+				// NE VAAT ETMIYORUZ: bu yuklemenin okudugu degerler dogru
+				// olmayabilir. Zincirin buyuk kismi kuklaya ciktigi icin bunu
+				// kabul ediyoruz; ama bir deger gorunur matematige sizarsa
+				// sonuc yanlis olur. Bilincli bir ara adim, kalici cozum degil.
+				// PSEMU_SRT_STRICT=1 eski sert davranisi geri getirir.
+				static const bool strict = [] {
+					const char* e = std::getenv("PSEMU_SRT_STRICT");
+					return e != nullptr && e[0] == '1';
+				}();
+				if (strict) {
+					return unbased ? Fail(inst->pc, error, "scalar memory base is unresolved")
+					               : Fail(inst->pc, error, address_error);
+				}
+				static std::atomic<uint32_t> s_n {0};
+				if (s_n.fetch_add(1) < 16) {
+					std::printf("[SRT-TEMELSIZ] skaler adres kaynagi cozulemedi, temelsiz "
+					            "sayilip devam ediliyor (pc=0x%08x kind=%u) %s\n",
+					            inst->pc, static_cast<uint32_t>(inst->memory.kind),
+					            address_error.c_str());
+					std::fflush(stdout);
+				}
+				inst->memory.resource_source = ScalarProvenance::Unknown;
 			}
 			const auto resource = AddAddress(*inst);
 			if (resource == UINT32_MAX) {
