@@ -18,6 +18,7 @@
 #include "graphics/host_gpu/renderer/debug.h"
 #include "graphics/host_gpu/renderer/depthRenderTarget.h"
 #include "graphics/host_gpu/renderer/descriptorCache.h"
+#include "graphics/host_gpu/renderer/descriptors.h"
 #include "graphics/host_gpu/renderer/framebufferCache.h"
 #include "graphics/host_gpu/renderer/pipelineCache.h"
 #include "graphics/host_gpu/renderer/render.h"
@@ -1019,6 +1020,16 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 		                pipeline->pipeline_layout, state->vs_input_info.stage,
 		                vk::ShaderStageFlagBits::eVertex, DescriptorCache::Stage::Vertex);
 
+		// TANI: bu cizim EKRAN tamponuna mi gidiyor? Oyleyse baglanan
+		// dokulari [EKRAN-GIRDI] olarak ayikliyoruz (bkz. descriptors.cpp).
+		bool display_draw = false;
+		for (uint32_t i = 0; i < state->color_count; i++) {
+			if (state->color_info[i].type == RenderColorType::DisplayBuffer) {
+				display_draw = true;
+				break;
+			}
+		}
+		PsemuSetDisplayDrawActive(display_draw);
 		if (state->ps_active) {
 			LogDrawPhase(draw.name, "BindDescriptorsPS");
 			if (set_auto_debug) {
@@ -1028,6 +1039,7 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 			                pipeline->pipeline_layout, state->ps_input_info.stage,
 			                vk::ShaderStageFlagBits::eFragment, DescriptorCache::Stage::Pixel);
 		}
+		PsemuSetDisplayDrawActive(false);
 		if (buffer->GetRecordingGeneration() != recording_generation) {
 			continue;
 		}

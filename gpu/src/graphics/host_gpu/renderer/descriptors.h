@@ -39,6 +39,11 @@ ResolveTargetTextureView(const ShaderRecompiler::IR::ImageResource& resource,
 [[nodiscard]] bool
 IsSupportedSampledVideoOutView(const ShaderRecompiler::IR::ImageResource& resource,
                                const ShaderTextureResource& descriptor, const VulkanImage& image);
+// TANI: ekran tamponuna giden cizim sirasinda acilir; baglanan dokularin
+// [EKRAN-GIRDI] olarak ayiklanmasini saglar.
+void PsemuSetDisplayDrawActive(bool active);
+[[nodiscard]] bool PsemuDisplayDrawActive();
+
 void ValidateMetadataReuseTexture(const ShaderRecompiler::IR::ImageResource& resource,
                                   const ShaderTextureResource& descriptor, uint64_t size);
 void ValidateStorageTexture(const ShaderRecompiler::IR::ImageResource& resource,

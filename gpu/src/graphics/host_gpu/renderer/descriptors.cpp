@@ -48,6 +48,18 @@
 
 namespace Libs::Graphics {
 
+// Ekran tamponuna giden cizim sirasinda acik olan tani bayragi. renderDraw
+// tarafindan kurulur; burada hangi dokularin OKUNDUGUNU ayiklamak icin
+// kullanilir.
+static std::atomic<bool> g_psemu_display_draw {false};
+void PsemuSetDisplayDrawActive(bool active) {
+	g_psemu_display_draw.store(active, std::memory_order_relaxed);
+}
+bool PsemuDisplayDrawActive() {
+	return g_psemu_display_draw.load(std::memory_order_relaxed);
+}
+
+
 struct BounceCopy {
     vk::Buffer bounce_buffer;
     vk::Buffer original_buffer;
@@ -1010,6 +1022,26 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 			if (storage && image != nullptr) {
 				g_render_ctx->GetTextureCache()->MarkGpuWritten(image);
 			}
+		}
+	}
+	// TANI: EKRAN cizimi hangi dokulari OKUYOR?
+	//
+	// Siyah ekranin sebebini daraltmak icin: kompozisyon cizimi sirasinda
+	// baglanan her doku icin adres/olcu ve o bolgede GPU'nun bir sey uretip
+	// uretmedigi (gpu_image_bytes) yazdirilir. Hepsi "uretilmemis" cikarsa
+	// sorun atlanan BVH dispatch'lerinden cok daha yukarida demektir.
+	if (PsemuDisplayDrawActive()) {
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 48) {
+			const auto region = g_render_ctx->GetTextureCache()->QueryRegion(address, size.size);
+			std::printf("[EKRAN-GIRDI] %s adres=0x%016llx %ux%u boyut=0x%llx tile=%u "
+			            "gpu_uretti=%llu goruntu_bayti=%llu onbellekte=%d\n",
+			            storage ? "DEPOLAMA" : "ornekleme",
+			            static_cast<unsigned long long>(address), width, height,
+			            static_cast<unsigned long long>(size.size), static_cast<uint32_t>(tile),
+			            static_cast<unsigned long long>(region.gpu_image_bytes),
+			            static_cast<unsigned long long>(region.image_bytes), image != nullptr);
+			std::fflush(stdout);
 		}
 	}
 	if (image == nullptr) {
