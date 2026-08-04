@@ -689,11 +689,54 @@ static bool PrepareDrawRenderState(uint64_t submit_id, CommandBuffer* buffer, HW
 						       static_cast<double>(ci.color_clear_value.float32[3]));
 						fflush(stdout);
 					}
-					// Toplam sayimi da gorelim (ekran / diger hedef).
-					if (((n + 1) % 256) == 0) {
-						printf("[EKRAN-CIZIM] toplam: ekran=%u diger_hedef=%u\n", s_disp.load(),
-						       s_tex.load());
-						fflush(stdout);
+					// HEDEF BAZINDA SAYIM: hangi render hedefine kac cizim
+					// gidiyor? Kompozisyonun okudugu 2432x1368 sahne dokusu
+					// TAMAMEN SIFIR cikti; bu sayim "o hedefe hic cizim
+					// gitmiyor" (sorun yukarida: culling/vertex/pipeline) ile
+					// "cizim gidiyor ama sifir kaliyor" (sorun sahiplik /
+					// takma ad / DCC) arasini ayirir.
+					{
+						struct TargetStat {
+							uint64_t address = 0;
+							uint32_t count   = 0;
+							uint32_t width   = 0;
+							uint32_t height  = 0;
+							uint32_t type    = 0;
+							uint32_t clears  = 0;
+						};
+						static Common::Mutex      s_mutex;
+						static std::vector<TargetStat> s_stats;
+						static std::atomic<uint32_t>   s_total {0};
+						{
+							Common::LockGuard lock(s_mutex);
+							auto it = std::find_if(s_stats.begin(), s_stats.end(),
+							                       [&](const TargetStat& t) {
+								                       return t.address == ci.base_addr;
+							                       });
+							if (it == s_stats.end() && s_stats.size() < 32) {
+								s_stats.push_back({ci.base_addr, 0, ci.extent.width,
+								                   ci.extent.height,
+								                   static_cast<uint32_t>(ci.type), 0});
+								it = s_stats.end() - 1;
+							}
+							if (it != s_stats.end()) {
+								it->count++;
+								it->clears += ci.color_clear_enable ? 1u : 0u;
+							}
+						}
+						const auto total = s_total.fetch_add(1) + 1;
+						if (total == 64 || total == 256 || (total % 1024) == 0) {
+							Common::LockGuard lock(s_mutex);
+							printf("[HEDEF-SAYIM] toplam_cizim=%u ekran=%u diger=%u | farkli "
+							       "hedef=%zu\n",
+							       total, s_disp.load(), s_tex.load(), s_stats.size());
+							for (const auto& t: s_stats) {
+								printf("    0x%016llx %ux%u tur=%u cizim=%u temizleme=%u\n",
+								       static_cast<unsigned long long>(t.address), t.width,
+								       t.height, t.type, t.count, t.clears);
+							}
+							fflush(stdout);
+						}
 					}
 				}
 				state->color_count++;
