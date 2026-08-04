@@ -1210,6 +1210,49 @@ void CommandProcessor::DmaData(uint8_t engine, uint8_t dst_sel, uint8_t dst_cach
 	const bool dst_memory = dst_sel == 0 || dst_sel == 3;
 	const bool src_memory = src_sel == 0 || src_sel == 3;
 	if (!dst_memory) {
+		// TANI: PM4'te DST_SEL=1 GDS demektir. Emulatorde GDS altyapisi
+		// ZATEN var (SPIR-V tarafinda gds_variable/EmitGdsElementPointer,
+		// host tarafinda GetGdsBuffer). Baglamadan once ISTEGIN NE OLDUGUNU
+		// olcuyoruz: boyut, GDS icindeki hedef ofset ve kaynagin turu.
+		//
+		// SINANACAK HIPOTEZ: dort duvar once compute shader'da
+		// "GDS append/consume requires a zero instruction offset" hatasi
+		// almistik ve o komutun ofseti 8'di (raw=[0xd8fa0008 ...]).
+		// Buradaki hedef ofset de 8 cikarsa, CP'nin ILKLENDIRDIGI sayac ile
+		// shader'in OKUDUGU sayacin AYNI oldugu kanitlanir.
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 24) {
+			const char* src_tur = (src_sel == 2)                   ? "SABIT DEGER (immediate)"
+			                      : (src_sel == 0 || src_sel == 3) ? "BELLEK adresi"
+			                      : (src_sel == 1)                 ? "GDS"
+			                                                       : "bilinmeyen";
+			printf("[DMA-GDS] dst_sel=%u (GDS) num_bytes=%u gds_hedef_ofset=%llu "
+			       "src_sel=%u (%s) src/imm=0x%016llx engine=%u confirm=%u\n",
+			       dst_sel, num_bytes,
+			       static_cast<unsigned long long>(dst_address_or_offset), src_sel, src_tur,
+			       static_cast<unsigned long long>(src_address_or_offset_or_immediate), engine,
+			       write_confirm);
+			fflush(stdout);
+		}
+		// GDS HEDEFI BAGLANDI (DST_SEL=1).
+		//
+		// Olculen istek: num_bytes=4, gds_hedef_ofset=4, src_sel=2 (sabit
+		// deger), imm=0 -> GDS'teki 4 baytlik bir sayacin SIFIRLANMASI.
+		// Bu, dort duvar once compute shader'da karsilastigimiz GDS
+		// append/consume ile ayni mekanizmanin CP tarafi: motor sayaci
+		// CP-DMA ile ilklendiriyor, shader append/consume ile guncelliyor.
+		// (Shader'daki ofset 8'di, buradaki 4 - ayni GDS sayac alaninda
+		//  komsu slotlar.)
+		//
+		// Yeni bir birim yazmiyoruz: GdsBuffer zaten var ve Clear() dword
+		// hizali doldurma yapiyor, sinir kontrolu de kendi icinde.
+		if (dst_sel == 1u && src_sel == 2u && (num_bytes & 3u) == 0u &&
+		    (dst_address_or_offset & 3u) == 0u) {
+			g_render_ctx->GetGdsBuffer()->Clear(
+			    g_render_ctx->GetGraphicCtx(), dst_address_or_offset / 4u, num_bytes / 4u,
+			    static_cast<uint32_t>(src_address_or_offset_or_immediate & 0xffffffffu));
+			return;
+		}
 		EXIT("unsupported dmaData destination selector 0x%02" PRIx8 "\n", dst_sel);
 	}
 	if (src_sel == 2) {
@@ -1221,6 +1264,45 @@ void CommandProcessor::DmaData(uint8_t engine, uint8_t dst_sel, uint8_t dst_cach
 	if (src_memory) {
 		GetGpuResources()->CopyBuffer(CurrentBuffer(), dst_address_or_offset,
 		                              src_address_or_offset_or_immediate, num_bytes);
+		return;
+	}
+	// GDS KAYNAGI BAGLANDI (SRC_SEL=1): GDS -> bellek.
+	//
+	// Hedef yonun (DST_SEL=1) simetrigi. Motor GDS'te tuttugu sayaci geri
+	// belege yaziyor; tipik kullanim, shader'in append/consume ile
+	// buyuttugu sayaci CPU'nun veya sonraki bir paketin okuyabilecegi bir
+	// adrese tasimak.
+	//
+	// CPU tarafi okuma bu kod tabaninda zaten yerlesik bir yol:
+	// Sync::ReadGds (sync.cpp:412) ayni GdsBuffer::Read cagrisini yapiyor.
+	// Yazma tarafinda ise dogrudan memcpy yerine FillBuffer kullaniyoruz ki
+	// hedef adres GPU tarafindan izlenen bir tampon ise onbellek/gecerlilik
+	// takibi bozulmasin.
+	if (src_sel == 1u && (src_address_or_offset_or_immediate & 3u) == 0u) {
+		constexpr uint32_t kMaxDw = 64;
+		const uint32_t     dw_num = num_bytes / 4u;
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 24) {
+			printf("[DMA-GDS-KAYNAK] src_sel=1 (GDS) num_bytes=%u gds_kaynak_ofset=%llu "
+			       "dst_sel=%u hedef_adres=0x%016llx\n",
+			       num_bytes,
+			       static_cast<unsigned long long>(src_address_or_offset_or_immediate),
+			       dst_sel, static_cast<unsigned long long>(dst_address_or_offset));
+			fflush(stdout);
+		}
+		// Kucuk sayac geri-okumasi disinda bir sey gelirse SESSIZCE yanlis
+		// veri uretmek yerine duruyoruz; boylece gercek sekli olcup
+		// gerekirse GPU tarafi vkCmdCopyBuffer'a gecebiliriz.
+		EXIT_NOT_IMPLEMENTED(dw_num == 0 || dw_num > kMaxDw);
+		uint32_t dw[kMaxDw] = {};
+		g_render_ctx->GetGdsBuffer()->Read(g_render_ctx->GetGraphicCtx(), dw,
+		                                   static_cast<uint32_t>(
+		                                       src_address_or_offset_or_immediate / 4u),
+		                                   dw_num);
+		for (uint32_t i = 0; i < dw_num; i++) {
+			GetGpuResources()->FillBuffer(CurrentBuffer(),
+			                              dst_address_or_offset + uint64_t {i} * 4u, 4, dw[i]);
+		}
 		return;
 	}
 	EXIT("unsupported dmaData source selector 0x%02" PRIx8 "\n", src_sel);

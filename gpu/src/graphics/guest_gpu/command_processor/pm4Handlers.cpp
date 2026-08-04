@@ -2760,14 +2760,39 @@ KYTY_CP_OP_PARSER(CpOpIndirectShRegs) {
 		auto pfunc = g_hw_sh_indirect_func[cmd_offset];
 
 		if (pfunc == nullptr) {
-			LOGF("unknown indirect SH register: index=%" PRIu32 "/%" PRIu32 ", regs=0x%016" PRIx64
-			     ", offset=0x%08" PRIx32 ", value=0x%08" PRIx32 "\n",
-			     i, indirect_num_dw, indirect_address, cmd_offset, value);
+			// TANI: LOGF ayri bir gunluge gidiyor; bu dokum tesnisin
+			// kendisi oldugu icin stdout'a da basiyoruz. Ayrica tum blogu
+			// (16 degil) ve bilinen kayit adlarini gosteriyoruz ki
+			// eksik kaydin GERCEK yapilandirma mi yoksa komsu bir blogun
+			// AYNASI mi oldugu tahmin edilmeden gorulebilsin.
+			printf("[SH-BILINMEYEN] indirect SH kayit: index=%" PRIu32 "/%" PRIu32
+			       " regs=0x%016" PRIx64 " ofset=0x%02" PRIx32 " deger=0x%08" PRIx32 "\n",
+			       i, indirect_num_dw, indirect_address, cmd_offset, value);
 			auto* dump_regs = indirect_buffer - i * 2;
-			for (uint32_t j = 0; j < indirect_num_dw && j < 16; j++) {
-				LOGF("\t sh_indirect[%" PRIu32 "] offset=0x%08" PRIx32 ", value=0x%08" PRIx32 "\n",
-				     j, dump_regs[j * 2], dump_regs[j * 2 + 1]);
+			for (uint32_t j = 0; j < indirect_num_dw; j++) {
+				const uint32_t o = NormalizeRegisterOffset(dump_regs[j * 2]);
+				const char*    ad =
+				    (o == Pm4::SPI_SHADER_PGM_LO_ES)      ? "PGM_LO_ES"
+				    : (o == Pm4::SPI_SHADER_PGM_HI_ES)    ? "PGM_HI_ES"
+				    : (o == Pm4::SPI_SHADER_PGM_RSRC1_ES) ? "PGM_RSRC1_ES"
+				    : (o == Pm4::SPI_SHADER_PGM_RSRC2_ES) ? "PGM_RSRC2_ES"
+				    : (o == Pm4::SPI_SHADER_PGM_LO_GS)    ? "PGM_LO_GS"
+				    : (o == Pm4::SPI_SHADER_PGM_HI_GS)    ? "PGM_HI_GS"
+				    : (o == Pm4::SPI_SHADER_PGM_RSRC1_GS) ? "PGM_RSRC1_GS"
+				    : (o == Pm4::SPI_SHADER_PGM_RSRC2_GS) ? "PGM_RSRC2_GS"
+				    : (o == Pm4::SPI_SHADER_PGM_LO_PS)    ? "PGM_LO_PS"
+				    : (o == Pm4::SPI_SHADER_PGM_RSRC1_PS) ? "PGM_RSRC1_PS"
+				    : (o == Pm4::SPI_SHADER_PGM_RSRC2_PS) ? "PGM_RSRC2_PS"
+				    : (o >= Pm4::SPI_SHADER_USER_DATA_ES_0 && o <= Pm4::SPI_SHADER_USER_DATA_ES_15)
+				        ? "USER_DATA_ES"
+				    : (o >= Pm4::SPI_SHADER_USER_DATA_GS_0 && o <= Pm4::SPI_SHADER_USER_DATA_GS_31)
+				        ? "USER_DATA_GS"
+				        : "?";
+				printf("\t sh_indirect[%2" PRIu32 "] ofset=0x%02" PRIx32 " (%-13s) deger=0x%08" PRIx32
+				       "%s\n",
+				       j, o, ad, dump_regs[j * 2 + 1], (j == i ? "   <== BILINMEYEN" : ""));
 			}
+			fflush(stdout);
 			EXIT("unknown sh reg at %05" PRIx32 ": 0x%" PRIx32 "\n", num_dw - dw, cmd_offset);
 		}
 
@@ -4693,6 +4718,53 @@ void GraphicsInitJmpTablesShIndirect() {
 		base &= 0xFFFF00FFFFFFFFFFull;
 		base |= (static_cast<uint64_t>(value) & 0xffu) << 40u;
 		cp->GetShCtx()->SetEsShaderBase(base);
+	};
+
+	// SPI_SHADER_PGM_RSRC1_ES (0xCA) / RSRC2_ES (0xCB).
+	//
+	// GFX10'da ES asamasi GS ile BIRLESTIRILDI; ES blogu (0xC8..0xDB)
+	// birlesik asamanin ES yarisinin aynasidir. Olcum (Astro Bot, tek
+	// SET_SH_REG_INDIRECT blogu, 21 kayit):
+	//     [0] 0x8a PGM_RSRC1_GS = 0x60000002
+	//     [1] 0x8b PGM_RSRC2_GS = 0x00030000
+	//     [2] 0xca PGM_RSRC1_ES = 0x03000002
+	// Iki degerde de VGPRS=2 ve bilesen sayaci 3 - GS blogunda
+	// GS_VGPR_COMP_CNT bit[30:29], ES blogunda VGPR_COMP_CNT bit[25:24].
+	// Yani ayni programin ayni yapilandirmasi, her blogun kendi bit
+	// yerlesimiyle iki kez yaziliyor.
+	//
+	// Emulatorun modeli bunu zaten dogru kuruyor: program adresi
+	// es_regs.data_addr'dan, kaynak yapilandirmasi ise gs_regs.rsrc1/rsrc2'den
+	// okunuyor (shader.cpp:307-315, :819) ve EsStageRegisters bilerek yalnizca
+	// data_addr tutuyor. ES blogu fazladan bilgi tasimadigi icin RSRC3_GS /
+	// RSRC4_GS gibi yok sayiyoruz.
+	//
+	// Yok saymanin yanlis olacagi bir durum cikarsa (ES ve GS bloklari
+	// CELISIRSE) gorebilmek icin ilk gorulen degeri GS karsiligiyla birlikte
+	// logluyoruz - sessizce yutmuyoruz.
+	g_hw_sh_indirect_func[Pm4::SPI_SHADER_PGM_RSRC1_ES] = [](KYTY_HW_SH_INDIRECT_ARGS) {
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) == 0) {
+			const auto& gs = cp->GetShCtx()->GetVs().gs_regs;
+			printf("[ES-AYNA] PGM_RSRC1_ES=0x%08" PRIx32 " yok sayildi (birlesik ES/GS); "
+			       "GS karsiligi: vgprs=%u comp_cnt=%u user_sgpr=%u\n",
+			       value, static_cast<uint32_t>(gs.rsrc1.vgprs),
+			       static_cast<uint32_t>(gs.rsrc1.gs_vgpr_component_count),
+			       static_cast<uint32_t>(gs.rsrc2.user_sgpr));
+			fflush(stdout);
+		}
+	};
+
+	g_hw_sh_indirect_func[Pm4::SPI_SHADER_PGM_RSRC2_ES] = [](KYTY_HW_SH_INDIRECT_ARGS) {
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) == 0) {
+			const auto& gs = cp->GetShCtx()->GetVs().gs_regs;
+			printf("[ES-AYNA] PGM_RSRC2_ES=0x%08" PRIx32 " yok sayildi (birlesik ES/GS); "
+			       "GS karsiligi: user_sgpr=%u lds_size=%u\n",
+			       value, static_cast<uint32_t>(gs.rsrc2.user_sgpr),
+			       static_cast<uint32_t>(gs.rsrc2.lds_size));
+			fflush(stdout);
+		}
 	};
 
 	g_hw_sh_indirect_func[Pm4::SPI_SHADER_PGM_LO_GS] = [](KYTY_HW_SH_INDIRECT_ARGS) {
