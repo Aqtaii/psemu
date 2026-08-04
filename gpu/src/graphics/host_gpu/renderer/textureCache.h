@@ -145,8 +145,12 @@ private:
 	void PublishReadbackBacking(uint64_t address, uint64_t size);
 	void RequireRetirementIsolation(const std::vector<CachedImage*>& retire, const char* operation,
 	                                uint64_t address, uint64_t size) const;
+	// reason: TANI etiketi - bir goruntuyu KIMIN dusurdugunu gormek icin.
+	// Siyah ekranin koku, dolu bir depolama goruntusunun emekliye ayrilip
+	// verisinin geri gelmemesi; katili bu etiket gosterir.
 	void RetireImages(const std::vector<CachedImage*>& retire,
-	                  const CachedImage*               native_image_source = nullptr);
+	                  const CachedImage*               native_image_source = nullptr,
+	                  const char*                      reason              = "?");
 	void SynchronizeColorImageToBufferLocked(CachedImage& cached, uint64_t write_address,
 	                                         uint64_t write_size);
 	void SynchronizeDepthImageToBufferLocked(CachedImage& cached, uint64_t write_address,

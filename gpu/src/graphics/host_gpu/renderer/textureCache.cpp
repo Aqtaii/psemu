@@ -727,7 +727,27 @@ void TextureCache::RequireRetirementIsolation(const std::vector<CachedImage*>& r
 }
 
 void TextureCache::RetireImages(const std::vector<CachedImage*>& retire,
-                                const CachedImage*               native_image_source) {
+                                const CachedImage*               native_image_source,
+                                const char*                      reason) {
+	// OLUM ANI: bir goruntu dusuruluyor. Adres/olcu/bayraklar ve KIMIN
+	// dusurdugu birlikte basiliyor. Ozellikle DEPOLAMA goruntuleri kritik:
+	// kompozisyonun okudugu sahne dokusu bunlardan biri ve okunacagi anda
+	// onbellekte bulunamiyor (bkz. [ORNEKLEME-ESLESMEDI]).
+	for (const auto* dying: retire) {
+		if (dying == nullptr) {
+			continue;
+		}
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 64) {
+			std::printf("[GORUNTU-OLUM] %-28s | 0x%016llx %ux%u tur=%u gpu_mod=%d buffer_mod=%d "
+			            "native=%d\n",
+			            reason, static_cast<unsigned long long>(dying->Address()),
+			            dying->info.width, dying->info.height,
+			            static_cast<uint32_t>(dying->kind), dying->gpu_modified,
+			            dying->buffer_modified, dying == native_image_source);
+			std::fflush(stdout);
+		}
+	}
 	if (retire.empty()) {
 		return;
 	}
@@ -1072,7 +1092,7 @@ void TextureCache::RetireSampledTargetAliases(GraphicContext* ctx, const ImageIn
 		m_metadata_tracker.UntrackMemory(metadata->first, metadata->second.size);
 		m_surface_metas.erase(metadata);
 	}
-	RetireImages(retire);
+	RetireImages(retire, nullptr, "ornekleme-hedef-emekliligi");
 }
 
 void TextureCache::ResolveStorageImageOverlaps(GraphicContext* ctx, const ImageInfo& requested) {
@@ -1125,7 +1145,7 @@ void TextureCache::ResolveStorageImageOverlaps(GraphicContext* ctx, const ImageI
 		}
 		cached->gpu_modified = false;
 	}
-	RetireImages(retire);
+	RetireImages(retire, nullptr, "depolama-komsu-emekliligi");
 }
 
 void TextureCache::RetireStorageDepthAliasLocked(GraphicContext* ctx, const ImageInfo& requested) {
@@ -1166,7 +1186,7 @@ void TextureCache::RetireStorageDepthAliasLocked(GraphicContext* ctx, const Imag
 	m_memory_tracker.ForEachDownloadRange<true>(transfer.address, transfer.size,
 	                                            [](uint64_t, uint64_t) noexcept {});
 	selected->gpu_modified = false;
-	RetireImages({selected});
+	RetireImages({selected}, nullptr, "depolama-derinlik-takma-adi");
 }
 
 TextureCache::~TextureCache() {
@@ -1807,7 +1827,7 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 		}
 		cached->buffer_modified = false;
 	}
-	RetireImages(retire, native_image_source.get());
+	RetireImages(retire, native_image_source.get(), "FindRenderTarget");
 	auto cached                = std::make_shared<CachedImage>();
 	cached->kind               = CachedImage::Kind::RenderTarget;
 	cached->target             = info;
@@ -2069,7 +2089,7 @@ DepthStencilVulkanImage* TextureCache::FindDepthTarget(CommandBuffer* command, G
 	    native_depth_source != nullptr
 	        ? native_depth_source.get()
 	        : (discarded_depth_source != nullptr ? discarded_depth_source.get() : nullptr);
-	RetireImages(retire, transition_source);
+	RetireImages(retire, transition_source, "FindDepthTarget");
 	const bool coherent_guest_stencil =
 	    has_stencil &&
 	    IsCoherentGuestImageSource(stencil_source, info.stencil_address, info.stencil_size);
@@ -3294,7 +3314,7 @@ void TextureCache::RegisterMeta(uint64_t vaddr, uint64_t size, uint32_t layers) 
 			     "\n",
 			     range_vaddr, range_size, cached->Address(), cached->Size());
 		}
-		RetireImages(retire);
+		RetireImages(retire, nullptr, "ClearImageFromBuffer");
 	}
 	if (existing == m_surface_metas.end()) {
 		m_surface_metas.emplace(vaddr, MetaDataInfo {.size = size, .layers = layers});
