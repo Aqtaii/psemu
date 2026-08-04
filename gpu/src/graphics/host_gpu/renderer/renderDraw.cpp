@@ -693,7 +693,7 @@ static bool PrepareDrawRenderState(uint64_t submit_id, CommandBuffer* buffer, HW
 	return true;
 }
 
-static void RefreshShaders(HW::Context* ctx, HW::Shader* sh_ctx, const DrawCallInfo& draw,
+static bool RefreshShaders(HW::Context* ctx, HW::Shader* sh_ctx, const DrawCallInfo& draw,
                            bool log_phases, DrawRenderState* state) {
 	EXIT_IF(ctx == nullptr);
 	EXIT_IF(sh_ctx == nullptr);
@@ -721,11 +721,15 @@ static void RefreshShaders(HW::Context* ctx, HW::Shader* sh_ctx, const DrawCallI
 	}
 	if (!ShaderCompileInfoVS(&vertex_shader_info, &shader_regs, lane_mask_mode,
 	                         &state->vs_input_info, &state->vs_shader)) {
-		EXIT("ShaderCompileInfoVS failed for draw %s\n", draw.name);
+		// Gevsek modda (bkz. shader.cpp ShaderFailureIsFatal) shader.cpp
+		// EXIT etmez; buraya duseriz ve CIZIMI ATLARIZ.
+		printf("[CIZIM-ATLA] VS derlenemedi (draw=%s) -> cizim atlandi\n", draw.name);
+		fflush(stdout);
+		return false;
 	}
 
 	if (!state->ps_active) {
-		return;
+		return true;
 	}
 	if (log_phases) {
 		LogDrawPhase(draw.name, "ShaderCompileInfoPS");
@@ -733,8 +737,11 @@ static void RefreshShaders(HW::Context* ctx, HW::Shader* sh_ctx, const DrawCallI
 	if (!ShaderCompileInfoPS(&pixel_shader_info, &shader_regs, lane_mask_mode,
 	                         &state->vs_input_info, target_export_mapping, &state->ps_input_info,
 	                         &state->ps_shader)) {
-		EXIT("ShaderCompileInfoPS failed for draw %s\n", draw.name);
+		printf("[CIZIM-ATLA] PS derlenemedi (draw=%s) -> cizim atlandi\n", draw.name);
+		fflush(stdout);
+		return false;
 	}
+	return true;
 }
 
 static void BindDrawVertexBuffers(uint64_t submit_id, CommandBuffer* buffer,
@@ -1191,7 +1198,9 @@ void RenderDrawIndex(uint64_t submit_id, CommandBuffer* buffer, HW::Context* ctx
 		return;
 	}
 
-	RefreshShaders(ctx, sh_ctx, draw, true, &state);
+	if (!RefreshShaders(ctx, sh_ctx, draw, true, &state)) {
+		return;
+	}
 
 	LogDrawStateIfNeeded(ctx, ucfg, draw, state, true, false, index_type_and_size, index_addr);
 
@@ -1302,7 +1311,9 @@ void RenderDrawIndexAuto(uint64_t submit_id, CommandBuffer* buffer, HW::Context*
 	     (ucfg->GetPrimType() == Prospero::GpuEnumValue(Prospero::PrimitiveType::kRectList) ||
 	      ucfg->GetPrimType() == Prospero::GpuEnumValue(Prospero::PrimitiveType::kRectListLegacy)));
 
-	RefreshShaders(ctx, sh_ctx, draw, false, &state);
+	if (!RefreshShaders(ctx, sh_ctx, draw, false, &state)) {
+		return;
+	}
 
 	// NOTE: Previously there was a skip here for rect-list draws with no VS
 	// param exports and PS inputs. This was removed because GameMaker (and

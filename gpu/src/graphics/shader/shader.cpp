@@ -27,6 +27,7 @@
 #include <fmt/format.h>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -203,10 +204,50 @@ static bool SpirvValidateBinary(const char* label, uint64_t shader_hash,
 	return false;
 }
 
+// Bir shader derlenemedigi zaman TUM SURECI oldurmek yerine yalnizca O
+// SHADER'i iptal edip devam etmeyi saglar.
+//
+// NEDEN: MIMG 0xe6 (bkz. ImageOps.cpp) bu depodaki tablolarda yok ve
+// guvenle turetilemedi. Onu tahminle baglamak sessizce yanlis doku okumasi
+// uretirdi. Ama tek bir shader yuzunden emulator komple duruyor ve boru
+// hattinin ilerisini (FLIP dahil) hic goremiyoruz.
+//
+// Bu anahtar aciksa: derleme false doner, cagiran o dispatch/cizimi ATLAR,
+// diger shader'lar derlenmeye devam eder. Sonuc: o efekt/nesne gorunmez
+// ama oyun kare uretebilir.
+// DURUSTLUK NOTU: bu bir COZUM DEGIL, kapsam olcme araci. Atlanan her
+// shader gorsel eksiklik demektir; hangi shader'larin atlandigi tek tek
+// loglanir ki etki bilinsin.
+// Varsayilan ACIK; PSEMU_SHADER_STRICT=1 ile eski (olumcul) davranisa donulur.
+static bool ShaderFailureIsFatal() {
+	static const bool strict = [] {
+		const char* e = std::getenv("PSEMU_SHADER_STRICT");
+		return e != nullptr && e[0] == '1';
+	}();
+	return strict;
+}
+
 static void ExitShaderRecompilerFailure(const char* label, uint64_t shader_hash,
                                         const char* reason) {
-	EXIT("%s failed hash=0x%016" PRIx64 ": %s\n", label, shader_hash,
-	     reason != nullptr ? reason : "");
+	if (ShaderFailureIsFatal()) {
+		EXIT("%s failed hash=0x%016" PRIx64 ": %s\n", label, shader_hash,
+		     reason != nullptr ? reason : "");
+	}
+	// Ayni shader her karede yeniden denenebilir; hash basina bir kez yaz.
+	static std::mutex               mtx;
+	static std::set<uint64_t>       reported;
+	bool                            first = false;
+	{
+		std::lock_guard<std::mutex> lk(mtx);
+		first = reported.insert(shader_hash).second;
+	}
+	if (first) {
+		std::printf("[SHADER-ATLA] %s derlenemedi hash=0x%016llx: %s -> bu shader iptal, "
+		            "emulator devam ediyor\n",
+		            label, static_cast<unsigned long long>(shader_hash),
+		            reason != nullptr ? reason : "");
+		std::fflush(stdout);
+	}
 }
 
 static const ShaderBinaryInfo* GetBinaryInfo(const uint32_t* code) {
@@ -1447,12 +1488,14 @@ bool ShaderCompileSpirvVS(const HW::VertexShaderInfo* regs, const HW::ShaderRegi
 	std::string                     error;
 	if (!ShaderRecompiler::TryRecompile(code, options, &result, &error)) {
 		ExitShaderRecompilerFailure("ShaderRecompiler VS", options.shader_hash, error.c_str());
+		return false; // olumcul degilse: bu shader iptal, surec devam
 	}
 	DumpShaderRecompilerOriginal("vs", options.shader_hash, code, result.decoded_dump);
 	if (!SpirvValidateBinary("ShaderRecompiler VS", options.shader_hash, result.spirv)) {
 		DumpShaderRecompilerSpirv("vs", options.shader_hash, result.spirv);
 		ExitShaderRecompilerFailure("ShaderRecompiler VS", options.shader_hash,
 		                            "SPIR-V validation failed");
+		return false; // olumcul degilse: bu shader iptal, surec devam
 	}
 
 	input_info->stage.program =
@@ -1506,12 +1549,14 @@ bool ShaderCompileSpirvPS(const HW::PixelShaderInfo* regs, const HW::ShaderRegis
 	std::string                     error;
 	if (!ShaderRecompiler::TryRecompile(code, options, &result, &error)) {
 		ExitShaderRecompilerFailure("ShaderRecompiler PS", options.shader_hash, error.c_str());
+		return false; // olumcul degilse: bu shader iptal, surec devam
 	}
 	DumpShaderRecompilerOriginal("ps", options.shader_hash, code, result.decoded_dump);
 	if (!SpirvValidateBinary("ShaderRecompiler PS", options.shader_hash, result.spirv)) {
 		DumpShaderRecompilerSpirv("ps", options.shader_hash, result.spirv);
 		ExitShaderRecompilerFailure("ShaderRecompiler PS", options.shader_hash,
 		                            "SPIR-V validation failed");
+		return false; // olumcul degilse: bu shader iptal, surec devam
 	}
 	input_info->stage.program =
 	    std::make_shared<const ShaderRecompiler::IR::Program>(std::move(result.program));
@@ -1567,12 +1612,14 @@ bool ShaderCompileSpirvCS(const HW::ComputeShaderInfo* regs, const HW::ShaderReg
 	PsemuGpuMark("TryRecompile(CS) -> cikis", options.shader_hash, result.spirv.size(), 0);
 	if (!cs_recompiled) {
 		ExitShaderRecompilerFailure("ShaderRecompiler CS", options.shader_hash, error.c_str());
+		return false; // olumcul degilse: bu shader iptal, surec devam
 	}
 	DumpShaderRecompilerOriginal("cs", options.shader_hash, code, result.decoded_dump);
 	if (!SpirvValidateBinary("ShaderRecompiler CS", options.shader_hash, result.spirv)) {
 		DumpShaderRecompilerSpirv("cs", options.shader_hash, result.spirv);
 		ExitShaderRecompilerFailure("ShaderRecompiler CS", options.shader_hash,
 		                            "SPIR-V validation failed");
+		return false; // olumcul degilse: bu shader iptal, surec devam
 	}
 	input_info->stage.program =
 	    std::make_shared<const ShaderRecompiler::IR::Program>(std::move(result.program));

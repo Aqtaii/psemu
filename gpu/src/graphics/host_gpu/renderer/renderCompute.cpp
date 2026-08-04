@@ -427,8 +427,18 @@ void RenderDispatchDirect(uint64_t submit_id, CommandBuffer* buffer, HW::Context
 	ShaderComputeInputInfo    input_info {};
 	std::span<const uint32_t> cs_shader;
 	if (!ShaderCompileInfoCS(&cs_regs, &sh_regs, &input_info, &cs_shader)) {
-		EXIT("ShaderCompileInfoCS failed for dispatch with CS shader 0x%016" PRIx64 "\n",
-		     cs_regs.cs_regs.data_addr);
+		// Derleme basarisiz. Katı modda (PSEMU_SHADER_STRICT=1) shader.cpp
+		// zaten EXIT etti ve buraya hic gelinmez. Gevsek modda buraya
+		// geliriz: dispatch'i ATLA, surec devam etsin. O hesaplama isi
+		// yapilmaz (ilgili efekt eksik cikar) ama boru hatti akmaya devam
+		// eder ve ilerideki duvarlari gorebiliriz.
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 16) {
+			printf("[DISPATCH-ATLA] CS derlenemedi (shader=0x%016llx) -> bu dispatch atlandi\n",
+			       static_cast<unsigned long long>(cs_regs.cs_regs.data_addr));
+			fflush(stdout);
+		}
+		return;
 	}
 
 	const bool use_thread_dimensions = (mode & DISPATCH_INITIATOR_USE_THREAD_DIMENSIONS) != 0;
