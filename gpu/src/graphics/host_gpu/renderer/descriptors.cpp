@@ -1016,9 +1016,18 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 		// BURADA cevirince FindStorageTexture, Vulkan goruntu olusturma ve
 		// gorunum secimi dahil TUM alt katmanlar sirdan bir 2D goruntu
 		// gorur; hicbirinde ayrica 1D destegi gerekmez.
+		// SIMETRIK OLMALI: ilk surumde bu normalizasyon "storage &&" ile
+		// yalnizca DEPOLAMA yoluna uygulanmisti. Sonuc: ayni bellek bolgesi
+		// depolama tarafinda type=9 (2D), ornekleme tarafinda type=8 (1D)
+		// gorunuyordu ve doku onbellegi bunu cakisma sanip
+		// "unsupported sampled/storage image alias" ile oluyordu - iki
+		// descriptor TEK BU ALAN disinda birebir aynidir:
+		//   requested={format=77 1x1x1 pitch=64 tile=27 swizzle=0xfac type=8}
+		//   storage  ={format=77 1x1x1 pitch=64 tile=27 swizzle=0xfac type=9}
+		// Bu yuzden kosul her iki yol icin de gecerli.
 		info.type = descriptor.Type();
-		if (storage && info.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor1D) &&
-		    height == 1 && depth == 1) {
+		if (info.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor1D) && height == 1 &&
+		    depth == 1) {
 			static std::atomic<uint32_t> s_n {0};
 			if (s_n.fetch_add(1) < 8) {
 				printf("[1D->2D] 1D depolama goruntusu tek satirli 2D olarak ele aliniyor "
