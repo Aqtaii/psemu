@@ -426,6 +426,50 @@ bool LowerDsWrite2(const Decoder::Instruction& decoded, BasicBlock* block,
 	return true;
 }
 
+// IMAGE_BVH_INTERSECT_RAY (MIMG 0xe6) KUKLASI: "hicbir cocuk dugum yok".
+//
+// Gercek traversal Vulkan tarafinda hizlandirma yapisi insasi +
+// VK_KHR_ray_query + SPIR-V traversal uretimi gerektirir. Bunun yerine
+// donen 4 dword'un HEPSINE -1 yaziyoruz.
+//
+// Bu deger keyfi degil: OYUNUN KENDI KODU tam olarak -1'i gecersiz dugum
+// sentineli olarak sinyor (olculdu, cs_00000237c55d1000_disasm.txt):
+//     0x00002244: v_cmp_ne_u32 s20,    -1, v5
+//     0x00002258: v_cmp_ne_u32 vcc_lo, -1, v6
+//     0x00002264: v_cmp_ne_u32 vcc_lo, -1, v7
+//     0x00002270: v_cmp_ne_u32 vcc_lo, -1, v8
+// Dolayisiyla shader dogal olarak "gidecek cocuk dugum yok" deyip
+// traversal dongusunden cikar ve "isin carpmadi" (miss) yoluna gider.
+//
+// SONUC: isin izlemeye bagli efektler (yansima / cevresel perdeleme) eksik
+// kalir; rasterizasyon yolunun tamami calisir. Amac ilk anlamli pikseli
+// gormek - kalici cozum degil, bilincli bir ara adim.
+bool LowerImageBvhIntersectRayStub(const Decoder::Instruction& decoded, BasicBlock* block,
+                                   std::string* error) {
+	Operand base {};
+	if (!LowerRegisterOperand(decoded.dst, &base, error)) {
+		return false;
+	}
+	if (base.kind != OperandKind::Register || base.reg.file != RegisterFile::Vector) {
+		SetError(error, "IMAGE_BVH_INTERSECT_RAY stub requires a VGPR destination");
+		return false;
+	}
+	const uint32_t count = decoded.data_dwords != 0 ? decoded.data_dwords : 4u;
+	for (uint32_t i = 0; i < count; i++) {
+		Instruction inst {};
+		inst.pc            = decoded.pc;
+		inst.op            = Opcode::MoveU32;
+		inst.src_count     = 1;
+		inst.dst           = base;
+		inst.dst.reg.index = base.reg.index + i;
+		inst.src[0]        = {};
+		inst.src[0].kind   = OperandKind::ImmediateU32;
+		inst.src[0].imm    = 0xffffffffu;
+		block->instructions.push_back(inst);
+	}
+	return true;
+}
+
 bool LowerImageOperation(const Decoder::Instruction& decoded, BasicBlock* block,
                          std::string* error) {
 	Instruction inst;
@@ -621,6 +665,8 @@ bool LowerMemoryInstruction(const Decoder::Instruction& decoded, BasicBlock* blo
 		case Decoder::Opcode::DsWriteB64:
 		case Decoder::Opcode::DsWriteB96:
 		case Decoder::Opcode::DsWriteB128: return LowerDsWrite(decoded, block, error);
+		case Decoder::Opcode::ImageBvhIntersectRay:
+			return LowerImageBvhIntersectRayStub(decoded, block, error);
 		case Decoder::Opcode::ImageGetResinfo:
 		case Decoder::Opcode::ImageGetLod:
 		case Decoder::Opcode::ImageLoad:
@@ -777,6 +823,10 @@ bool IsMemoryOpcode(Decoder::Opcode opcode) {
 		case Decoder::Opcode::ImageGather4CO:
 		case Decoder::Opcode::ImageGather4CLzO:
 		case Decoder::Opcode::ImageGather4H:
+		// Kukla da bu yoldan indirgeniyor (LowerImageBvhIntersectRayStub).
+		// Yalnizca MoveU32 uretiyor, memory bilgisi kurmuyor - dolayisiyla
+		// kaynak takibi/descriptor yolu HIC tetiklenmiyor.
+		case Decoder::Opcode::ImageBvhIntersectRay:
 		case Decoder::Opcode::ImageSample: return true;
 		default: return false;
 	}

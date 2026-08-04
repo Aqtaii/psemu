@@ -95,6 +95,7 @@ enum class Opcode {
 	MaskedBitCountLowU32,
 	MaskedBitCountHighU32,
 	FindLsbU32,
+	FindLsbU64,
 	FindMsbFromHighU32,
 	FindMsbFromHighU64,
 	BitFieldMaskU32,

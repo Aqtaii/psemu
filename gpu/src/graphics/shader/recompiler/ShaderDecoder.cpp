@@ -460,6 +460,7 @@ std::string OpcodeToString(Opcode opcode) {
 		case Opcode::SBcnt1I32B32: return "s_bcnt1_i32_b32";
 		case Opcode::SBcnt1I32B64: return "s_bcnt1_i32_b64";
 		case Opcode::SFf1I32B32: return "s_ff1_i32_b32";
+		case Opcode::SFf1I32B64: return "s_ff1_i32_b64";
 		case Opcode::SFlbitI32B64: return "s_flbit_i32_b64";
 		case Opcode::SBitreplicateB64B32: return "s_bitreplicate_b64_b32";
 		case Opcode::SGetpcB64: return "s_getpc_b64";
@@ -912,6 +913,7 @@ std::string OpcodeToString(Opcode opcode) {
 		case Opcode::DsReadAddtidB32: return "ds_read_addtid_b32";
 		case Opcode::ImageGetResinfo: return "image_get_resinfo";
 		case Opcode::ImageGetLod: return "image_get_lod";
+		case Opcode::ImageBvhIntersectRay: return "image_bvh_intersect_ray";
 		case Opcode::ImageLoad: return "image_load";
 		case Opcode::ImageLoadMip: return "image_load_mip";
 		case Opcode::ImageStore: return "image_store";
@@ -1022,6 +1024,7 @@ std::string InstructionToString(const Instruction& inst) {
 		case Opcode::SBrevB32:
 		case Opcode::SBcnt1I32B32:
 		case Opcode::SFf1I32B32:
+		case Opcode::SFf1I32B64:
 		case Opcode::SNotB64:
 		case Opcode::SWqmB64:
 		case Opcode::SAndSaveexecB32:
@@ -1089,7 +1092,8 @@ std::string InstructionToString(const Instruction& inst) {
 		case Opcode::ImageGather4LzO:
 		case Opcode::ImageGather4CO:
 		case Opcode::ImageGather4CLzO:
-		case Opcode::ImageGather4H: return WithUnsupportedReason(inst, FormatMimg(inst));
+		case Opcode::ImageGather4H:
+		case Opcode::ImageBvhIntersectRay: return WithUnsupportedReason(inst, FormatMimg(inst));
 		case Opcode::SLoadDword:
 		case Opcode::SLoadDwordx2:
 		case Opcode::SLoadDwordx4:

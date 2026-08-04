@@ -1243,6 +1243,13 @@ bool LowerProgram(const Decoder::Program& decoded, const CFG::Graph& cfg, Shader
 				continue;
 			}
 			if (!LowerDecodedInstruction(decoded.instructions[i], &block, error)) {
+				// TANI: hangi komutta dustugumuzu soylemeden hata ayiklamak
+				// zor - mesaja pc ve komut metnini ekliyoruz.
+				if (error != nullptr) {
+					*error = fmt::format("{} (pc 0x{:08x}: {})", *error,
+					                     decoded.instructions[i].pc,
+					                     Decoder::InstructionToString(decoded.instructions[i]));
+				}
 				return false;
 			}
 		}

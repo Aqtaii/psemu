@@ -921,7 +921,15 @@ bool FinalizeVop2Instruction(uint32_t pc, std::span<const uint32_t> code, uint32
 			inst->src2.kind = OperandKind::LiteralConstant;
 			inst->src_count = 3;
 			break;
+		// VOP2 biciminde tasima girisi ve cikisi ORTUK VCC'dir.
+		// VSubbrevU32 (VOP2 0x2a) bu ailede VAddcU32'nin (VOP2 0x28) birebir
+		// ikizidir - VOP3B yolunda ayni gerekce zaten yazili (bkz. addc
+		// bayragi). Ilk surumde yalnizca VOP3B tarafi baglanmisti; VOP2
+		// bicimi default'a dusup dst2/src2'siz kaliyor ve indirgeme
+		// "decoded operand cannot be used as an IR register" ile duruyordu
+		// (olculdu: pc 0x0b84 v_subbrev_co_ci_u32 v0, 0, v24).
 		case Opcode::VAddcU32:
+		case Opcode::VSubbrevU32:
 			inst->dst2.kind = OperandKind::VccLo;
 			inst->src2.kind = OperandKind::VccLo;
 			inst->src_count = 3;

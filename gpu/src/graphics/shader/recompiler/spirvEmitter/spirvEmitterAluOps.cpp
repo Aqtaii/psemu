@@ -65,6 +65,39 @@ void EmitFindLsbU32(EmitterState* state, const IR::Instruction& inst) {
 	EmitStoreU32(state, inst.dst, u32);
 }
 
+// S_FF1_I32_B64: 64-bit kaynakta en dusuk SET bitin indeksi (0..63),
+// hicbir bit set degilse -1. Govde EmitFindMsbFromHighU64'un simetrigi:
+// dusuk dword'e bak, yoksa yuksek dword'e bak ve +32 ekle, o da yoksa -1.
+void EmitFindLsbU64(EmitterState* state, const IR::Instruction& inst) {
+	const auto low            = EmitSequentialValueLoad(state, inst.src[0], 0);
+	const auto high           = EmitSequentialValueLoad(state, inst.src[0], 1);
+	const auto low_i32        = state->builder.AllocateId();
+	const auto low_lsb        = state->builder.AllocateId();
+	const auto low_non_zero   = state->builder.AllocateId();
+	const auto high_i32       = state->builder.AllocateId();
+	const auto high_lsb       = state->builder.AllocateId();
+	const auto high_total     = state->builder.AllocateId();
+	const auto high_non_zero  = state->builder.AllocateId();
+	const auto high_ret       = state->builder.AllocateId();
+	const auto ret            = state->builder.AllocateId();
+	state->builder.AddFunction(
+	    {OpExtInst, state->int_type, low_i32, state->glsl_std450, GlslFindILsb, low});
+	state->builder.AddFunction({OpBitcast, state->uint_type, low_lsb, low_i32});
+	state->builder.AddFunction(
+	    {OpINotEqual, state->bool_type, low_non_zero, low, ConstantU32(state, 0)});
+	state->builder.AddFunction(
+	    {OpExtInst, state->int_type, high_i32, state->glsl_std450, GlslFindILsb, high});
+	state->builder.AddFunction({OpBitcast, state->uint_type, high_lsb, high_i32});
+	state->builder.AddFunction(
+	    {OpIAdd, state->uint_type, high_total, high_lsb, ConstantU32(state, 32)});
+	state->builder.AddFunction(
+	    {OpINotEqual, state->bool_type, high_non_zero, high, ConstantU32(state, 0)});
+	state->builder.AddFunction({OpSelect, state->uint_type, high_ret, high_non_zero, high_total,
+	                            ConstantU32(state, 0xffffffffu)});
+	state->builder.AddFunction({OpSelect, state->uint_type, ret, low_non_zero, low_lsb, high_ret});
+	EmitStoreU32(state, inst.dst, ret);
+}
+
 void EmitFindMsbFromHighU32(EmitterState* state, const IR::Instruction& inst) {
 	const auto src      = EmitValueLoad(state, inst.src[0]);
 	const auto i32      = state->builder.AllocateId();

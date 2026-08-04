@@ -271,6 +271,7 @@ bool DecodeMimg(uint32_t pc, std::span<const uint32_t> code, uint32_t word_index
 	                            : opcode == 0x09u   ? Opcode::ImageStoreMip
 	                            : opcode == 0x0eu   ? Opcode::ImageGetResinfo
 	                            : opcode == 0x60u   ? Opcode::ImageGetLod
+	                            : opcode == 0xe6u   ? Opcode::ImageBvhIntersectRay
 	                                                : Opcode::Unsupported);
 	inst->dmask              = (word0 >> 8u) & 0xfu;
 	inst->data_dwords        = gather != nullptr ? 4u : CountDmaskComponents(inst->dmask);
@@ -286,7 +287,11 @@ bool DecodeMimg(uint32_t pc, std::span<const uint32_t> code, uint32_t word_index
 		inst->image_nsa_addr[i] = (code[word_index + 2u + i / 4u] >> ((i % 4u) * 8u)) & 0xffu;
 	}
 	inst->image_address_components =
-	    sample != nullptr   ? ImageSampleAddressComponents(sample->flags, dimension)
+	    // BVH isin kesisimi: dugum_isaretcisi(1) + t_max(1) + origin(3) +
+	    // dir(3) + inv_dir(3) = 11. Olculen kodlamada vaddr'daki 1 yazmac +
+	    // NSA'daki 10 yazmac bunu birebir veriyor.
+	    opcode == 0xe6u     ? 11u
+	    : sample != nullptr ? ImageSampleAddressComponents(sample->flags, dimension)
 	    : gather != nullptr ? ImageSampleAddressComponents(gather->flags, dimension)
 	    : atomic != nullptr ? 3u
 	    : opcode == 0x60u   ? ImageCoordComponents(dimension)

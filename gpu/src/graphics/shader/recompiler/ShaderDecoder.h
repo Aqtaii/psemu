@@ -43,6 +43,11 @@ enum class Opcode {
 	SBcnt1I32B32,
 	SBcnt1I32B64,
 	SFf1I32B32,
+	// SOP1 0x14. Tablodan TURETILDI: bu ailede 32-bit surumu
+	// hemen ardindan 64-bit surumu geliyor (0x0f BCNT1_B32 -> 0x10 BCNT1_B64),
+	// ve 0x16 FLBIT_B64 de bu dizilisi dogruluyor. Yani 0x13 FF1_B32 -> 0x14
+	// FF1_B64.
+	SFf1I32B64,
 	SFlbitI32B64,
 	SBitreplicateB64B32,
 	SGetpcB64,
@@ -497,6 +502,21 @@ enum class Opcode {
 	DsReadAddtidB32,
 	ImageGetResinfo,
 	ImageGetLod,
+	// MIMG 0xe6 = IMAGE_BVH_INTERSECT_RAY (RDNA2 isin izleme).
+	// Kimligi disassembly'den KANITLANDI (bkz. commit cf936e6):
+	// traversal dongusu (geri atlayan dal), dugum indeksi ++ ve 64-bit dugum
+	// yuklemesi, en yakin mesafe (t_max) guncellemesi, 11 adres bileseni
+	// (dugum + t_max + origin3 + dir3 + inv_dir3), donen 4 dword'un hepsi
+	// -1'e (gecersiz dugum) karsi sinaniyor, ornekleyici yok.
+	//
+	// KUKLA olarak baglaniyor: gercek BVH traversal'i Vulkan tarafinda
+	// hizlandirma yapisi + VK_KHR_ray_query + SPIR-V traversal uretimi
+	// gerektirir. Bunun yerine "hicbir cocuk dugum yok" (-1) donduruyoruz;
+	// oyunun kendi kodu zaten tam olarak bunu gecersizlik sentineli sayiyor,
+	// dolayisiyla dogal olarak donguden cikip "isin carpmadi" yoluna gidiyor.
+	// Isin izlemeye bagli efektler (yansima/AO) eksik kalir, rasterizasyon
+	// yolunun tamami calisir.
+	ImageBvhIntersectRay,
 	ImageLoad,
 	ImageLoadMip,
 	ImageStore,

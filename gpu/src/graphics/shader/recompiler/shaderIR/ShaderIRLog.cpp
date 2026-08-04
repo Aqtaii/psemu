@@ -249,6 +249,7 @@ std::string InstructionToString(const Instruction& inst) {
 		case Opcode::MaskedBitCountLowU32: text += "MaskedBitCountLowU32"; break;
 		case Opcode::MaskedBitCountHighU32: text += "MaskedBitCountHighU32"; break;
 		case Opcode::FindLsbU32: text += "FindLsbU32"; break;
+		case Opcode::FindLsbU64: text += "FindLsbU64"; break;
 		case Opcode::FindMsbFromHighU32: text += "FindMsbFromHighU32"; break;
 		case Opcode::FindMsbFromHighU64: text += "FindMsbFromHighU64"; break;
 		case Opcode::BitFieldMaskU32: text += "BitFieldMaskU32"; break;

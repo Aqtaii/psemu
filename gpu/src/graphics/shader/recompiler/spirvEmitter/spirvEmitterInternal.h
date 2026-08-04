@@ -1081,6 +1081,7 @@ void EmitUnaryU32(EmitterState* state, const IR::Instruction& inst, uint32_t opc
 void EmitUnaryU64(EmitterState* state, const IR::Instruction& inst, uint32_t opcode);
 
 void EmitFindLsbU32(EmitterState* state, const IR::Instruction& inst);
+void EmitFindLsbU64(EmitterState* state, const IR::Instruction& inst);
 
 void EmitFindMsbFromHighU32(EmitterState* state, const IR::Instruction& inst);
 
