@@ -53,6 +53,10 @@ public:
 	[[nodiscard]] bool InvalidateMemory(PageFaultAccess access, uint64_t vaddr, uint64_t size,
 	                                    PageFaultPhase phase) noexcept;
 	void               UnmapMemory(uint64_t vaddr, uint64_t size);
+	// Aralikta GPU'nun urettigi ve konuk bellekte olmayan baytlari konuk
+	// belege indirip sahipligi birakir. Ayni bellegi bir GORUNTU sahiplenmek
+	// uzereyken cagrilir; bir sey bosaltildiysa true doner.
+	[[nodiscard]] bool FlushGpuModifiedToBacking(uint64_t vaddr, uint64_t size);
 	[[nodiscard]] std::pair<VulkanBuffer*, uint64_t>
 	ObtainBuffer(CommandBuffer* command, GraphicContext* ctx, uint64_t vaddr, uint64_t size,
 	             bool is_written = false, bool is_read = true, bool is_formatted = false);

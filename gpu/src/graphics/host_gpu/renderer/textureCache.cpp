@@ -2547,10 +2547,46 @@ void TextureCache::MarkGpuWritten(VulkanImage* image) {
 				// buffer/image alias" ile YUKSEK SESLE duruyor. Yani
 				// gevsettigimiz kosul asagi akistaki kontrolle zaten kapali.
 				if (gpu_modified) {
-					EXIT(
-					    "TextureCache: GPU-written image aliases a dirty buffer, addr=0x%016" PRIx64
-					    " size=0x%016" PRIx64 " cpu_modified=%d gpu_modified=%d\n",
-					    cached->Address(i), cached->Size(i), cpu_modified, gpu_modified);
+					// SAHIPLIK DEVRI: tampon, konuk bellekte OLMAYAN baytlar
+					// tutuyor ve ayni bellegi bir goruntu sahiplenmek uzere.
+					// Baytlari kaybetmeden devrediyoruz: once tamponun GPU
+					// ciktisini konuk belege indir, sonra goruntunun
+					// sahiplenmesine izin ver.
+					//
+					// Olculen durum (Astro Bot): goruntu VideoOut yuzeyi
+					// (kind=4), 0x..59030000+0x1fe0000 = 3840x2176x4, yani 4K
+					// ekran tamponu; cakisan tampon BIREBIR ayni aralikta ve
+					// gercekten GPU-kirli (gpu_kirli=1,
+					// yayinlanmis_gpu_araligi=1). Compute shader son kareyi
+					// dogrudan ekran yuzeyine SALT YAZMA depolama goruntusu
+					// olarak yaziyor (descriptors.cpp: !resource.read &&
+					// resource.written, olculeri birebir dogrulaniyor).
+					//
+					// Bosaltma basarisiz olursa - yani devredecek bir sey
+					// bulunamazsa - eski sert davranisa donuyoruz: sessizce
+					// veri kaybetmiyoruz.
+					m_buffer_cache.LogPageOverlaps("GPU-YAZ-CAKISMA", cached->Address(i),
+					                               cached->Size(i));
+					const bool handed_over =
+					    m_buffer_cache.FlushGpuModifiedToBacking(cached->Address(i),
+					                                             cached->Size(i));
+					if (!handed_over ||
+					    m_buffer_cache.IsRegionGpuModified(cached->Address(i), cached->Size(i))) {
+						EXIT("TextureCache: GPU-written image aliases a dirty buffer, "
+						     "addr=0x%016" PRIx64 " size=0x%016" PRIx64
+						     " cpu_modified=%d gpu_modified=%d kind=%u devredildi=%d\n",
+						     cached->Address(i), cached->Size(i), cpu_modified, gpu_modified,
+						     static_cast<uint32_t>(cached->kind), handed_over);
+					}
+					static std::atomic<uint32_t> s_n {0};
+					if (s_n.fetch_add(1) < 8) {
+						printf("[TAMPON-DEVIR] GPU-kirli tampon konuk belege bosaltildi, sahiplik "
+						       "goruntuye gecti (0x%016llx+0x%llx tur=%u)\n",
+						       static_cast<unsigned long long>(cached->Address(i)),
+						       static_cast<unsigned long long>(cached->Size(i)),
+						       static_cast<uint32_t>(cached->kind));
+						fflush(stdout);
+					}
 				}
 				if (cpu_modified) {
 					static std::atomic<uint32_t> s_n {0};

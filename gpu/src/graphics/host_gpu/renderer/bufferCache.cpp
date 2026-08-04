@@ -595,6 +595,62 @@ bool BufferCache::InvalidateMemory(PageFaultAccess access, uint64_t vaddr, uint6
 	return true;
 }
 
+bool BufferCache::FlushGpuModifiedToBacking(uint64_t vaddr, uint64_t size) {
+	// Tamponun GPU'da urettigi ve konuk bellekte OLMAYAN baytlarini konuk
+	// belege indirir, sonra sahipligi birakir (CPU-kirli isaretleyip dirty
+	// aralikligi dusurur). Govde UnmapMemory'nin bosaltma adiminin aynisidir
+	// - orada da tam olarak bu yapiliyor; burada araliga uygulanabilir hale
+	// getirildi, cunku ayni bellegi bir GORUNTU sahiplenmek uzereyken
+	// tamponun baytlarini kaybetmemeliyiz.
+	//
+	// Indirme sirasinda GPU'nun bosta olmasi gerekiyor. Bu, kayit sirasinda
+	// yapilan diger bosaltmalarla ayni desen (bkz.
+	// TextureCache::SynchronizeColorImageToBufferLocked: WaitForGraphicsIdle
+	// + DownloadImage + WriteBacking).
+	FaultSafeCacheLock lock(this, m_mutex);
+	bool               flushed = false;
+	for (const auto& [begin, cached]: m_buffers) {
+		const auto offset = begin >= vaddr ? begin - vaddr : UINT64_MAX;
+		if (offset > size || cached->size > size - offset ||
+		    !m_memory_tracker.IsRegionGpuModified(begin, cached->size)) {
+			continue;
+		}
+		const auto dirty = m_gpu_modified_ranges.Intersections(begin, cached->size);
+		if (dirty.empty()) {
+			EXIT("BufferCache: GPU-modified buffer has no dirty ranges, addr=0x%016" PRIx64
+			     " size=0x%016" PRIx64 "\n",
+			     begin, cached->size);
+		}
+		Transfer::WaitForGraphicsIdle(cached->ctx);
+		auto     backing_writes = ReserveBackingWrites(m_page_manager, dirty);
+		uint64_t downloaded     = 0;
+		m_memory_tracker.ForEachDownloadRange<true>(
+		    begin, cached->size,
+		    [&](uint64_t address, uint64_t bytes) noexcept {
+			    ValidateDirtyPages(m_gpu_modified_ranges, address, bytes, "image-handover");
+		    },
+		    [&](uint64_t address, uint64_t bytes) noexcept {
+			    const auto ranges = m_gpu_modified_ranges.Intersections(address, bytes);
+			    for (const auto& range: ranges) {
+				    std::vector<uint8_t> data(range.size);
+				    Transfer::DownloadBuffer(cached->ctx, cached->buffer.get(),
+				                             range.address - begin, data.data(), range.size);
+				    Libs::LibKernel::Memory::WriteBacking(range.address, data.data(), data.size());
+				    downloaded += range.size;
+			    }
+		    });
+		if (downloaded == 0) {
+			EXIT("BufferCache: GPU-modified buffer downloaded no bytes, addr=0x%016" PRIx64
+			     " size=0x%016" PRIx64 "\n",
+			     begin, cached->size);
+		}
+		m_memory_tracker.MarkRegionAsCpuModified(begin, cached->size);
+		m_gpu_modified_ranges.Subtract(begin, cached->size);
+		flushed = true;
+	}
+	return flushed;
+}
+
 void BufferCache::UnmapMemory(uint64_t vaddr, uint64_t size) {
 	GraphicsRunSubmissionLock submissions;
 	FaultSafeCacheLock        lock(this, m_mutex);
