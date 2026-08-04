@@ -571,8 +571,29 @@ static bool IsSupportedStorageTextureDescriptor(const ShaderRecompiler::IR::Imag
 	const auto width  = static_cast<uint32_t>(descriptor.Width5()) + 1u;
 	const auto height = static_cast<uint32_t>(descriptor.Height5()) + 1u;
 	const auto depth  = static_cast<uint32_t>(descriptor.Depth()) + 1u;
+	// 1D depolama goruntusu, TEK SATIRLI 2D olarak kabul ediliyor.
+	//
+	// Olculdu: shader komutu 2D adresleme kullaniyor (resource.dimension =
+	// Dim2D) ama descriptor kColor1D diyor:
+	//     dimension=1 (Dim2D)  type=8 (kColor1D)  extent=1x1x1
+	//     tile=kRenderTarget   swizzle_ok=1   read=0 written=1
+	//     format=77 (k32_32_32_32Float)  size=0x10000
+	// Yani tek elemanlik, yalnizca-yazilan bir scratch/sayac hedefi.
+	//
+	// GEREKCE: yuksekligi 1 olan bir 1D goruntu ile 1xN 2D goruntu ayni
+	// bellek duzenini ve ayni adreslemeyi kullanir; shader zaten (x,y) ile
+	// adresliyor ve y=0. Ustelik Vulkan surucularinde 2D storage image
+	// yolu 1D'ye gore cok daha saglam. Bu yuzden 1D'yi burada kabul edip
+	// ImageInfo uretilirken tipi kColor2D'ye NORMALIZE ediyoruz (bkz.
+	// asagida info.type); boylece alt katmanlar 1D'yi hic gormuyor.
+	// Kisit dar: yalnizca height==1 ve Depth()==0 olan 1D descriptor'lar.
+	const bool is_1d_as_2d =
+	    resource.dimension == ShaderRecompiler::Decoder::ImageDimension::Dim2D &&
+	    descriptor.Type() == Prospero::GpuEnumValue(Prospero::ImageType::kColor1D) &&
+	    descriptor.Depth() == 0 && height == 1;
 	const bool is_2d = resource.dimension == ShaderRecompiler::Decoder::ImageDimension::Dim2D &&
-	                   descriptor.Type() == Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) &&
+	                   (descriptor.Type() == Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) ||
+	                    is_1d_as_2d) &&
 	                   descriptor.Depth() == 0;
 	const bool is_2d_array =
 	    resource.dimension == ShaderRecompiler::Decoder::ImageDimension::Dim2DArray &&
@@ -990,7 +1011,23 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 		info.tile        = tile;
 		info.swizzle     = swizzle;
 		info.depth       = depth;
-		info.type        = descriptor.Type();
+		// 1D -> 1 satirli 2D NORMALIZASYONU (gerekce icin
+		// IsSupportedStorageTextureDescriptor'daki nota bakiniz). Tipi
+		// BURADA cevirince FindStorageTexture, Vulkan goruntu olusturma ve
+		// gorunum secimi dahil TUM alt katmanlar sirdan bir 2D goruntu
+		// gorur; hicbirinde ayrica 1D destegi gerekmez.
+		info.type = descriptor.Type();
+		if (storage && info.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor1D) &&
+		    height == 1 && depth == 1) {
+			static std::atomic<uint32_t> s_n {0};
+			if (s_n.fetch_add(1) < 8) {
+				printf("[1D->2D] 1D depolama goruntusu tek satirli 2D olarak ele aliniyor "
+				       "(genislik=%u addr=0x%016llx format=%u)\n",
+				       width, static_cast<unsigned long long>(address), format);
+				fflush(stdout);
+			}
+			info.type = Prospero::GpuEnumValue(Prospero::ImageType::kColor2D);
+		}
 		info.base_array  = descriptor.BaseArray5();
 		if (storage) {
 			image = texture_cache->FindStorageTexture(command_buffer, g_render_ctx->GetGraphicCtx(),
