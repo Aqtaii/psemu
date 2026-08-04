@@ -227,6 +227,41 @@ static bool ShaderFailureIsFatal() {
 	return strict;
 }
 
+// TANI: derlenemeyen bir shader'in TAM disassembly'sini tools/dumps/ altina
+// yazar. Decoder desteklemedigi komutlari da listeler (hata CFG asamasinda
+// olustugu icin cozumleme zaten tamamlanmis olur), boylece bilinmeyen bir
+// opcode'un ETRAFINDAKI yapiyi - dongu, dal, isaretci matematigi - okuyup
+// kimligini KANITLAYABILIRIZ.
+static void PsemuDumpFailedShaderDisasm(const char* kind, uint64_t shader_hash,
+                                        std::span<const uint32_t> code) {
+	static std::atomic<uint32_t> s_dumped {0};
+	if (s_dumped.fetch_add(1) >= 8 || code.empty()) {
+		return;
+	}
+	ShaderRecompiler::Decoder::Program program;
+	std::string                       decode_error;
+	const bool decoded = ShaderRecompiler::Decoder::DecodeProgram(code, &program, &decode_error);
+	std::error_code ec;
+	std::filesystem::create_directories("tools/dumps", ec);
+	const auto path = fmt::format("tools/dumps/{}_{:016x}_disasm.txt", kind, shader_hash);
+	FILE*      f    = std::fopen(path.c_str(), "wb");
+	if (f == nullptr) {
+		return;
+	}
+	std::fprintf(f, "; shader=0x%016llx dwords=%llu decode_ok=%d\n",
+	             static_cast<unsigned long long>(shader_hash),
+	             static_cast<unsigned long long>(code.size()), static_cast<int>(decoded));
+	if (!decode_error.empty()) {
+		std::fprintf(f, "; decode_error=%s\n", decode_error.c_str());
+	}
+	const auto text = ShaderRecompiler::Decoder::ProgramToString(program);
+	std::fwrite(text.data(), 1, text.size(), f);
+	std::fclose(f);
+	printf("[SHADER-DISASM] %s (%llu komut)\n", path.c_str(),
+	       static_cast<unsigned long long>(program.instructions.size()));
+	fflush(stdout);
+}
+
 static void ExitShaderRecompilerFailure(const char* label, uint64_t shader_hash,
                                         const char* reason) {
 	if (ShaderFailureIsFatal()) {
@@ -1611,6 +1646,19 @@ bool ShaderCompileSpirvCS(const HW::ComputeShaderInfo* regs, const HW::ShaderReg
 	const bool cs_recompiled = ShaderRecompiler::TryRecompile(code, options, &result, &error);
 	PsemuGpuMark("TryRecompile(CS) -> cikis", options.shader_hash, result.spirv.size(), 0);
 	if (!cs_recompiled) {
+		// TANI: derlenemeyen CS'in TAM DISASSEMBLY'sini diske dok.
+		//
+		// Amac MIMG 0xe6'nin KIMLIGINI kanitlamak. Depoda o opcode icin tablo
+		// yok; yapisal ipuclari (ssamp=0, 10 adres bileseni, dmask=0xf) BVH
+		// isin kesisimine uyuyor ama DOGRULANMADI. Ray traversal cok
+		// karakteristiktir: dugum isaretcisi guncellenip donguye geri beslenir,
+		// mesafe (t_max) karsilastirmasi yapilir, geriye atlayan bir dal olur.
+		// Bunlari gormeden Vulkan ray query altyapisina girmek dogru degil -
+		// kanitlamadan donanim insa etmiyoruz.
+		//
+		// Decoder komutu ZATEN cozuyor (hata CFG asamasinda), o yuzden
+		// ProgramToString tam listeyi verebiliyor.
+		PsemuDumpFailedShaderDisasm("cs", options.shader_hash, code);
 		ExitShaderRecompilerFailure("ShaderRecompiler CS", options.shader_hash, error.c_str());
 		return false; // olumcul degilse: bu shader iptal, surec devam
 	}
