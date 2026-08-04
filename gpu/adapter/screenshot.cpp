@@ -12,11 +12,14 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
+#include <vector>
 #include <mutex>
 #include <string>
 
 #include "graphics/host_gpu/graphicContext.h"
 #include "graphics/host_gpu/renderer/render.h"
+#include "graphics/host_gpu/transfer.h"
 #include "graphics/host_gpu/vma.h"
 
 namespace Libs::Graphics {
@@ -204,6 +207,225 @@ void PsemuDumpGuestTexture(uint64_t addr, uint32_t w, uint32_t h) {
 // swapchain.cpp WindowPresentFrame'den cagrilir. image present edilecek kare;
 // bu noktada eTransferSrcOptimal layout'unda (WindowPrepareFrame'in CopyImage'i
 // oraya birakti). Her N present'te bir yakalar, run basina ust sinir uygular.
+// ============================================================================
+// TANI: kompozisyonun okudugu ANA SAHNE DOKUSUNU diske dok.
+//
+// Soru: ekran siyah cikiyor ama girdi dokusunun bolgesinde GPU bayt uretmis
+// ([EKRAN-GIRDI] gpu_uretti=1). Doku ZATEN siyah mi, yoksa dolu da
+// kompozisyon mu siyaha eziyor?
+//
+// Format yanlis yorumlanirsa dolu bir doku siyah sanilabilir. Bu yuzden
+// goruntunun yani sira ISTATISTIK de basiyoruz (min/max/ortalama ve sifirdan
+// farkli piksel orani) - istatistik, renk cozumunden bagimsiz olarak
+// "bos mu dolu mu" sorusunu yanitlar.
+// ============================================================================
+static float HalfToFloat(uint16_t half) {
+	const uint32_t sign = static_cast<uint32_t>(half >> 15u) << 31u;
+	uint32_t       exp  = (half >> 10u) & 0x1fu;
+	uint32_t       man  = half & 0x3ffu;
+	uint32_t       bits = 0;
+	if (exp == 0) {
+		if (man == 0) {
+			bits = sign;
+		} else {
+			while ((man & 0x400u) == 0) {
+				man <<= 1u;
+				exp--;
+			}
+			exp++;
+			man &= 0x3ffu;
+			bits = sign | ((exp + 112u) << 23u) | (man << 13u);
+		}
+	} else if (exp == 31) {
+		bits = sign | 0x7f800000u | (man << 13u);
+	} else {
+		bits = sign | ((exp + 112u) << 23u) | (man << 13u);
+	}
+	float f = 0.0f;
+	std::memcpy(&f, &bits, sizeof(f));
+	return f;
+}
+
+// Bir pikseli float RGB'ye cevirir. Desteklenmeyen formatta false doner -
+// sessizce siyah uretmez.
+static bool DecodePixelFloat(const uint8_t* px, vk::Format format, float* out_r, float* out_g,
+                             float* out_b) {
+	switch (format) {
+		case vk::Format::eR8G8B8A8Unorm:
+		case vk::Format::eR8G8B8A8Srgb:
+		case vk::Format::eR8G8B8A8Uint:
+			*out_r = static_cast<float>(px[0]) / 255.0f;
+			*out_g = static_cast<float>(px[1]) / 255.0f;
+			*out_b = static_cast<float>(px[2]) / 255.0f;
+			return true;
+		case vk::Format::eB8G8R8A8Unorm:
+		case vk::Format::eB8G8R8A8Srgb:
+			*out_b = static_cast<float>(px[0]) / 255.0f;
+			*out_g = static_cast<float>(px[1]) / 255.0f;
+			*out_r = static_cast<float>(px[2]) / 255.0f;
+			return true;
+		case vk::Format::eA2R10G10B10UnormPack32: {
+			uint32_t v = 0;
+			std::memcpy(&v, px, sizeof(v));
+			*out_r = static_cast<float>((v >> 20u) & 0x3ffu) / 1023.0f;
+			*out_g = static_cast<float>((v >> 10u) & 0x3ffu) / 1023.0f;
+			*out_b = static_cast<float>(v & 0x3ffu) / 1023.0f;
+			return true;
+		}
+		case vk::Format::eA2B10G10R10UnormPack32: {
+			uint32_t v = 0;
+			std::memcpy(&v, px, sizeof(v));
+			*out_b = static_cast<float>((v >> 20u) & 0x3ffu) / 1023.0f;
+			*out_g = static_cast<float>((v >> 10u) & 0x3ffu) / 1023.0f;
+			*out_r = static_cast<float>(v & 0x3ffu) / 1023.0f;
+			return true;
+		}
+		case vk::Format::eR16G16B16A16Sfloat: {
+			uint16_t h[3] = {0, 0, 0};
+			std::memcpy(h, px, sizeof(h));
+			*out_r = HalfToFloat(h[0]);
+			*out_g = HalfToFloat(h[1]);
+			*out_b = HalfToFloat(h[2]);
+			return true;
+		}
+		case vk::Format::eR16G16B16A16Unorm: {
+			uint16_t h[3] = {0, 0, 0};
+			std::memcpy(h, px, sizeof(h));
+			*out_r = static_cast<float>(h[0]) / 65535.0f;
+			*out_g = static_cast<float>(h[1]) / 65535.0f;
+			*out_b = static_cast<float>(h[2]) / 65535.0f;
+			return true;
+		}
+		default: return false;
+	}
+}
+
+static uint32_t FormatBytesPerPixel(vk::Format format) {
+	switch (format) {
+		case vk::Format::eR16G16B16A16Sfloat:
+		case vk::Format::eR16G16B16A16Unorm: return 8;
+		default: return 4;
+	}
+}
+
+void PsemuDumpSampledTexture(GraphicContext* ctx, VulkanImage* image, uint64_t guest_addr) {
+	if (ctx == nullptr || image == nullptr || image->image == nullptr) {
+		return;
+	}
+	static std::atomic<uint32_t> s_dumped {0};
+	if (s_dumped.fetch_add(1) >= 4) {
+		return;
+	}
+
+	const uint32_t w = image->extent.width;
+	const uint32_t h = image->extent.height;
+	if (w == 0 || h == 0 || w > 8192 || h > 8192) {
+		return;
+	}
+	const uint32_t bpp  = FormatBytesPerPixel(image->format);
+	const uint64_t size = static_cast<uint64_t>(w) * h * bpp;
+
+	std::vector<uint8_t> data(size);
+	const auto           regions = Transfer::MakeLayeredImageBufferCopies(1, size, w, w, h);
+	Transfer::DownloadImage(ctx, data.data(), size, regions, image, image->layout);
+
+	// ISTATISTIK: renk cozumunden bagimsiz "bos mu dolu mu" yaniti.
+	float    mn[3]  = {1e30f, 1e30f, 1e30f};
+	float    mx[3]  = {-1e30f, -1e30f, -1e30f};
+	double   sum[3] = {0.0, 0.0, 0.0};
+	uint64_t nonzero   = 0;
+	uint64_t counted   = 0;
+	bool     decodable = true;
+	for (uint32_t y = 0; y < h && decodable; y += 4) {
+		for (uint32_t x = 0; x < w; x += 4) {
+			float rgb[3] = {0.0f, 0.0f, 0.0f};
+			if (!DecodePixelFloat(data.data() + (static_cast<size_t>(y) * w + x) * bpp,
+			                      image->format, &rgb[0], &rgb[1], &rgb[2])) {
+				decodable = false;
+				break;
+			}
+			for (int c = 0; c < 3; c++) {
+				mn[c] = std::min(mn[c], rgb[c]);
+				mx[c] = std::max(mx[c], rgb[c]);
+				sum[c] += static_cast<double>(rgb[c]);
+			}
+			if (rgb[0] > 0.0f || rgb[1] > 0.0f || rgb[2] > 0.0f) {
+				nonzero++;
+			}
+			counted++;
+		}
+	}
+	if (!decodable || counted == 0) {
+		std::fprintf(stderr, "[DOKU-DOKUM] format=%d COZULEMEDI (%ux%u bpp=%u) addr=0x%016llx\n",
+		             static_cast<int>(image->format), w, h, bpp,
+		             static_cast<unsigned long long>(guest_addr));
+		std::fflush(stderr);
+		return;
+	}
+	std::fprintf(stderr,
+	             "[DOKU-DOKUM] addr=0x%016llx %ux%u format=%d bpp=%u | min=(%.4f,%.4f,%.4f) "
+	             "max=(%.4f,%.4f,%.4f) ort=(%.4f,%.4f,%.4f) sifirdan_farkli=%llu/%llu\n",
+	             static_cast<unsigned long long>(guest_addr), w, h,
+	             static_cast<int>(image->format), bpp, static_cast<double>(mn[0]),
+	             static_cast<double>(mn[1]), static_cast<double>(mn[2]), static_cast<double>(mx[0]),
+	             static_cast<double>(mx[1]), static_cast<double>(mx[2]),
+	             sum[0] / static_cast<double>(counted), sum[1] / static_cast<double>(counted),
+	             sum[2] / static_cast<double>(counted), static_cast<unsigned long long>(nonzero),
+	             static_cast<unsigned long long>(counted));
+	std::fflush(stderr);
+
+	// Gorsel dokum: 4x kucultulmus, Reinhard tonlama (HDR degerler patlamasin).
+	const uint32_t factor = 4;
+	const uint32_t ow     = w / factor;
+	const uint32_t oh     = h / factor;
+	if (ow == 0 || oh == 0) {
+		return;
+	}
+	const uint32_t row_bytes = (ow * 3u + 3u) & ~3u;
+	CreateDirectoryA("tools", nullptr);
+	CreateDirectoryA("tools\\dumps", nullptr);
+	char name[160];
+	std::snprintf(name, sizeof(name), "tools\\dumps\\scene_%llx_%ux%u.bmp",
+	              static_cast<unsigned long long>(guest_addr), w, h);
+	BITMAPFILEHEADER fh {};
+	BITMAPINFOHEADER ih {};
+	fh.bfType        = 0x4D42;
+	fh.bfOffBits     = sizeof(fh) + sizeof(ih);
+	fh.bfSize        = fh.bfOffBits + row_bytes * oh;
+	ih.biSize        = sizeof(ih);
+	ih.biWidth       = static_cast<LONG>(ow);
+	ih.biHeight      = static_cast<LONG>(oh);
+	ih.biPlanes      = 1;
+	ih.biBitCount    = 24;
+	ih.biCompression = BI_RGB;
+	ih.biSizeImage   = row_bytes * oh;
+	FILE* f = std::fopen(name, "wb");
+	if (f == nullptr) {
+		return;
+	}
+	std::fwrite(&fh, sizeof(fh), 1, f);
+	std::fwrite(&ih, sizeof(ih), 1, f);
+	std::string row(row_bytes, static_cast<char>(0));
+	for (uint32_t oy = 0; oy < oh; oy++) {
+		const uint32_t sy = (oh - 1u - oy) * factor;
+		for (uint32_t ox = 0; ox < ow; ox++) {
+			float rgb[3] = {0.0f, 0.0f, 0.0f};
+			DecodePixelFloat(data.data() + (static_cast<size_t>(sy) * w + ox * factor) * bpp,
+			                 image->format, &rgb[0], &rgb[1], &rgb[2]);
+			for (int c = 0; c < 3; c++) {
+				const float tone = rgb[c] / (1.0f + rgb[c]);
+				const auto  v    = static_cast<int>(tone * 255.0f + 0.5f);
+				row[ox * 3u + static_cast<uint32_t>(2 - c)] =
+				    static_cast<char>(v < 0 ? 0 : (v > 255 ? 255 : v));
+			}
+		}
+		std::fwrite(row.data(), row_bytes, 1, f);
+	}
+	std::fclose(f);
+	std::fprintf(stderr, "[DOKU-DOKUM] %s yazildi\n", name);
+	std::fflush(stderr);
+}
+
 void PsemuCaptureFrame(GraphicContext* ctx, const VulkanImage* image) {
 	if (ctx == nullptr || image == nullptr || image->image == nullptr) return;
 	if (image->format == vk::Format::eUndefined) return;

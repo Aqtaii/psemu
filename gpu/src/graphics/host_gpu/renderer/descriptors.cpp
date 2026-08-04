@@ -1043,6 +1043,13 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 			            static_cast<unsigned long long>(region.image_bytes), image != nullptr);
 			std::fflush(stdout);
 		}
+		// ANA SAHNE DOKUSUNU DOK: 1x1 LUT'lari atla, gercek boyutlu ve
+		// onbellekte cozulmus olani icerigiyle birlikte diske yaz.
+		if (image != nullptr && width > 64 && height > 64) {
+			extern void PsemuDumpSampledTexture(GraphicContext* ctx, VulkanImage* image,
+			                                    uint64_t guest_addr);
+			PsemuDumpSampledTexture(g_render_ctx->GetGraphicCtx(), image, address);
+		}
 	}
 	if (image == nullptr) {
 		const auto video = Presentation::DisplayBufferFind(address);
