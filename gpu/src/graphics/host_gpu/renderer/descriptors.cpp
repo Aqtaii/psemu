@@ -638,11 +638,56 @@ static bool IsSupportedStorageTextureEncoding(const ShaderTextureResource& descr
 	                                     (static_cast<uint32_t>(descriptor.LastLevel()) << 16u) |
 	                                     (static_cast<uint32_t>(descriptor.TileMode()) << 20u) |
 	                                     (static_cast<uint32_t>(descriptor.Type()) << 28u);
+	// DCC (delta renk sikistirma) metadata blogu: fields[6] bit[31:15] ve
+	// fields[7] tamami. Bunlari YOK SAYIYORUZ - bilerek ve dar bir sekilde.
+	//
+	// Olculen tanimlayici (Astro Bot, 2432x1368 depolama goruntusu, yazma
+	// amacli - read=0 written=1):
+	//   alan6=0xe07b0000 alan7=0x01e7a2b1
+	//   -> meta_sikistirma=1 yazma_sikistirma=1 boru_hizali=1 dcc_alfa=1
+	//   -> meta adresi 0x1e7a2b1e000 (MetaAddr eriscisi Base40'tan farkli
+	//      olarak <<8 kaydirmasini yapmiyor), goruntu 0x1e76dfc0000+0x1a20000
+	//
+	// Neden yok saymak tutarli: emulatorde RENK DCC'si HICBIR YERDE
+	// desteklenmiyor - ne yuklemede, ne geri okumada, ne render hedefinde.
+	// Metadata makinesi yalnizca HTILE (derinlik) icin kurulu. Sikistirmayi
+	// bastan sona yok saydigimiz surece boru hatti kendi icinde tutarli
+	// kalir: yazdigimiz da okudugumuz da ham piksel.
+	//
+	// Neyi VAAT ETMIYORUZ: oyun DCC'yi hizli-temizleme ile sabit renge
+	// ayarlayip yuzeye hic piksel yazmadan okursa, o yuzey bizde bayat
+	// gorunur. Bu bir gorsel eksiklik, sessiz bir tutarsizlik degil - ve
+	// olculen durumda metadata bolgesi emulatorde HIC KAYITLI DEGIL
+	// (kayitli=0), yani zaten temiz oldugunu iddia edemiyoruz.
+	//
+	// Yok sayma DAR: honorlemek zorunda olacagimiz alanlar (MipStatsCntId
+	// bit[7:0], MsaaDepth bit[10] ve aradaki ayrilmis bitler) hala SIFIR
+	// olmak zorunda. Yalnizca metadata blogu serbest.
+	constexpr uint32_t field6_must_be_zero_mask = 0x00007fffu;
+	static const bool  dcc_strict               = [] {
+        const char* e = std::getenv("PSEMU_DCC_STRICT");
+        return e != nullptr && e[0] == '1';
+	}();
+	const bool metadata_block_only =
+	    !dcc_strict && (descriptor.fields[6] & field6_must_be_zero_mask) == 0;
+	const bool meta_fields_ok =
+	    (descriptor.fields[6] == 0 && descriptor.fields[7] == 0) || metadata_block_only;
+	if (metadata_block_only && (descriptor.fields[6] != 0 || descriptor.fields[7] != 0)) {
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) == 0) {
+			printf("[DCC-YOKSAY] depolama goruntusu DCC metadata'si bildiriyor, sikistirma yok "
+			       "sayiliyor (alan6=0x%08x alan7=0x%08x meta=0x%016llx). Emulatorde renk DCC'si "
+			       "hicbir yerde honorlanmiyor; boru hatti ham piksel uzerinde tutarli. "
+			       "Sert davranis icin PSEMU_DCC_STRICT=1.\n",
+			       descriptor.fields[6], descriptor.fields[7],
+			       static_cast<unsigned long long>(descriptor.MetaAddr() << 8u));
+			fflush(stdout);
+		}
+	}
 	return (descriptor.fields[1] & field1_reserved_mask) == 0 &&
 	       (descriptor.fields[2] & field2_reserved_mask) == 0 &&
 	       descriptor.fields[3] == expected_field3 && descriptor.fields[4] == descriptor.Depth() &&
-	       (descriptor.fields[5] & ~field5_max_mip_mask) == field5_expected &&
-	       descriptor.fields[6] == 0 && descriptor.fields[7] == 0;
+	       (descriptor.fields[5] & ~field5_max_mip_mask) == field5_expected && meta_fields_ok;
 }
 
 void ValidateStorageTexture(const ShaderRecompiler::IR::ImageResource& resource,
@@ -657,6 +702,36 @@ void ValidateStorageTexture(const ShaderRecompiler::IR::ImageResource& resource,
 	                       uint_resource == Prospero::IsUintTextureFormat(format);
 	if (resource_ok && descriptor_ok && encoding_ok && format_ok && size != 0) {
 		return;
+	}
+	// TANI: kodlama kontrolu yalnizca fields[6]/[7] yuzunden dusuyorsa, elimizde
+	// DCC (delta renk sikistirma) metadata'si bildiren bir tanimlayici var
+	// demektir. Karar piksel dogrulugunu etkiledigi icin, izin vermeden once
+	// emulatorun o metadata bolgesini TANIYIP TANIMADIGINI ve TEMIZ durumda
+	// olup olmadigini olcuyoruz: temizlenmis DCC = sikistirma yok = ham piksel.
+	// MetaAddr eriscisi Base40'tan farkli olarak <<8 kaydirmasini YAPMIYOR,
+	// o yuzden iki adayi da soruyoruz.
+	if (resource_ok && descriptor_ok && format_ok && size != 0 && !encoding_ok) {
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 8) {
+			auto*          cache    = g_render_ctx->GetTextureCache();
+			const uint64_t raw      = descriptor.MetaAddr();
+			const uint64_t shifted  = raw << 8u;
+			printf("[DCC-TANI] alan6=0x%08x alan7=0x%08x -> meta_sikistirma=%d yazma_sikistirma=%d "
+			       "boru_hizali=%d dcc_alfa=%d dcc_renk_donusum=%d maks_sikis_blok=%u "
+			       "maks_sikismamis_blok=%u\n",
+			       descriptor.fields[6], descriptor.fields[7], descriptor.MetaCompress(),
+			       descriptor.WriteCompress(), descriptor.MetaPipeAligned(),
+			       descriptor.DccAlphaPos(), descriptor.DccColorTransf(),
+			       descriptor.MaxCompBlkSize(), descriptor.MaxUncompBlkSize());
+			printf("[DCC-TANI] meta_ham=0x%016llx kayitli=%d temiz=%d | "
+			       "meta_kaydirilmis=0x%016llx kayitli=%d temiz=%d | goruntu=0x%016llx+0x%llx\n",
+			       static_cast<unsigned long long>(raw), cache->IsMeta(raw),
+			       cache->IsMetaCleared(raw, 0), static_cast<unsigned long long>(shifted),
+			       cache->IsMeta(shifted), cache->IsMetaCleared(shifted, 0),
+			       static_cast<unsigned long long>(descriptor.Base40()),
+			       static_cast<unsigned long long>(size));
+			fflush(stdout);
+		}
 	}
 	EXIT("unsupported storage texture: resource=%d descriptor=%d encoding=%d format=%d "
 	     "kind=%u dimension=%u mip_mode=%u atomic=%d compare=%d "
