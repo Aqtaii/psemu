@@ -509,6 +509,17 @@ static Graphics::VideoOutInfo MakeVideoOutInfo(const VideoOutBufferAttribute2& a
 	if (!Graphics::DecodeVideoOutPixelFormat(attribute.pixel_format, &pixel_format)) {
 		EXIT("unsupported video-out pixel format: 0x%016" PRIx64 "\n", attribute.pixel_format);
 	}
+	// TANI: ekran yuzeyinin GERCEK formati. Basilan karede bitlerin 2'ser
+	// kaydigi bir desen cikti; bu, veriyi yanlis piksel formatiyla okumanin
+	// imzasi. Yuzey 10-bit paketli (A2B10G10R10) ise, 4 bayti 8-bit kanal
+	// sanan her okuyucu - ekran goruntusu araci dahil - boyle bir desen
+	// uretir. Once formati kesin bilmeliyiz.
+	printf("[VO-FORMAT] konuk pixel_format=0x%016llx -> vk_format=%d bpe=%u bgra16=%d "
+	       "%ux%u tiling=%u\n",
+	       static_cast<unsigned long long>(attribute.pixel_format),
+	       static_cast<int>(pixel_format.format), pixel_format.bytes_per_element,
+	       pixel_format.bgra16, attribute.width, attribute.height, attribute.tiling_mode);
+	fflush(stdout);
 	const auto tile_mode =
 	    Graphics::Prospero::GpuEnumValue(Graphics::Prospero::TileMode::kRenderTarget);
 	const auto pitch =

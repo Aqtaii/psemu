@@ -838,6 +838,19 @@ static void BindDrawIndexBuffer(CommandBuffer* buffer, vk::CommandBuffer vk_buff
 	}
 
 	EXIT_IF(index_buffer == nullptr);
+	// TANI: indeks tamponlarinin KONUK adresleri. Ekrana basilan karede
+	// G=4*B, R=16*B (mod 256) seklinde sentetik bir rampa cikti - artan
+	// indeks verisi tam boyle gorunur. Bu adresler ekran tamponu adresiyle
+	// (bkz. [TAMPON-DEVIR] / [TAMPON-KIMLIK]) ortusuyorsa suclu bulunmus olur.
+	{
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 24) {
+			printf("[INDEKS-TAMPON] konuk=0x%016llx boyut=0x%llx host_veri=%d\n",
+			       static_cast<unsigned long long>(source.address),
+			       static_cast<unsigned long long>(source.size), source.host_data != nullptr);
+			fflush(stdout);
+		}
+	}
 	vk_buffer.bindIndexBuffer(index_buffer->buffer, index_offset, source.type);
 }
 

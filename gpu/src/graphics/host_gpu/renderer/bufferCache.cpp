@@ -177,6 +177,14 @@ struct BufferCache::CachedBuffer {
 	uint64_t                      queue_mask = 0;
 	GraphicContext*               ctx        = nullptr;
 	std::shared_ptr<VulkanBuffer> buffer;
+	// TANI: tamponun KIMLIGI. Vulkan usage bayraklari ayirt etmiyor (hepsi
+	// ayni birlesik kume ile olusturuluyor), o yuzden tamponun nasil TALEP
+	// EDILDIGINI biriktiriyoruz. Ekran bellegini kaplayan GPU-kirli tamponun
+	// gercekte ne oldugunu (kare mi, indeks/vertex verisi mi) bu ayirir.
+	uint32_t obtain_count   = 0;
+	bool     used_read      = false;
+	bool     used_written   = false;
+	bool     used_formatted = false;
 };
 
 struct BufferCache::ReadbackWorker {
@@ -621,6 +629,21 @@ bool BufferCache::FlushGpuModifiedToBacking(uint64_t vaddr, uint64_t size) {
 			     " size=0x%016" PRIx64 "\n",
 			     begin, cached->size);
 		}
+		{
+			// TANI: bosaltilan tamponun KIMLIGI. Ekran bellegini kaplayan bu
+			// tamponun kare mi yoksa baska bir kaynak mi (or. indeks verisi)
+			// oldugunu tahmin etmeden gorelim.
+			static std::atomic<uint32_t> s_n {0};
+			if (s_n.fetch_add(1) < 16) {
+				printf("[TAMPON-KIMLIK] 0x%016llx+0x%llx talep=%u okuma=%d yazma=%d formatli=%d "
+				       "kuyruklar=0x%llx kirli_aralik=%zu\n",
+				       static_cast<unsigned long long>(begin),
+				       static_cast<unsigned long long>(cached->size), cached->obtain_count,
+				       cached->used_read, cached->used_written, cached->used_formatted,
+				       static_cast<unsigned long long>(cached->queue_mask), dirty.size());
+				fflush(stdout);
+			}
+		}
 		Transfer::WaitForGraphicsIdle(cached->ctx);
 		auto     backing_writes = ReserveBackingWrites(m_page_manager, dirty);
 		uint64_t downloaded     = 0;
@@ -987,6 +1010,10 @@ std::pair<VulkanBuffer*, uint64_t> BufferCache::ObtainBuffer(CommandBuffer*  com
 		m_gpu_modified_ranges.Add(vaddr, size);
 	}
 	cached.queue_mask |= queue_mask;
+	cached.obtain_count++;
+	cached.used_read |= is_read;
+	cached.used_written |= is_written;
+	cached.used_formatted |= is_formatted;
 	command->RetainResourceUntilFence(cached.buffer);
 	return {cached.buffer.get(), vaddr - cached.vaddr};
 }

@@ -42,9 +42,54 @@ static const std::string& EnsureRunDir() {
 	return g_run_dir;
 }
 
+// Kaynak piksel nasil cozulecek. PS5 ekran yuzeyi 10-BIT PAKETLI olabiliyor
+// (olculdu: pixel_format=0x8100000000000000 -> A2R10G10B10_UNORM_PACK32);
+// 4 bayti 8-bit kanal sanmak anlamsiz bir desen uretir.
+enum class ShotPixelDecode { Bgra8, Rgba8, A2R10G10B10, A2B10G10R10, Unsupported };
+
+static ShotPixelDecode SelectPixelDecode(vk::Format format) {
+	switch (format) {
+		case vk::Format::eR8G8B8A8Unorm:
+		case vk::Format::eR8G8B8A8Srgb:
+		case vk::Format::eR8G8B8A8Uint: return ShotPixelDecode::Rgba8;
+		case vk::Format::eB8G8R8A8Unorm:
+		case vk::Format::eB8G8R8A8Srgb: return ShotPixelDecode::Bgra8;
+		case vk::Format::eA2R10G10B10UnormPack32: return ShotPixelDecode::A2R10G10B10;
+		case vk::Format::eA2B10G10R10UnormPack32: return ShotPixelDecode::A2B10G10R10;
+		default: return ShotPixelDecode::Unsupported;
+	}
+}
+
+// 4 bayttan (B,G,R) uret. 10-bit paketli formatlarda 32-bit kelime little
+// endian okunur: A2R10G10B10 -> A[31:30] R[29:20] G[19:10] B[9:0].
+static void DecodePixel(const uint8_t* px, ShotPixelDecode decode, uint8_t* b, uint8_t* g,
+                        uint8_t* r) {
+	switch (decode) {
+		case ShotPixelDecode::Rgba8: *r = px[0]; *g = px[1]; *b = px[2]; return;
+		case ShotPixelDecode::Bgra8: *b = px[0]; *g = px[1]; *r = px[2]; return;
+		case ShotPixelDecode::A2R10G10B10: {
+			uint32_t v = 0;
+			std::memcpy(&v, px, sizeof(v));
+			*r = static_cast<uint8_t>(((v >> 20u) & 0x3ffu) >> 2u);
+			*g = static_cast<uint8_t>(((v >> 10u) & 0x3ffu) >> 2u);
+			*b = static_cast<uint8_t>((v & 0x3ffu) >> 2u);
+			return;
+		}
+		case ShotPixelDecode::A2B10G10R10: {
+			uint32_t v = 0;
+			std::memcpy(&v, px, sizeof(v));
+			*b = static_cast<uint8_t>(((v >> 20u) & 0x3ffu) >> 2u);
+			*g = static_cast<uint8_t>(((v >> 10u) & 0x3ffu) >> 2u);
+			*r = static_cast<uint8_t>((v & 0x3ffu) >> 2u);
+			return;
+		}
+		case ShotPixelDecode::Unsupported: *b = 0; *g = 0; *r = 0; return;
+	}
+}
+
 // 24-bit, bottom-up BGR BMP yaz (4x downscale).
 static void WriteBmpDownscaled(const std::string& path, const uint8_t* bgra, uint32_t w,
-                               uint32_t h, bool source_is_rgba) {
+                               uint32_t h, ShotPixelDecode decode) {
 	constexpr uint32_t F = 4; // kucultme faktoru
 	const uint32_t ow = w / F;
 	const uint32_t oh = h / F;
@@ -76,9 +121,8 @@ static void WriteBmpDownscaled(const std::string& path, const uint8_t* bgra, uin
 		const uint32_t sy = (oh - 1u - oy) * F;
 		for (uint32_t ox = 0; ox < ow; ox++) {
 			const uint8_t* px = bgra + (static_cast<size_t>(sy) * w + static_cast<size_t>(ox) * F) * 4u;
-			uint8_t b, g, r;
-			if (source_is_rgba) { r = px[0]; g = px[1]; b = px[2]; }
-			else                { b = px[0]; g = px[1]; r = px[2]; }
+			uint8_t b = 0, g = 0, r = 0;
+			DecodePixel(px, decode, &b, &g, &r);
 			row[ox * 3u + 0u] = static_cast<char>(b);
 			row[ox * 3u + 1u] = static_cast<char>(g);
 			row[ox * 3u + 2u] = static_cast<char>(r);
@@ -181,6 +225,25 @@ void PsemuCaptureFrame(GraphicContext* ctx, const VulkanImage* image) {
 	const uint32_t w = image->extent.width;
 	const uint32_t h = image->extent.height;
 	if (w == 0 || h == 0) return;
+	// TANI: bu arac 4 bayti 8-BIT KANAL sayarak yaziyor. Kaynak 10-bit
+	// paketli (A2B10G10R10) ya da 16-bit float ise urettigi goruntu
+	// ANLAMSIZ olur - yani gordugumuz desen render hatasi degil, ARACIN
+	// kendi eseri olabilir. Formati her calistirmada bir kez basiyoruz ki
+	// bu ayrim tahmin gerektirmesin.
+	{
+		static std::atomic<bool> s_logged {false};
+		if (!s_logged.exchange(true)) {
+			const auto  d    = SelectPixelDecode(image->format);
+			const char* name = d == ShotPixelDecode::Rgba8          ? "RGBA8"
+			                   : d == ShotPixelDecode::Bgra8        ? "BGRA8"
+			                   : d == ShotPixelDecode::A2R10G10B10  ? "A2R10G10B10 (10-bit HDR)"
+			                   : d == ShotPixelDecode::A2B10G10R10  ? "A2B10G10R10 (10-bit HDR)"
+			                                                        : "DESTEKLENMIYOR";
+			std::fprintf(stderr, "[SHOT-FORMAT] sunulan goruntu vk_format=%d (%ux%u) -> cozum: %s\n",
+			             static_cast<int>(image->format), w, h, name);
+			std::fflush(stderr);
+		}
+	}
 	const uint64_t size = static_cast<uint64_t>(w) * h * 4u;
 
 	VulkanBuffer readback{};
@@ -232,7 +295,12 @@ void PsemuCaptureFrame(GraphicContext* ctx, const VulkanImage* image) {
 					const uint32_t sx = (static_cast<uint32_t>(gx) * 2u + 1u) * w / 32u;
 					const uint32_t sy = (static_cast<uint32_t>(gy) * 2u + 1u) * h / 32u;
 					const uint8_t* q = px + (static_cast<size_t>(sy) * w + sx) * 4u;
-					sig[k++] = static_cast<uint8_t>((q[0] + q[1] + q[2]) / 3u); // luma
+					// Imza da COZULMUS pikselden uretilmeli: 10-bit paketli
+					// yuzeyde ham baytlarin toplami luma degildir ve sahne
+					// degisikligini yanlis olcer.
+					uint8_t qb = 0, qg = 0, qr = 0;
+					DecodePixel(q, SelectPixelDecode(image->format), &qb, &qg, &qr);
+					sig[k++] = static_cast<uint8_t>((qb + qg + qr) / 3u); // luma
 				}
 			}
 		}
@@ -247,14 +315,11 @@ void PsemuCaptureFrame(GraphicContext* ctx, const VulkanImage* image) {
 		if (scene_changed) {
 			std::memcpy(s_last_sig, sig, sizeof(sig));
 			s_have_last = true;
-			const bool rgba = (image->format == vk::Format::eR8G8B8A8Unorm ||
-			                   image->format == vk::Format::eR8G8B8A8Srgb ||
-			                   image->format == vk::Format::eR8G8B8A8Uint);
 			const uint64_t seq = g_shot_seq.fetch_add(1);
 			char fname[64];
 			std::snprintf(fname, sizeof(fname), "\\frame_%05llu.bmp",
 			              static_cast<unsigned long long>(seq));
-			WriteBmpDownscaled(EnsureRunDir() + fname, px, w, h, rgba);
+			WriteBmpDownscaled(EnsureRunDir() + fname, px, w, h, SelectPixelDecode(image->format));
 			std::fprintf(stderr, "[SHOT] SAHNE kare: %s%s (%ux%u, present#%llu, diff=%u)\n",
 			             g_run_dir.c_str(), fname, w, h, static_cast<unsigned long long>(p), diff);
 		}
