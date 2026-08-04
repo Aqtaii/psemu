@@ -734,13 +734,30 @@ ClassifyBufferImageWrite(uint64_t buffer_address, uint64_t buffer_size, uint64_t
 			return image_gpu_modified ? BufferImageWrite::SynchronizeVideoOut
 			                          : BufferImageWrite::InvalidateVideoOut;
 		case BufferImageBinding::RenderTarget:
-			if (!exact || !buffer_page_aligned || !buffer_formatted) {
+			if (!buffer_page_aligned || !buffer_formatted) {
 				return BufferImageWrite::Unsupported;
 			}
+			// KISMI ORTUSMEYE IZIN (yalnizca bosaltma yonunde).
+			//
+			// SynchronizeColorImageToBufferLocked yazma araligini SADECE sinir
+			// kontrolu icin kullaniyor: indirme de (DownloadImage) geri yazma
+			// da (WriteBacking) her zaman TUM goruntu uzerinden, target.size
+			// ile yapiliyor. Dolayisiyla "exact" sarti bu yon icin makinenin
+			// gercek bir siniri degil, temkinli bir kapiydi.
+			//
+			// Goruntunun icinde baslayip disina tasan bir tampon yazmasinda da
+			// dogru davranis ayni: once goruntunun GPU baytlarini konuk
+			// bellege bosalt, sonra yazmayi gecir. Tasan kisim zaten goruntuyle
+			// ilgisiz. Olculen sekil (Astro Bot): RT 0x277851a0000+0xff0000
+			// (1920x1088x8, HDR hedefi), yazma 0x27785e90000+0x480000 - RT'nin
+			// 0xcf0000 icinde basliyor, sonunu 0x180000 asiyor.
 			if (image_gpu_modified && !image_buffer_modified) {
 				return BufferImageWrite::SynchronizeRenderTarget;
 			}
-			return !image_gpu_modified && image_buffer_modified
+			// Ters yon (goruntu bayat, yeni baytlar tamponda): TUM goruntuyu
+			// gecersiz kilmak ancak yazma onu tamamen kapsiyorsa dogru olur,
+			// burada temkinli kaliyoruz.
+			return exact && !image_gpu_modified && image_buffer_modified
 			           ? BufferImageWrite::InvalidateRenderTarget
 			           : BufferImageWrite::Unsupported;
 		case BufferImageBinding::StorageTexture:
@@ -1003,8 +1020,31 @@ ClassifyRenderTargetOverlap(const RenderTargetInfo& cached, bool cached_gpu_modi
 	const bool pool_storage_shape_changed = cached.pitch != requested.pitch ||
 	                                        cached.height != requested.height ||
 	                                        cached.bytes_per_element != requested.bytes_per_element;
-	return cached.address == requested.address && page_isolated && pool_storage_shape_changed &&
-	               !cached_gpu_modified && !cached_buffer_modified && same_context
+	if (cached.address == requested.address && page_isolated && pool_storage_shape_changed &&
+	    !cached_gpu_modified && !cached_buffer_modified && same_context) {
+		return RenderTargetOverlap::RetireTarget;
+	}
+	// KISMI YENIDEN KULLANIM: yeni hedef, eskisinin BIR PARCASININ uzerine
+	// biniyor (esit adres degil).
+	//
+	// Yukaridaki Kyty kurali ayni adresli havuz girdisi senaryosuna gore
+	// yazilmis; adres esitligi ve sekil degisikligi o senaryonun tarifi,
+	// emekliye ayirmanin GUVENLIK GEREGI degil. Emeklilik su kosulda
+	// KAYIPSIZDIR: goruntude konuk bellekte olmayan bayt yoksa, yani
+	// !cached_gpu_modified. Bu durumda goruntuyu dusurmek hicbir seyi yok
+	// etmez - oyun o bolgeyi sonra ornekleyecek olursa onbellek konuk
+	// bellekten yeniden olusturur. cached_buffer_modified ise "yeni baytlar
+	// tampon onbelleginde" demektir; bayat goruntuyu dusurmek yine kayipsiz.
+	//
+	// Olculen sekil (Astro Bot): eski RT 0x2348ce50000+0xff0000
+	// (1920x1088x8 HDR hedefi), yeni RT 0x2348db40000+0x480000 - eskinin
+	// 0xcf0000 icinde baslayip sonunu asiyor. Oyun buyuk hedefin kuyrugunu
+	// ikinci bir hedef icin yeniden kullaniyor (gecici hedef bellegi).
+	//
+	// Sayfa yalitimi sarti korunuyor; ayrica cagiran taraf emeklilik sonrasi
+	// RequireRetirementIsolation ile takip edilen sayfa takma adi kalmadigini
+	// dogruluyor.
+	return page_isolated && !cached_gpu_modified && same_context
 	           ? RenderTargetOverlap::RetireTarget
 	           : RenderTargetOverlap::Unsupported;
 }

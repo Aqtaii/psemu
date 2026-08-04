@@ -1526,6 +1526,7 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 	}
 	std::vector<CachedImage*>    retire;
 	std::vector<CachedImage*>    buffer_owned_depth_retire;
+	std::vector<CachedImage*>    buffer_owned_target_retire;
 	std::shared_ptr<CachedImage> native_image_source;
 	for (const auto& entry: m_images) {
 		auto& cached = *entry;
@@ -1589,6 +1590,21 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 				if (supported && cached.kind == CachedImage::Kind::DepthTarget) {
 					buffer_owned_depth_retire.push_back(&cached);
 				}
+				// Bosaltilmis renk hedefi: SynchronizeColorImageToBufferLocked
+				// bayraklari atamadan once TUM goruntu arka bellegini konuk
+				// belege yaziyor (WriteBacking(target.address, .., target.size)),
+				// sonra gpu_modified=false + buffer_modified=true kuruyor.
+				// Dolayisiyla bu ikili bir renk hedefinde "baytlar artik konuk
+				// bellekte, goruntu bayat" demektir; bayat goruntuyu dusurmek
+				// kayipsizdir. Derinlik hedeflerindeki yerlesik yolun aynisi:
+				// tutarlilik dogrulandiktan sonra bayat-goruntu isaretini
+				// temizleyip normal emeklilige birakiyoruz. Gercek emniyet
+				// kontrolu RetireImages'te duruyor: izleyici o araliklar icin
+				// hala GPU sahipligi tutuyorsa emeklilik yine reddedilir.
+				if (supported && cached.kind == CachedImage::Kind::RenderTarget &&
+				    cached.buffer_modified && !cached.gpu_modified) {
+					buffer_owned_target_retire.push_back(&cached);
+				}
 				break;
 			case RenderTargetOverlap::None:
 			case RenderTargetOverlap::Unsupported: break;
@@ -1611,6 +1627,19 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 	for (auto* cached: buffer_owned_depth_retire) {
 		// The exact formatted buffer owns the current bytes. Clear the stale-image marker only
 		// after coherence validation so normal retirement can remove the obsolete Vulkan shape.
+		cached->buffer_modified = false;
+	}
+	for (auto* cached: buffer_owned_target_retire) {
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 8) {
+			printf("[RT-KISMI-EMEKLI] bosaltilmis renk hedefi dusuruluyor "
+			       "(eski=0x%016llx+0x%llx yeni=0x%016llx+0x%llx)\n",
+			       static_cast<unsigned long long>(cached->Address()),
+			       static_cast<unsigned long long>(cached->Size()),
+			       static_cast<unsigned long long>(info.address),
+			       static_cast<unsigned long long>(info.size));
+			fflush(stdout);
+		}
 		cached->buffer_modified = false;
 	}
 	RetireImages(retire, native_image_source.get());
@@ -2543,12 +2572,31 @@ void TextureCache::SynchronizeColorImageToBufferLocked(CachedImage& cached, uint
 		     video_out ? static_cast<uint32_t>(cached.video_out.compression) : 0,
 		     cached.gpu_modified, cached.buffer_modified);
 	}
-	if (write_address < target.address || write_size == 0 ||
-	    write_address - target.address > target.size ||
-	    write_size > target.size - (write_address - target.address)) {
-		EXIT("TextureCache: image synchronization write is outside backing, "
+	// Bosaltma TUM goruntuyu kapsadigi icin yazmanin arka bellege TAMAMEN
+	// sigmasi gerekmiyor; ORTUSMESI yeterli. Kismi/tasan yazmalar da
+	// once-bosalt-sonra-yaz olarak dogru ele alinir (bkz. imageInfo.h,
+	// ClassifyBufferImageWrite RenderTarget dali). Hic ortusmeyen bir yazma
+	// ise hala hatadir: bu fonksiyon yanlis goruntu icin cagrilmis demektir.
+	if (write_size == 0 || write_size > UINT64_MAX - write_address ||
+	    write_address + write_size <= target.address ||
+	    write_address >= target.address + target.size) {
+		EXIT("TextureCache: image synchronization write does not overlap backing, "
 		     "write=0x%016" PRIx64 "+0x%016" PRIx64 " image=0x%016" PRIx64 "+0x%016" PRIx64 "\n",
 		     write_address, write_size, target.address, target.size);
+	}
+	if (write_address < target.address || write_address - target.address > target.size ||
+	    write_size > target.size - (write_address - target.address)) {
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 8) {
+			printf("[RT-KISMI-BOSALT] yazma arka bellegi tam kapsamiyor -> tum goruntu "
+			       "bosaltiliyor (yazma=0x%016llx+0x%llx goruntu=0x%016llx+0x%llx tur=%u)\n",
+			       static_cast<unsigned long long>(write_address),
+			       static_cast<unsigned long long>(write_size),
+			       static_cast<unsigned long long>(target.address),
+			       static_cast<unsigned long long>(target.size),
+			       static_cast<uint32_t>(cached.kind));
+			fflush(stdout);
+		}
 	}
 	const auto slice_size = target.size / target.layers;
 	if (cached.image->format != target.format || cached.image->extent.width != target.width ||
