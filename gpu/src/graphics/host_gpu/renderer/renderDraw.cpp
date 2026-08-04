@@ -696,11 +696,18 @@ static bool PrepareDrawRenderState(uint64_t submit_id, CommandBuffer* buffer, HW
 					// "cizim gidiyor ama sifir kaliyor" (sorun sahiplik /
 					// takma ad / DCC) arasini ayirir.
 					{
+						// PITCH ve BOYUT sart: ornekleme dokusu ile render hedefi
+						// ayni adreste ama farkli olcude. Bellek duzenlerinin
+						// UYUMLU olup olmadigi pitch'e bagli - pitch esitse
+						// ayni goruntuyu paylasabilirler, degilse paylasmak
+						// yanlis piksel uretir. Once olcuyoruz.
 						struct TargetStat {
 							uint64_t address = 0;
+							uint64_t size    = 0;
 							uint32_t count   = 0;
 							uint32_t width   = 0;
 							uint32_t height  = 0;
+							uint32_t pitch   = 0;
 							uint32_t type    = 0;
 							uint32_t clears  = 0;
 						};
@@ -714,8 +721,16 @@ static bool PrepareDrawRenderState(uint64_t submit_id, CommandBuffer* buffer, HW
 								                       return t.address == ci.base_addr;
 							                       });
 							if (it == s_stats.end() && s_stats.size() < 32) {
-								s_stats.push_back({ci.base_addr, 0, ci.extent.width,
-								                   ci.extent.height,
+								// Pitch'i donanim kaydindan al (ResolveRenderColorTarget
+								// ile ayni ifade): pitch_div8_minus1 kuruluysa
+								// (n+1)*8, degilse genislik.
+								const auto& rt_reg = ctx->GetRenderTarget(ci.target_slot);
+								const uint32_t rt_pitch =
+								    rt_reg.pitch.pitch_div8_minus1 != 0
+								        ? (rt_reg.pitch.pitch_div8_minus1 + 1u) << 3u
+								        : ci.extent.width;
+								s_stats.push_back({ci.base_addr, ci.buffer_size, 0,
+								                   ci.extent.width, ci.extent.height, rt_pitch,
 								                   static_cast<uint32_t>(ci.type), 0});
 								it = s_stats.end() - 1;
 							}
@@ -731,9 +746,12 @@ static bool PrepareDrawRenderState(uint64_t submit_id, CommandBuffer* buffer, HW
 							       "hedef=%zu\n",
 							       total, s_disp.load(), s_tex.load(), s_stats.size());
 							for (const auto& t: s_stats) {
-								printf("    0x%016llx %ux%u tur=%u cizim=%u temizleme=%u\n",
+								printf("    0x%016llx %ux%u pitch=%u boyut=0x%llx tur=%u "
+								       "cizim=%u temizleme=%u\n",
 								       static_cast<unsigned long long>(t.address), t.width,
-								       t.height, t.type, t.count, t.clears);
+								       t.height, t.pitch,
+								       static_cast<unsigned long long>(t.size), t.type, t.count,
+								       t.clears);
 							}
 							fflush(stdout);
 						}

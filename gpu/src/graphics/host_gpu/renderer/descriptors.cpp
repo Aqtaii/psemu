@@ -1041,6 +1041,11 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 			            static_cast<unsigned long long>(size.size), static_cast<uint32_t>(tile),
 			            static_cast<unsigned long long>(region.gpu_image_bytes),
 			            static_cast<unsigned long long>(region.image_bytes), image != nullptr);
+			// VkImage ISARETCISI: depolama yazmasi ile ornekleme okumasi AYNI
+			// goruntuye mi dusuyor? Ayni adreste iki ayri goruntu olusursa
+			// compute dolduruyor, kompozisyon bosunu okuyor.
+			std::printf("             -> vk_image=%p\n",
+			            static_cast<const void*>(image != nullptr ? image->image : nullptr));
 			std::fflush(stdout);
 		}
 		// ANA SAHNE DOKUSUNU DOK: 1x1 LUT'lari atla, gercek boyutlu ve
@@ -1049,6 +1054,17 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 			extern void PsemuDumpSampledTexture(GraphicContext* ctx, VulkanImage* image,
 			                                    uint64_t guest_addr);
 			PsemuDumpSampledTexture(g_render_ctx->GetGraphicCtx(), image, address);
+		}
+	}
+	// BUYUK DEPOLAMA YAZMALARI: kompozisyonun okudugu yuzeyi kim dolduruyor?
+	if (storage && width > 1000 && height > 1000) {
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 24) {
+			std::printf("[DEPOLAMA-YAZ] adres=0x%016llx %ux%u boyut=0x%llx tile=%u vk_image=%p\n",
+			            static_cast<unsigned long long>(address), width, height,
+			            static_cast<unsigned long long>(size.size), static_cast<uint32_t>(tile),
+			            static_cast<const void*>(image != nullptr ? image->image : nullptr));
+			std::fflush(stdout);
 		}
 	}
 	if (image == nullptr) {
@@ -1171,6 +1187,21 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 		if (storage) {
 			image = texture_cache->FindStorageTexture(command_buffer, g_render_ctx->GetGraphicCtx(),
 			                                          info);
+			// TANI: buyuk depolama yazmasi hangi VkImage'a gidiyor?
+			// Kompozisyonun okudugu [EKRAN-GIRDI] vk_image ile AYNI mi?
+			// Ayni adreste iki ayri goruntu olusursa compute birini
+			// dolduruyor, kompozisyon otekinin sifirlarini okuyor.
+			if (width > 1000 && height > 1000) {
+				static std::atomic<uint32_t> s_n {0};
+				if (s_n.fetch_add(1) < 16) {
+					std::printf("[DEPOLAMA-COZUM] adres=0x%016llx %ux%u tip=%u vk_image=%p\n",
+					            static_cast<unsigned long long>(address), width, height,
+					            static_cast<uint32_t>(info.type),
+					            static_cast<const void*>(image != nullptr ? image->image
+					                                                      : nullptr));
+					std::fflush(stdout);
+				}
+			}
 			view  = VulkanImage::VIEW_DEFAULT;
 			image_view = texture_cache->GetStorageTextureStorageView(
 			    g_render_ctx->GetGraphicCtx(), static_cast<StorageTextureVulkanImage*>(image),

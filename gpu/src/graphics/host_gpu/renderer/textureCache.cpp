@@ -1252,6 +1252,36 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
 				     cached->info.swizzle, cached->info.type, cached->info.base_array);
 		}
 	}
+	// TANI: buyuk bir ornekleme baglamasi depolama goruntusunu BULAMIYORSA
+	// nedenini gorelim. Olculdu: compute 2432x1368'i bir VkImage'a yaziyor,
+	// kompozisyon ayni adresi BASKA bir VkImage'dan okuyup sifir aliyor.
+	// Eslesme olmamasinin tek sessiz yolu, o depolama goruntusunun ONBELLEKTE
+	// OLMAMASI (eslesme olsa ExactImage, uyusmazlik olsa Unsupported ile
+	// yuksek sesle dururdu).
+	if (storage_match == nullptr && info.width > 1000 && info.height > 1000) {
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 8) {
+			uint32_t storage_count = 0;
+			std::printf("[ORNEKLEME-ESLESMEDI] adres=0x%016llx %ux%u tip=%u - onbellekteki "
+			            "DEPOLAMA goruntuleri:\n",
+			            static_cast<unsigned long long>(info.address), info.width, info.height,
+			            info.type);
+			for (const auto& cached: m_images) {
+				if (cached->kind != CachedImage::Kind::StorageTexture) {
+					continue;
+				}
+				storage_count++;
+				std::printf("    0x%016llx %ux%u tip=%u gpu_mod=%d cpu_kirli=%d vk_image=%p\n",
+				            static_cast<unsigned long long>(cached->info.address),
+				            cached->info.width, cached->info.height, cached->info.type,
+				            cached->gpu_modified, cached->info.IsCpuDirty(),
+				            static_cast<const void*>(cached->image != nullptr ? cached->image->image
+				                                                             : nullptr));
+			}
+			std::printf("    (toplam depolama goruntusu=%u)\n", storage_count);
+			std::fflush(stdout);
+		}
+	}
 	if (storage_match != nullptr) {
 		if (m_memory_tracker.IsRegionCpuModified(info.address, info.size) ||
 		    !m_memory_tracker.IsRegionGpuModified(info.address, info.size) ||
