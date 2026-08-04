@@ -298,6 +298,27 @@ bool DecodeMimg(uint32_t pc, std::span<const uint32_t> code, uint32_t word_index
 	SetRawWords(inst, code, word_index, word_count);
 
 	if (inst->opcode == Opcode::Unsupported) {
+		// TANI: bu opcode kod tabanindaki hicbir tabloda YOK ve public GFX10
+		// haritasinda da 0x62-0x67 araligi atanmamis; yani Prospero'ya ozgu
+		// olabilir. Tahmin etmek yerine komutun YAPISINI dokuyoruz - alanlar
+		// hangi aileye ait oldugunu daraltir (karsilastirma? turev? ofset?
+		// kac adres bileseni?).
+		// Ust bit (word0 bit 0) "_a" varyant bayragi: tabloda 0x20 sample ->
+		// 0xa0 sample_a bunu dogruluyor, yani taban opcode = opcode & 0x7f.
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 24) {
+			std::printf("[MIMG-BILINMEYEN] opcode=0x%02x (taban=0x%02x, a_bayragi=%u) "
+			            "dmask=0x%x boyut=%u nsa_dw=%u a16=%u glc=%u slc=%u "
+			            "vaddr=%u vdata=%u srsrc=%u ssamp=%u adres_bilesenleri=[",
+			            opcode, opcode & 0x7fu, (opcode >> 7u) & 1u, inst->dmask,
+			            static_cast<uint32_t>(dimension), nsa_dwords, a16 ? 1u : 0u,
+			            inst->glc ? 1u : 0u, inst->slc ? 1u : 0u, vaddr, vdata, srsrc, ssamp);
+			for (uint32_t i = 0; i < nsa_dwords * 4u && i < MaxImageNsaAddressComponents; i++) {
+				std::printf("%s%u", i != 0 ? "," : "", inst->image_nsa_addr[i]);
+			}
+			std::printf("]\n");
+			std::fflush(stdout);
+		}
 		SetUnsupported(inst, Family::MIMG, opcode, "MIMG opcode is not implemented");
 	}
 	if (gather != nullptr && !IsSingleDmaskBit(inst->dmask)) {
