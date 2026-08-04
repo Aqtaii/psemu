@@ -1239,6 +1239,32 @@ bool BufferCache::HasPageOverlap(uint64_t vaddr, uint64_t size) {
 	return false;
 }
 
+void BufferCache::LogPageOverlaps(const char* tag, uint64_t vaddr, uint64_t size) {
+	FaultSafeCacheLock lock(this, m_mutex);
+	uint32_t           n = 0;
+	for (const auto& [address, cached]: m_buffers) {
+		if (!PageOverlaps(vaddr, size, address, cached->size)) {
+			continue;
+		}
+		const bool exact    = cached->vaddr == vaddr && cached->size == size;
+		const bool contains = vaddr >= cached->vaddr && vaddr - cached->vaddr <= cached->size &&
+		                      size <= cached->size - (vaddr - cached->vaddr);
+		printf("[%s] cakisan tampon[%u]: 0x%016llx+0x%llx (sorgu 0x%016llx+0x%llx) "
+		       "birebir=%d kapsiyor=%d\n",
+		       tag, n, static_cast<unsigned long long>(cached->vaddr),
+		       static_cast<unsigned long long>(cached->size),
+		       static_cast<unsigned long long>(vaddr), static_cast<unsigned long long>(size), exact,
+		       contains);
+		n++;
+	}
+	printf("[%s] toplam cakisan tampon=%u  izleyici: gpu_kirli=%d cpu_kirli=%d "
+	       "yayinlanmis_gpu_araligi=%d\n",
+	       tag, n, m_memory_tracker.IsRegionGpuModified(vaddr, size),
+	       m_memory_tracker.IsRegionCpuModified(vaddr, size),
+	       !m_gpu_modified_ranges.Intersections(vaddr, size).empty());
+	fflush(stdout);
+}
+
 bool BufferCache::IsRegionGpuModified(uint64_t vaddr, uint64_t size) {
 	return m_memory_tracker.IsRegionGpuModified(vaddr, size);
 }

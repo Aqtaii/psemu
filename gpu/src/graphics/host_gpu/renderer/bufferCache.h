@@ -68,6 +68,9 @@ public:
 	void CopyBuffer(CommandBuffer* command, GraphicContext* ctx, uint64_t dst_vaddr,
 	                uint64_t src_vaddr, uint64_t size);
 	[[nodiscard]] bool HasPageOverlap(uint64_t vaddr, uint64_t size);
+	// TANI: cakisan onbellek tamponlarinin araligini stdout'a dokar. Sahiplik
+	// catismalarinda "hangi tampon" sorusunu tahmin etmeden yanitlamak icin.
+	void LogPageOverlaps(const char* tag, uint64_t vaddr, uint64_t size);
 	[[nodiscard]] bool IsRegionCpuModified(uint64_t vaddr, uint64_t size);
 	[[nodiscard]] bool IsRegionGpuModified(uint64_t vaddr, uint64_t size);
 	void               PublishImageBacking(uint64_t vaddr, uint64_t size);

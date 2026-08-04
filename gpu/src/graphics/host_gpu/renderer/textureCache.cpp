@@ -272,6 +272,13 @@ struct TextureCache::ReadbackWorker {
 	struct ReadbackRange {
 		uint64_t address;
 		uint64_t size;
+		// Indirme, uzerinde onbellek tamponu bulunan bir araligi yeniden
+		// kurdu: sahiplik tampon onbellegine DEVREDILMELI. Devri indirmenin
+		// icinde yapamayiz - o sirada sayfa hatasi hala BEKLIYOR ve
+		// MarkRegionAsCpuModified bekleyen hatayla catisir
+		// (regionManager.h:120). Bu yuzden cagirana birakiyoruz: her cagiran
+		// GPU sahipligini temizledikten SONRA yayinlar.
+		bool publish_backing = false;
 	};
 	static_assert(std::atomic<State>::is_always_lock_free);
 
@@ -506,7 +513,23 @@ struct TextureCache::ReadbackWorker {
 		const auto slice_size     = info.size / layers;
 		const bool meta_overlap   = cache.HasMetaOverlapLocked(info.address, info.size);
 		const bool buffer_overlap = cache.m_buffer_cache.HasPageOverlap(info.address, info.size);
-		if (meta_overlap || buffer_overlap) {
+		// Cakisan tampon artik olumcul degil: indirme TUM goruntuyu konuk
+		// belege yaziyor, sonrasinda arka bellek tampon onbellegine
+		// YAYINLANIYOR (asagida). Bu, SynchronizeColorImageToBufferLocked'in
+		// sonunda zaten kullanilan gecisin aynisi.
+		//
+		// Olcum (Astro Bot): tam bir cakisan tampon var ve render hedefiyle
+		// BIREBIR ayni (0x..75e70000+0x480000), izleyici arali temiz goruyor
+		// (gpu_kirli=0 cpu_kirli=0). Yani PublishImageBacking'in uc on kosulu
+		// da saglaniyor. Oyun ayni bellegi hem tampon hem render hedefi olarak
+		// kullaniyor; iki onbellek arasindaki sahiplik devri tam olarak bu.
+		//
+		// Ust ust binen ust veri (meta) hala olumcul: onun icin boyle bir
+		// devir yolu yok.
+		if (meta_overlap) {
+			if (buffer_overlap) {
+				cache.m_buffer_cache.LogPageOverlaps("READBACK-CAKISMA", info.address, info.size);
+			}
 			EXIT("TextureCache: color-image readback storage is unsupported, addr=0x%016" PRIx64
 			     " size=0x%016" PRIx64 " meta=%d buffer=%d kind=%u\n",
 			     info.address, info.size, meta_overlap, buffer_overlap,
@@ -536,7 +559,9 @@ struct TextureCache::ReadbackWorker {
 		} else {
 			Libs::LibKernel::Memory::WriteBacking(info.address, download.data(), info.size);
 		}
-		return {info.address, info.size};
+		// Arka bellek yeniden kuruldu. Cakisan tampon varsa sahiplik devri
+		// gerekiyor, ama burada DEGIL - bkz. ReadbackRange::publish_backing.
+		return {info.address, info.size, buffer_overlap};
 	}
 
 	void Run() noexcept {
@@ -617,6 +642,12 @@ struct TextureCache::ReadbackWorker {
 				     "addr=0x%016" PRIx64 " size=0x%016" PRIx64 "\n",
 				     transfer.address, transfer.size);
 			}
+			// Hata tamamlandi ve GPU sahipligi birakildi; sahiplik devri artik
+			// guvenli. Bunu indirmenin icinde yapamiyorduk - orada hata hala
+			// bekliyordu.
+			if (transfer.publish_backing) {
+				cache.PublishReadbackBacking(transfer.address, transfer.size);
+			}
 			selected->gpu_modified = false;
 			submissions_prepaused  = false;
 			state.store(State::Idle, std::memory_order_release);
@@ -634,6 +665,26 @@ struct TextureCache::ReadbackWorker {
 	std::vector<uint8_t> guest;
 	std::thread          thread;
 };
+
+void TextureCache::PublishReadbackBacking(uint64_t address, uint64_t size) {
+	// Indirme, uzerinde onbellek tamponu bulunan bir goruntunun arka bellegini
+	// konuk bellekte yeniden kurdu. Sahipligi tampon onbellegine devrediyoruz
+	// ki cakisan tampon bir sonraki kullanimda konuk bellekten yeniden
+	// yuklensin - WriteBacking + MarkRegionAsCpuModified, bu kod tabaninda
+	// sahiplik devrinin yerlesik cifti (bkz. bufferCache.cpp:634-644).
+	//
+	// Cagrilma noktasi onemli: hata BEKLERKEN yapilamaz, cunku
+	// MarkRegionAsCpuModified bekleyen hatayla catisir (regionManager.h:120).
+	// Bu yuzden tum cagiranlar GPU sahipligini biraktiktan sonra cagiriyor.
+	static std::atomic<uint32_t> s_n {0};
+	if (s_n.fetch_add(1) < 8) {
+		printf("[READBACK-YAYIN] goruntu arka bellegi tampon onbellegine devredildi "
+		       "(0x%016llx+0x%llx)\n",
+		       static_cast<unsigned long long>(address), static_cast<unsigned long long>(size));
+		fflush(stdout);
+	}
+	m_buffer_cache.PublishImageBacking(address, size);
+}
 
 void TextureCache::RequireRetirementIsolation(const std::vector<CachedImage*>& retire,
                                               const char* operation, uint64_t address,
@@ -964,6 +1015,9 @@ void TextureCache::RetireSampledTargetAliases(GraphicContext* ctx, const ImageIn
 		                          : m_readback->DownloadColorImage(*cached);
 		m_memory_tracker.ForEachDownloadRange<true>(transfer.address, transfer.size,
 		                                            [](uint64_t, uint64_t) noexcept {});
+		if (transfer.publish_backing) {
+			PublishReadbackBacking(transfer.address, transfer.size);
+		}
 		cached->gpu_modified = false;
 	}
 	std::vector<uint64_t> retire_depth_metadata;
@@ -1036,6 +1090,9 @@ void TextureCache::ResolveStorageImageOverlaps(GraphicContext* ctx, const ImageI
 		const auto transfer = m_readback->DownloadColorImage(*cached);
 		m_memory_tracker.ForEachDownloadRange<true>(transfer.address, transfer.size,
 		                                            [](uint64_t, uint64_t) noexcept {});
+		if (transfer.publish_backing) {
+			PublishReadbackBacking(transfer.address, transfer.size);
+		}
 		cached->gpu_modified = false;
 	}
 	RetireImages(retire);

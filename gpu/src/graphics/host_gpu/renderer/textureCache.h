@@ -140,6 +140,9 @@ private:
 	                                                     std::shared_ptr<CachedImage> image);
 	[[nodiscard]] std::vector<CachedImage*> FindImagesInRegionLocked(uint64_t vaddr, uint64_t size,
 	                                                                 bool page_overlap);
+	// Indirilen goruntu arka bellegini tampon onbellegine devreder. Yalnizca
+	// GPU sahipligi birakildiktan SONRA cagrilmalidir (bkz. tanimindaki not).
+	void PublishReadbackBacking(uint64_t address, uint64_t size);
 	void RequireRetirementIsolation(const std::vector<CachedImage*>& retire, const char* operation,
 	                                uint64_t address, uint64_t size) const;
 	void RetireImages(const std::vector<CachedImage*>& retire,
