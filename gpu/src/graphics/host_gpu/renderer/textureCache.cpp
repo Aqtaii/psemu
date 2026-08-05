@@ -678,6 +678,35 @@ struct TextureCache::ReadbackWorker {
 	std::thread          thread;
 };
 
+namespace {
+
+// TANI: goruntu kaynagi istegi hangi GEOMETRI ile yapiliyor?
+// bufferCache "istek tampondan buyuk" diyor (0x2b0000 vs 0x280000, fark
+// 0x30000). Fark mip zinciri mi, hizalama dolgusu mu, doseme mi - bunu
+// ancak istegin genislik/yukseklik/pitch/levels/layers degerleri soyler.
+// Korlemesine tamponu buyutmek, sorunu aylar sonra bulunacak bir doku
+// bozulmasina cevirirdi.
+// Sablon: cagiranlar ImageInfo / RenderTargetInfo / VideoOutInfo tasiyor.
+// Hepsinde ortak olan alanlar yeterli - 0x30000'lik farkin mip zinciri mi
+// yoksa dolgu mu oldugunu pitch*height ile size'i karsilastirarak anlariz.
+template <typename Info>
+void PsemuLogImageSourceRequest(const char* what, const Info& info) {
+	static std::atomic<uint32_t> s_n {0};
+	if (s_n.fetch_add(1) >= 48) {
+		return;
+	}
+	const uint64_t flat = static_cast<uint64_t>(info.pitch) * info.height;
+	std::printf("[KAYNAK-ISTEK] %-22s 0x%016llx+0x%llx | %ux%u pitch=%u | pitch*h=%llu "
+	            "size/pitch*h=%.4f\n",
+	            what, static_cast<unsigned long long>(info.address),
+	            static_cast<unsigned long long>(info.size), info.width, info.height, info.pitch,
+	            static_cast<unsigned long long>(flat),
+	            flat != 0 ? static_cast<double>(info.size) / static_cast<double>(flat) : 0.0);
+	std::fflush(stdout);
+}
+
+} // namespace
+
 void TextureCache::PublishReadbackBacking(uint64_t address, uint64_t size) {
 	// Indirme, uzerinde onbellek tamponu bulunan bir goruntunun arka bellegini
 	// konuk bellekte yeniden kurdu. Sahipligi tampon onbellegine devrediyoruz
@@ -1239,6 +1268,7 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
 	if (m_buffer_cache.HasPageOverlap(info.address, info.size)) {
 		// ObtainBufferForImage publishes dirty native-buffer bytes when necessary and otherwise
 		// uses a CPU-current staging fallback through guest backing.
+		PsemuLogImageSourceRequest("FindTexture/Storage", info);
 		source = m_buffer_cache.ObtainBufferForImage(info.address, info.size);
 		if (!IsCoherentGuestImageSource(source, info.address, info.size)) {
 			EXIT("TextureCache: sampled-image buffer source is inconsistent, addr=0x%016" PRIx64
@@ -1479,6 +1509,7 @@ StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   com
 	const bool            buffer_overlap = m_buffer_cache.HasPageOverlap(info.address, info.size);
 	BufferImageCopySource source {nullptr, 0, info.address, info.size, true};
 	if (buffer_overlap) {
+		PsemuLogImageSourceRequest("FindTexture/Storage", info);
 		source = m_buffer_cache.ObtainBufferForImage(info.address, info.size);
 		if (!IsCoherentGuestImageSource(source, info.address, info.size)) {
 			EXIT("TextureCache: storage-image buffer source is inconsistent, addr=0x%016" PRIx64
@@ -1642,6 +1673,7 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 		// A render target may use a containing native buffer after dirty bytes are published or
 		// coherent guest backing for a clean partial view. ObtainBufferForImage keeps GPU-dirty
 		// partial ownership and inconsistent state as hard failures.
+		PsemuLogImageSourceRequest("FindRenderTarget", info);
 		target_source = m_buffer_cache.ObtainBufferForImage(info.address, info.size);
 	}
 	FaultSafeTextureLock lock(this, m_lock);
@@ -2510,6 +2542,7 @@ void TextureCache::RefreshVideoOut(VideoOutVulkanImage* image, bool render_targe
 		     info.address, info.size, image_dirty, buffer_dirty, render_target);
 	}
 	if (buffer_dirty) {
+		PsemuLogImageSourceRequest("RefreshVideoOut", info);
 		const auto source = m_buffer_cache.ObtainBufferForImage(info.address, info.size);
 		if (!IsCoherentGuestImageSource(source, info.address, info.size)) {
 			EXIT("TextureCache: invalid video-out source, addr=0x%016" PRIx64 " size=0x%016" PRIx64
