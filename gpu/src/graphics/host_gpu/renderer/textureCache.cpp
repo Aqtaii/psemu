@@ -739,10 +739,28 @@ void TextureCache::RetireImages(const std::vector<CachedImage*>& retire,
 		}
 		static std::atomic<uint32_t> s_n {0};
 		if (s_n.fetch_add(1) < 64) {
+			// Olcu, TURE gore farkli alanda duruyor: render/derinlik hedefleri
+			// target/depth icinde, depolama ve ornekleme dokulari info icinde.
+			// Ilk surum hepsinde info'yu okuyordu ve hedefler icin 0x0
+			// basiyordu - yaniltici tani bu oturumda defalarca yanlis yone
+			// goturdu, tekrarlamayalim.
+			const uint32_t dying_w = dying->kind == CachedImage::Kind::RenderTarget
+			                             ? dying->target.width
+			                         : dying->kind == CachedImage::Kind::DepthTarget
+			                             ? dying->depth.width
+			                         : dying->kind == CachedImage::Kind::VideoOut
+			                             ? dying->video_out.width
+			                             : dying->info.width;
+			const uint32_t dying_h = dying->kind == CachedImage::Kind::RenderTarget
+			                             ? dying->target.height
+			                         : dying->kind == CachedImage::Kind::DepthTarget
+			                             ? dying->depth.height
+			                         : dying->kind == CachedImage::Kind::VideoOut
+			                             ? dying->video_out.height
+			                             : dying->info.height;
 			std::printf("[GORUNTU-OLUM] %-28s | 0x%016llx %ux%u tur=%u gpu_mod=%d buffer_mod=%d "
 			            "native=%d\n",
-			            reason, static_cast<unsigned long long>(dying->Address()),
-			            dying->info.width, dying->info.height,
+			            reason, static_cast<unsigned long long>(dying->Address()), dying_w, dying_h,
 			            static_cast<uint32_t>(dying->kind), dying->gpu_modified,
 			            dying->buffer_modified, dying == native_image_source);
 			std::fflush(stdout);

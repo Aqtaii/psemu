@@ -60,6 +60,12 @@ uint32_t PsemuNextEventSeq() {
 	return g_psemu_event_seq.fetch_add(1, std::memory_order_relaxed) + 1u;
 }
 
+// Compute girdisi ayiklama: 0 = kapali, aksi halde dispatch sira numarasi.
+static std::atomic<uint32_t> g_psemu_compute_probe {0};
+void PsemuSetComputeInputProbe(uint32_t dispatch_seq) {
+	g_psemu_compute_probe.store(dispatch_seq, std::memory_order_relaxed);
+}
+
 static std::atomic<bool> g_psemu_display_draw {false};
 void PsemuSetDisplayDrawActive(bool active) {
 	g_psemu_display_draw.store(active, std::memory_order_relaxed);
@@ -367,6 +373,20 @@ static BufferView NativeStorageBuffer(uint64_t submit_id, CommandBuffer* command
 		EXIT("storage buffer range or device alignment is unsupported\n");
 	}
 	(void)submit_id;
+	// Compute girdisi ayiklama: TAMPON tarafi. Sahne dokusunu yazan dispatch
+	// dokulardan degil tamponlardan besleniyor olabilir.
+	if (const auto probe = g_psemu_compute_probe.load(std::memory_order_relaxed); probe != 0) {
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 64) {
+			std::printf("[CS-GIRDI #%u] TAMPON adres=0x%016llx boyut=0x%llx okuma=%d yazma=%d "
+			            "formatli=%d gpu_kirli=%d\n",
+			            probe, static_cast<unsigned long long>(address),
+			            static_cast<unsigned long long>(size), resource.read, resource.written,
+			            resource.formatted,
+			            g_render_ctx->GetBufferCache()->IsRegionGpuModified(address, size));
+			std::fflush(stdout);
+		}
+	}
 	auto binding = g_render_ctx->GetBufferCache()->ObtainBuffer(
 	    command_buffer, ctx, address, size, resource.written, resource.read, resource.formatted);
 	if (binding.first == nullptr || !binding.first->buffer) {
@@ -1039,6 +1059,25 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 	// baglanan her doku icin adres/olcu ve o bolgede GPU'nun bir sey uretip
 	// uretmedigi (gpu_image_bytes) yazdirilir. Hepsi "uretilmemis" cikarsa
 	// sorun atlanan BVH dispatch'lerinden cok daha yukarida demektir.
+	// COMPUTE GIRDI AYIKLAMA: sahne dokusunu yazan dispatch sifir uretiyor.
+	// Okudugu dokularin adresi/olcusu ve o bolgede GPU'nun bir sey uretip
+	// uretmedigi burada gorulur. Hepsi "uretilmemis" cikarsa, siyah ekran bir
+	// emulasyon hatasi degil, EKSIK IMPLEMENTASYONUN (atlanan BVH
+	// dispatch'lerinin) dogru sonucudur.
+	if (const auto probe = g_psemu_compute_probe.load(std::memory_order_relaxed); probe != 0) {
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 64) {
+			const auto region = g_render_ctx->GetTextureCache()->QueryRegion(address, size.size);
+			std::printf("[CS-GIRDI #%u] %s adres=0x%016llx %ux%u boyut=0x%llx tile=%u "
+			            "gpu_uretti=%llu goruntu_bayti=%llu\n",
+			            probe, storage ? "DEPOLAMA(yazma)" : "ornekleme(okuma)",
+			            static_cast<unsigned long long>(address), width, height,
+			            static_cast<unsigned long long>(size.size), static_cast<uint32_t>(tile),
+			            static_cast<unsigned long long>(region.gpu_image_bytes),
+			            static_cast<unsigned long long>(region.image_bytes));
+			std::fflush(stdout);
+		}
+	}
 	if (PsemuDisplayDrawActive()) {
 		static std::atomic<uint32_t> s_n {0};
 		if (s_n.fetch_add(1) < 48) {

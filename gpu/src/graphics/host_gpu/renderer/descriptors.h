@@ -45,6 +45,9 @@ IsSupportedSampledVideoOutView(const ShaderRecompiler::IR::ImageResource& resour
 // siralamak icin (bkz. [SIRA #n ...] loglari).
 [[nodiscard]] uint32_t PsemuNextEventSeq();
 void PsemuSetDisplayDrawActive(bool active);
+// Compute dispatch'inin GIRDILERINI ayiklamak icin. Sahne dokusunu yazan
+// dispatch sifir uretiyor; ne okudugunu gormek son kalan soru.
+void PsemuSetComputeInputProbe(uint32_t dispatch_seq);
 [[nodiscard]] bool PsemuDisplayDrawActive();
 
 void ValidateMetadataReuseTexture(const ShaderRecompiler::IR::ImageResource& resource,

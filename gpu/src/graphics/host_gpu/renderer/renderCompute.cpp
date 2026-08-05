@@ -586,9 +586,26 @@ void RenderDispatchDirect(uint64_t submit_id, CommandBuffer* buffer, HW::Context
 		ClearBounceCopies();
 		// 2) DESCRIPTOR KURULUMU
 		rdd("BindDescriptors -> giris");
+		// TANI: bu dispatch NE OKUYOR? Sahne dokusunu yazan compute sifir
+		// uretiyor; boru hattinin geri kalani (sira, kaynak baglantisi,
+		// bariyer) dogrulandi, geriye girdileri kaldi. Her dispatch'e ayni
+		// zaman ekseninden bir numara verip baglanan kaynaklari o numarayla
+		// etiketliyoruz ([CS-GIRDI #n ...]).
+		const auto probe_seq = PsemuNextEventSeq();
+		{
+			static std::atomic<uint32_t> s_n {0};
+			if (s_n.fetch_add(1) < 48) {
+				printf("[CS-BASLIK #%u] shader=0x%016llx gruplar=%ux%ux%u\n", probe_seq,
+				       static_cast<unsigned long long>(cs_regs.cs_regs.data_addr), thread_group_x,
+				       thread_group_y, thread_group_z);
+				fflush(stdout);
+			}
+		}
+		PsemuSetComputeInputProbe(probe_seq);
 		BindDescriptors(submit_id, buffer, vk::PipelineBindPoint::eCompute,
 		                pipeline->pipeline_layout, input_info.stage,
 		                vk::ShaderStageFlagBits::eCompute, DescriptorCache::Stage::Compute);
+		PsemuSetComputeInputProbe(0);
 		rdd("BindDescriptors -> cikis");
 		// Uc satirlik bosluk: her adimi ayri isaretliyoruz ki "son olum"
 		// hangisiymis kesinlessin.
