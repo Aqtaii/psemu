@@ -1078,6 +1078,14 @@ BufferImageCopySource BufferCache::ObtainBufferForImage(uint64_t vaddr, uint64_t
 	auto find_owner = [&](uint64_t address, uint64_t bytes) noexcept -> CachedBuffer& {
 		auto owner = m_buffers.upper_bound(address);
 		if (owner == m_buffers.begin()) {
+			// TANI: hicbir tampon bu adresin ONUNDE degil.
+			std::printf("[GORUNTU-KAYNAK] SAHIPSIZ istek=0x%016llx+0x%llx "
+			            "(onbellekteki tampon sayisi=%zu, ilk=0x%016llx)\n",
+			            static_cast<unsigned long long>(address),
+			            static_cast<unsigned long long>(bytes), m_buffers.size(),
+			            static_cast<unsigned long long>(
+			                m_buffers.empty() ? 0 : m_buffers.begin()->second->vaddr));
+			std::fflush(stdout);
 			EXIT("BufferCache: GPU image-source bytes have no cached owner\n");
 		}
 		--owner;
@@ -1085,6 +1093,24 @@ BufferImageCopySource BufferCache::ObtainBufferForImage(uint64_t vaddr, uint64_t
 		const auto offset = address - cached.vaddr;
 		if (offset > cached.size || bytes > cached.size - offset || cached.ctx == nullptr ||
 		    cached.buffer == nullptr || cached.buffer->buffer == nullptr) {
+			// TANI: en yakin tampon bulundu ama istegi KAPSAMIYOR. Kismi
+			// ortusme mi, tasma mi, yoksa gecersiz tampon mu - ayirt edelim.
+			// Bu, sureci olduren duvar; ayrintisiz mesaj hicbir sey soylemiyordu.
+			std::printf("[GORUNTU-KAYNAK] KAPSAMIYOR istek=0x%016llx+0x%llx | "
+			            "en_yakin_tampon=0x%016llx+0x%llx ofset=0x%llx | "
+			            "tasma=%d ctx_yok=%d tampon_yok=%d | onbellek=%zu\n",
+			            static_cast<unsigned long long>(address),
+			            static_cast<unsigned long long>(bytes),
+			            static_cast<unsigned long long>(cached.vaddr),
+			            static_cast<unsigned long long>(cached.size),
+			            static_cast<unsigned long long>(offset),
+			            static_cast<int>(offset > cached.size ||
+			                             (offset <= cached.size && bytes > cached.size - offset)),
+			            static_cast<int>(cached.ctx == nullptr),
+			            static_cast<int>(cached.buffer == nullptr ||
+			                             cached.buffer->buffer == nullptr),
+			            m_buffers.size());
+			std::fflush(stdout);
 			EXIT("BufferCache: GPU image-source bytes have no containing native buffer\n");
 		}
 		return cached;
