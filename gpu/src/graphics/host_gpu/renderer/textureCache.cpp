@@ -1186,7 +1186,8 @@ void TextureCache::ResolveStorageImageOverlaps(GraphicContext* ctx, const ImageI
 		switch (ClassifyStorageImageOverlap(
 		    requested.address, requested.size, cached->Address(), cached->Size(),
 		    cached->kind == CachedImage::Kind::Texture,
-		    cached->kind == CachedImage::Kind::RenderTarget, cached->ctx == ctx,
+		    cached->kind == CachedImage::Kind::RenderTarget,
+		    cached->kind == CachedImage::Kind::StorageTexture, cached->ctx == ctx,
 		    cached->gpu_modified, cached->buffer_modified, tracker_gpu)) {
 			case StorageImageOverlap::None: continue;
 			case StorageImageOverlap::RetireSampled: retire.push_back(cached); continue;
@@ -3304,8 +3305,78 @@ bool TextureCache::InvalidateMemoryFromGPU(uint64_t vaddr, uint64_t size,
 		const auto next = ClassifyBufferImageWrite(vaddr, size, cached.Address(), cached.Size(),
 		                                           cached.BufferBinding(), cached.gpu_modified,
 		                                           formatted_buffer_write, cached.buffer_modified);
+		// BIRDEN FAZLA ESLESME CATISMA DEGILDIR - eger hepsi AYNI kararda ve
+		// hicbiri GPU baytlari tutmuyorsa.
+		//
+		// Olculdu (Astro Bot): yazma 0x..669c0000+0x280000, iki doku birden
+		// o baytlari kapsiyor:
+		//   1920x1080 0x..669c0000+0x280000   gpu_mod=0 buffer_mod=1 karar=1
+		//   2432x1368 0x..66970000+0x1a20000  gpu_mod=0 buffer_mod=1 karar=1
+		// Ikisi de TEMIZ ve ikisi de InvalidateTexture istiyor. Yazma, iki
+		// dokunun PAYLASTIGI baytlara dokunuyor; dogrusu ikisini birden bayat
+		// isaretlemek. Gecici bellek yeniden kullaniminda bu normal.
+		//
+		// Oturumun kurali burada da gecerli: TUR degil DURUM belirleyici.
+		// Gecersiz kilma !gpu_modified iken kayipsizdir - goruntu konuk
+		// bellekte olmayan bayt tutmuyor.
+		const bool invalidate_only =
+		    (next == BufferImageWrite::InvalidateTexture ||
+		     next == BufferImageWrite::InvalidateVideoOut ||
+		     next == BufferImageWrite::InvalidateStorageTexture ||
+		     next == BufferImageWrite::InvalidateDepthTarget ||
+		     next == BufferImageWrite::InvalidateRenderTarget) &&
+		    !cached.gpu_modified;
+		if (match != m_images.end() && invalidate_only && action == next) {
+			// Ayni karar, ikisi de temiz: oncekini SIMDI uygula, dongu
+			// devam etsin. Boylece eslesen her goruntu bayat isaretlenir.
+			(**match).buffer_modified = true;
+			static std::atomic<uint32_t> s_n {0};
+			if (s_n.fetch_add(1) < 16) {
+				std::printf("[GECERSIZ-COKLU] ayni karar, ikisi de temiz -> her ikisi de bayat "
+				            "isaretlendi (istek=0x%016llx+0x%llx)\n",
+				            static_cast<unsigned long long>(vaddr),
+				            static_cast<unsigned long long>(size));
+				std::fflush(stdout);
+			}
+			match  = it;
+			action = next;
+			continue;
+		}
 		if (match != m_images.end() || next == BufferImageWrite::None ||
 		    next == BufferImageWrite::Unsupported) {
+			// KIMLIK TESPITI: mesaj yalnizca IKINCI eslesmeyi basiyordu, oysa
+			// "ambiguous" durumunda asil soru IKI eslesmenin de KIM oldugu.
+			// Hangisi bayat hangisi guncel, hangisine yonlendirilmeli -
+			// gormeden karar verilemez.
+			{
+				auto describe = [&](const char* tag, const CachedImage& c,
+				                    BufferImageWrite decision) {
+					const uint32_t w = c.kind == CachedImage::Kind::RenderTarget ? c.target.width
+					                   : c.kind == CachedImage::Kind::DepthTarget ? c.depth.width
+					                   : c.kind == CachedImage::Kind::VideoOut ? c.video_out.width
+					                                                           : c.info.width;
+					const uint32_t h = c.kind == CachedImage::Kind::RenderTarget ? c.target.height
+					                   : c.kind == CachedImage::Kind::DepthTarget ? c.depth.height
+					                   : c.kind == CachedImage::Kind::VideoOut ? c.video_out.height
+					                                                           : c.info.height;
+					std::printf("    %s tur=%u %ux%u 0x%016llx+0x%llx gpu_mod=%d buffer_mod=%d "
+					            "karar=%u vk_image=%p\n",
+					            tag, static_cast<uint32_t>(c.kind), w, h,
+					            static_cast<unsigned long long>(c.Address()),
+					            static_cast<unsigned long long>(c.Size()), c.gpu_modified,
+					            c.buffer_modified, static_cast<uint32_t>(decision),
+					            static_cast<const void*>(c.image != nullptr ? c.image->image
+					                                                       : nullptr));
+				};
+				std::printf("[GECERSIZ-BELIRSIZ] istek=0x%016llx+0x%llx formatli=%d\n",
+				            static_cast<unsigned long long>(vaddr),
+				            static_cast<unsigned long long>(size), formatted_buffer_write);
+				if (match != m_images.end()) {
+					describe("ONCEKI ", **match, action);
+				}
+				describe("SIMDIKI", cached, next);
+				std::fflush(stdout);
+			}
 			EXIT("TextureCache: unsupported GPU invalidation alias, addr=0x%016" PRIx64
 			     " size=0x%016" PRIx64 " cached_kind=%u cached=0x%016" PRIx64 "+0x%016" PRIx64
 			     " gpu_modified=%d buffer_modified=%d formatted=%d ambiguous=%d\n",

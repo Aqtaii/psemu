@@ -983,7 +983,7 @@ ClassifySampledRenderTargetOverlap(const ImageInfo& sampled, const RenderTargetI
 [[nodiscard]] inline StorageImageOverlap
 ClassifyStorageImageOverlap(uint64_t requested_address, uint64_t requested_size,
                             uint64_t cached_address, uint64_t cached_size, bool sampled,
-                            bool render_target, bool same_context, bool gpu_modified,
+                            bool render_target, bool storage, bool same_context, bool gpu_modified,
                             bool buffer_modified, bool tracker_gpu_modified) {
 	if (!ImagePageRangesOverlap(requested_address, requested_size, cached_address, cached_size)) {
 		return StorageImageOverlap::None;
@@ -1027,7 +1027,17 @@ ClassifyStorageImageOverlap(uint64_t requested_address, uint64_t requested_size,
 	//
 	// buffer_modified temkinli birakildi: RetireImages target+buffer_modified'i
 	// zaten reddediyor ve burada bosaltma o yolu kapatmiyor.
-	if (same_context && render_target && !buffer_modified) {
+	// DEPOLAMA DOKUSU da ayni yoldan gecebilir: cagiran emeklilikten ONCE
+	// bosaltiyor (flush_before_retire) ve DownloadColorImage depolama
+	// dokularini destekliyor (storage dali). Yani gpu_modified engel degil.
+	// Olculen sekil: istenen 0x..0c140000+0x280000, mevcut depolama
+	// 0x..0bf80000+0x3c0000, kind=1, gpu=1/1 - gecici bellek yeniden
+	// kullaniminda iki kaynak bayt paylasiyor.
+	//
+	// buffer_modified temkinli birakildi: RetireImages depolama icin
+	// buffer_modified'i ve info.IsCpuDirty()'yi zaten reddediyor - o durumda
+	// sessizce degil YUKSEK SESLE duruluyor.
+	if (same_context && (render_target || storage) && !buffer_modified) {
 		return StorageImageOverlap::RetireOverlappingTarget;
 	}
 	return StorageImageOverlap::Unsupported;
