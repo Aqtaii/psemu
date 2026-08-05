@@ -1826,6 +1826,44 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 			PublishReadbackBacking(transfer.address, transfer.size);
 		}
 		cached->gpu_modified = false;
+		// BELIRLEYICI OLCUM: bosaltmanin INDIRDIGI veri dolu mu bos mu?
+		//
+		// Yukleme yolu dogrulandi (tam boyut yukleniyor), izleyici de temiz.
+		// Geriye tek olasilik kaliyor: indirilen icerigin kendisi sifir.
+		// Oyleyse render hedefi BOSALTILDIGI ANDA zaten bostu - yani cizimler
+		// ya calismamis ya da henuz GONDERILMEMIS (WaitForGraphicsIdle
+		// yalnizca GONDERILMIS isi bekler; ayni komut tamponuna kaydedilmis
+		// ama gonderilmemis cizimler bu beklemeye DAHIL DEGILDIR).
+		{
+			static std::atomic<uint32_t> s_n {0};
+			if (s_n.fetch_add(1) < 24) {
+				uint64_t   nonzero = 0;
+				uint64_t   sampled = 0;
+				const auto span    = std::min<uint64_t>(transfer.size, 0x400000);
+				const auto* bytes  = reinterpret_cast<const uint8_t*>(transfer.address);
+				MEMORY_BASIC_INFORMATION mbi {};
+				if (VirtualQuery(bytes, &mbi, sizeof(mbi)) != 0 && mbi.State == MEM_COMMIT) {
+					for (uint64_t i = 0; i + 4 <= span; i += 64) {
+						sampled++;
+						if (bytes[i] != 0 || bytes[i + 1] != 0 || bytes[i + 2] != 0 ||
+						    bytes[i + 3] != 0) {
+							nonzero++;
+						}
+					}
+				}
+				std::printf("[BOSALT-SONRASI] 0x%016llx+0x%llx cpu_kirli=%d gpu_kirli=%d | "
+				            "INDIRILEN_VERI sifirdan_farkli=%llu/%llu\n",
+				            static_cast<unsigned long long>(transfer.address),
+				            static_cast<unsigned long long>(transfer.size),
+				            static_cast<int>(m_memory_tracker.IsRegionCpuModified(
+				                transfer.address, transfer.size)),
+				            static_cast<int>(m_memory_tracker.IsRegionGpuModified(
+				                transfer.address, transfer.size)),
+				            static_cast<unsigned long long>(nonzero),
+				            static_cast<unsigned long long>(sampled));
+				std::fflush(stdout);
+			}
+		}
 	}
 	for (auto* cached: buffer_owned_depth_retire) {
 		// The exact formatted buffer owns the current bytes. Clear the stale-image marker only
@@ -1912,12 +1950,39 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 		}
 		Transfer::CopyImage(command, regions, cached->image, RENDER_COLOR_IMAGE_LAYOUT);
 	} else {
+		// DAR TEST: emeklilik sonrasi YENIDEN OLUSTURULAN render hedefi
+		// gercekten konuk bellekten yukleniyor mu?
+		//
+		// Hipotez: bu oturumda eklenen bosaltma yolu (flush_before_retire)
+		// izleyicinin GPU sahipligini birakiyor ve tampon onbelleginde
+		// CPU-kirli isaretliyor, ama DOKU ONBELLEGININ kendi izleyicisinde
+		// bolgeyi CPU-kirli birakmiyor. Oyleyse burada "yuklenecek bir sey
+		// yok" denip BOS goruntu birakilir - ve olcek yukseltici onu bos
+		// okur (olculdu: [CS-GIRDI #88] gpu_uretti=0).
+		//
+		// Yuklenen bayt SIFIR cikarsa hipotez kanitlanir.
+		uint64_t upload_bytes   = 0;
+		bool     upload_invoked = false;
 		m_memory_tracker.ForEachUploadRange(
-		    info.address, info.size, false, [](uint64_t, uint64_t) noexcept {},
+		    info.address, info.size, false,
+		    [&](uint64_t, uint64_t bytes) noexcept { upload_bytes += bytes; },
 		    [&]() noexcept {
+			    upload_invoked = true;
 			    ImageOps::UploadRenderTarget(
 			        ctx, static_cast<RenderTextureVulkanImage*>(cached->image), info, false);
 		    });
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 24) {
+			std::printf("[RT-YUKLE] 0x%016llx %ux%u boyut=0x%llx -> yuklenen_bayt=%llu "
+			            "yukleme_calisti=%d cpu_kirli=%d\n",
+			            static_cast<unsigned long long>(info.address), info.width, info.height,
+			            static_cast<unsigned long long>(info.size),
+			            static_cast<unsigned long long>(upload_bytes),
+			            static_cast<int>(upload_invoked),
+			            static_cast<int>(m_memory_tracker.IsRegionCpuModified(info.address,
+			                                                                 info.size)));
+			std::fflush(stdout);
+		}
 	}
 	cached->gpu_modified = preserve_native;
 	return static_cast<RenderTextureVulkanImage*>(PublishImage(command, std::move(cached)));
