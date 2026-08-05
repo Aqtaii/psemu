@@ -78,6 +78,9 @@ public:
 	[[nodiscard]] bool IsRegionCpuModified(uint64_t vaddr, uint64_t size);
 	[[nodiscard]] bool IsRegionGpuModified(uint64_t vaddr, uint64_t size);
 	void               PublishImageBacking(uint64_t vaddr, uint64_t size);
+	// TANI: yeni bir tampon otururken/eskisi silinirken, o adreste kendinden
+	// BUYUK bir kirli aralik yetim kaliyor mu?
+	void LogOrphanDirtyRange(const char* what, uint64_t vaddr, uint64_t size);
 	// PublishImageBacking'in genel-topoloji surumu: onbellek tamponunun
 	// araligi kapsamasi gerekmez (readback tum goruntuyu yayinlar, tampon onun
 	// alt araligi olabilir).

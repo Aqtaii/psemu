@@ -985,10 +985,15 @@ std::pair<VulkanBuffer*, uint64_t> BufferCache::ObtainBuffer(CommandBuffer*  com
 			    vk::DependencyFlagBits::eByRegion, 0, nullptr, 1, &after, 0, nullptr);
 			for (const auto& overlap: overlaps) {
 				command->RetainResourceUntilFence(overlap->second->buffer);
+				LogOrphanDirtyRange("birlestirme-sil", overlap->second->vaddr,
+				                    overlap->second->size);
 				m_buffers.erase(overlap);
 			}
 		}
+		const auto new_vaddr = cached->vaddr;
+		const auto new_size  = cached->size;
 		it = m_buffers.emplace(cached->vaddr, std::move(cached)).first;
+		LogOrphanDirtyRange("yeni-tampon", new_vaddr, new_size);
 	}
 
 	auto&                                      cached = *it->second;
@@ -1110,10 +1115,59 @@ BufferImageCopySource BufferCache::ObtainBufferForImage(uint64_t vaddr, uint64_t
 			            static_cast<int>(cached.buffer == nullptr ||
 			                             cached.buffer->buffer == nullptr),
 			            m_buffers.size());
+			// HIPOTEZ: RangeSet bitisik kirli araliklari BIRLESTIRIYOR olabilir.
+			// Oyleyse istek, iki KOMSU tamponun kirli kayitlarinin kaynasmis
+			// hali olur ve tek bir sahip bulunamaz - yetim aralik olmadigi
+			// halde (YETIM-KIRLI=0) tasma yasanmasini bu aciklar.
+			// Kontrol: tamponun bittigi yerde baska bir tampon basliyor mu?
+			{
+				auto next = m_buffers.upper_bound(cached.vaddr);
+				if (next != m_buffers.end()) {
+					std::printf("    sonraki tampon = 0x%016llx+0x%llx (bu tamponun sonu "
+					            "0x%016llx) -> bitisik=%d\n",
+					            static_cast<unsigned long long>(next->second->vaddr),
+					            static_cast<unsigned long long>(next->second->size),
+					            static_cast<unsigned long long>(cached.vaddr + cached.size),
+					            static_cast<int>(next->second->vaddr == cached.vaddr + cached.size));
+				} else {
+					std::printf("    sonraki tampon yok\n");
+				}
+			}
 			std::fflush(stdout);
 			EXIT("BufferCache: GPU image-source bytes have no containing native buffer\n");
 		}
 		return cached;
+	};
+	// KIRLI ARALIGI SAHIPLERE GORE BOL.
+	//
+	// RangeSet bitisik kirli araliklari BIRLESTIRIYOR; iki komsu tamponun
+	// kayitlari tek araliga kaynasabiliyor. find_owner ise bir araligin TEK bir
+	// tampona sigmasini sart kosuyordu ve surec burada oluyordu.
+	//
+	// Olculdu: istek 0x2b0000, en yakin tampon 0x280000, ve hemen ardindan
+	// 0x30000'lik BITISIK bir tampon daha (0x280000 + 0x30000 = 0x2b0000).
+	// Yetim kirli kayit YOK ([YETIM-KIRLI]=0), kuculen tampon YOK - sorun
+	// yalnizca "her araligin tek sahibi vardir" varsayimiydi.
+	//
+	// Bolme KAYIPSIZDIR: her parca kendi sahibinden indirilir; hicbir sey
+	// kirpilmaz ya da atilmaz. (Kirpma semptomu bastirir, ciplak "kirli kaydi
+	// sil" ise konuk bellege hic yazilmamis veriyi sessizce cope atardi -
+	// bu kod tabaninda Subtract'in dort cagrisi da once indirme yapiyor.)
+	auto for_each_owned_piece = [&](uint64_t address, uint64_t bytes, auto&& fn) {
+		uint64_t       cursor = address;
+		const uint64_t end    = address + bytes;
+		while (cursor < end) {
+			auto&          owner     = find_owner(cursor, 1);
+			const uint64_t owner_end = owner.vaddr + owner.size;
+			const uint64_t piece_end = std::min(end, owner_end);
+			if (piece_end <= cursor) {
+				EXIT("BufferCache: image-source range split made no progress, addr=0x%016" PRIx64
+				     " cursor=0x%016" PRIx64 "\n",
+				     address, cursor);
+			}
+			fn(owner, cursor, piece_end - cursor);
+			cursor = piece_end;
+		}
 	};
 	if (gpu_modified) {
 		if (!GraphicsRunIsCommandProcessorThread() && !GraphicsRunSubmissionLockHeld() &&
@@ -1126,11 +1180,14 @@ BufferImageCopySource BufferCache::ObtainBufferForImage(uint64_t vaddr, uint64_t
 		}
 		std::vector<GraphicContext*> waited;
 		for (const auto& range: dirty_ranges) {
-			auto& owner = find_owner(range.address, range.size);
-			if (std::find(waited.begin(), waited.end(), owner.ctx) == waited.end()) {
-				Transfer::WaitForGraphicsIdle(owner.ctx);
-				waited.push_back(owner.ctx);
-			}
+			for_each_owned_piece(range.address, range.size,
+			                     [&](CachedBuffer& owner, uint64_t, uint64_t) {
+				                     if (std::find(waited.begin(), waited.end(), owner.ctx) ==
+				                         waited.end()) {
+					                     Transfer::WaitForGraphicsIdle(owner.ctx);
+					                     waited.push_back(owner.ctx);
+				                     }
+			                     });
 		}
 		auto     backing_writes = ReserveBackingWrites(m_page_manager, dirty_ranges);
 		uint64_t downloaded     = 0;
@@ -1147,13 +1204,17 @@ BufferImageCopySource BufferCache::ObtainBufferForImage(uint64_t vaddr, uint64_t
 				         address, bytes);
 			    }
 			    for (const auto& range: dirty) {
-				    auto&                owner         = find_owner(range.address, range.size);
-				    const auto           buffer_offset = range.address - owner.vaddr;
-				    std::vector<uint8_t> data(range.size);
-				    Transfer::DownloadBuffer(owner.ctx, owner.buffer.get(), buffer_offset,
-				                             data.data(), range.size);
-				    Libs::LibKernel::Memory::WriteBacking(range.address, data.data(), data.size());
-				    downloaded += range.size;
+				    for_each_owned_piece(
+				        range.address, range.size,
+				        [&](CachedBuffer& owner, uint64_t piece_addr, uint64_t piece_size) {
+					        const auto           buffer_offset = piece_addr - owner.vaddr;
+					        std::vector<uint8_t> data(piece_size);
+					        Transfer::DownloadBuffer(owner.ctx, owner.buffer.get(), buffer_offset,
+					                                 data.data(), piece_size);
+					        Libs::LibKernel::Memory::WriteBacking(piece_addr, data.data(),
+					                                              data.size());
+					        downloaded += piece_size;
+				        });
 			    }
 		    });
 		if (downloaded == 0) {
@@ -1385,6 +1446,43 @@ void BufferCache::CopyBuffer(CommandBuffer* command, GraphicContext* ctx, uint64
 	vk_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
 	                          vk::PipelineStageFlagBits::eAllCommands,
 	                          vk::DependencyFlagBits::eByRegion, 0, nullptr, 2, after, 0, nullptr);
+}
+
+
+// SUC MAHALLI KAMERASI: m_buffers'a yeni bir tampon otururken, o adreste
+// KENDINDEN BUYUK bir kirli aralik (dirty range) kaliyor mu?
+//
+// Cokme tam bunu soyluyordu: find_owner, 0x2b0000'lik bir KIRLI ARALIK icin
+// sahip ararken 0x280000'lik tampon buluyor ve tasma nedeniyle sureci
+// olduruyor. Kirli aralik, o adreste daha once yasamis DAHA BUYUK bir
+// kaynaktan kalmis olmali. Bu kontrol o ani yakalar.
+//
+// NOT: buradaki dogru duzeltme cirilciplak "kirli kaydi sil" DEGILDIR -
+// bu kod tabaninda Subtract'in dort cagrisi da once indirme + WriteBacking
+// + MarkRegionAsCpuModified yapiyor. Ciplak silme, konuk bellege hic
+// yazilmamis GPU verisini sessizce cope atardi.
+void BufferCache::LogOrphanDirtyRange(const char* what, uint64_t vaddr, uint64_t size) {
+	const auto dirty = m_gpu_modified_ranges.Intersections(vaddr, size);
+	for (const auto& range: dirty) {
+		const auto range_end  = range.address + range.size;
+		const auto buffer_end = vaddr + size;
+		if (range_end <= buffer_end && range.address >= vaddr) {
+			continue; // tampon araligi kapsiyor, sorun yok
+		}
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 64) {
+			std::printf("[YETIM-KIRLI] %-18s tampon=0x%016llx+0x%llx | kirli=0x%016llx+0x%llx "
+			            "-> tasma=0x%llx\n",
+			            what, static_cast<unsigned long long>(vaddr),
+			            static_cast<unsigned long long>(size),
+			            static_cast<unsigned long long>(range.address),
+			            static_cast<unsigned long long>(range.size),
+			            static_cast<unsigned long long>(range_end > buffer_end
+			                                                ? range_end - buffer_end
+			                                                : 0));
+			std::fflush(stdout);
+		}
+	}
 }
 
 bool BufferCache::HasPageOverlap(uint64_t vaddr, uint64_t size) {
