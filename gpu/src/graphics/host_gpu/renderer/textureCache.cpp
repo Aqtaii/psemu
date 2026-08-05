@@ -1858,6 +1858,31 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 		regions.reserve(static_cast<size_t>(native_image_source->image->layers) *
 		                native_image_source->image->mip_levels);
 		AppendLayerCopies(regions, native_image_source->image, vk::ImageAspectFlagBits::eColor);
+		// SIRA DAMGASI: bu kopya, kaynagin (depolama goruntusu) icerigini yeni
+		// render hedefine tasiyan adim. Hipotez: kopya KAYDEDILDIGI anda
+		// kaynak henuz BOS ve compute dispatch daha SONRA calisiyor. Kopyanin
+		// sira numarasi ile depolama baglamasinin/dispatch'in sira numarasi
+		// karsilastirilinca hipotez kanitlanir ya da curur.
+		{
+			extern uint32_t PsemuNextEventSeq();
+			static std::atomic<uint32_t> s_n {0};
+			if (s_n.fetch_add(1) < 16) {
+				// VkImage TUTAMAGINI bas (VulkanImage* degil) ki depolama
+				// baglamasi ve kompozisyon okumasi loglariyla KARSILASTIRILABILIR
+				// olsun - hepsi ayni tur isaretci olmali.
+				std::printf("[SIRA #%u PRESERVE-KOPYA] kaynak_vk=%p -> hedef_vk=%p (0x%016llx "
+				            "%ux%u kaynak_gpu_mod=%d)\n",
+				            PsemuNextEventSeq(),
+				            static_cast<const void*>(native_image_source->image != nullptr
+				                                         ? native_image_source->image->image
+				                                         : nullptr),
+				            static_cast<const void*>(cached->image != nullptr ? cached->image->image
+				                                                              : nullptr),
+				            static_cast<unsigned long long>(info.address), info.width, info.height,
+				            native_image_source->gpu_modified);
+				std::fflush(stdout);
+			}
+		}
 		Transfer::CopyImage(command, regions, cached->image, RENDER_COLOR_IMAGE_LAYOUT);
 	} else {
 		m_memory_tracker.ForEachUploadRange(

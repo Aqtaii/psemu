@@ -51,6 +51,15 @@ namespace Libs::Graphics {
 // Ekran tamponuna giden cizim sirasinda acik olan tani bayragi. renderDraw
 // tarafindan kurulur; burada hangi dokularin OKUNDUGUNU ayiklamak icin
 // kullanilir.
+// ORTAK OLAY SAYACI: farkli dosyalardaki olaylari AYNI zaman ekseninde
+// siralamak icin. Siyah ekranin koku, dolu bir depolama goruntusunun
+// PreserveStorage yoluyla emekliye ayrilmasi; hipotez, kopyanin compute
+// yazmasindan ONCE kaydedilmesi. Bu sayac hipotezi kanitlar ya da curutur.
+static std::atomic<uint32_t> g_psemu_event_seq {0};
+uint32_t PsemuNextEventSeq() {
+	return g_psemu_event_seq.fetch_add(1, std::memory_order_relaxed) + 1u;
+}
+
 static std::atomic<bool> g_psemu_display_draw {false};
 void PsemuSetDisplayDrawActive(bool active) {
 	g_psemu_display_draw.store(active, std::memory_order_relaxed);
@@ -1044,8 +1053,9 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 			// VkImage ISARETCISI: depolama yazmasi ile ornekleme okumasi AYNI
 			// goruntuye mi dusuyor? Ayni adreste iki ayri goruntu olusursa
 			// compute dolduruyor, kompozisyon bosunu okuyor.
-			std::printf("             -> vk_image=%p\n",
-			            static_cast<const void*>(image != nullptr ? image->image : nullptr));
+			std::printf("             -> vk_image=%p [SIRA #%u KOMPOZISYON-OKUMA]\n",
+			            static_cast<const void*>(image != nullptr ? image->image : nullptr),
+			            PsemuNextEventSeq());
 			std::fflush(stdout);
 		}
 		// ANA SAHNE DOKUSUNU DOK: 1x1 LUT'lari atla, gercek boyutlu ve
@@ -1194,7 +1204,9 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 			if (width > 1000 && height > 1000) {
 				static std::atomic<uint32_t> s_n {0};
 				if (s_n.fetch_add(1) < 16) {
-					std::printf("[DEPOLAMA-COZUM] adres=0x%016llx %ux%u tip=%u vk_image=%p\n",
+					std::printf("[SIRA #%u DEPOLAMA-BAGLAMA] adres=0x%016llx %ux%u tip=%u "
+					            "vk_image=%p\n",
+					            PsemuNextEventSeq(),
 					            static_cast<unsigned long long>(address), width, height,
 					            static_cast<uint32_t>(info.type),
 					            static_cast<const void*>(image != nullptr ? image->image

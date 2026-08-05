@@ -41,6 +41,9 @@ IsSupportedSampledVideoOutView(const ShaderRecompiler::IR::ImageResource& resour
                                const ShaderTextureResource& descriptor, const VulkanImage& image);
 // TANI: ekran tamponuna giden cizim sirasinda acilir; baglanan dokularin
 // [EKRAN-GIRDI] olarak ayiklanmasini saglar.
+// Ortak olay sayaci: farkli alt sistemlerdeki olaylari AYNI zaman ekseninde
+// siralamak icin (bkz. [SIRA #n ...] loglari).
+[[nodiscard]] uint32_t PsemuNextEventSeq();
 void PsemuSetDisplayDrawActive(bool active);
 [[nodiscard]] bool PsemuDisplayDrawActive();
 

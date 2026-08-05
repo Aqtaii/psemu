@@ -616,6 +616,19 @@ void RenderDispatchDirect(uint64_t submit_id, CommandBuffer* buffer, HW::Context
 		FlushBounceCopies(vk_buffer, false);
 		rdd("FlushBounceCopies(pre) -> cikis");
 		rdd("vkCmdDispatch -> giris");
+		// SIRA DAMGASI: compute yazmasi ne zaman KAYDEDILIYOR? PreserveStorage
+		// kopyasinin sira numarasindan ONCE mi SONRA mi? Sonra ise, kopya bos
+		// bir kaynagi tasiyor ve siyah ekranin sebebi kesinlesir.
+		{
+			static std::atomic<uint32_t> s_n {0};
+			if (s_n.fetch_add(1) < 48) {
+				printf("[SIRA #%u COMPUTE-DISPATCH] shader=0x%016llx gruplar=%ux%ux%u\n",
+				       PsemuNextEventSeq(),
+				       static_cast<unsigned long long>(cs_regs.cs_regs.data_addr), thread_group_x,
+				       thread_group_y, thread_group_z);
+				fflush(stdout);
+			}
+		}
 		vk_buffer.dispatch(thread_group_x, thread_group_y, thread_group_z);
 		rdd("vkCmdDispatch -> cikis");
 		FlushBounceCopies(vk_buffer, true);
