@@ -691,8 +691,11 @@ namespace {
 // yoksa dolgu mu oldugunu pitch*height ile size'i karsilastirarak anlariz.
 template <typename Info>
 void PsemuLogImageSourceRequest(const char* what, const Info& info) {
+	// KAPAK YUKSEK TUTULUYOR: bu oturumda kesilmis loglar defalarca yanlis
+	// "hic olmuyor" sonucuna goturdu - dusen istek tam da 48'lik kapagin
+	// arkasinda kalmisti.
 	static std::atomic<uint32_t> s_n {0};
-	if (s_n.fetch_add(1) >= 48) {
+	if (s_n.fetch_add(1) >= 100000) {
 		return;
 	}
 	const uint64_t flat = static_cast<uint64_t>(info.pitch) * info.height;
@@ -2099,7 +2102,23 @@ DepthStencilVulkanImage* TextureCache::FindDepthTarget(CommandBuffer* command, G
 	// uploading from guest memory, but it is not evidence that a clean native image is
 	// stale. Only a genuinely overlapping buffer participates in transition selection.
 	const bool depth_buffer_overlap = m_buffer_cache.HasPageOverlap(info.address, info.size);
+	PsemuLogImageSourceRequest("FindDepthTarget", info);
 	const auto depth_source         = m_buffer_cache.ObtainBufferForImage(info.address, info.size);
+	if (has_stencil) {
+		// Sekizinci ve son cagiran: STENCIL duzlemi. Digerlerinin hicbiri
+		// dusen 0x2b0000'lik istegi uretmedi (kapak kaldirildiktan sonra da).
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 100000) {
+			std::printf("[KAYNAK-ISTEK] STENCIL                0x%016llx+0x%llx | derinlik "
+			            "0x%016llx+0x%llx %ux%u pitch=%u\n",
+			            static_cast<unsigned long long>(info.stencil_address),
+			            static_cast<unsigned long long>(info.stencil_size),
+			            static_cast<unsigned long long>(info.address),
+			            static_cast<unsigned long long>(info.size), info.width, info.height,
+			            info.pitch);
+			std::fflush(stdout);
+		}
+	}
 	const auto stencil_source =
 	    has_stencil ? m_buffer_cache.ObtainBufferForImage(info.stencil_address, info.stencil_size)
 	                : BufferImageCopySource {};
@@ -2687,6 +2706,15 @@ bool TextureCache::ClearImageFromBuffer(CommandBuffer* command, uint64_t vaddr, 
 	    buffer_overlap && m_buffer_cache.IsRegionGpuModified(vaddr, size);
 	BufferImageCopySource source {nullptr, 0, vaddr, size, true};
 	if (buffer_overlap && !buffer_cpu_modified && !buffer_gpu_modified) {
+		{
+			static std::atomic<uint32_t> s_raw {0};
+			if (s_raw.fetch_add(1) < 24) {
+				std::printf("[KAYNAK-ISTEK] HAM-A(ham vaddr/size)  0x%016llx+0x%llx\n",
+				            static_cast<unsigned long long>(vaddr),
+				            static_cast<unsigned long long>(size));
+				std::fflush(stdout);
+			}
+		}
 		source = m_buffer_cache.ObtainBufferForImage(vaddr, size);
 	}
 	const bool buffer_source_valid =
@@ -3411,6 +3439,15 @@ void TextureCache::RegisterMeta(uint64_t vaddr, uint64_t size, uint32_t layers) 
 	if (m_buffer_cache.HasPageOverlap(vaddr, size)) {
 		// Register virtual surface metadata independently of an earlier buffer view. Kyty's split
 		// caches first publish any dirty buffer bytes; clean partial views use guest backing.
+		{
+			static std::atomic<uint32_t> s_raw {0};
+			if (s_raw.fetch_add(1) < 24) {
+				std::printf("[KAYNAK-ISTEK] HAM-B(ham vaddr/size)  0x%016llx+0x%llx\n",
+				            static_cast<unsigned long long>(vaddr),
+				            static_cast<unsigned long long>(size));
+				std::fflush(stdout);
+			}
+		}
 		const auto source = m_buffer_cache.ObtainBufferForImage(vaddr, size);
 		if (!IsCoherentGuestImageSource(source, vaddr, size)) {
 			EXIT("TextureCache: metadata buffer source is inconsistent, addr=0x%016" PRIx64
