@@ -1801,6 +1801,19 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 	// Yerlesik desen (bkz. ornekleme hedefi / depolama komsusu emeklilikleri):
 	// indir -> izleyiciyi temizle -> sahipligi devret -> gpu_modified=false.
 	if (!flush_before_retire.empty()) {
+		// NOT (olculdu, DENENDI VE GERI ALINDI): burada bekleyen kayitli isi
+		// gondermek (End/Execute/WaitForFenceAndReset/Begin) DENENDI.
+		// Gerekce mantikliydi - Transfer::WaitForGraphicsIdle
+		// (vkDeviceWaitIdle) yalnizca GONDERILMIS isi bekler, ayni komut
+		// tamponuna kaydedilmis ama gonderilmemis cizimler beklemeye dahil
+		// degildir. Ama OLCUM hipotezi CURUTTU: gonderimden sonra da
+		// indirilen veri sifir kaldi
+		// ([BOSALT-SONRASI] INDIRILEN_VERI sifirdan_farkli=0/65536).
+		//
+		// Yani hedefler, cizimler gonderilmedigi icin degil, GERCEKTEN piksel
+		// uretilmedigi icin bos. Olculmus faydasi olmayan ama kare basina 14
+		// kez tam boru hatti bosaltmasi maliyeti getiren degisiklik geri
+		// alindi. Sorun daha yukarida: cizimler hedefe yazmiyor.
 		Transfer::WaitForGraphicsIdle(ctx);
 	}
 	for (auto* cached: flush_before_retire) {
