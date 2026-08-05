@@ -1870,12 +1870,21 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 				// VkImage TUTAMAGINI bas (VulkanImage* degil) ki depolama
 				// baglamasi ve kompozisyon okumasi loglariyla KARSILASTIRILABILIR
 				// olsun - hepsi ayni tur isaretci olmali.
-				std::printf("[SIRA #%u PRESERVE-KOPYA] kaynak_vk=%p -> hedef_vk=%p (0x%016llx "
-				            "%ux%u kaynak_gpu_mod=%d)\n",
+				// KAYNAK LAYOUT'U kritik: Transfer::SetImageLayout'un
+				// srcAccessMask'i ESKI LAYOUT'a gore secilir. eGeneral ise
+				// eShaderWrite dahil (compute yazmasi beklenir, dogru); ama
+				// eShaderReadOnlyOptimal / eUndefined switch'te YOK, o zaman
+				// srcAccessMask BOS kalir ve bariyer compute yazmasini
+				// BEKLEMEZ -> kopya bos veri tasir.
+				std::printf("[SIRA #%u PRESERVE-KOPYA] kaynak_vk=%p (layout=%d) -> hedef_vk=%p "
+				            "(0x%016llx %ux%u kaynak_gpu_mod=%d)\n",
 				            PsemuNextEventSeq(),
 				            static_cast<const void*>(native_image_source->image != nullptr
 				                                         ? native_image_source->image->image
 				                                         : nullptr),
+				            native_image_source->image != nullptr
+				                ? static_cast<int>(native_image_source->image->layout)
+				                : -1,
 				            static_cast<const void*>(cached->image != nullptr ? cached->image->image
 				                                                              : nullptr),
 				            static_cast<unsigned long long>(info.address), info.width, info.height,
