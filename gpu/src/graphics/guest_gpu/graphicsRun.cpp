@@ -1944,6 +1944,26 @@ void CommandProcessor::DrawIndirect(uint32_t data_offset, uint32_t draw_initiato
 
 	DrawIndexedIndirectArgs args {};
 	std::memcpy(&args, args_addr, sizeof(args));
+	// TANI: DOLAYLI CIZIM ARGUMANLARI. Oyunun gercek sahne geometrisi GPU'ya
+	// hic ulasmiyor - olculdu: 40 cizimin 40'i da 3 vertex, yani hepsi tam
+	// ekran post-process gecisi. PS5 oyunlari sahneyi GPU-driven ciziyor:
+	// compute eleme gecisi gorunur nesne sayisini bir tampona yazar,
+	// DrawIndexIndirect o tampondan okur. Tampon sifirsa sifir nesne cizilir.
+	//
+	// Bu log iki senaryoyu ayirir:
+	//   index_count=0        -> tampon BOS (eleme gecisi calismamis/atlanmis)
+	//   index_count>0        -> argumanlar dolu, sorun asagida
+	{
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 32) {
+			std::printf("[DOLAYLI-CIZIM] index_count=%u instance=%u start_index=%u "
+			            "base_vertex=%u start_instance=%u | args_adres=%p\n",
+			            args.index_count_per_instance, args.instance_count,
+			            args.start_index_location, args.base_vertex_location,
+			            args.start_instance_location, static_cast<const void*>(args_addr));
+			std::fflush(stdout);
+		}
+	}
 	if (args.base_vertex_location != 0u || args.start_instance_location != 0u) {
 		static std::atomic<uint32_t> log_count {0};
 		if (log_count.fetch_add(1) < 64) {
