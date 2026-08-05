@@ -365,6 +365,26 @@ static PipelineDynamicParameters BuildGraphicsDynamicParams(const HW::Context&  
 		     render_target_mask_slot(ctx.GetRenderTargetMask(), colors[i].target_slot) != 0);
 	}
 
+	// CIZIM PROFILCISI (ikinci yarisi): "gorunmezlik pelerini" adaylari.
+	// Bos scissor ya da hedef disina tasan/sifir viewport, cizimi sessizce
+	// yok eder ve sayacta yine "cizim" olarak gorunur.
+	{
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 40) {
+			printf("[CIZIM-ALAN] viewport=%.1fx%.1f (olcek %.1f,%.1f) scissor=(%d,%d)-(%d,%d) "
+			       "renk_yazma=%d hedef=0x%016llx %ux%u\n",
+			       static_cast<double>(ret.viewport_scale[0] * 2.0f),
+			       static_cast<double>(ret.viewport_scale[1] * 2.0f),
+			       static_cast<double>(ret.viewport_scale[0]),
+			       static_cast<double>(ret.viewport_scale[1]), ret.scissor_ltrb[0],
+			       ret.scissor_ltrb[1], ret.scissor_ltrb[2], ret.scissor_ltrb[3],
+			       static_cast<int>(ret.color_write_enable[0]),
+			       static_cast<unsigned long long>(color_count != 0 ? colors[0].base_addr : 0),
+			       color_count != 0 ? colors[0].extent.width : 0,
+			       color_count != 0 ? colors[0].extent.height : 0);
+			fflush(stdout);
+		}
+	}
 	return ret;
 }
 
@@ -990,6 +1010,24 @@ static void EmitDrawPrimitives(const HW::UserConfig* ucfg, vk::CommandBuffer vk_
 
 	PsemuMetricAddDraw(); // canli metrik: kare basina cizim sayisi
 
+	// CIZIM PROFILCISI: 1920x1080 hedefe 6 "cizim" sayiliyor ama hedef bos
+	// kaliyor. Saydigimiz sey cizim KURULUMU; firca gercekten tuvale
+	// degiyor mu? Sifir vertex/index, bos scissor ya da hedef disina tasan
+	// viewport da o sayaca girer. Uc soruyu birden yanitliyoruz:
+	//   1) kac vertex/index isteniyor
+	//   2) viewport olculeri ne
+	//   3) scissor dikdortgeni ne
+	{
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 40) {
+			printf("[CIZIM-PROFIL] prim=%u indexed=%d index_count=%u instance=%u "
+			       "vertex_offset=%d first_vertex=%u draw_vertex_count=%u\n",
+			       ucfg->GetPrimType(), static_cast<int>(emit.indexed), draw.index_count,
+			       draw.instance_count, emit.vertex_offset, emit.first_vertex,
+			       emit.draw_vertex_count);
+			fflush(stdout);
+		}
+	}
 	switch (static_cast<Prospero::PrimitiveType>(ucfg->GetPrimType())) {
 		case Prospero::PrimitiveType::kPointList:
 		case Prospero::PrimitiveType::kLineList:
