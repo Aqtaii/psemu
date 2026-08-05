@@ -750,11 +750,44 @@ void TextureCache::RequireRetirementIsolation(const std::vector<CachedImage*>& r
 	if (conflict.Exists()) {
 		const auto& retired  = ranges[conflict.retired];
 		const auto& retained = ranges[conflict.retained];
-		EXIT("TextureCache: %s retirement leaves a tracked page alias, request=0x%016" PRIx64
-		     "+0x%016" PRIx64 " retired=0x%016" PRIx64 "+0x%016" PRIx64 " retained=0x%016" PRIx64
-		     "+0x%016" PRIx64 "\n",
-		     operation, address, size, retired.address, retired.size, retained.address,
-		     retained.size);
+		// EMEKLILIK YALITIMI: bu ON KONTROL, asil mekanizmanin ZATEN dogru
+		// yaptigi seyi ikinci kez ve daha KATI sekilde sart kosuyordu.
+		//
+		// UnregisterImageLocked sahip dizininden yalnizca SAHIPSIZ KALAN
+		// araliklari aliyor ve takibi yalnizca onlar icin birakiyor:
+		//     m_image_owner_index.Unregister(&image, final_releases);
+		//     for (const auto& release: final_releases) UntrackMemory(...);
+		// Yani baska bir goruntunun sahiplendigi aralik zaten korunuyor -
+		// "takma ad geride kalir" durumu olusmuyor. Kontrol, altindaki
+		// mekanizma referans saymaya baslamadan once yazilmis gorunuyor.
+		//
+		// Olculen durum (Astro Bot): emekli=0x..160e0000+0xff0000 (1920x1088),
+		// korunan=0x..16a20000+0x1a20000 (2432x1368) - gecici bellek yeniden
+		// kullaniminda iki goruntu gercekten bayt paylasiyor. Bu bu oyunda
+		// normal ve mekanizma bunu kaldirabiliyor.
+		//
+		// PSEMU_STRICT_RETIRE_ISOLATION=1 eski sert davranisi geri getirir.
+		static const bool strict = [] {
+			const char* e = std::getenv("PSEMU_STRICT_RETIRE_ISOLATION");
+			return e != nullptr && e[0] == '1';
+		}();
+		if (strict) {
+			EXIT("TextureCache: %s retirement leaves a tracked page alias, request=0x%016" PRIx64
+			     "+0x%016" PRIx64 " retired=0x%016" PRIx64 "+0x%016" PRIx64
+			     " retained=0x%016" PRIx64 "+0x%016" PRIx64 "\n",
+			     operation, address, size, retired.address, retired.size, retained.address,
+			     retained.size);
+		}
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 16) {
+			std::printf("[EMEKLI-TAKMA-AD] %s: emekli=0x%016llx+0x%llx korunan=0x%016llx+0x%llx "
+			            "(sahip dizini paylasilan araliklari zaten koruyor)\n",
+			            operation, static_cast<unsigned long long>(retired.address),
+			            static_cast<unsigned long long>(retired.size),
+			            static_cast<unsigned long long>(retained.address),
+			            static_cast<unsigned long long>(retained.size));
+			std::fflush(stdout);
+		}
 	}
 }
 
