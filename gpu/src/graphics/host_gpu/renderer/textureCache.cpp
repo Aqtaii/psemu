@@ -1107,27 +1107,36 @@ void TextureCache::RetireSampledTargetAliases(GraphicContext* ctx, const ImageIn
 		// stencil/htile'li olduklari icin de desteklenmeyen takma ad olarak
 		// EXIT ediyordu.
 		//
-		// Hedefte GPU tarafinda uretilmis icerik yoksa (gpu_modified false)
-		// atlamak kayipsizdir: geri yazilacak bir sey yok.
-		if (!cached->received_draws && !cached->gpu_modified) {
+		// Hedefte GPU icerigi olsa bile KAYIP YOK: asagidaki emeklilik yolu
+		// (satir ~1159) zaten indirme yapiyor - DownloadDepthTarget stencil ve
+		// htile'i taniyor, ardindan izleyici temizlenip gpu_modified sifirlanıyor
+		// ve htile metadata'si ayrica ele aliniyor. Yani hizli temizleme sonucu
+		// misafir bellege iniyor. Tek yapmamiz gereken EXIT'e dusmeden bu yola
+		// birakmak.
+		const bool dummy_depth_target = !cached->received_draws && cached->ctx == ctx &&
+		                                !cached->buffer_modified && contained;
+		if (dummy_depth_target) {
 			static std::atomic<uint32_t> s_n {0};
 			if (s_n.fetch_add(1) < 32) {
-				printf("[KUKLA-ATLA] cizilmemis derinlik hedefi atlandi: depth=0x%llx+0x%llx "
-				       "%ux%u pitch=%u | sampled=0x%llx+0x%llx %ux%u\n",
+				printf("[KUKLA-EMEKLI] cizilmemis derinlik hedefi bosaltilip emekli ediliyor: "
+				       "depth=0x%llx+0x%llx %ux%u pitch=%u gpu_kirli=%d stencil=0x%llx "
+				       "htile=0x%llx | sampled=0x%llx+0x%llx %ux%u\n",
 				       (unsigned long long)cached->depth.address,
 				       (unsigned long long)cached->depth.size, cached->depth.width,
-				       cached->depth.height, cached->depth.pitch,
+				       cached->depth.height, cached->depth.pitch, cached->gpu_modified ? 1 : 0,
+				       (unsigned long long)cached->depth.stencil_address,
+				       (unsigned long long)cached->depth.htile_address,
 				       (unsigned long long)requested.address, (unsigned long long)requested.size,
 				       requested.width, requested.height);
 				fflush(stdout);
 			}
-			continue;
 		}
 
-		const bool supported = cached->ctx == ctx && !cached->buffer_modified &&
-		                       cached->depth.stencil_address == 0 &&
-		                       cached->depth.stencil_size == 0 && cached->depth.layers == 1 &&
-		                       contained && (exact_range || sampled_expansion);
+		const bool supported = dummy_depth_target ||
+		                       (cached->ctx == ctx && !cached->buffer_modified &&
+		                        cached->depth.stencil_address == 0 &&
+		                        cached->depth.stencil_size == 0 && cached->depth.layers == 1 &&
+		                        contained && (exact_range || sampled_expansion));
 		if (!supported) {
 			EXIT("TextureCache: unsupported sampled/depth-target alias, sampled=0x%016" PRIx64
 			     "+0x%016" PRIx64 " depth=0x%016" PRIx64 "+0x%016" PRIx64
@@ -1158,6 +1167,40 @@ void TextureCache::RetireSampledTargetAliases(GraphicContext* ctx, const ImageIn
 	}
 	for (auto* cached: retire) {
 		if (!cached->gpu_modified) {
+			continue;
+		}
+		// KUKLA HEDEF: hic cizim almamis derinlik hedefinden INDIRME YAPILMAZ.
+		//
+		// Olculdu: bu hedeflerin geometrisi dejenere (extent 1x1, pitch=128,
+		// 64 KB tahsis) ve DownloadDepthTarget onlari reddediyor -
+		// "unsupported depth-image readback layout ... expected_depth=0x0
+		// expected_htile=0x0". Yani kodun KENDI hesabina gore indirilecek veri
+		// sifir bayt; 64 KB yalnizca hizalama dolgusu.
+		//
+		// Icerik gpu_modified olarak isaretli cunku htile uzerinden hizli
+		// temizleme yapilmis. Tek pikselllik bir temizleme degerini atlamak,
+		// ustundeki 1920x1080'lik CANLI dokuyu yok etmekten kiyaslanamayacak
+		// kadar ucuz. Cizim almadigi da ayrica olculdu (64 cizim / 29 karede
+		// sifir).
+		if (cached->kind == CachedImage::Kind::DepthTarget && !cached->received_draws) {
+			static std::atomic<uint32_t> s_n {0};
+			if (s_n.fetch_add(1) < 16) {
+				printf("[KUKLA-INDIRME-YOK] cizilmemis derinlik hedefi indirilmeden emekli "
+				       "ediliyor: 0x%llx+0x%llx %ux%u\n",
+				       (unsigned long long)cached->depth.address,
+				       (unsigned long long)cached->depth.size, cached->depth.width,
+				       cached->depth.height);
+				fflush(stdout);
+			}
+			// Indirmeyi atliyoruz ama IZLEYICI SAHIPLIGINI birakmak sart:
+			// normalde bunu indirme yolundaki ForEachDownloadRange<true> yapar.
+			// Atlanirsa emeklilik "clean target retirement retained tracker GPU
+			// ownership" ile durur (olculdu, textureCache.cpp:894).
+			for (uint32_t i = 0; i < cached->RangeCount(); i++) {
+				m_memory_tracker.ForEachDownloadRange<true>(
+				    cached->Address(i), cached->Size(i), [](uint64_t, uint64_t) noexcept {});
+			}
+			cached->gpu_modified = false;
 			continue;
 		}
 		const auto transfer = cached->kind == CachedImage::Kind::DepthTarget
