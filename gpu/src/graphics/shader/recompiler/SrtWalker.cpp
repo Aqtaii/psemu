@@ -494,6 +494,24 @@ private:
 		if (m_runtime.read_memory == nullptr) {
 			std::memcpy(result, reinterpret_cast<const void*>(address), sizeof(*result));
 		}
+		// TANI (Mesh): SRT yurutucusu descriptor bekledigi yerde viewport
+		// sabitleri ({1/1920, 1/1080, 1920.0, 1080.0}) buluyor. Taban, sapma ve
+		// NIHAI ADRESI dokerek iki senaryoyu ayiriyoruz:
+		//   (A) nihai adres gecerli descriptor'larin birkac dword otesi
+		//       -> yurutucu tablo icinde yanlis ofset hesapliyor
+		//   (B) bambaska, izole bir sabit bolgesi
+		//       -> shader gercekten sabit okuyor, kaynak izleyici yanlis fisliyor
+		if (m_program.stage == ShaderType::Mesh) {
+			static std::atomic<uint32_t> s_n {0};
+			if (s_n.fetch_add(1) < 64) {
+				std::printf("[SRT-OKUMA-ADRES] pc=0x%08x tur=%s taban=0x%012llx imm=%lld "
+				            "ofset=%u -> adres=0x%012llx deger=%08x\n",
+				            value.pc, buffer ? "ConstBuffer" : "Const",
+				            (unsigned long long)base, (long long)immediate, offset,
+				            (unsigned long long)address, *result);
+				std::fflush(stdout);
+			}
+		}
 		return true;
 	}
 
