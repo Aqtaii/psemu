@@ -370,6 +370,24 @@ static BufferView NativeStorageBuffer(uint64_t submit_id, CommandBuffer* command
 	const auto  alignment = ctx->StorageMinAlignment();
 	if (alignment == 0 || size > ctx->GetPhysicalDeviceProperties().limits.maxStorageBufferRange ||
 	    BufferCache::CACHING_PAGE_SIZE % alignment != 0) {
+		// TANI: hangi kosul dustu ve sayilar ne? Vulkan'in istedigi ile bizim
+		// verdigimizi yan yana koyuyoruz. Ozellikle "size" ilgi cekici: stride
+		// x num_records carpimindan geliyor ve descriptor cop ise devasa
+		// olabilir.
+		const auto max_range = ctx->GetPhysicalDeviceProperties().limits.maxStorageBufferRange;
+		printf("[DEPO-TAMPON-LIMIT] neden: hizalama_sifir=%d boyut_asiyor=%d "
+		       "sayfa_hizalanmiyor=%d\n"
+		       "  descriptor: adres=0x%012llx stride=%u kayit=%u -> boyut=0x%llx (%llu bayt)\n"
+		       "  cihaz     : maxStorageBufferRange=0x%x (%u bayt) minAlignment=%llu "
+		       "CACHING_PAGE_SIZE=%llu\n"
+		       "  ham       : %08x %08x %08x %08x\n",
+		       alignment == 0 ? 1 : 0, size > max_range ? 1 : 0,
+		       (alignment != 0 && BufferCache::CACHING_PAGE_SIZE % alignment != 0) ? 1 : 0,
+		       (unsigned long long)address, stride, records, (unsigned long long)size,
+		       (unsigned long long)size, max_range, max_range, (unsigned long long)alignment,
+		       (unsigned long long)BufferCache::CACHING_PAGE_SIZE, descriptor.fields[0],
+		       descriptor.fields[1], descriptor.fields[2], descriptor.fields[3]);
+		fflush(stdout);
 		EXIT("storage buffer range or device alignment is unsupported\n");
 	}
 	(void)submit_id;
