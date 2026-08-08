@@ -11,6 +11,7 @@
 
 namespace Libs::Graphics {
 
+
 class RangeSet final {
 public:
 	struct Range {
@@ -86,8 +87,12 @@ private:
 			// degil. Hangi cagiranin sifir adresle geldigini kaydediyoruz;
 			// sahte descriptor tespiti (commit c3e6488) null tampon bagladigi
 			// icin bu yol yeni yeni tetikleniyor.
-			std::printf("[ARALIK-GECERSIZ] adres=0x%016llx boyut=0x%016llx "
-			            "(cagiran donus adresi=%p)\n",
+			// NOT: module-goreli ofset DENENDI, ISE YARAMADI - header'daki capa
+			// kodla ayni bolumde olmadigi icin anlamsiz sayi uretiyordu
+			// (loader+0xffffffffffdfec90). Kalici cozum icin loader'in kendi
+			// sembol cozumleyicisi kullanilmali - crash izlerinde zaten
+			// "loader+0x..." basiyor.
+			std::printf("[ARALIK-GECERSIZ] adres=0x%016llx boyut=0x%016llx | cagiran=%p\n",
 			            static_cast<unsigned long long>(address),
 			            static_cast<unsigned long long>(size), __builtin_return_address(0));
 			std::fflush(stdout);
