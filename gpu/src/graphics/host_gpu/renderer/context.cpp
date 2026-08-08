@@ -440,7 +440,8 @@ void CommandBuffer::Submit(vk::Semaphore wait_semaphore, vk::PipelineStageFlags 
 	m_execute      = true;
 	m_fence_waited = false;
 	m_submit_seq   = g_command_buffer_submit_seq.fetch_add(1, std::memory_order_relaxed) + 1;
-	if (g_mesh_draw_recorded.exchange(false, std::memory_order_relaxed)) {
+	const bool mesh_submit = g_mesh_draw_recorded.exchange(false, std::memory_order_relaxed);
+	if (mesh_submit) {
 		printf("[SUBMIT-MESH] mesh cizimi tasiyan gonderim: submit_seq=%llu kuyruk=%d indeks=%u\n",
 		       (unsigned long long)m_submit_seq, m_queue, m_index);
 		fflush(stdout);
@@ -476,6 +477,32 @@ void CommandBuffer::Submit(vk::Semaphore wait_semaphore, vk::PipelineStageFlags 
 		const char* env = std::getenv("PSEMU_SUBMIT_PROBE");
 		return env != nullptr && env[0] == '1';
 	}();
+	// MESH GONDERIMININ KENDI FENCE'INI SURELI BEKLE.
+	//
+	// Bu, "takilma mi, anlik hata mi" sorusunu nihai olarak cevaplar:
+	//   ~2000 ms + ErrorDeviceLost -> TDR, yani GPU takildi. Sorun kontrol
+	//                                 akisinda (sonsuz dongu, kirilmayan dal).
+	//   <10 ms + ErrorDeviceLost   -> anlik donanim hatasi (page fault), yani
+	//                                 gecersiz bellek erisimi / bozuk descriptor.
+	// Onceki olcum (BEKLEME=0 ms) SONRAKI gonderimin fence'indeydi ve bu ayrimi
+	// yapamiyordu; olduren gonderim 552 iken biz 553'u bekliyorduk.
+	if (probe && mesh_submit) {
+		auto       device     = g_render_ctx->GetGraphicCtx()->device;
+		const auto begin      = std::chrono::steady_clock::now();
+		const auto mesh_state = device.waitForFences(1, &m_pool->fences[m_index], VK_TRUE,
+		                                             uint64_t {5} * 1000 * 1000 * 1000);
+		const auto ms         = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            std::chrono::steady_clock::now() - begin)
+		                    .count();
+		printf("[MESH-FENCE] submit_seq=%llu sonuc=%s (%d) SURE=%lld ms\n",
+		       (unsigned long long)m_submit_seq, VulkanToString(mesh_state).c_str(),
+		       static_cast<int>(mesh_state), (long long)ms);
+		fflush(stdout);
+		if (mesh_state == vk::Result::eSuccess) {
+			m_fence_waited = true;
+		}
+	}
+
 	if (probe) {
 		auto device      = g_render_ctx->GetGraphicCtx()->device;
 		auto probe_state = device.getFenceStatus(m_pool->fences[m_index]);

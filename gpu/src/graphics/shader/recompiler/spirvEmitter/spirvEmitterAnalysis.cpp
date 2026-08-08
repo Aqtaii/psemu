@@ -808,6 +808,15 @@ int MeshNoopMode() {
 		if (std::strcmp(env, "tampon") == 0) {
 			return 8;
 		}
+		if (std::strcmp(env, "hepsi-bellek") == 0) {
+			return 16;
+		}
+		if (std::strcmp(env, "srt") == 0) {
+			return 32;
+		}
+		if (std::strcmp(env, "lds-oku") == 0) {
+			return 64;
+		}
 		return 0;
 	}();
 	return mode;

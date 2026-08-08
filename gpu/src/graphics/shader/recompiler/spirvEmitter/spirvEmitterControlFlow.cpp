@@ -388,7 +388,27 @@ static bool MeshNoopSkips(const EmitterState& state, IR::Opcode op) {
 	// Bozuk bir descriptor (yanlis VkBuffer/offset ya da hic yazilmamis giris)
 	// tam da BEKLEME=0 ms'lik anlik device lost uretir.
 	const bool skip_buffer = (mode & 8) != 0;
+	// "hepsi-bellek": descriptor cozumleme (LoadSrtDword), LDS OKUMALARI ve
+	// goruntu erisimleri dahil TUM bellek islemleri. Onceki "tampon" denemesi
+	// bunlari KACIRMISTI - skaler descriptor cekimi ayri bir opcode.
+	const bool skip_memory = (mode & 16) != 0;
+	// Son bolme: descriptor cozumleme (srt) mi, LDS okumalari (lds-oku) mi?
+	const bool skip_srt      = (mode & 32) != 0;
+	const bool skip_lds_read = (mode & 64) != 0;
 	switch (op) {
+		case IR::Opcode::LoadSrtDword: return skip_memory || skip_srt;
+		case IR::Opcode::DsReadUbyte:
+		case IR::Opcode::DsReadSbyte:
+		case IR::Opcode::DsReadUshort:
+		case IR::Opcode::DsReadSshort:
+		case IR::Opcode::DsReadB32:
+		case IR::Opcode::DsReadAddtidB32: return skip_memory || skip_lds_read;
+		case IR::Opcode::ImageSample:
+		case IR::Opcode::ImageGather4:
+		case IR::Opcode::ImageGetLod:
+		case IR::Opcode::ImageLoad:
+		case IR::Opcode::ImageStore:
+		case IR::Opcode::ImageGetResinfo: return skip_memory;
 		case IR::Opcode::SLoadDword:
 		case IR::Opcode::SBufferLoadDword:
 		case IR::Opcode::BufferLoadUbyte:
@@ -400,13 +420,13 @@ static bool MeshNoopSkips(const EmitterState& state, IR::Opcode op) {
 		case IR::Opcode::FlatLoadSbyte:
 		case IR::Opcode::FlatLoadUshort:
 		case IR::Opcode::FlatLoadSshort:
-		case IR::Opcode::FlatLoadDword: return skip_buffer;
+		case IR::Opcode::FlatLoadDword: return skip_buffer || skip_memory;
 		case IR::Opcode::DsWriteByte:
 		case IR::Opcode::DsWriteShort:
 		case IR::Opcode::DsWriteB32:
 		case IR::Opcode::DsWriteAddtidB32:
 		case IR::Opcode::DsMinF32:
-		case IR::Opcode::DsMaxF32: return skip_lds_write;
+		case IR::Opcode::DsMaxF32: return skip_lds_write || skip_memory;
 		case IR::Opcode::Barrier: return skip_barrier;
 		default: return false;
 	}
