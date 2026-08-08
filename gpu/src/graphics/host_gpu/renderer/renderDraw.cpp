@@ -1338,6 +1338,12 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 		// Cizim gelip gelmedigini sayiyoruz: gelmiyorsa emeklilik kurallarini
 		// karmasiklastirmak yerine bayat kaynagin cache'e girisini engellemek
 		// dogru cozum olur.
+		// Bu cizim bir derinlik hedefine gidiyorsa isaretle. Kukla ayiklama
+		// kurali (RetireSampledTargetAliases) buna bakiyor.
+		if (state->depth_info.vulkan_buffer != nullptr) {
+			g_render_ctx->GetTextureCache()->MarkDepthTargetDrawn(state->depth_info.vulkan_buffer);
+		}
+
 		if (state->depth_info.width == 1 && state->depth_info.height == 1 &&
 		    state->depth_info.vulkan_buffer != nullptr) {
 			static std::atomic<uint64_t> s_draws {0};

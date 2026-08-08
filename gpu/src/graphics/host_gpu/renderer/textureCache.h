@@ -62,6 +62,8 @@ public:
 	void UnregisterVideoOutSurfaces(const std::vector<VideoOutVulkanImage*>& images);
 	[[nodiscard]] bool ClearImageFromBuffer(CommandBuffer* command, uint64_t vaddr, uint64_t size,
 	                                        uint32_t packed_clear);
+	// Derinlik hedefine fiilen cizim yapildigini bildirir (kukla ayiklama).
+	void               MarkDepthTargetDrawn(VulkanImage* image);
 	void               MarkGpuWritten(VulkanImage* image);
 	[[nodiscard]] bool IsGpuWritten(VulkanImage* image);
 	void               PrepareHostWrite(uint64_t vaddr, uint64_t size);

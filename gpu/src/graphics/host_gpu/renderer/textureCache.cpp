@@ -114,6 +114,12 @@ struct TextureCache::CachedImage {
 	bool             buffer_modified     = false;
 	bool             stencil_initialized = false;
 	bool             registered          = false;
+	// Bu hedefe hic cizim yapildi mi? Olculdu: oyun, pipeline gecerli bir
+	// derinlik eki bekledigi icin 1x1'lik KUKLA derinlik hedefleri baglıyor ve
+	// onlara tek bir ucgen bile cizmiyor (64 cizim / 29 karede sifir). Boyle
+	// bir kukla, ustune denk geldigi 1920x1080'lik CANLI dokuyu emekli etmeye
+	// zorlamamali.
+	bool             received_draws      = false;
 
 	~CachedImage() {
 		if (ctx == nullptr || image == nullptr || registered) {
@@ -1091,6 +1097,33 @@ void TextureCache::RetireSampledTargetAliases(GraphicContext* ctx, const ImageIn
 		const bool sampled_expansion = IsSampledDepthExpansion(requested, cached->depth);
 		const bool exact_range =
 		    requested.address == cached->depth.address && requested.size == cached->depth.size;
+		// KUKLA DERINLIK HEDEFI: hic cizim almamis bir hedef, ustune denk
+		// geldigi CANLI dokuyu emekli etmeye zorlayamaz.
+		//
+		// Olculdu: oyun pipeline'i mutlu etmek icin 1x1 / pitch=128 derinlik
+		// hedefleri bagliyor ve onlara tek bir ucgen bile cizmiyor (64 cizim /
+		// 29 karede sifir - bkz. [KUKLA-DERINLIK]). Buna ragmen 1920x1080'lik
+		// dokunun icine kapsandiklari icin emeklilik tetikleniyordu ve
+		// stencil/htile'li olduklari icin de desteklenmeyen takma ad olarak
+		// EXIT ediyordu.
+		//
+		// Hedefte GPU tarafinda uretilmis icerik yoksa (gpu_modified false)
+		// atlamak kayipsizdir: geri yazilacak bir sey yok.
+		if (!cached->received_draws && !cached->gpu_modified) {
+			static std::atomic<uint32_t> s_n {0};
+			if (s_n.fetch_add(1) < 32) {
+				printf("[KUKLA-ATLA] cizilmemis derinlik hedefi atlandi: depth=0x%llx+0x%llx "
+				       "%ux%u pitch=%u | sampled=0x%llx+0x%llx %ux%u\n",
+				       (unsigned long long)cached->depth.address,
+				       (unsigned long long)cached->depth.size, cached->depth.width,
+				       cached->depth.height, cached->depth.pitch,
+				       (unsigned long long)requested.address, (unsigned long long)requested.size,
+				       requested.width, requested.height);
+				fflush(stdout);
+			}
+			continue;
+		}
+
 		const bool supported = cached->ctx == ctx && !cached->buffer_modified &&
 		                       cached->depth.stencil_address == 0 &&
 		                       cached->depth.stencil_size == 0 && cached->depth.layers == 1 &&
@@ -2847,6 +2880,27 @@ bool TextureCache::ClearImageFromBuffer(CommandBuffer* command, uint64_t vaddr, 
 	}
 	command->RetainResourceUntilFence(match);
 	return true;
+}
+
+// Bir derinlik hedefine fiilen CIZIM yapildigini isaretler.
+//
+// Olculdu: oyun, pipeline gecerli bir derinlik eki bekledigi icin 1x1'lik
+// KUKLA derinlik hedefleri bagliyor ve onlara tek bir ucgen bile cizmiyor
+// (64 cizim / 29 karede sifir). Boyle bir kukla, ustune denk geldigi
+// 1920x1080'lik CANLI dokuyu emekli etmeye zorlamamali - bkz.
+// RetireSampledTargetAliases.
+void TextureCache::MarkDepthTargetDrawn(VulkanImage* image) {
+	if (image == nullptr) {
+		return;
+	}
+	std::lock_guard      transaction(m_resource_mutex);
+	FaultSafeTextureLock lock(this, m_lock);
+	for (auto& cached: m_images) {
+		if (cached->image == image && cached->kind == CachedImage::Kind::DepthTarget) {
+			cached->received_draws = true;
+			return;
+		}
+	}
 }
 
 void TextureCache::MarkGpuWritten(VulkanImage* image) {
