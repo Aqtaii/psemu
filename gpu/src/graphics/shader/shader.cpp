@@ -1,4 +1,5 @@
 #include "graphics/shader/shader.h"
+#include "graphics/shader/meshHelloSpirv.h"
 
 #include "common/assert.h"
 #include "common/common.h"
@@ -1645,6 +1646,16 @@ void PsemuProbeMeshCompile(uint64_t gs_addr, uint32_t user_sgpr_count, const uin
 // Artik atlama yok: ES gorevini yapip LDS'i doldurur ve fiziksel olarak
 // ardindaki GS koduna dogal akisla (fall-through) devam eder. ES'in icindeki
 // "s_cbranch_execz 0x38" de kirpma noktasinin ICINDE kaldigi icin bozulmuyor.
+// BISECTION anahtari: PSEMU_MESH_HELLO=1 ise recompiler ciktisi yerine
+// sentetik tek-ucgen mesh shader'i baglanir.
+static bool MeshHelloEnabled() {
+	static const bool enabled = [] {
+		const char* env = std::getenv("PSEMU_MESH_HELLO");
+		return env != nullptr && env[0] == '1';
+	}();
+	return enabled;
+}
+
 static bool SpliceMergedEsGs(uint64_t es_addr, uint64_t gs_addr, std::vector<uint32_t>* out) {
 	EXIT_IF(out == nullptr);
 	ShaderMappedData es_data {};
@@ -1821,6 +1832,25 @@ bool ShaderCompileInfoMS(const HW::VertexShaderInfo* regs, const HW::ShaderRegis
 	    std::make_shared<const ShaderRecompiler::IR::Program>(std::move(result.program));
 	permutation.resources =
 	    std::make_shared<const ShaderRecompiler::IR::ResourceSnapshot>(std::move(result.resources));
+
+	// BISECTION (PSEMU_MESH_HELLO=1): recompiler'in urettigi SPIR-V'yi at,
+	// yerine elle yazilmis tek-ucgen mesh shader'ini bagla.
+	//
+	// Recompiler yine de KOSUYOR: IR programi ve kaynak anlik goruntusu boru
+	// tesisatinin (descriptor set duzeni, bariyer kararlari) degismeden
+	// kalmasi icin gerekli. Yalnizca GPU'ya giden kod degisiyor - deneyin
+	// tek degiskeni bu.
+	if (MeshHelloEnabled()) {
+		permutation.spirv.assign(std::begin(MESH_HELLO_SPIRV), std::end(MESH_HELLO_SPIRV));
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 4) {
+			printf("[MESH-HELLO] recompiler ciktisi ATILDI, sentetik tek-ucgen shader baglandi "
+			       "(%llu dword)\n",
+			       (unsigned long long)permutation.spirv.size());
+			fflush(stdout);
+		}
+	}
+
 	info->stage.program   = permutation.program;
 	info->stage.resources = permutation.resources;
 	*spirv = AddShaderProgramPermutation("MS", hash, key, std::move(permutation));
