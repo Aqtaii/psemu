@@ -460,16 +460,24 @@ void CommandBuffer::WaitForFenceOnly() {
 		return;
 	}
 	auto device = g_render_ctx->GetGraphicCtx()->device;
+	// Bekleme SURESI, device lost'un sebebini ayirir: GPU takilmasi (sonsuz
+	// dongu) TDR zaman asimiyla ~2 saniye surer; gecersiz bellek erisimi gibi
+	// anlik hatalar hemen doner.
+	const auto wait_begin = std::chrono::steady_clock::now();
 	auto result = device.waitForFences(1, &m_pool->fences[m_index], VK_TRUE, UINT64_MAX);
+	const auto wait_ms =
+	    std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() -
+	                                                          wait_begin)
+	        .count();
 	if (result != vk::Result::eSuccess) {
 		// printf: LOGF bu projede stdout'a gitmiyor, bu yuzden basarisizligin
 		// GERCEK sebebi (ozellikle eErrorDeviceLost) gorunmez kaliyordu.
-		printf("[FENCE-HATA] vkWaitForFences: %s (%d) kuyruk=%d indeks=%u submit_seq=%llu "
-		       "debug_op=%u debug_submit=%llu args=%u,%u,%u,%u,0x%016llx\n",
-		       VulkanToString(result).c_str(), static_cast<int>(result), m_queue, m_index,
-		       (unsigned long long)m_submit_seq, m_debug_op, (unsigned long long)m_debug_submit_id,
-		       m_debug_arg0, m_debug_arg1, m_debug_arg2, m_debug_arg3,
-		       (unsigned long long)m_debug_arg4);
+		printf("[FENCE-HATA] vkWaitForFences: %s (%d) BEKLEME=%lld ms kuyruk=%d indeks=%u "
+		       "submit_seq=%llu debug_op=%u debug_submit=%llu args=%u,%u,%u,%u,0x%016llx\n",
+		       VulkanToString(result).c_str(), static_cast<int>(result), (long long)wait_ms, m_queue,
+		       m_index, (unsigned long long)m_submit_seq, m_debug_op,
+		       (unsigned long long)m_debug_submit_id, m_debug_arg0, m_debug_arg1, m_debug_arg2,
+		       m_debug_arg3, (unsigned long long)m_debug_arg4);
 		fflush(stdout);
 		LOGF("vkWaitForFences failed: %s (%d), queue=%d index=%u submit_seq=%" PRIu64
 		     " debug_op=%u debug_submit=%" PRIu64 " args=%u,%u,%u,%u,0x%016" PRIx64 "\n",

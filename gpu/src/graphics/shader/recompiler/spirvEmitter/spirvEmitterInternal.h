@@ -35,6 +35,7 @@ struct EmitterState;
 [[nodiscard]] uint32_t MeshLocalSizeX(const EmitterState& state);
 // DENEY anahtari: PSEMU_MESH_ALLOC=erken ise tahsis giris blogunda,
 // kosulsuz ve sabit limitlerle yapilir (bkz. EmitFunction).
+[[nodiscard]] int      MeshNoopMode();
 [[nodiscard]] bool     MeshEagerAllocEnabled();
 // LDS dizisinin dword sayisi. TEK KAYNAK: dizi bildirimi ve sinir denetimi
 // ayni degeri kullanmak zorunda, yoksa ya sinir disi yazariz ya da gecerli

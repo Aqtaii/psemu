@@ -134,6 +134,11 @@ static void EmitPrimitiveIndicesExport(EmitterState* state, const IR::Instructio
 void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 	const bool mesh = state->stage == ShaderType::Mesh;
 
+	// KIRPMA DENEYI: "cikis" modunda mesh disavurumlarinin tamami atlanir.
+	if (mesh && (MeshNoopMode() & 4) != 0) {
+		return;
+	}
+
 	if (inst.export_info.kind == IR::ExportTargetKind::Null) {
 		return;
 	}

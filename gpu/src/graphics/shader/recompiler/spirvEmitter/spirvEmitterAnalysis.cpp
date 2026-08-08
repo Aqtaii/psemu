@@ -780,6 +780,36 @@ uint32_t LdsArrayDwords(const EmitterState& state) {
 	return 1024u;
 }
 
+// PSEMU_MESH_NOOP: gercek shader'i blok blok iptal ederek device lost'un
+// kaynagini daraltma anahtari.
+//   1 = LDS yazmalari, 2 = bariyerler, 4 = cikislar
+// "cikis" modu hem disavurumlari atar hem SetMeshOutputsEXT(0,0) yazar:
+// boylece hicbir sey rasterlenmez ve geriye yalnizca shader'in kendi
+// hesaplamasi kalir. Hala cokuyorsa sorun kod govdesinde (ornegin sonsuz
+// dongu), durursa ciktilarda.
+int MeshNoopMode() {
+	static const int mode = [] {
+		const char* env = std::getenv("PSEMU_MESH_NOOP");
+		if (env == nullptr) {
+			return 0;
+		}
+		if (std::strcmp(env, "lds-yaz") == 0) {
+			return 1;
+		}
+		if (std::strcmp(env, "bariyer") == 0) {
+			return 2;
+		}
+		if (std::strcmp(env, "ikisi") == 0) {
+			return 3;
+		}
+		if (std::strcmp(env, "cikis") == 0) {
+			return 4;
+		}
+		return 0;
+	}();
+	return mode;
+}
+
 bool MeshEagerAllocEnabled() {
 	static const bool enabled = [] {
 		const char* env = std::getenv("PSEMU_MESH_ALLOC");

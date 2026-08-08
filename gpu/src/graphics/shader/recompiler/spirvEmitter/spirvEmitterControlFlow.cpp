@@ -1,5 +1,8 @@
 #include "graphics/shader/recompiler/spirvEmitter/spirvEmitterInternal.h"
 
+#include <cstdlib>
+#include <cstring>
+
 namespace Libs::Graphics::ShaderRecompiler::Spirv::Emitter {
 
 void ComputeReachableBlocks(EmitterState* state, const IR::Program& program) {
@@ -364,7 +367,45 @@ void EmitVertexInputRegisters(EmitterState* state) {
 	}
 }
 
+// KIRPMA DENEYI (PSEMU_MESH_NOOP). Bisection kanitladi ki device lost
+// recompile edilen koddan geliyor (bkz. commit 0687e32). Aramayi daraltmak
+// icin gercek shader'in blok blok iptal edilmesi:
+//   PSEMU_MESH_NOOP=lds-yaz  -> tum LDS yazmalari atlanir
+//   PSEMU_MESH_NOOP=bariyer  -> s_barrier'lar atlanir
+//   PSEMU_MESH_NOOP=ikisi    -> ikisi birden
+// Yalnizca Mesh asamasinda etkili; diger asamalar dokunulmadan kalir.
+static bool MeshNoopSkips(const EmitterState& state, IR::Opcode op) {
+	if (state.stage != ShaderType::Mesh) {
+		return false;
+	}
+	const int mode = MeshNoopMode();
+	if (mode == 0) {
+		return false;
+	}
+	const bool skip_lds_write = (mode & 1) != 0;
+	const bool skip_barrier   = (mode & 2) != 0;
+	switch (op) {
+		case IR::Opcode::DsWriteByte:
+		case IR::Opcode::DsWriteShort:
+		case IR::Opcode::DsWriteB32:
+		case IR::Opcode::DsWriteAddtidB32:
+		case IR::Opcode::DsMinF32:
+		case IR::Opcode::DsMaxF32: return skip_lds_write;
+		case IR::Opcode::Barrier: return skip_barrier;
+		default: return false;
+	}
+}
+
 void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
+	if (MeshNoopSkips(*state, inst.op)) {
+		static std::atomic<uint64_t> s_n {0};
+		const auto                   n = s_n.fetch_add(1, std::memory_order_relaxed) + 1;
+		if (n == 1 || (n % 256) == 0) {
+			printf("[MESH-NOOP] atlanan komut sayisi=%llu\n", (unsigned long long)n);
+			fflush(stdout);
+		}
+		return;
+	}
 	switch (inst.op) {
 		case IR::Opcode::ControlNop: EmitControlNop(state, inst); break;
 		case IR::Opcode::Waitcnt: EmitWaitcnt(state, inst); break;
