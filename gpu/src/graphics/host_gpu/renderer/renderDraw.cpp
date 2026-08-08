@@ -1121,6 +1121,7 @@ static void EmitMeshDraw(vk::CommandBuffer vk_buffer, const DrawCallInfo& draw) 
 		       (unsigned long long)n, groups, draw.index_count, draw.instance_count);
 		fflush(stdout);
 	}
+	PsemuNoteMeshDrawRecorded();
 	vk_buffer.drawMeshTasksEXT(groups, 1, 1);
 }
 

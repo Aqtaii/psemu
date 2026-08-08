@@ -25,6 +25,15 @@
 #include <memory>
 namespace Libs::Graphics {
 static std::atomic<uint64_t> g_command_buffer_submit_seq = 0;
+// Mesh cizimi kaydedildi mi? EmitMeshDraw isaretler, gonderim tuketir.
+// Amac: device lost'u bildiren submit_seq ile mesh cizimini TASIYAN
+// submit_seq'i yan yana gorup suclunun mesh gonderimi olup olmadigini
+// kesinlestirmek. Tani amacli; kuyruklar arasi kesinlik iddia etmiyor.
+static std::atomic<bool> g_mesh_draw_recorded {false};
+
+void PsemuNoteMeshDrawRecorded() {
+	g_mesh_draw_recorded.store(true, std::memory_order_relaxed);
+}
 
 static void RequireValidQueueId(int queue_id) {
 	EXIT_IF(queue_id < 0 || queue_id >= GraphicContext::QUEUES_NUM);
@@ -431,8 +440,20 @@ void CommandBuffer::Submit(vk::Semaphore wait_semaphore, vk::PipelineStageFlags 
 	m_execute      = true;
 	m_fence_waited = false;
 	m_submit_seq   = g_command_buffer_submit_seq.fetch_add(1, std::memory_order_relaxed) + 1;
+	if (g_mesh_draw_recorded.exchange(false, std::memory_order_relaxed)) {
+		printf("[SUBMIT-MESH] mesh cizimi tasiyan gonderim: submit_seq=%llu kuyruk=%d indeks=%u\n",
+		       (unsigned long long)m_submit_seq, m_queue, m_index);
+		fflush(stdout);
+	}
 
 	if (result != vk::Result::eSuccess) {
+		printf("[SUBMIT-HATA] vkQueueSubmit: %s (%d) kuyruk=%d indeks=%u submit_seq=%llu "
+		       "debug_op=%u debug_submit=%llu args=%u,%u,%u,%u,0x%016llx\n",
+		       VulkanToString(result).c_str(), static_cast<int>(result), m_queue, m_index,
+		       (unsigned long long)m_submit_seq, m_debug_op, (unsigned long long)m_debug_submit_id,
+		       m_debug_arg0, m_debug_arg1, m_debug_arg2, m_debug_arg3,
+		       (unsigned long long)m_debug_arg4);
+		fflush(stdout);
 		LOGF("vkQueueSubmit failed: %s (%d), queue=%d index=%u submit_seq=%" PRIu64
 		     " debug_op=%u debug_submit=%" PRIu64 " args=%u,%u,%u,%u,0x%016" PRIx64 "\n",
 		     VulkanToString(result).c_str(), static_cast<int>(result), m_queue, m_index,
@@ -440,6 +461,37 @@ void CommandBuffer::Submit(vk::Semaphore wait_semaphore, vk::PipelineStageFlags 
 		     m_debug_arg3, m_debug_arg4);
 	}
 	EXIT_NOT_IMPLEMENTED(result != vk::Result::eSuccess);
+
+	// SUBMIT-BAZLI YOKLAMA (PSEMU_SUBMIT_PROBE=1).
+	//
+	// Olculdu: device lost'u bildiren fence beklemesi 0 ms suruyor, yani cihaz
+	// DAHA ONCE olmus. Asenkron gonderimde suclunun kimligi ancak her
+	// gonderimden sonra BLOKLAMADAN yoklanarak bulunur. Yoklama cihazi
+	// beklemez (timeout=0); yalnizca "bu gonderimden sonra cihaz hala ayakta
+	// mi" sorusunu sorar ve ilk olumsuz cevabi veren submit_seq'i basar.
+	//
+	// Varsayilan KAPALI: her gonderimde bir Vulkan cagrisi eklemek olcum
+	// disinda gereksiz.
+	static const bool probe = [] {
+		const char* env = std::getenv("PSEMU_SUBMIT_PROBE");
+		return env != nullptr && env[0] == '1';
+	}();
+	if (probe) {
+		auto device      = g_render_ctx->GetGraphicCtx()->device;
+		auto probe_state = device.getFenceStatus(m_pool->fences[m_index]);
+		if (probe_state != vk::Result::eSuccess && probe_state != vk::Result::eNotReady) {
+			static std::atomic<bool> reported {false};
+			if (!reported.exchange(true)) {
+				printf("[SUBMIT-YOKLAMA] ILK OLUMCUL GONDERIM: %s (%d) submit_seq=%llu kuyruk=%d "
+				       "indeks=%u debug_op=%u debug_submit=%llu args=%u,%u,%u,%u,0x%016llx\n",
+				       VulkanToString(probe_state).c_str(), static_cast<int>(probe_state),
+				       (unsigned long long)m_submit_seq, m_queue, m_index, m_debug_op,
+				       (unsigned long long)m_debug_submit_id, m_debug_arg0, m_debug_arg1,
+				       m_debug_arg2, m_debug_arg3, (unsigned long long)m_debug_arg4);
+				fflush(stdout);
+			}
+		}
+	}
 }
 
 vk::Semaphore CommandBuffer::ResolveSignalSemaphore(vk::Semaphore semaphore) const {

@@ -805,6 +805,9 @@ int MeshNoopMode() {
 		if (std::strcmp(env, "cikis") == 0) {
 			return 4;
 		}
+		if (std::strcmp(env, "tampon") == 0) {
+			return 8;
+		}
 		return 0;
 	}();
 	return mode;

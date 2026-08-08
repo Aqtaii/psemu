@@ -384,7 +384,23 @@ static bool MeshNoopSkips(const EmitterState& state, IR::Opcode op) {
 	}
 	const bool skip_lds_write = (mode & 1) != 0;
 	const bool skip_barrier   = (mode & 2) != 0;
+	// "tampon": descriptor uzerinden yapilan TUM bellek okumalari atlanir.
+	// Bozuk bir descriptor (yanlis VkBuffer/offset ya da hic yazilmamis giris)
+	// tam da BEKLEME=0 ms'lik anlik device lost uretir.
+	const bool skip_buffer = (mode & 8) != 0;
 	switch (op) {
+		case IR::Opcode::SLoadDword:
+		case IR::Opcode::SBufferLoadDword:
+		case IR::Opcode::BufferLoadUbyte:
+		case IR::Opcode::BufferLoadSbyte:
+		case IR::Opcode::BufferLoadUshort:
+		case IR::Opcode::BufferLoadSshort:
+		case IR::Opcode::BufferLoadDword:
+		case IR::Opcode::FlatLoadUbyte:
+		case IR::Opcode::FlatLoadSbyte:
+		case IR::Opcode::FlatLoadUshort:
+		case IR::Opcode::FlatLoadSshort:
+		case IR::Opcode::FlatLoadDword: return skip_buffer;
 		case IR::Opcode::DsWriteByte:
 		case IR::Opcode::DsWriteShort:
 		case IR::Opcode::DsWriteB32:

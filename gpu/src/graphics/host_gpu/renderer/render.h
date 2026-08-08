@@ -203,6 +203,9 @@ void GraphicsRenderMemoryBarrier(CommandBuffer* buffer);
 void GraphicsRenderTextureBarrier(CommandBuffer* buffer, uint64_t vaddr, uint64_t size);
 void GraphicsRenderDepthStencilBarrier(CommandBuffer* buffer, uint64_t vaddr, uint64_t size);
 
+// Mesh cizimi kaydedildigini gonderim tarafina bildirir (tani).
+void PsemuNoteMeshDrawRecorded();
+
 } // namespace Libs::Graphics
 
 #endif /* EMULATOR_INCLUDE_EMULATOR_GRAPHICS_GRAPHICSRENDER_H_ */
