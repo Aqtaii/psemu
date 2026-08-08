@@ -1494,9 +1494,14 @@ bool Structurize(Graph* graph, std::string* error) {
 	ClearStructuredTerminators(graph);
 
 	std::map<uint32_t, uint32_t> merge_headers;
-	auto                         reserve_merge_block = [&](uint32_t header, uint32_t merge) {
+	// TANI: ilk cakismada durmak yerine HEPSINI sayiyoruz. "Birini coz,
+	// sirakini gor" dongusune girmemek icin once toplam sayiyi ve siniflarini
+	// bilmek gerekiyor.
+	uint32_t conflict_count = 0;
+	auto     reserve_merge_block = [&](uint32_t header, uint32_t merge) {
 		const auto [it, inserted] = merge_headers.emplace(merge, header);
 		if (!inserted && it->second != header) {
+			conflict_count++;
 			// TANI: cakismanin ANATOMISI. Iki basligin domine ettigi kumeler ve
 			// merge'in oncul kesisimi yan yana. Olculdu: ic ice iki secim
 			// (disaridaki + icerideki) ayni bloga yakinsiyor; icteki icin bolme,
@@ -1539,6 +1544,12 @@ bool Structurize(Graph* graph, std::string* error) {
 			            graph->Dominates(header, merge) ? 1 : 0,
 			            graph->Dominates(other, merge) ? 1 : 0,
 			            graph->Dominates(other, header) ? 1 : 0);
+			// A sinifi mi B sinifi mi? Tek ve NCPD ile ayni cikis -> A.
+			const auto construct_new = DominatedBlocks(*graph, header, merge);
+			const auto exit_new      = FindTrueExitBlock(*graph, header, construct_new);
+			std::printf("  SINIF=%s cakisma_no=%u gercek_cikis=%s\n",
+			            exit_new == merge ? "A" : "B", conflict_count,
+			            exit_new == UINT32_MAX ? "COKLU/YOK" : std::to_string(exit_new).c_str());
 			std::fflush(stdout);
 			SetFailure(
 			    graph, FailureKind::StructuredControlFlow, header,
@@ -1574,8 +1585,8 @@ bool Structurize(Graph* graph, std::string* error) {
 			continue;
 		}
 
-		const auto merge = graph->FindNearestCommonPostDominator(block.terminator.true_block,
-		                                                         block.terminator.false_block);
+		auto merge = graph->FindNearestCommonPostDominator(block.terminator.true_block,
+		                                                   block.terminator.false_block);
 		if (merge == UINT32_MAX) {
 			SetFailure(graph, FailureKind::StructuredControlFlow, block.id,
 			           fmt::format("conditional block {} has no structured merge", block.id),
