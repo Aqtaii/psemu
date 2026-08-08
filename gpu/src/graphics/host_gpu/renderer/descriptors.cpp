@@ -384,8 +384,34 @@ static BufferView NativeStorageBuffer(uint64_t submit_id, CommandBuffer* command
 	}
 	auto* const ctx       = g_render_ctx->GetGraphicCtx();
 	const auto  alignment = ctx->StorageMinAlignment();
-	if (alignment == 0 || size > ctx->GetPhysicalDeviceProperties().limits.maxStorageBufferRange ||
-	    BufferCache::CACHING_PAGE_SIZE % alignment != 0) {
+	// BOYUT ASIMI = "BU BIR DESCRIPTOR DEGIL", cihaz hatasi degil.
+	//
+	// Olculdu (commit c97a006): kaynak izleyici, shader'in SABIT blogundan
+	// yaptigi 4 dword'luk okumayi V# descriptor sanabiliyor. O dort dword
+	// {1/1920, 1/1080, 1920.0, 1080.0} viewport sabitleriydi ve descriptor
+	// gibi yorumlaninca stride=14962 x kayit=1156579328 = 17.3 TB cikiyordu.
+	// Boyle bir boyut fiziksel olarak imkansiz; guvenilir bir "descriptor
+	// degil" isaretidir.
+	//
+	// Bu durumda cokmek yerine NULL tampon bagliyoruz: shader o slotu zaten
+	// descriptor olarak kullanmiyor, sabit okumasi kendi yolundan ilerliyor.
+	// (alignment == 0 ve sayfa hizalamasi ise CIHAZ yapilandirma hatasidir -
+	// onlar EXIT olarak kaliyor.)
+	if (size > ctx->GetPhysicalDeviceProperties().limits.maxStorageBufferRange) {
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 32) {
+			printf("[SAHTE-DESCRIPTOR] asama=%s boyut=0x%llx > maxStorageBufferRange=0x%x -> null "
+			       "tampon baglandi | adres=0x%012llx stride=%u kayit=%u ham=%08x %08x %08x %08x\n",
+			       StageNameForLog(t_current_descriptor_stage), (unsigned long long)size,
+			       ctx->GetPhysicalDeviceProperties().limits.maxStorageBufferRange,
+			       (unsigned long long)address, stride, records, descriptor.fields[0],
+			       descriptor.fields[1], descriptor.fields[2], descriptor.fields[3]);
+			fflush(stdout);
+		}
+		BindNullStorageBuffer(command_buffer, &result);
+		return result;
+	}
+	if (alignment == 0 || BufferCache::CACHING_PAGE_SIZE % alignment != 0) {
 		// TANI: hangi kosul dustu ve sayilar ne? Vulkan'in istedigi ile bizim
 		// verdigimizi yan yana koyuyoruz. Ozellikle "size" ilgi cekici: stride
 		// x num_records carpimindan geliyor ve descriptor cop ise devasa
