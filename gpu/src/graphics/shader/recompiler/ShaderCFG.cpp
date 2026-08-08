@@ -1609,9 +1609,22 @@ bool Structurize(Graph* graph, std::string* error) {
 			// A sinifi mi B sinifi mi? Tek ve NCPD ile ayni cikis -> A.
 			const auto construct_new = DominatedBlocks(*graph, header, merge);
 			const auto exit_new      = FindTrueExitBlock(*graph, header, construct_new);
-			std::printf("  SINIF=%s cakisma_no=%u gercek_cikis=%s\n",
+			std::printf("  SINIF=%s cakisma_no=%u gercek_cikis=%s construct_boyu=%zu\n",
 			            exit_new == merge ? "A" : "B", conflict_count,
-			            exit_new == UINT32_MAX ? "COKLU/YOK" : std::to_string(exit_new).c_str());
+			            exit_new == UINT32_MAX ? "COKLU/YOK" : std::to_string(exit_new).c_str(),
+			            construct_new.size());
+			// Tek blokluk secim vakasi: her iki dal da AYNI yere mi gidiyor?
+			// "Iki kenari da tek sentetik bloga topla" tasarimi ancak oyleyse
+			// anlamsal olarak dogru; farkli hedefler varsa dallanmanin anlamini
+			// yok eder.
+			{
+				const auto* h = graph->FindBlock(header);
+				if (h != nullptr) {
+					std::printf("  ARDILLAR: true=%u false=%u ayni=%d\n", h->terminator.true_block,
+					            h->terminator.false_block,
+					            h->terminator.true_block == h->terminator.false_block ? 1 : 0);
+				}
+			}
 			// Bu basliklardan biri DONGU BASLIGI mi? Cikis kenarlarindan biri
 			// geri kenarsa, ortada "coklu cikis" degil bir DONGU vardir ve
 			// cakisma "donguden break yapan secim" desenidir.
@@ -1678,6 +1691,30 @@ bool Structurize(Graph* graph, std::string* error) {
 		if (block.terminator.kind != TerminatorKind::ConditionalBranch ||
 		    block.terminator.loop_header) {
 			continue;
+		}
+
+		// DONGU LATCH'I SECIM DEGILDIR.
+		//
+		// Olculdu: blok 44'un dallari true=11 (dongu basligi) ve false=45
+		// (dongu merge'i) - yani "if (kosul) continue; else break;". Bu bir
+		// secim construct'i degil, dongunun geri kenar sonlandiricisidir ve
+		// SPIR-V'de OpSelectionMerge almaz. Merge rezerve etmeye calisinca
+		// dongunun merge'iyle cakisiyordu (44/11 -> 45, 42/9 -> 43).
+		//
+		// Tanim: ardillarindan biri, bu blogu domine eden bir dongu basligi.
+		{
+			bool is_latch = false;
+			for (const auto& loop: graph->natural_loops) {
+				if ((block.terminator.true_block == loop.header ||
+				     block.terminator.false_block == loop.header) &&
+				    graph->Dominates(loop.header, block.id)) {
+					is_latch = true;
+					break;
+				}
+			}
+			if (is_latch) {
+				continue;
+			}
 		}
 
 		auto merge = graph->FindNearestCommonPostDominator(block.terminator.true_block,
