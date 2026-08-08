@@ -540,15 +540,18 @@ void EmitHeaderAndTypes(EmitterState* state) {
 		    {state->main_func, ExecutionModeLocalSize, local_x, local_y, local_z});
 	}
 	if (state->stage == ShaderType::Mesh) {
-		// Yer tutucu degerler. Gercek kaynaklar Asama 3'te baglanacak:
+		// Gercek kaynaklar Asama 3/4'te baglanacak:
 		//   LocalSize        <- NGG dalga/alt grup yapilandirmasi
-		//   OutputVertices   <- VGT_GS_MAX_VERT_OUT (olculdu: 0x48 = 72)
-		//   OutputPrimitives <- GE_MAX_OUTPUT_PER_SUBGROUP (olculdu: 0xd8 = 216)
-		// Su an hicbir mesh shader yaratilmadigi icin bu degerler kullanilmiyor;
-		// modulun yapisal olarak gecerli kalmasi icin bulunuyorlar.
+		//   OutputVertices   <- VGT_GS_MAX_VERT_OUT (olculen shader'da 0x48 = 72)
+		//   OutputPrimitives <- GE_MAX_OUTPUT_PER_SUBGROUP (olculen: 0xd8 = 216)
+		//
+		// O zamana kadar 256: OpSetMeshOutputsEXT artik DINAMIK deger yaziyor ve
+		// bu limitleri asamaz. 256, Vulkan'in maxMeshOutputVertices /
+		// maxMeshOutputPrimitives icin garanti ettigi asgari tavan, yani her
+		// uyumlu cihazda gecerli. (Yer tutucu 1 birakmak garanti ihlal olurdu.)
 		state->builder.AddExecutionMode({state->main_func, ExecutionModeLocalSize, 1u, 1u, 1u});
-		state->builder.AddExecutionMode({state->main_func, ExecutionModeOutputVertices, 1u});
-		state->builder.AddExecutionMode({state->main_func, ExecutionModeOutputPrimitivesEXT, 1u});
+		state->builder.AddExecutionMode({state->main_func, ExecutionModeOutputVertices, 256u});
+		state->builder.AddExecutionMode({state->main_func, ExecutionModeOutputPrimitivesEXT, 256u});
 		state->builder.AddExecutionMode({state->main_func, ExecutionModeOutputTrianglesEXT});
 	}
 	if (state->stage == ShaderType::Pixel) {

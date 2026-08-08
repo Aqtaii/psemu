@@ -378,4 +378,40 @@ void EmitBarrier(EmitterState* state, const IR::Instruction& inst) {
 	                            ConstantU32(state, ScopeWorkgroup), ConstantU32(state, semantics)});
 }
 
+// NGG GS_ALLOC_REQ (s_sendmsg 0x9) -> OpSetMeshOutputsEXT.
+//
+// m0 kodlamasi olculdu (bkz. LowerSendmsg):  m0 = vertex | (primitif << 12)
+// Iki alan da calisma zamani degeri. OpSetMeshOutputsEXT'in iki operandi da
+// resmi gramerde IdRef - yani dinamik SSA degeri kabul ediyor, literal degil
+// (C:\VulkanSDK\...\spirv.core.grammar.json'dan dogrulandi). Bu yuzden statik
+// cikarim gerekmiyor: bit alanlarini SPIR-V'de ayikliyoruz.
+//
+// Mesaj kimligi 0x9 disindaki her sey ve Mesh disindaki her asama eskisi gibi
+// no-op kalir.
+void EmitSendmsg(EmitterState* state, const IR::Instruction& inst) {
+	constexpr uint32_t GS_ALLOC_REQ   = 0x9u;
+	constexpr uint32_t MESSAGE_ID_BITS = 0xfu;
+	constexpr uint32_t COUNT_MASK      = 0xfffu;
+
+	if (state->stage != ShaderType::Mesh || inst.src_count < 2u ||
+	    inst.src[0].kind != IR::OperandKind::ImmediateU32 ||
+	    (inst.src[0].imm & MESSAGE_ID_BITS) != GS_ALLOC_REQ) {
+		EmitControlNop(state, inst);
+		return;
+	}
+
+	const auto m0        = EmitValueLoad(state, inst.src[1]);
+	const auto vertices  = state->builder.AllocateId();
+	const auto shifted   = state->builder.AllocateId();
+	const auto primitives = state->builder.AllocateId();
+
+	state->builder.AddFunction(
+	    {OpBitwiseAnd, state->uint_type, vertices, m0, ConstantU32(state, COUNT_MASK)});
+	state->builder.AddFunction(
+	    {OpShiftRightLogical, state->uint_type, shifted, m0, ConstantU32(state, 12u)});
+	state->builder.AddFunction(
+	    {OpBitwiseAnd, state->uint_type, primitives, shifted, ConstantU32(state, COUNT_MASK)});
+	state->builder.AddFunction({OpSetMeshOutputsEXT, vertices, primitives});
+}
+
 } // namespace Libs::Graphics::ShaderRecompiler::Spirv::Emitter

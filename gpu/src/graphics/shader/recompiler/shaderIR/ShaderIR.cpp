@@ -985,6 +985,45 @@ bool LowerControlMarker(const Decoder::Instruction& decoded, BasicBlock* block, 
 	return true;
 }
 
+// s_sendmsg'in YUKU m0'dadir; komutun kendisinde yalnizca mesaj kimligi bulunur.
+// NGG'nin GS_ALLOC_REQ'i (mesaj 0x9) icin olculen kodlama:
+//
+//   s_max_u32  vcc_hi, 1, s5        ; primitif sayisi
+//   s_lshl_b32 vcc_lo, vcc_hi, 12
+//   s_or_b32   m0, s4, vcc_lo       ; m0 = vertex | (primitif << 12)
+//   s_sendmsg  0x9
+//
+// Iki sayi da CALISMA ZAMANI degeri (s4/s5 NGG donanim SGPR'larindan turuyor),
+// statik olarak cikarilamaz. Bu yuzden m0'i ikinci kaynak olarak baglayip
+// cozumlemeyi SPIR-V tarafina birakiyoruz - m0 zaten RegisterFile::M0 olarak
+// izleniyor, yani dinamik bir SSA degeri olarak okunabiliyor.
+bool LowerSendmsg(const Decoder::Instruction& decoded, BasicBlock* block, std::string* error) {
+	Instruction inst;
+	inst.pc        = decoded.pc;
+	inst.op        = Opcode::Sendmsg;
+	inst.dst.kind  = OperandKind::Null;
+	inst.src_count = 1u;
+	if (!LowerSourceOperand(decoded.src0, &inst.src[0], error)) {
+		return false;
+	}
+
+	// m0'i YALNIZCA GS_ALLOC_REQ icin bagliyoruz. Kayit toplama gecisi tum
+	// kaynaklari geziyor; kosulsuz baglasaydik s_sendmsg iceren HER shader'da
+	// bir M0 degiskeni belirir ve calisan modulleri degistirirdi. Diger mesajlar
+	// (GS_EMIT, GS_CUT, SYSMSG...) eskisi gibi tek kaynakli isaret kaliyor.
+	constexpr uint32_t GS_ALLOC_REQ = 0x9u;
+	if (inst.src[0].kind == OperandKind::ImmediateU32 && (inst.src[0].imm & 0xfu) == GS_ALLOC_REQ) {
+		const auto m0 = M0Operand();
+		if (!LowerSourceOperand(m0, &inst.src[1], error)) {
+			return false;
+		}
+		inst.src_count = 2u;
+	}
+
+	block->instructions.push_back(inst);
+	return true;
+}
+
 bool LowerControlInstruction(const Decoder::Instruction& decoded, BasicBlock* block,
                              std::string* error) {
 	switch (decoded.opcode) {
@@ -996,7 +1035,7 @@ bool LowerControlInstruction(const Decoder::Instruction& decoded, BasicBlock* bl
 		case Decoder::Opcode::SBarrier:
 			return LowerControlMarker(decoded, block, Opcode::Barrier, false, error);
 		case Decoder::Opcode::SSendmsg:
-			return LowerControlMarker(decoded, block, Opcode::Sendmsg, true, error);
+			return LowerSendmsg(decoded, block, error);
 		case Decoder::Opcode::SSetregB32:
 		case Decoder::Opcode::SSleep:
 			return LowerControlMarker(decoded, block, Opcode::ControlNop, true, error);

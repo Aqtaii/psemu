@@ -1100,6 +1100,9 @@ void EmitWaitcnt(EmitterState* state, const IR::Instruction& inst);
 
 void EmitBarrier(EmitterState* state, const IR::Instruction& inst);
 
+// NGG GS_ALLOC_REQ -> OpSetMeshOutputsEXT (yalnizca Mesh asamasinda).
+void EmitSendmsg(EmitterState* state, const IR::Instruction& inst);
+
 void EmitAbsI32(EmitterState* state, const IR::Instruction& inst);
 
 void EmitUnaryU32(EmitterState* state, const IR::Instruction& inst, uint32_t opcode);
