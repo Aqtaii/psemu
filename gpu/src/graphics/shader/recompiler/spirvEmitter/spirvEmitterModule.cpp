@@ -514,6 +514,14 @@ void EmitHeaderAndTypes(EmitterState* state) {
 		state->builder.AddCapability({CapabilityComputeDerivativeGroupQuadsKHR});
 		state->builder.AddExtension("SPV_KHR_compute_shader_derivatives");
 	}
+	if (state->stage == ShaderType::Mesh) {
+		// SPV_EXT_mesh_shader en az SPIR-V 1.4 ister. Surum yalnizca bu asamada
+		// yukseliyor; vertex/pixel/compute modulleri 1.3 olarak bit bazinda
+		// degismeden kaliyor.
+		state->builder.SetVersion(0x00010400u);
+		state->builder.AddCapability({CapabilityMeshShadingEXT});
+		state->builder.AddExtension("SPV_EXT_mesh_shader");
+	}
 	state->builder.AddExtInstImport(state->glsl_std450, "GLSL.std.450");
 	state->builder.AddMemoryModel({AddressingModelLogical, MemoryModelGLSL450});
 	state->builder.AddEntryPoint(ExecutionModelForStage(state->stage), state->main_func, "main",
@@ -531,6 +539,18 @@ void EmitHeaderAndTypes(EmitterState* state) {
 		state->builder.AddExecutionMode(
 		    {state->main_func, ExecutionModeLocalSize, local_x, local_y, local_z});
 	}
+	if (state->stage == ShaderType::Mesh) {
+		// Yer tutucu degerler. Gercek kaynaklar Asama 3'te baglanacak:
+		//   LocalSize        <- NGG dalga/alt grup yapilandirmasi
+		//   OutputVertices   <- VGT_GS_MAX_VERT_OUT (olculdu: 0x48 = 72)
+		//   OutputPrimitives <- GE_MAX_OUTPUT_PER_SUBGROUP (olculdu: 0xd8 = 216)
+		// Su an hicbir mesh shader yaratilmadigi icin bu degerler kullanilmiyor;
+		// modulun yapisal olarak gecerli kalmasi icin bulunuyorlar.
+		state->builder.AddExecutionMode({state->main_func, ExecutionModeLocalSize, 1u, 1u, 1u});
+		state->builder.AddExecutionMode({state->main_func, ExecutionModeOutputVertices, 1u});
+		state->builder.AddExecutionMode({state->main_func, ExecutionModeOutputPrimitivesEXT, 1u});
+		state->builder.AddExecutionMode({state->main_func, ExecutionModeOutputTrianglesEXT});
+	}
 	if (state->stage == ShaderType::Pixel) {
 		state->builder.AddExecutionMode({state->main_func, ExecutionModeOriginUpperLeft});
 		if (state->depth_variable != 0) {
@@ -547,7 +567,7 @@ void EmitHeaderAndTypes(EmitterState* state) {
 		state->builder.AddExecutionMode({state->main_func, ExecutionModeDerivativeGroupQuadsKHR});
 	}
 	state->builder.AddName(state->main_func, "main");
-	if (state->stage == ShaderType::Compute || state->needs_function_lds) {
+	if (StageHasWorkgroupLds(state->stage) || state->needs_function_lds) {
 		state->builder.AddName(state->lds_variable, "lds_dwords");
 	}
 	AddInputAnnotationsAndNames(state);
@@ -723,7 +743,7 @@ void EmitHeaderAndTypes(EmitterState* state) {
 		state->builder.AddType({OpVariable, state->ptr_storage_buffer,
 		                        state->flattened_srt_variable, StorageClassStorageBuffer});
 	}
-	if (state->stage == ShaderType::Compute || state->needs_function_lds) {
+	if (StageHasWorkgroupLds(state->stage) || state->needs_function_lds) {
 		const auto storage_class =
 		    state->needs_function_lds ? StorageClassFunction : StorageClassWorkgroup;
 		const auto lds_size = ConstantU32(state, state->needs_function_lds ? 8192u : 1024u);
@@ -732,7 +752,7 @@ void EmitHeaderAndTypes(EmitterState* state) {
 		    {OpTypePointer, state->ptr_workgroup_array, storage_class, state->lds_array_type});
 		state->builder.AddType(
 		    {OpTypePointer, state->ptr_workgroup_uint, storage_class, state->uint_type});
-		if (state->stage == ShaderType::Compute) {
+		if (StageHasWorkgroupLds(state->stage)) {
 			state->builder.AddType({OpVariable, state->ptr_workgroup_array, state->lds_variable,
 			                        StorageClassWorkgroup});
 		}

@@ -342,7 +342,11 @@ bool IsLdsOpcode(IR::Opcode op) {
 }
 
 bool ProgramNeedsFunctionLds(const IR::Program& program) {
-	if (program.stage == ShaderType::Compute) {
+	// Cagri-yerel LDS, lane'ler arasi veri paylasimini SESSIZCE bozar. NGG
+	// birlesik ES-GS tam da bunu yapiyor: LDS'e yaz -> s_barrier -> baska
+	// lane'in yazdigini oku. Bu yuzden Mesh, Compute ile ayni tarafta durur ve
+	// gercek StorageClassWorkgroup bellegini alir.
+	if (program.stage == ShaderType::Compute || program.stage == ShaderType::Mesh) {
 		return false;
 	}
 
@@ -747,6 +751,7 @@ uint32_t ExecutionModelForStage(ShaderType stage) {
 	switch (stage) {
 		case ShaderType::Vertex: return ExecutionModelVertex;
 		case ShaderType::Pixel: return ExecutionModelFragment;
+		case ShaderType::Mesh: return ExecutionModelMeshEXT;
 		default: return ExecutionModelGLCompute;
 	}
 }

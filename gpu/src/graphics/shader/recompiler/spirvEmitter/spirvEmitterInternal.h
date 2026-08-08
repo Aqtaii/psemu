@@ -22,14 +22,31 @@
 
 namespace Libs::Graphics::ShaderRecompiler::Spirv::Emitter {
 
+// Gercek is grubu LDS'ine (StorageClassWorkgroup) sahip asamalar. Digerlerinde
+// LDS cagri-yerel bir diziye duser ve lane'ler arasi paylasimi sessizce bozar.
+// Tek noktada tutuluyor: bu karar uc ayri yerde soruluyor, biri unutulursa
+// hata derleme zamaninda degil, ekranda kaybolan geometri olarak cikar.
+inline bool StageHasWorkgroupLds(ShaderType stage) {
+	return stage == ShaderType::Compute || stage == ShaderType::Mesh;
+}
+
 enum : uint32_t {
 	ExecutionModelVertex                     = 0,
 	ExecutionModelFragment                   = 4,
 	ExecutionModelGLCompute                  = 5,
+	// SPV_EXT_mesh_shader. RDNA2 NGG birlesik ES-GS'in Vulkan karsiligi:
+	// is grubu + LDS + barrier + is grubu basina vertex/primitif tahsisi.
+	// Degerler C:\VulkanSDK\...\spirv\unified1\spirv.hpp'den DOGRULANDI
+	// (5364 TaskEXT'tir, MeshEXT 5365; hafizadan yazarken karistirilabiliyor).
+	ExecutionModelMeshEXT                    = 5365,
 	ExecutionModeOriginUpperLeft             = 7,
 	ExecutionModeEarlyFragmentTests          = 9,
 	ExecutionModeDepthReplacing              = 12,
 	ExecutionModeLocalSize                   = 17,
+	ExecutionModeOutputVertices              = 26,
+	ExecutionModeOutputLinesEXT              = 5269,
+	ExecutionModeOutputPrimitivesEXT         = 5270,
+	ExecutionModeOutputTrianglesEXT          = 5298,
 	ExecutionModeDerivativeGroupQuadsKHR     = 5289,
 	AddressingModelLogical                   = 0,
 	MemoryModelGLSL450                       = 1,
@@ -42,6 +59,7 @@ enum : uint32_t {
 	CapabilityGroupNonUniformBallot          = 64,
 	CapabilityGroupNonUniformShuffle         = 65,
 	CapabilityComputeDerivativeGroupQuadsKHR = 5288,
+	CapabilityMeshShadingEXT                 = 5283,
 	StorageClassUniformConstant              = 0,
 	StorageClassInput                        = 1,
 	StorageClassOutput                       = 3,
@@ -80,6 +98,12 @@ enum : uint32_t {
 	BuiltInSubgroupLocalInvocationId = 41,
 	BuiltInVertexIndex               = 42,
 	BuiltInInstanceIndex             = 43,
+	// SPV_EXT_mesh_shader: primitif baglanti dizileri. NGG'nin
+	// "exp target=0x14" primitif disavurumunun gidecegi yer.
+	BuiltInPrimitivePointIndicesEXT    = 5294,
+	BuiltInPrimitiveLineIndicesEXT     = 5295,
+	BuiltInPrimitiveTriangleIndicesEXT = 5296,
+	BuiltInCullPrimitiveEXT            = 5299,
 };
 
 enum : uint32_t {
@@ -238,6 +262,8 @@ enum : uint32_t {
 	OpGroupNonUniformBallot        = 339,
 	OpGroupNonUniformBallotFindLSB = 343,
 	OpGroupNonUniformShuffle       = 345,
+	// SPV_EXT_mesh_shader: NGG'nin s_sendmsg GS_ALLOC_REQ karsiligi.
+	OpSetMeshOutputsEXT            = 5295,
 };
 
 enum : uint32_t {

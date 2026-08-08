@@ -21,7 +21,10 @@ struct ComputeShaderInfo;
 struct ShaderRegisters;
 } // namespace HW
 
-enum class ShaderType { Unknown, Vertex, Pixel, Fetch, Compute };
+// Mesh: RDNA2 NGG birlesik ES-GS asamasi. Vertex gibi degil, Compute gibi
+// davranir - is grubu, gercek LDS, barrier. Bu yuzden LDS/barrier kararlarinda
+// Compute ile ayni tarafta yer alir.
+enum class ShaderType { Unknown, Vertex, Pixel, Fetch, Compute, Mesh };
 
 enum class ShaderLaneMaskMode { NativeWave, PerInvocation };
 

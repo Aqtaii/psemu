@@ -18,6 +18,12 @@ public:
 
 	void AddCapability(std::initializer_list<uint32_t> operands);
 	void AddExtension(const char* name);
+
+	// SPV_EXT_mesh_shader en az SPIR-V 1.4 ister. Surumu KOSULLU yukseltiyoruz:
+	// boylece mevcut vertex/pixel/compute modulleri bit bazinda ayni kalir ve
+	// bu asama calisan hicbir shader'i etkilemez. Vulkan 1.3 zaten 1.6'ya kadar
+	// destekliyor, tavan sorun degil.
+	void SetVersion(uint32_t version) { m_version = version; }
 	void AddExtInstImport(uint32_t id, const char* name);
 	void AddMemoryModel(std::initializer_list<uint32_t> operands);
 	void AddEntryPoint(uint32_t execution_model, uint32_t entry_point, const char* name,
@@ -39,6 +45,7 @@ private:
 	static void AppendString(std::vector<uint32_t>* words, const char* text);
 
 	uint32_t              m_next_id = 1;
+	uint32_t              m_version = 0x00010300u;  // SPIR-V 1.3 (varsayilan)
 	std::vector<uint32_t> m_capabilities;
 	std::vector<uint32_t> m_extensions;
 	std::vector<uint32_t> m_ext_inst_imports;

@@ -542,11 +542,12 @@ static void VulkanInitSubgroupSizeControl(vk::PhysicalDevice physical_device, Gr
 static vk::Device VulkanCreateDevice(vk::PhysicalDevice physical_device, vk::SurfaceKHR surface,
                                      const VulkanExtensions* r, const VulkanQueues& queues,
                                      const std::vector<const char*>& device_extensions,
-                                     const GraphicContext*           ctx) {
+                                     const GraphicContext* ctx, bool* out_mesh_shader_enabled) {
 	EXIT_IF(physical_device == nullptr);
 	EXIT_IF(r == nullptr);
 	EXIT_IF(surface == nullptr);
 	EXIT_IF(ctx == nullptr);
+	EXIT_IF(out_mesh_shader_enabled == nullptr);
 
 	std::vector<vk::DeviceQueueCreateInfo> queue_create_info(queues.family_count);
 	std::vector<std::vector<float>>        queue_priority(queues.family_count);
@@ -604,6 +605,20 @@ static vk::Device VulkanCreateDevice(vk::PhysicalDevice physical_device, vk::Sur
 		supported_features13.pNext = &supported_robustness2;
 	}
 
+	// RDNA2 NGG birlesik ES-GS asamasinin hedefi. Uzantinin varligi listeye
+	// eklenirken kontrol edildi; burada CIHAZIN gercekten meshShader ozelligini
+	// bildirdigini dogruluyoruz - uzanti var ama ozellik kapali olabilir.
+	const auto mesh_shader_ext_enabled =
+	    HasExtension(device_extensions, VK_EXT_MESH_SHADER_EXTENSION_NAME);
+
+	vk::PhysicalDeviceMeshShaderFeaturesEXT supported_mesh_shader {};
+	supported_mesh_shader.sType = vk::StructureType::ePhysicalDeviceMeshShaderFeaturesEXT;
+	supported_mesh_shader.pNext = nullptr;
+	if (mesh_shader_ext_enabled) {
+		supported_mesh_shader.pNext = supported_features13.pNext;
+		supported_features13.pNext  = &supported_mesh_shader;
+	}
+
 	vk::PhysicalDeviceFeatures2 supported_features2 {};
 	supported_features2.sType = vk::StructureType::ePhysicalDeviceFeatures2;
 	supported_features2.pNext = &supported_features13;
@@ -639,11 +654,35 @@ static vk::Device VulkanCreateDevice(vk::PhysicalDevice physical_device, vk::Sur
 		robustness2.nullDescriptor      = supported_robustness2.nullDescriptor;
 	}
 
+	void* chain_after_robustness2 =
+	    robustness2_ext_enabled ? static_cast<void*>(&robustness2)
+	                            : const_cast<void*>(base_feature_chain);
+
+	vk::PhysicalDeviceMeshShaderFeaturesEXT mesh_shader {};
+	mesh_shader.sType = vk::StructureType::ePhysicalDeviceMeshShaderFeaturesEXT;
+	mesh_shader.pNext = chain_after_robustness2;
+	if (mesh_shader_ext_enabled && supported_mesh_shader.meshShader == VK_TRUE) {
+		mesh_shader.meshShader            = VK_TRUE;
+		mesh_shader.taskShader            = supported_mesh_shader.taskShader;
+		mesh_shader.multiviewMeshShader   = VK_FALSE;
+		mesh_shader.primitiveFragmentShadingRateMeshShader = VK_FALSE;
+		mesh_shader.meshShaderQueries     = VK_FALSE;
+		chain_after_robustness2           = &mesh_shader;
+		*out_mesh_shader_enabled          = true;
+	}
+
 	vk::PhysicalDeviceVulkan13Features features13 {};
-	features13.sType = vk::StructureType::ePhysicalDeviceVulkan13Features;
-	features13.pNext =
-	    robustness2_ext_enabled ? &robustness2 : const_cast<void*>(base_feature_chain);
+	features13.sType             = vk::StructureType::ePhysicalDeviceVulkan13Features;
+	features13.pNext             = chain_after_robustness2;
 	features13.robustImageAccess = supported_features13.robustImageAccess;
+
+	// printf: LOGF bu projede stdout'a gitmiyor, olculemez olurdu.
+	std::printf("[MESH-UZANTI] uzanti=%s cihaz_ozelligi=%s gorev_shader=%s -> %s\n",
+	            mesh_shader_ext_enabled ? "var" : "yok",
+	            supported_mesh_shader.meshShader == VK_TRUE ? "var" : "yok",
+	            supported_mesh_shader.taskShader == VK_TRUE ? "var" : "yok",
+	            *out_mesh_shader_enabled ? "ACIK" : "kapali");
+	std::fflush(stdout);
 
 	LOGF("Vulkan robustness: robustImageAccess=%s robustImageAccess2=%s\n",
 	     features13.robustImageAccess == VK_TRUE ? "true" : "false",
@@ -1081,6 +1120,11 @@ void VulkanCreate(WindowContext* ctx) {
 		if (HasExtension(available_extensions, VK_EXT_ROBUSTNESS_2_EXTENSION_NAME)) {
 			device_extensions.push_back(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME);
 		}
+		// NGG birlesik ES-GS asamasinin hedefi. Opsiyonel: yoksa mesh yolu
+		// kapali kalir, geri kalan her sey aynen calismaya devam eder.
+		if (HasExtension(available_extensions, VK_EXT_MESH_SHADER_EXTENSION_NAME)) {
+			device_extensions.push_back(VK_EXT_MESH_SHADER_EXTENSION_NAME);
+		}
 	}
 
 	std::printf("[VK-MARK] properties OK; GetSystemInfo...\n"); std::fflush(stdout);
@@ -1091,8 +1135,10 @@ void VulkanCreate(WindowContext* ctx) {
 
 	VulkanInitSubgroupSizeControl(ctx->graphic_ctx.physical_device, &ctx->graphic_ctx);
 
-	ctx->graphic_ctx.device = VulkanCreateDevice(ctx->graphic_ctx.physical_device, ctx->surface, &r,
-	                                             queues, device_extensions, &ctx->graphic_ctx);
+	ctx->graphic_ctx.device =
+	    VulkanCreateDevice(ctx->graphic_ctx.physical_device, ctx->surface, &r, queues,
+	                       device_extensions, &ctx->graphic_ctx,
+	                       &ctx->graphic_ctx.mesh_shader_enabled);
 	if (ctx->graphic_ctx.device == nullptr) {
 		EXIT("Could not create device");
 	}

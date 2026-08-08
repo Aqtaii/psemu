@@ -42,6 +42,9 @@ struct VulkanInstance {
 	VmaAllocator                       allocator                         = nullptr;
 	bool                               memory_budget_ext_enabled         = false;
 	bool                               rt_extensions_enabled             = false;
+	// VK_EXT_mesh_shader hem mevcut hem de meshShader ozelligi acilabildiyse
+	// true. NGG birlesik ES-GS asamasi yalnizca bu durumda kullanilabilir.
+	bool                               mesh_shader_enabled               = false;
 	bool                               subgroup_size_control_enabled     = false;
 	uint32_t                           subgroup_size                     = 0;
 	uint32_t                           min_subgroup_size                 = 0;

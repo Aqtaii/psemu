@@ -144,7 +144,7 @@ std::vector<uint32_t> Builder::Build() const {
 	               m_debug.size() + m_annotations.size() + m_types.size() + m_functions.size());
 
 	module.push_back(0x07230203u);
-	module.push_back(0x00010300u);
+	module.push_back(m_version);
 	module.push_back(0u);
 	module.push_back(m_next_id);
 	module.push_back(0u);
