@@ -497,6 +497,46 @@ static bool ShouldSkipGeShader(const HW::Context* ctx, const HW::UserConfig* ucf
 	    sh_regs.m_geMaxOutputPerSubgroup > 0x00000040;
 
 	if (unsupported_stage_mask || unsupported_gs_stage || ge_group_size || ge_shader_regs) {
+		// TANI: sahne geometrisini tasiyan cok-ornekli dolayli cizimlerin HEPSI bu
+		// kapida yeniliyor. Dort kosuldan hangisi tetikliyor? LOGF stdout'a gitmiyor,
+		// bu yuzden ayri printf. Benzersiz imza basina tek satir: log patlamaz.
+		{
+			static std::atomic<uint64_t> s_n {0};
+			static std::atomic<uint64_t> s_seen[64] {};
+			const uint64_t               sig =
+			    (static_cast<uint64_t>(stages) << 8) ^
+			    (static_cast<uint64_t>(sh_regs.m_vgtGsOutPrimType) << 4) ^
+			    (static_cast<uint64_t>(sh_regs.m_vgtGsMaxVertOut) << 20) ^
+			    (unsupported_stage_mask ? 1u : 0u) ^ (unsupported_gs_stage ? 2u : 0u) ^
+			    (ge_group_size ? 4u : 0u) ^ (ge_shader_regs ? 8u : 0u);
+			bool fresh = true;
+			for (auto& s : s_seen) {
+				uint64_t cur = s.load(std::memory_order_relaxed);
+				if (cur == sig) {
+					fresh = false;
+					break;
+				}
+				if (cur == 0 && s.compare_exchange_strong(cur, sig, std::memory_order_relaxed)) {
+					break;
+				}
+			}
+			const auto n = s_n.fetch_add(1, std::memory_order_relaxed) + 1;
+			if (fresh || n <= 4) {
+				printf("[GE-ATLA] #%llu neden: asama_maskesi=%d gs_asamasi=%d grup_boyu=%d "
+				       "ge_kayitlari=%d | stages=0x%08x prim_grup=0x%04x vert_grup=0x%04x "
+				       "ngg=0x%08x max_cikis=0x%08x gs_max_vert=0x%08x gs_out_prim=0x%08x "
+				       "es=0x%016llx gs=0x%016llx\n",
+				       (unsigned long long)n, unsupported_stage_mask ? 1 : 0,
+				       unsupported_gs_stage ? 1 : 0, ge_group_size ? 1 : 0, ge_shader_regs ? 1 : 0,
+				       stages, (unsigned)ge_cntl.primitive_group_size,
+				       (unsigned)ge_cntl.vertex_group_size, sh_regs.m_geNggSubgrpCntl,
+				       sh_regs.m_geMaxOutputPerSubgroup, sh_regs.m_vgtGsMaxVertOut,
+				       sh_regs.m_vgtGsOutPrimType,
+				       (unsigned long long)vertex_info.es_regs.data_addr,
+				       (unsigned long long)vertex_info.gs_regs.data_addr);
+				fflush(stdout);
+			}
+		}
 		const auto log_id = g_shader_stage_log_count.fetch_add(1);
 		if (log_id < 32) {
 			LOGF("Skipping unsupported GE shader draw: stages=0x%08" PRIx32
@@ -1017,14 +1057,51 @@ static void EmitDrawPrimitives(const HW::UserConfig* ucfg, vk::CommandBuffer vk_
 	//   1) kac vertex/index isteniyor
 	//   2) viewport olculeri ne
 	//   3) scissor dikdortgeni ne
+	//
+	// HISTOGRAM (ikinci surum): ilk surum ilk 40 cizimi basiyordu ve o 40
+	// cizim ERKEN asamadandi - hepsi 3-vertex tam ekran gecisiydi. Ama surec
+	// artik T+2600'e kadar yasiyor ve oyun karakter tanimlarini yukluyor.
+	// Asil soru: ILERLEYEN asamada BINLERCE UCGENLIK gercek mesh cizimleri
+	// geliyor mu?
+	//
+	// Sabit kapak bunu yanitlayamaz (milyonlarca cizim var). Bunun yerine
+	// boyut kovalarina gore sayip PERIYODIK dokuyoruz - tum kosuyu kapsar,
+	// log patlamaz. Bu oturumda kesilmis loglarin defalarca yanlis "hic
+	// olmuyor" sonucuna goturdugunu gordukten sonra, kapak yerine histogram.
 	{
-		static std::atomic<uint32_t> s_n {0};
-		if (s_n.fetch_add(1) < 40) {
-			printf("[CIZIM-PROFIL] prim=%u indexed=%d index_count=%u instance=%u "
-			       "vertex_offset=%d first_vertex=%u draw_vertex_count=%u\n",
-			       ucfg->GetPrimType(), static_cast<int>(emit.indexed), draw.index_count,
-			       draw.instance_count, emit.vertex_offset, emit.first_vertex,
-			       emit.draw_vertex_count);
+		static std::atomic<uint64_t> s_total {0};
+		static std::atomic<uint64_t> s_bucket[6] {};   // 1-4, 5-64, 65-1k, 1k-16k, 16k-256k, 256k+
+		static std::atomic<uint64_t> s_max_indices {0};
+		static std::atomic<uint64_t> s_instanced {0};  // instance_count > 1
+		const uint32_t               n = draw.index_count;
+		const uint32_t               b = n <= 4       ? 0
+		                                 : n <= 64    ? 1
+		                                 : n <= 1024  ? 2
+		                                 : n <= 16384 ? 3
+		                                 : n <= 262144 ? 4
+		                                               : 5;
+		s_bucket[b].fetch_add(1, std::memory_order_relaxed);
+		if (draw.instance_count > 1) {
+			s_instanced.fetch_add(1, std::memory_order_relaxed);
+		}
+		for (uint64_t cur = s_max_indices.load(std::memory_order_relaxed); n > cur;) {
+			if (s_max_indices.compare_exchange_weak(cur, n, std::memory_order_relaxed)) {
+				break;
+			}
+		}
+		const auto total = s_total.fetch_add(1, std::memory_order_relaxed) + 1;
+		if (total == 64 || total == 512 || (total % 4096) == 0) {
+			printf("[CIZIM-HIST] toplam=%llu | 1-4:%llu  5-64:%llu  65-1k:%llu  1k-16k:%llu  "
+			       "16k-256k:%llu  256k+:%llu | en_buyuk=%llu  cok_ornekli=%llu\n",
+			       static_cast<unsigned long long>(total),
+			       static_cast<unsigned long long>(s_bucket[0].load()),
+			       static_cast<unsigned long long>(s_bucket[1].load()),
+			       static_cast<unsigned long long>(s_bucket[2].load()),
+			       static_cast<unsigned long long>(s_bucket[3].load()),
+			       static_cast<unsigned long long>(s_bucket[4].load()),
+			       static_cast<unsigned long long>(s_bucket[5].load()),
+			       static_cast<unsigned long long>(s_max_indices.load()),
+			       static_cast<unsigned long long>(s_instanced.load()));
 			fflush(stdout);
 		}
 	}
@@ -1207,19 +1284,47 @@ void RenderDrawIndex(uint64_t submit_id, CommandBuffer* buffer, HW::Context* ctx
 
 	Common::LockGuard lock(g_render_ctx->GetMutex());
 
+	// TANI: cizim hangi kapida dusuyor? Olculdu: 32 dolayli cizim (instance=512)
+	// EmitDrawPrimitives'e hic ulasmiyor (histogram cok_ornekli=0). Demek ki bu
+	// kapilardan birinde yeniliyorlar. Cok-ornekli cizimler ayrica sayiliyor:
+	// sahne geometrisini tasiyabilecek tek aday onlar.
+	static std::atomic<uint64_t> s_gate[6] {};  // 0:index0 1:metadata 2:vs_yok 3:ge_atla 4:topoloji 5:GECTI
+	static std::atomic<uint64_t> s_gate_mi[6] {};
+	const bool                   multi = (instance_count > 1);
+	auto                         gate  = [&](uint32_t g) {
+        s_gate[g].fetch_add(1, std::memory_order_relaxed);
+        const auto mi = multi ? s_gate_mi[g].fetch_add(1, std::memory_order_relaxed) + 1 : 0;
+        const auto all = s_gate[0] + s_gate[1] + s_gate[2] + s_gate[3] + s_gate[4] + s_gate[5];
+        if (all == 1 || (multi && mi <= 4) || (all % 2048) == 0) {
+            printf("[CIZIM-KAPI] index0:%llu/%llu metadata:%llu/%llu vs_yok:%llu/%llu "
+                   "ge_atla:%llu/%llu topoloji:%llu/%llu GECTI:%llu/%llu  (toplam/cok-ornekli)\n",
+                   (unsigned long long)s_gate[0], (unsigned long long)s_gate_mi[0],
+                   (unsigned long long)s_gate[1], (unsigned long long)s_gate_mi[1],
+                   (unsigned long long)s_gate[2], (unsigned long long)s_gate_mi[2],
+                   (unsigned long long)s_gate[3], (unsigned long long)s_gate_mi[3],
+                   (unsigned long long)s_gate[4], (unsigned long long)s_gate_mi[4],
+                   (unsigned long long)s_gate[5], (unsigned long long)s_gate_mi[5]);
+            fflush(stdout);
+        }
+	};
+
 	if (index_count == 0) {
+		gate(0);
 		return;
 	}
 
 	if (ConsumeMetadataColorOperation(*ctx)) {
+		gate(1);
 		return;
 	}
 
 	if (!DrawHasValidVertexShader(sh_ctx)) {
+		gate(2);
 		return;
 	}
 
 	if (ShouldSkipGeShader(ctx, ucfg, sh_ctx)) {
+		gate(3);
 		return;
 	}
 
@@ -1250,8 +1355,10 @@ void RenderDrawIndex(uint64_t submit_id, CommandBuffer* buffer, HW::Context* ctx
 
 	vk::PrimitiveTopology topology = vk::PrimitiveTopology::ePointList;
 	if (!GetDrawTopology(ucfg, false, false, &topology)) {
+		gate(4);
 		return;
 	}
+	gate(5);
 
 	vk::IndexType index_type           = vk::IndexType::eUint16;
 	uint64_t      index_size           = 0;

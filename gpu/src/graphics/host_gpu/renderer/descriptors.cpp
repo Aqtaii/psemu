@@ -377,7 +377,7 @@ static BufferView NativeStorageBuffer(uint64_t submit_id, CommandBuffer* command
 	// dokulardan degil tamponlardan besleniyor olabilir.
 	if (const auto probe = g_psemu_compute_probe.load(std::memory_order_relaxed); probe != 0) {
 		static std::atomic<uint32_t> s_n {0};
-		if (s_n.fetch_add(1) < 64) {
+		if (s_n.fetch_add(1) < 200000) {  // kapak YUKSEK: kesilmis log bu oturumda defalarca yanlis "hic olmuyor" sonucuna goturdu
 			std::printf("[CS-GIRDI #%u] TAMPON adres=0x%016llx boyut=0x%llx okuma=%d yazma=%d "
 			            "formatli=%d gpu_kirli=%d\n",
 			            probe, static_cast<unsigned long long>(address),
@@ -1066,7 +1066,7 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 	// dispatch'lerinin) dogru sonucudur.
 	if (const auto probe = g_psemu_compute_probe.load(std::memory_order_relaxed); probe != 0) {
 		static std::atomic<uint32_t> s_n {0};
-		if (s_n.fetch_add(1) < 64) {
+		if (s_n.fetch_add(1) < 200000) {  // kapak YUKSEK: kesilmis log bu oturumda defalarca yanlis "hic olmuyor" sonucuna goturdu
 			const auto region = g_render_ctx->GetTextureCache()->QueryRegion(address, size.size);
 			std::printf("[CS-GIRDI #%u] %s adres=0x%016llx %ux%u boyut=0x%llx tile=%u "
 			            "gpu_uretti=%llu goruntu_bayti=%llu\n",
