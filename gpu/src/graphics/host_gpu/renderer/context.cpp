@@ -462,6 +462,15 @@ void CommandBuffer::WaitForFenceOnly() {
 	auto device = g_render_ctx->GetGraphicCtx()->device;
 	auto result = device.waitForFences(1, &m_pool->fences[m_index], VK_TRUE, UINT64_MAX);
 	if (result != vk::Result::eSuccess) {
+		// printf: LOGF bu projede stdout'a gitmiyor, bu yuzden basarisizligin
+		// GERCEK sebebi (ozellikle eErrorDeviceLost) gorunmez kaliyordu.
+		printf("[FENCE-HATA] vkWaitForFences: %s (%d) kuyruk=%d indeks=%u submit_seq=%llu "
+		       "debug_op=%u debug_submit=%llu args=%u,%u,%u,%u,0x%016llx\n",
+		       VulkanToString(result).c_str(), static_cast<int>(result), m_queue, m_index,
+		       (unsigned long long)m_submit_seq, m_debug_op, (unsigned long long)m_debug_submit_id,
+		       m_debug_arg0, m_debug_arg1, m_debug_arg2, m_debug_arg3,
+		       (unsigned long long)m_debug_arg4);
+		fflush(stdout);
 		LOGF("vkWaitForFences failed: %s (%d), queue=%d index=%u submit_seq=%" PRIu64
 		     " debug_op=%u debug_submit=%" PRIu64 " args=%u,%u,%u,%u,0x%016" PRIx64 "\n",
 		     VulkanToString(result).c_str(), static_cast<int>(result), m_queue, m_index,

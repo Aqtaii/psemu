@@ -2259,6 +2259,12 @@ DepthStencilVulkanImage* TextureCache::FindDepthTarget(CommandBuffer* command, G
 					sampled_depth_source = entry;
 				}
 				break;
+			case DepthOverlap::RetireSampledDiscard:
+				// Temiz ama geometrisi uyusmayan doku: emekli et, iceriKINI KULLANMA.
+				// sampled_depth_source'a ATAMIYORUZ - yanlis sekilli bir goruntuyu
+				// derinlik olarak yuklemek sessizce bozuk kare uretirdi.
+				supported = cached.kind == CachedImage::Kind::Texture && !cached.gpu_modified;
+				break;
 			case DepthOverlap::RetireStorage:
 				supported = cached.kind == CachedImage::Kind::StorageTexture &&
 				            cached.gpu_modified && !cached.buffer_modified &&
@@ -2287,6 +2293,28 @@ DepthStencilVulkanImage* TextureCache::FindDepthTarget(CommandBuffer* command, G
 			case DepthOverlap::Unsupported: break;
 		}
 		if (!supported) {
+			// TANI: iki hedefin TAM KIMLIGI. Bu oturumda ogrendik ki adres+boyut
+			// tek basina bir takma adin ne oldugunu soylemiyor; karari veren sey
+			// geometri, format ve kirlilik bayraklari. Once kimlik, sonra kural.
+			const auto& ci = cached.info;
+			printf("[DERINLIK-TAKMA-AD] karar=%u desteklenmedi\n"
+			       "  ISTENEN : 0x%016llx+0x%llx  %ux%u pitch=%u kat=%u bpe=%u fmt=%d "
+			       "misafir_fmt=0x%x tile=%u  stencil=0x%llx+0x%llx htile=0x%llx+0x%llx "
+			       "temizle=%d stencil_erisim=%d\n"
+			       "  MEVCUT  : 0x%016llx+0x%llx  tur=%u %ux%u pitch=%u derinlik=%u seviye=%u "
+			       "misafir_fmt=0x%x tile=%u tip=%u  gpu_kirli=%d tampon_kirli=%d cpu_kirli=%d\n",
+			       static_cast<uint32_t>(overlap), (unsigned long long)info.address,
+			       (unsigned long long)info.size, info.width, info.height, info.pitch, info.layers,
+			       info.bytes_per_element, static_cast<int>(info.format), info.guest_format,
+			       info.tile_mode, (unsigned long long)info.stencil_address,
+			       (unsigned long long)info.stencil_size, (unsigned long long)info.htile_address,
+			       (unsigned long long)info.htile_size, info.depth_load_clear ? 1 : 0,
+			       info.stencil_access ? 1 : 0, (unsigned long long)cached.Address(),
+			       (unsigned long long)cached.Size(), static_cast<uint32_t>(cached.kind), ci.width,
+			       ci.height, ci.pitch, ci.depth, ci.levels, ci.format, ci.tile, ci.type,
+			       cached.gpu_modified ? 1 : 0, cached.buffer_modified ? 1 : 0,
+			       ci.IsCpuDirty() ? 1 : 0);
+			fflush(stdout);
 			EXIT("TextureCache: unsupported depth-target alias, depth=0x%016" PRIx64
 			     "+0x%016" PRIx64 " existing_kind=%u existing=0x%016" PRIx64 "+0x%016" PRIx64 "\n",
 			     info.address, info.size, static_cast<uint32_t>(cached.kind), cached.Address(),

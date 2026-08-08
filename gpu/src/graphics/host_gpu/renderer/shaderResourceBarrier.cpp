@@ -19,6 +19,14 @@ vk::PipelineStageFlags ShaderPipelineStages(vk::ShaderStageFlags stages) {
 	if (stages & vk::ShaderStageFlagBits::eCompute) {
 		result |= vk::PipelineStageFlagBits::eComputeShader;
 	}
+	// NGG birlesik ES-GS mesh yolu. Bu esleme eksik oldugu icin mesh cizimleri
+	// bariyer kurulumunda EXIT ediyordu (olculdu: shaderResourceBarrier.cpp:22).
+	if (stages & vk::ShaderStageFlagBits::eMeshEXT) {
+		result |= vk::PipelineStageFlagBits::eMeshShaderEXT;
+	}
+	if (stages & vk::ShaderStageFlagBits::eTaskEXT) {
+		result |= vk::PipelineStageFlagBits::eTaskShaderEXT;
+	}
 	EXIT_IF(!result);
 	return result;
 }

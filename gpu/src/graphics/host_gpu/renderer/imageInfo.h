@@ -332,6 +332,11 @@ inline constexpr std::array<VideoOutFormatPolicy, 6> VIDEO_OUT_FORMAT_POLICIES {
 enum class DepthOverlap : uint8_t {
 	None,
 	RetireSampled,
+	// Temiz ama GEOMETRISI UYUSMAYAN ornekli doku: emekli etmek kayipsiz
+	// (GPU tarafinda misafir bellekte olmayan icerik yok), ama iceriginin
+	// derinlik hedefine YUKLENMESI yanlis olurdu - farkli sekil, farkli boyut.
+	// Bu yuzden emeklilik ile icerik korumasi ayriliyor.
+	RetireSampledDiscard,
 	RetireStorage,
 	ExpandTarget,
 	DiscardTarget,
@@ -863,6 +868,18 @@ ClassifyStorageBufferRebind(bool buffer_overlap, bool cached_gpu_modified,
 	    (!has_stencil ||
 	     (depth.stencil_address != 0 && depth.stencil_size != 0 && depth.stencil_load_clear))) {
 		return DepthOverlap::RetireSampled;
+	}
+	// OLCULDU (NGG mesh yolu, PSEMU_MESH=1): ayni taban adreste 1920x1080 TEMIZ
+	// bir ornekli doku ile 1x1/pitch=128 bir derinlik hedefi cakisiyor. Ayni
+	// misafir format (0x16) ve ayni tile (24), ama tamamen farkli geometri -
+	// klasik gecici VRAM takma adi.
+	//
+	// Doku gpu_modified DEGILSE icerigi zaten misafir bellekte; emekli etmek
+	// kayipsiz. Bu, renk ve depolama hedefleri icin bu oturumda olcerek
+	// dogruladigimiz kuralin ayni uygulamasi. Geometri uyusmadigi icin
+	// icerigini derinlige YUKLEMIYORUZ - yalnizca yolu aciyoruz.
+	if (!sampled_gpu_modified) {
+		return DepthOverlap::RetireSampledDiscard;
 	}
 	return DepthOverlap::Unsupported;
 }
