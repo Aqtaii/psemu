@@ -1462,6 +1462,17 @@ void BufferCache::CopyBuffer(CommandBuffer* command, GraphicContext* ctx, uint64
 // + MarkRegionAsCpuModified yapiyor. Ciplak silme, konuk bellege hic
 // yazilmamis GPU verisini sessizce cope atardi.
 void BufferCache::LogOrphanDirtyRange(const char* what, uint64_t vaddr, uint64_t size) {
+	// TESHIS KODU EMULATORU COKERTMEMELI.
+	//
+	// Olculdu (keskin nisanci isareti: bufferCache:1465): bu fonksiyon sifir
+	// adresle cagrilabiliyor ve Intersections(0, ...) RangeSet'in mesru
+	// "sifir adres yok" degismezine carpip sureci olduruyordu. Mesh yolunda
+	// daha once EXIT ettigimiz icin bu dehlize hic girmemistik.
+	//
+	// Sifir adreste kesisim de olamaz; loglanacak bir sey yok.
+	if (vaddr == 0 || size == 0) {
+		return;
+	}
 	const auto dirty = m_gpu_modified_ranges.Intersections(vaddr, size);
 	for (const auto& range: dirty) {
 		const auto range_end  = range.address + range.size;

@@ -11,6 +11,11 @@
 
 namespace Libs::Graphics {
 
+// KESKIN NISANCI ISARETI: RangeSet yalnizca BufferCache tarafindan
+// kullaniliyor. Sifir adresle gelen cagirani ASLR/sembol cozumlemesiyle
+// ugrasmadan bulmak icin cagirma noktalari buraya kendi etiketini birakiyor.
+inline thread_local const char* g_psemu_range_site = "?";
+
 
 class RangeSet final {
 public:
@@ -92,9 +97,11 @@ private:
 			// (loader+0xffffffffffdfec90). Kalici cozum icin loader'in kendi
 			// sembol cozumleyicisi kullanilmali - crash izlerinde zaten
 			// "loader+0x..." basiyor.
-			std::printf("[ARALIK-GECERSIZ] adres=0x%016llx boyut=0x%016llx | cagiran=%p\n",
+			std::printf("[ARALIK-GECERSIZ] adres=0x%016llx boyut=0x%016llx | ISARET=%s "
+			            "cagiran=%p\n",
 			            static_cast<unsigned long long>(address),
-			            static_cast<unsigned long long>(size), __builtin_return_address(0));
+			            static_cast<unsigned long long>(size), g_psemu_range_site,
+			            __builtin_return_address(0));
 			std::fflush(stdout);
 			EXIT("invalid range-set address or size\n");
 		}
