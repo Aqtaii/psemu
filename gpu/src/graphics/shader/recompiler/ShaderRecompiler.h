@@ -33,6 +33,17 @@ struct CompileOptions {
 	const ShaderVertexInputInfo*  vertex_input_info    = nullptr;
 	const ShaderPixelInputInfo*   pixel_input_info     = nullptr;
 	const ShaderComputeInputInfo* compute_input_info   = nullptr;
+
+	// Mesh (NGG birlesik ES-GS) asamasinin DONANIM limitleri. Yer tutucu
+	// degerlerle calistirmak device lost uretiyordu: olculen shader wave64
+	// varsayiyor (v13 = (dalga_id << 6) + mbcnt) ve is grubu basina 216'ya
+	// kadar ilkel yaziyor; LocalSize=1 ile bu modelin tamami cokuyor.
+	//   mesh_output_vertices   <- VGT_GS_MAX_VERT_OUT
+	//   mesh_output_primitives <- GE_MAX_OUTPUT_PER_SUBGROUP
+	//   mesh_local_size_x      <- is grubu basina cagri sayisi
+	uint32_t mesh_output_vertices   = 0;
+	uint32_t mesh_output_primitives = 0;
+	uint32_t mesh_local_size_x      = 0;
 };
 
 struct CompileResult {

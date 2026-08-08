@@ -753,6 +753,11 @@ struct Program {
 	bool                    shader_info_complete       = false;
 	BindingLayout           bindings;
 	bool                    binding_layout_complete = false;
+	// Mesh asamasinin donanim limitleri (bkz. CompileOptions). 0 ise emitter
+	// guvenli varsayilanlara duser.
+	uint32_t                mesh_output_vertices   = 0;
+	uint32_t                mesh_output_primitives = 0;
+	uint32_t                mesh_local_size_x      = 0;
 };
 
 bool LowerProgram(const Decoder::Program& decoded, const CFG::Graph& cfg, ShaderType stage,

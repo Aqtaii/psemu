@@ -1685,6 +1685,24 @@ bool ShaderCompileInfoMS(const HW::VertexShaderInfo* regs, const HW::ShaderRegis
 	options.dump_ir              = false;
 	options.early_dump           = false;
 	options.dump_label           = "ShaderRecompiler MS";
+	// DONANIM limitleri. Yer tutucularla (LocalSize=1, cikti 256) calistirmak
+	// ErrorDeviceLost uretiyordu: olculen shader wave64 varsayiyor ve is grubu
+	// basina 216'ya kadar ilkel yaziyor.
+	options.mesh_output_vertices   = sh->m_vgtGsMaxVertOut;         // olculdu: 0x48 = 72
+	options.mesh_output_primitives = sh->m_geMaxOutputPerSubgroup;  // olculdu: 0xd8 = 216
+	// v13 = (dalga_id << 6) + mbcnt -> is grubu dalga_boyu katlarinda.
+	options.mesh_local_size_x = 64;
+	{
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 8) {
+			printf("[MS-LIMIT] gs_max_vert=%u(0x%x) max_cikis_alt_grup=%u(0x%x) "
+			       "ngg_alt_grup=0x%x gs_ornek=%u esgs_ring=%u -> LocalSize=%u\n",
+			       sh->m_vgtGsMaxVertOut, sh->m_vgtGsMaxVertOut, sh->m_geMaxOutputPerSubgroup,
+			       sh->m_geMaxOutputPerSubgroup, sh->m_geNggSubgrpCntl, sh->m_vgtGsInstanceCnt,
+			       sh->m_vgtEsgsRingItemsize, options.mesh_local_size_x);
+			fflush(stdout);
+		}
+	}
 
 	ShaderRecompiler::CompileResult result;
 	std::string                     error;

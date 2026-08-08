@@ -747,6 +747,26 @@ uint32_t LoadStorageImageDescriptor(EmitterState* state, uint32_t resource, bool
 	return image;
 }
 
+// VGT_GS_MAX_VERT_OUT / GE_MAX_OUTPUT_PER_SUBGROUP. Olculen Astro Bot GS'inde
+// 0x48 (72) ve 0xd8 (216). Tavan MESH_OUTPUT_MAX; 0 gelirse (register hic
+// yazilmamissa) tavana duseriz.
+uint32_t MeshOutputVertices(const EmitterState& state) {
+	const auto v = state.mesh_output_vertices;
+	return v == 0 ? MESH_OUTPUT_MAX : std::min(v, MESH_OUTPUT_MAX);
+}
+
+uint32_t MeshOutputPrimitives(const EmitterState& state) {
+	const auto v = state.mesh_output_primitives;
+	return v == 0 ? MESH_OUTPUT_MAX : std::min(v, MESH_OUTPUT_MAX);
+}
+
+// Is grubu basina cagri sayisi. Olculen shader v13 = (dalga_id << 6) + mbcnt
+// hesapliyor, yani wave64 varsayiyor; bu yuzden varsayilan dalga boyu.
+uint32_t MeshLocalSizeX(const EmitterState& state) {
+	const auto v = state.mesh_local_size_x;
+	return v == 0 ? std::max<uint32_t>(state.wave_size, 1u) : v;
+}
+
 uint32_t ExecutionModelForStage(ShaderType stage) {
 	switch (stage) {
 		case ShaderType::Vertex: return ExecutionModelVertex;

@@ -560,20 +560,17 @@ void EmitHeaderAndTypes(EmitterState* state) {
 		    {state->main_func, ExecutionModeLocalSize, local_x, local_y, local_z});
 	}
 	if (state->stage == ShaderType::Mesh) {
-		// Gercek kaynaklar Asama 3/4'te baglanacak:
-		//   LocalSize        <- NGG dalga/alt grup yapilandirmasi
-		//   OutputVertices   <- VGT_GS_MAX_VERT_OUT (olculen shader'da 0x48 = 72)
-		//   OutputPrimitives <- GE_MAX_OUTPUT_PER_SUBGROUP (olculen: 0xd8 = 216)
-		//
-		// O zamana kadar 256: OpSetMeshOutputsEXT artik DINAMIK deger yaziyor ve
-		// bu limitleri asamaz. 256, Vulkan'in maxMeshOutputVertices /
-		// maxMeshOutputPrimitives icin garanti ettigi asgari tavan, yani her
-		// uyumlu cihazda gecerli. (Yer tutucu 1 birakmak garanti ihlal olurdu.)
-		state->builder.AddExecutionMode({state->main_func, ExecutionModeLocalSize, 1u, 1u, 1u});
+		// DONANIM limitleri artik HW context'ten geliyor (bkz. MeshOutputVertices /
+		// MeshOutputPrimitives / MeshLocalSizeX). Yer tutucu degerlerle
+		// calistirmak device lost uretiyordu: olculen shader wave64 varsayiyor
+		// (v13 = (dalga_id << 6) + mbcnt) ve is grubu basina 216'ya kadar ilkel
+		// yaziyor; LocalSize=1 ile bu modelin tamami cokuyordu.
 		state->builder.AddExecutionMode(
-		    {state->main_func, ExecutionModeOutputVertices, MESH_OUTPUT_MAX});
+		    {state->main_func, ExecutionModeLocalSize, MeshLocalSizeX(*state), 1u, 1u});
 		state->builder.AddExecutionMode(
-		    {state->main_func, ExecutionModeOutputPrimitivesEXT, MESH_OUTPUT_MAX});
+		    {state->main_func, ExecutionModeOutputVertices, MeshOutputVertices(*state)});
+		state->builder.AddExecutionMode(
+		    {state->main_func, ExecutionModeOutputPrimitivesEXT, MeshOutputPrimitives(*state)});
 		state->builder.AddExecutionMode({state->main_func, ExecutionModeOutputTrianglesEXT});
 	}
 	if (state->stage == ShaderType::Pixel) {
@@ -692,7 +689,9 @@ void EmitHeaderAndTypes(EmitterState* state) {
 		                        state->per_vertex_type});
 		if (mesh) {
 			// gl_MeshVerticesEXT: per-vertex yapisinin DIZISI.
-			const auto count = ConstantU32(state, MESH_OUTPUT_MAX);
+			// Boy, ExecutionModeOutputVertices ile AYNI olmak zorunda: ikisinin
+			// ayrismasi sinir disi yazma demektir.
+			const auto count = ConstantU32(state, MeshOutputVertices(*state));
 			state->builder.AddType({OpTypeArray, state->mesh_per_vertex_array_type,
 			                        state->per_vertex_type, count});
 			state->builder.AddType({OpTypePointer, state->ptr_mesh_per_vertex_array,
@@ -705,15 +704,18 @@ void EmitHeaderAndTypes(EmitterState* state) {
 		}
 	}
 	if (mesh) {
-		const auto count = ConstantU32(state, MESH_OUTPUT_MAX);
+		// Parametreler per-VERTEX, primitif indeksleri per-PRIMITIVE: iki AYRI
+		// limit (72 ve 216 olculdu). Karistirmak sinir disi yazma olurdu.
+		const auto vtx_count  = ConstantU32(state, MeshOutputVertices(*state));
+		const auto prim_count = ConstantU32(state, MeshOutputPrimitives(*state));
 		state->builder.AddType(
-		    {OpTypeArray, state->mesh_param_array_type, state->vec4_float_type, count});
+		    {OpTypeArray, state->mesh_param_array_type, state->vec4_float_type, vtx_count});
 		state->builder.AddType({OpTypePointer, state->ptr_mesh_param_array, StorageClassOutput,
 		                        state->mesh_param_array_type});
 		// gl_PrimitiveTriangleIndicesEXT: uvec3 dizisi. GFX10 ucunu TEK dword'e
 		// paketliyor (v12 = v2 | (v0 << 10) | (v1 << 20)); acmayi EmitExport yapar.
 		state->builder.AddType(
-		    {OpTypeArray, state->mesh_prim_array_type, state->vec3_uint_type, count});
+		    {OpTypeArray, state->mesh_prim_array_type, state->vec3_uint_type, prim_count});
 		state->builder.AddType({OpTypePointer, state->ptr_mesh_prim_array, StorageClassOutput,
 		                        state->mesh_prim_array_type});
 		state->builder.AddType(

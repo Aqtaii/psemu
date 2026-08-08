@@ -22,11 +22,17 @@
 
 namespace Libs::Graphics::ShaderRecompiler::Spirv::Emitter {
 
-// Mesh cikti dizilerinin boyu. ExecutionModeOutputVertices/OutputPrimitives ile
-// AYNI olmak zorunda. Asama 3/4'te VGT_GS_MAX_VERT_OUT ve
-// GE_MAX_OUTPUT_PER_SUBGROUP'tan turetilecek; simdilik Vulkan'in her uyumlu
-// cihazda garanti ettigi asgari tavan.
+// Mesh cikti tavani. Donanim degerleri bunun uzerine cikamaz: Vulkan'in her
+// uyumlu cihazda garanti ettigi asgari maxMeshOutputVertices/Primitives.
 constexpr uint32_t MESH_OUTPUT_MAX = 256;
+
+// Mesh limitleri: donanim degeri varsa onu, yoksa guvenli varsayilani kullan.
+// Cikti DIZI BOYLARI da bunlarla ayni olmak zorunda - ExecutionMode ile dizi
+// uzunlugunun ayrismasi, sinir disi yazma demektir.
+struct EmitterState;
+[[nodiscard]] uint32_t MeshOutputVertices(const EmitterState& state);
+[[nodiscard]] uint32_t MeshOutputPrimitives(const EmitterState& state);
+[[nodiscard]] uint32_t MeshLocalSizeX(const EmitterState& state);
 
 // Gercek is grubu LDS'ine (StorageClassWorkgroup) sahip asamalar. Digerlerinde
 // LDS cagri-yerel bir diziye duser ve lane'ler arasi paylasimi sessizce bozar.
@@ -342,6 +348,12 @@ struct EmitterState {
 	const ShaderComputeInputInfo*          compute_input_info             = nullptr;
 	ShaderType                             stage                          = ShaderType::Unknown;
 	uint32_t                               wave_size                      = 64;
+	// Mesh asamasinin DONANIM limitleri (IR::Program'dan gelir). 0 ise
+	// guvenli varsayilan kullanilir - ama yer tutucu degerlerle calistirmak
+	// device lost uretiyordu, bu yuzden gercek degerler onemli.
+	uint32_t                               mesh_output_vertices           = 0;
+	uint32_t                               mesh_output_primitives         = 0;
+	uint32_t                               mesh_local_size_x              = 0;
 	bool                                   exact_subgroup_operations      = false;
 	bool                                   per_invocation_masks           = false;
 	uint32_t                               void_type                      = 0;
