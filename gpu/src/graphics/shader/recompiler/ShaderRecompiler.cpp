@@ -72,8 +72,13 @@ std::string FormatCfgFailure(const CFG::Graph& cfg, const CompileOptions& option
 
 bool InstructionMaySplitSpirvBlock(const IR::Instruction& inst) {
 	switch (inst.op) {
+		// NOT: SBufferLoadDword bu listede DEGIL - artik dallanmasiz uretiliyor
+		// (EmitMemoryLoadDwordValueU32, OpSelect ile kirpilmis indeks). Dongu
+		// basligindaki tek tikayici oydu. SLoadDword farkli bir yoldan
+		// (EmitSLoadDword) ve BufferLoadDword da EmitGuardedByExec sarmali
+		// icinden gectigi icin ikisi de hala dallanma uretiyor; onlar
+		// dallanmasiz hale gelince buradan da cikarilabilirler.
 		case IR::Opcode::SLoadDword:
-		case IR::Opcode::SBufferLoadDword:
 		case IR::Opcode::BufferLoadUbyte:
 		case IR::Opcode::BufferLoadSbyte:
 		case IR::Opcode::BufferLoadUshort:

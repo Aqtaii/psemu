@@ -502,9 +502,30 @@ uint32_t EmitMemoryLoadDwordValueU32(EmitterState* state, const IR::Instruction&
 	}
 	if (IsStorageBufferMemoryKind(mem.kind)) {
 		const auto in_bounds = EmitStorageBufferElementInBounds(state, mem, index, inst.pc);
-		return EmitValueOrZeroIfCondition(state, in_bounds, [&]() {
-			return LoadFromPointer(EmitStorageBufferElementPointer(state, mem, index, inst.pc));
-		});
+		// DALLANMASIZ SINIR DENETIMI.
+		//
+		// Onceki hali OpSelectionMerge + OpBranchConditional + OpPhi uretiyordu.
+		// SPIR-V, dongu basliginin OpLoopMerge'ten HEMEN SONRA dallanmasini sart
+		// kosar; basligin icindeki bu gizli if/else yuzunden Astro Bot'un mesh
+		// shader'i yapilandirilamiyordu (olculdu: "loop header block 11 contains
+		// an instruction whose SPIR-V lowering emits internal control flow:
+		// SBufferLoadDword").
+		//
+		// Yerine: indeksi sinir icine KIRP, kosulsuz oku, sonucu OpSelect ile
+		// sec. Kirpilmis indeksten okumak guvenli - device_features
+		// .robustBufferAccess acik (bkz. vulkanWindow.cpp), yani bagli bir
+		// tamponda sinir disi erisim hataya degil tanimli davranisa yol acar;
+		// ayrica adres 0 olan descriptor'lar 16 baytlik null tampona baglaniyor.
+		// Anlamsal olarak ayni: sinir disinda 0 doner. Dallanma yok, phi yok.
+		const auto safe_index = state->builder.AllocateId();
+		state->builder.AddFunction(
+		    {OpSelect, state->uint_type, safe_index, in_bounds, index, ConstantU32(state, 0)});
+		const auto value =
+		    LoadFromPointer(EmitStorageBufferElementPointer(state, mem, safe_index, inst.pc));
+		const auto result = state->builder.AllocateId();
+		state->builder.AddFunction(
+		    {OpSelect, state->uint_type, result, in_bounds, value, ConstantU32(state, 0)});
+		return result;
 	}
 	return ConstantU32(state, 0);
 }
