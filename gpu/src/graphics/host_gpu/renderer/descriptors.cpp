@@ -294,6 +294,22 @@ static void CopyNativeDescriptor(const ShaderRecompiler::IR::DescriptorValue& so
 	std::copy_n(source.dwords.begin(), destination.size(), destination.begin());
 }
 
+// TANI: descriptor kurulumunda hangi asamadayiz? NativeStorageBuffer asamayi
+// parametre olarak almiyor; limit ihlali logunda "bu mesh mi, baska bir shader
+// mi" sorusunu cevaplamak icin BindDescriptors buraya isaret birakiyor.
+static thread_local ShaderType t_current_descriptor_stage = ShaderType::Unknown;
+
+static const char* StageNameForLog(ShaderType stage) {
+	switch (stage) {
+		case ShaderType::Vertex: return "Vertex";
+		case ShaderType::Pixel: return "Pixel";
+		case ShaderType::Compute: return "Compute";
+		case ShaderType::Mesh: return "Mesh";
+		case ShaderType::Fetch: return "Fetch";
+		default: return "Unknown";
+	}
+}
+
 static BufferView NativeStorageBuffer(uint64_t submit_id, CommandBuffer* command_buffer,
                                       const ShaderBufferResource&                 descriptor,
                                       const ShaderRecompiler::IR::BufferResource& resource) {
@@ -375,13 +391,14 @@ static BufferView NativeStorageBuffer(uint64_t submit_id, CommandBuffer* command
 		// x num_records carpimindan geliyor ve descriptor cop ise devasa
 		// olabilir.
 		const auto max_range = ctx->GetPhysicalDeviceProperties().limits.maxStorageBufferRange;
-		printf("[DEPO-TAMPON-LIMIT] neden: hizalama_sifir=%d boyut_asiyor=%d "
+		printf("[DEPO-TAMPON-LIMIT] asama=%s neden: hizalama_sifir=%d boyut_asiyor=%d "
 		       "sayfa_hizalanmiyor=%d\n"
 		       "  descriptor: adres=0x%012llx stride=%u kayit=%u -> boyut=0x%llx (%llu bayt)\n"
 		       "  cihaz     : maxStorageBufferRange=0x%x (%u bayt) minAlignment=%llu "
 		       "CACHING_PAGE_SIZE=%llu\n"
 		       "  ham       : %08x %08x %08x %08x\n",
-		       alignment == 0 ? 1 : 0, size > max_range ? 1 : 0,
+		       StageNameForLog(t_current_descriptor_stage), alignment == 0 ? 1 : 0,
+		       size > max_range ? 1 : 0,
 		       (alignment != 0 && BufferCache::CACHING_PAGE_SIZE % alignment != 0) ? 1 : 0,
 		       (unsigned long long)address, stride, records, (unsigned long long)size,
 		       (unsigned long long)size, max_range, max_range, (unsigned long long)alignment,
@@ -1331,6 +1348,7 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 	if (!ShaderRecompiler::IR::ValidateResourceSpecialization(program, snapshot, &error)) {
 		EXIT("invalid native shader runtime snapshot: %s\n", error.c_str());
 	}
+	t_current_descriptor_stage = program.stage;
 	auto       vk_buffer     = buffer->Handle();
 	const auto shader_stages = ShaderPipelineStages(vk_stage);
 
@@ -1409,6 +1427,24 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 				// yoksa user_data penceresi kaydigi icin cop mu? Ham dokum.
 				printf("[SRT-TAMPON] asama=mesh flattened_srt=%llu dword | user_data_base=%u\n",
 				       (unsigned long long)snapshot.flattened_srt.size(), program.user_data_base);
+				// SGPR HARITASI: shader hangi user SGPR'leri okuyor ve o
+				// pencerede ne var? Olculdu: cozulen "tampon" aslinda
+				// {1/1920, 1/1080, 1920.0, 1080.0} viewport sabitleri
+				// (commit 421eda1). Pencere kaymissa burada gorunur.
+				printf("[SGPR-HARITA] okunan_sgpr=[");
+				for (const auto reg: program.bindings.user_data_registers) {
+					printf("%u ", reg);
+				}
+				printf("] user_data_boyu=%llu\n",
+				       (unsigned long long)snapshot.user_data.size());
+				for (size_t k = 0; k < snapshot.user_data.size(); k += 4) {
+					printf("[SGPR-HARITA]   s%zu..s%zu: %08x %08x %08x %08x\n",
+					       k + program.user_data_base, k + 3 + program.user_data_base,
+					       snapshot.user_data[k],
+					       k + 1 < snapshot.user_data.size() ? snapshot.user_data[k + 1] : 0,
+					       k + 2 < snapshot.user_data.size() ? snapshot.user_data[k + 2] : 0,
+					       k + 3 < snapshot.user_data.size() ? snapshot.user_data[k + 3] : 0);
+				}
 				for (size_t k = 0; k < snapshot.flattened_srt.size(); k += 4) {
 					printf("[SRT-ICERIK]   [%02zu] %08x %08x %08x %08x\n", k,
 					       snapshot.flattened_srt[k],
