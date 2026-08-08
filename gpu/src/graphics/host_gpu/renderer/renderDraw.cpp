@@ -540,6 +540,12 @@ static bool ShouldSkipGeShader(const HW::Context* ctx, const HW::UserConfig* ucf
 				// kestirme yeter mi, yoksa tam NGG GS mi gerekiyor"u belirler.
 				PsemuDumpShaderAtAddress("es", vertex_info.es_regs.data_addr);
 				PsemuDumpShaderAtAddress("gs", vertex_info.gs_regs.data_addr);
+				// Asama 4 sondaji: GS'i Mesh olarak derlemeyi dene. Cizim yolu
+				// degismiyor - yalnizca emitter'in gercek shader'da gecerli
+				// SPIR-V uretip uretmedigini olcuyoruz.
+				PsemuProbeMeshCompile(vertex_info.gs_regs.data_addr,
+				                      vertex_info.gs_regs.rsrc2.user_sgpr,
+				                      sh_ctx->GetVs().gs_user_sgpr.value);
 			}
 		}
 		const auto log_id = g_shader_stage_log_count.fetch_add(1);

@@ -222,6 +222,10 @@ void ShaderMapUserData(uint64_t addr, const ShaderMappedData& data);
 // Derleme yoluna hic girmeyen (atlanan) shader'lari okumak icin.
 void PsemuDumpShaderAtAddress(const char* kind, uint64_t shader_addr);
 
+// ASAMA 4 SONDAJI: NGG GS'i Mesh asamasi olarak derleyip SPIR-V dogrulamasindan
+// gecirmeyi dener. Cizim yoluna dokunmaz; yalnizca olcum.
+void PsemuProbeMeshCompile(uint64_t gs_addr, uint32_t user_sgpr_count, const uint32_t* user_data);
+
 void     ShaderDbgDumpInputInfo(const ShaderVertexInputInfo* info);
 void     ShaderDbgDumpInputInfo(const ShaderPixelInputInfo* info);
 void     ShaderDbgDumpInputInfo(const ShaderComputeInputInfo* info);

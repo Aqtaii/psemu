@@ -4,6 +4,7 @@
 #include "common/common.h"
 
 #include <initializer_list>
+#include <string>
 #include <vector>
 
 namespace Libs::Graphics::ShaderRecompiler::Spirv {
@@ -43,8 +44,18 @@ private:
 	static void AppendInstruction(std::vector<uint32_t>* section, uint32_t opcode,
 	                              std::initializer_list<uint32_t> operands);
 	static void AppendString(std::vector<uint32_t>* words, const char* text);
+	void        EmitEntryPoint(std::vector<uint32_t>* section) const;
 
 	uint32_t              m_next_id = 1;
+	// Entry point Build() aninda basiliyor: SPIR-V 1.4+ arayuz listesine modul
+	// kapsamli TUM degiskenler girmek zorunda, ve onlar entry point'ten sonra
+	// bildiriliyor.
+	bool                  m_has_entry_point       = false;
+	uint32_t              m_entry_execution_model = 0;
+	uint32_t              m_entry_point           = 0;
+	std::string           m_entry_name;
+	std::vector<uint32_t> m_entry_interfaces;
+	std::vector<uint32_t> m_module_scope_variables;
 	uint32_t              m_version = 0x00010300u;  // SPIR-V 1.3 (varsayilan)
 	std::vector<uint32_t> m_capabilities;
 	std::vector<uint32_t> m_extensions;

@@ -1543,6 +1543,90 @@ static void DumpShaderRecompilerOriginal(const char* type, uint64_t shader_hash,
 	}
 }
 
+// ASAMA 4 SONDAJI: NGG birlesik ES-GS'in GS yarisini MESH asamasi olarak
+// derlemeyi dener ve SPIR-V dogrulamasindan gecirir. Cizim yoluna HIC
+// dokunmuyor - amac, Asama 1-3'te yazdigimiz emitter yolunun gercek bir
+// shader uzerinde gecerli SPIR-V uretip uretmedigini, renderer'i riske
+// atmadan olcmek. Sonuc "gecti" ise pipeline/draw tarafina gecmeye deger;
+// "kaldi" ise once eksigi kapatiriz.
+void PsemuProbeMeshCompile(uint64_t gs_addr, uint32_t user_sgpr_count, const uint32_t* user_data) {
+	if (gs_addr == 0) {
+		return;
+	}
+	static std::mutex            mtx;
+	static std::vector<uint64_t> done;
+	{
+		std::lock_guard lock(mtx);
+		for (const auto& a : done) {
+			if (a == gs_addr) {
+				return;
+			}
+		}
+		if (done.size() >= 4) {
+			return;
+		}
+		done.push_back(gs_addr);
+	}
+
+	ShaderMappedData data;
+	if (!ShaderGetMappedData(gs_addr, &data) || data.code_size_bytes == 0 ||
+	    (data.code_size_bytes % sizeof(uint32_t)) != 0) {
+		printf("[MESH-SONDAJ] 0x%016llx: ShaderMap'te yok\n", (unsigned long long)gs_addr);
+		fflush(stdout);
+		return;
+	}
+	const std::span<const uint32_t> code {reinterpret_cast<const uint32_t*>(gs_addr),
+	                                      data.code_size_bytes / sizeof(uint32_t)};
+
+	// Kaynak cozumlemesi user SGPR penceresine bagli ve GS yarisinin penceresi
+	// VS yolundan farkli olabilir. Tahmin etmek yerine birkac (taban, sayi)
+	// birlesimini deneyip HANGISININ gectigini olcuyoruz.
+	struct Deneme {
+		uint32_t base;
+		uint32_t count;
+	};
+	const Deneme denemeler[] = {{8, std::max<uint32_t>(user_sgpr_count, 16u)},
+	                            {8, 32u},
+	                            {0, std::max<uint32_t>(user_sgpr_count, 16u)},
+	                            {0, 32u}};
+
+	printf("[MESH-SONDAJ] 0x%016llx gs_user_sgpr=%u kod=%llu dword\n", (unsigned long long)gs_addr,
+	       user_sgpr_count, (unsigned long long)code.size());
+	fflush(stdout);
+
+	for (const auto& d : denemeler) {
+		ShaderRecompiler::CompileOptions options;
+		options.stage                = ShaderType::Mesh;
+		options.shader_hash          = gs_addr;
+		options.shader_base          = gs_addr;
+		options.user_data_base       = d.base;
+		options.user_data_count      = d.count;
+		options.user_data            = user_data;
+		options.descriptor_set       = 0;
+		options.push_constant_offset = 0;
+		options.dump_ir              = false;
+		options.early_dump           = false;
+		options.dump_label           = "ShaderRecompiler MS(sondaj)";
+
+		ShaderRecompiler::CompileResult result;
+		std::string                     error;
+		if (!ShaderRecompiler::TryRecompile(code, options, &result, &error)) {
+			printf("[MESH-SONDAJ]   taban=%u sayi=%u -> KALDI: %s\n", d.base, d.count,
+			       error.c_str());
+			fflush(stdout);
+			continue;
+		}
+		const bool valid =
+		    SpirvValidateBinary("ShaderRecompiler MS(sondaj)", options.shader_hash, result.spirv);
+		printf("[MESH-SONDAJ]   taban=%u sayi=%u -> RECOMPILE GECTI (spirv=%llu word) "
+		       "dogrulama=%s\n",
+		       d.base, d.count, (unsigned long long)result.spirv.size(), valid ? "GECTI" : "KALDI");
+		fflush(stdout);
+		DumpShaderRecompilerSpirv("ms_sondaj", options.shader_hash, result.spirv);
+		return;
+	}
+}
+
 bool ShaderCompileSpirvVS(const HW::VertexShaderInfo* regs, const HW::ShaderRegisters* sh,
                           ShaderLaneMaskMode lane_mask_mode, ShaderVertexInputInfo* input_info,
                           std::vector<uint32_t>* spirv) {

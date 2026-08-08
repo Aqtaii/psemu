@@ -1,5 +1,6 @@
 #include "graphics/shader/recompiler/SpirvBuilder.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -86,12 +87,39 @@ void Builder::AddMemoryModel(std::initializer_list<uint32_t> operands) {
 	AppendInstruction(&m_memory_model, 14u, operands);
 }
 
+// SPIR-V 1.4'ten ITIBAREN OpEntryPoint arayuz listesi modul kapsamli TUM
+// degiskenleri icermek zorunda; 1.3'te yalnizca Input/Output yeterliydi. Bu
+// yuzden entry point'i hemen basmiyoruz: once modul kapsamli degiskenleri
+// topluyoruz (AddType), sonra Build() aninda listeyi kuruyoruz.
+//
+// 1.3 modullerinde davranis DEGISMIYOR - liste aynen verildigi gibi basiliyor,
+// yani mevcut vertex/pixel/compute ciktilari bit bazinda korunuyor.
 void Builder::AddEntryPoint(uint32_t execution_model, uint32_t entry_point, const char* name,
                             const std::vector<uint32_t>& interfaces) {
-	std::vector<uint32_t> operands = {execution_model, entry_point};
-	AppendString(&operands, name);
+	m_entry_execution_model = execution_model;
+	m_entry_point           = entry_point;
+	m_entry_name            = name != nullptr ? name : "";
+	m_entry_interfaces      = interfaces;
+	m_has_entry_point       = true;
+}
+
+void Builder::EmitEntryPoint(std::vector<uint32_t>* section) const {
+	if (!m_has_entry_point) {
+		return;
+	}
+	std::vector<uint32_t> operands = {m_entry_execution_model, m_entry_point};
+	AppendString(&operands, m_entry_name.c_str());
+
+	std::vector<uint32_t> interfaces = m_entry_interfaces;
+	if (m_version >= 0x00010400u) {
+		for (const auto id: m_module_scope_variables) {
+			if (std::find(interfaces.begin(), interfaces.end(), id) == interfaces.end()) {
+				interfaces.push_back(id);
+			}
+		}
+	}
 	operands.insert(operands.end(), interfaces.begin(), interfaces.end());
-	AppendInstruction(&m_entry_points, 15u, operands);
+	AppendInstruction(section, 15u, operands);
 }
 
 void Builder::AddExecutionMode(std::initializer_list<uint32_t> operands) {
@@ -109,6 +137,15 @@ void Builder::AddAnnotation(std::initializer_list<uint32_t> words) {
 }
 
 void Builder::AddType(std::initializer_list<uint32_t> words) {
+	// Modul kapsamli degiskenleri yakala: OpVariable = 59, sozcukler
+	// [opcode, sonuc_tipi, sonuc_id, depolama_sinifi]. StorageClassFunction (7)
+	// fonksiyon-yereldir, arayuze girmez.
+	if (words.size() >= 4 && *words.begin() == 59u) {
+		const auto* w = words.begin();
+		if (w[3] != 7u) {
+			m_module_scope_variables.push_back(w[2]);
+		}
+	}
 	AppendInstructionWords(&m_types, words.begin(), words.size());
 }
 
@@ -153,7 +190,9 @@ std::vector<uint32_t> Builder::Build() const {
 	module.insert(module.end(), m_extensions.begin(), m_extensions.end());
 	module.insert(module.end(), m_ext_inst_imports.begin(), m_ext_inst_imports.end());
 	module.insert(module.end(), m_memory_model.begin(), m_memory_model.end());
-	module.insert(module.end(), m_entry_points.begin(), m_entry_points.end());
+	std::vector<uint32_t> entry_points;
+	EmitEntryPoint(&entry_points);
+	module.insert(module.end(), entry_points.begin(), entry_points.end());
 	module.insert(module.end(), m_execution_modes.begin(), m_execution_modes.end());
 	module.insert(module.end(), m_debug.begin(), m_debug.end());
 	module.insert(module.end(), m_annotations.begin(), m_annotations.end());

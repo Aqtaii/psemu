@@ -426,8 +426,8 @@ bool EmitProgram(const IR::Program& program, const IR::ResourceSnapshot& resourc
 		return false;
 	}
 	if (program.stage != ShaderType::Compute && program.stage != ShaderType::Vertex &&
-	    program.stage != ShaderType::Pixel) {
-		SetError(error, "binary SPIR-V emitter supports compute, vertex, and pixel shaders");
+	    program.stage != ShaderType::Pixel && program.stage != ShaderType::Mesh) {
+		SetError(error, "binary SPIR-V emitter supports compute, vertex, pixel, and mesh shaders");
 		return false;
 	}
 	if (!program.srt_patching_complete || !program.resource_tracking_complete ||

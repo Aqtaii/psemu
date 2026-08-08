@@ -642,9 +642,9 @@ bool TryRecompile(std::span<const uint32_t> code, const CompileOptions& options,
 		return false;
 	}
 	if (options.stage != ShaderType::Compute && options.stage != ShaderType::Vertex &&
-	    options.stage != ShaderType::Pixel) {
+	    options.stage != ShaderType::Pixel && options.stage != ShaderType::Mesh) {
 		if (error != nullptr) {
-			*error = "shader recompiler supports compute, vertex, and pixel stages";
+			*error = "shader recompiler supports compute, vertex, pixel, and mesh stages";
 		}
 		return false;
 	}
