@@ -934,6 +934,8 @@ bool SelectionMergeLeavesContainingLoop(const Graph& graph, uint32_t header, uin
 	return false;
 }
 
+std::string VectorToString(const std::vector<uint32_t>& values);
+
 bool SplitSharedMergeBlock(Graph* graph, uint32_t merge,
                            const std::vector<uint32_t>& construct_blocks,
                            bool                         force_split = false) {
@@ -957,8 +959,28 @@ bool SplitSharedMergeBlock(Graph* graph, uint32_t merge,
 		}
 	}
 
-	if (construct_predecessors.empty() || (!force_split && external_predecessors.empty())) {
+	// TANI: bolme hangi on kosulda duruyor? Cakisan merge'leri onarmak icin
+	// sart. Olculdu: gercek blokaj "tum_onculler_sentetik_yonlendirici" -
+	// bolunecek tek oncul zaten onceki bir bolmenin urettigi yonlendirici.
+	auto decline = [&](const char* reason) {
+		static std::atomic<uint32_t> s_n {0};
+		// Kapak YUKSEK: ilk olcumde 64 kaydin 64'u de ayni nedendi, gercek
+		// blokaj kesilmis logun arkasinda kalmisti.
+		if (s_n.fetch_add(1) < 100000) {
+			std::printf("[CFG-BOLME-RED] merge=%u neden=%s | construct_onculleri=[%s] "
+			            "dis_onculler=[%s] zorla=%d\n",
+			            merge, reason, VectorToString(construct_predecessors).c_str(),
+			            VectorToString(external_predecessors).c_str(), force_split ? 1 : 0);
+			std::fflush(stdout);
+		}
 		return false;
+	};
+
+	if (construct_predecessors.empty()) {
+		return decline("construct_onculu_yok");
+	}
+	if (!force_split && external_predecessors.empty()) {
+		return decline("dis_oncul_yok");
 	}
 	std::vector<uint32_t> predecessors_to_split;
 	for (auto pred: construct_predecessors) {
@@ -967,7 +989,7 @@ bool SplitSharedMergeBlock(Graph* graph, uint32_t merge,
 		}
 	}
 	if (predecessors_to_split.empty()) {
-		return false;
+		return decline("tum_onculler_sentetik_yonlendirici");
 	}
 
 	const auto synthetic_merge = AppendSyntheticMergeBlock(graph, merge);
@@ -1392,6 +1414,49 @@ bool Structurize(Graph* graph, std::string* error) {
 	auto                         reserve_merge_block = [&](uint32_t header, uint32_t merge) {
 		const auto [it, inserted] = merge_headers.emplace(merge, header);
 		if (!inserted && it->second != header) {
+			// TANI: cakismanin ANATOMISI. Iki basligin domine ettigi kumeler ve
+			// merge'in oncul kesisimi yan yana. Olculdu: ic ice iki secim
+			// (disaridaki + icerideki) ayni bloga yakinsiyor; icteki icin bolme,
+			// tek construct onculunun ZATEN sentetik yonlendirici olmasi
+			// yuzunden reddediliyor (bkz. [CFG-BOLME-RED]).
+			const auto            other       = it->second;
+			const auto*           merge_block = graph->FindBlock(merge);
+			const auto            dom_new     = DominatedBlocks(*graph, header, merge);
+			const auto            dom_old     = DominatedBlocks(*graph, other, merge);
+			std::vector<uint32_t> preds_in_new;
+			std::vector<uint32_t> preds_in_old;
+			std::vector<uint32_t> preds_outside;
+			if (merge_block != nullptr) {
+				for (auto pred: merge_block->predecessors) {
+					const bool in_new = Contains(dom_new, pred);
+					const bool in_old = Contains(dom_old, pred);
+					if (in_new) {
+						AddUnique(&preds_in_new, pred);
+					}
+					if (in_old) {
+						AddUnique(&preds_in_old, pred);
+					}
+					if (!in_new && !in_old) {
+						AddUnique(&preds_outside, pred);
+					}
+				}
+			}
+			std::printf("[CFG-CAKISMA] merge=%u | yeni_header=%u eski_header=%u\n"
+			            "  merge_onculleri = [%s]\n"
+			            "  yeni_header domine (merge'e kadar) = [%s]\n"
+			            "  eski_header domine (merge'e kadar) = [%s]\n"
+			            "  oncul kesisimi: yeni=[%s] eski=[%s] disarida=[%s]\n"
+			            "  dominans: yeni->merge=%d eski->merge=%d eski->yeni=%d\n",
+			            merge, header, other,
+			            merge_block != nullptr ? VectorToString(merge_block->predecessors).c_str()
+			                                   : "?",
+			            VectorToString(dom_new).c_str(), VectorToString(dom_old).c_str(),
+			            VectorToString(preds_in_new).c_str(), VectorToString(preds_in_old).c_str(),
+			            VectorToString(preds_outside).c_str(),
+			            graph->Dominates(header, merge) ? 1 : 0,
+			            graph->Dominates(other, merge) ? 1 : 0,
+			            graph->Dominates(other, header) ? 1 : 0);
+			std::fflush(stdout);
 			SetFailure(
 			    graph, FailureKind::StructuredControlFlow, header,
 			    fmt::format(
