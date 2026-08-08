@@ -817,6 +817,9 @@ int MeshNoopMode() {
 		if (std::strcmp(env, "lds-oku") == 0) {
 			return 64;
 		}
+		if (std::strcmp(env, "duz") == 0) {
+			return 128;
+		}
 		return 0;
 	}();
 	return mode;

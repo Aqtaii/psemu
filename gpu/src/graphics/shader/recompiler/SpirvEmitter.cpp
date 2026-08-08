@@ -7,6 +7,7 @@
 #include <array>
 #include <cinttypes>
 #include <cstdio>
+#include <map>
 
 namespace Libs::Graphics::ShaderRecompiler::Spirv {
 
@@ -457,6 +458,35 @@ bool EmitProgram(const IR::Program& program, const IR::ResourceSnapshot& resourc
 	state.mesh_output_primitives = program.mesh_output_primitives;
 	state.mesh_local_size_x      = program.mesh_local_size_x;
 	state.mesh_lds_dwords        = program.mesh_lds_dwords;
+
+	// TANI: mesh programinin IR OPCODE HISTOGRAMI.
+	//
+	// Kirpma deneylerinin (PSEMU_MESH_NOOP) KAPSAMINI dogrulamak icin sart.
+	// "tampon" ve "duz" modlarinda atlanan komut sayisini teyit edemedigimiz
+	// icin o deneylerin sonuclari belirsiz kaldi: shader'da o opcode hic yoksa
+	// deney bir sey kanitlamaz. Once icerigi olcuyoruz, sonra deney kuruyoruz.
+	if (program.stage == ShaderType::Mesh) {
+		static std::atomic<uint32_t> s_dumped {0};
+		if (s_dumped.fetch_add(1) < 2) {
+			std::map<int, uint32_t> counts;
+			uint32_t                total = 0;
+			for (const auto& block: program.blocks) {
+				for (const auto& inst: block.instructions) {
+					counts[static_cast<int>(inst.op)]++;
+					total++;
+				}
+			}
+			std::vector<std::pair<int, uint32_t>> sorted(counts.begin(), counts.end());
+			std::sort(sorted.begin(), sorted.end(),
+			          [](const auto& a, const auto& b) { return a.second > b.second; });
+			std::printf("[MS-IR] toplam_komut=%u benzersiz_opcode=%zu blok=%zu\n", total,
+			            sorted.size(), program.blocks.size());
+			for (size_t i = 0; i < sorted.size() && i < 24; i++) {
+				std::printf("[MS-IR]   op=%d adet=%u\n", sorted[i].first, sorted[i].second);
+			}
+			std::fflush(stdout);
+		}
+	}
 	state.per_invocation_masks = program.lane_mask_mode == ShaderLaneMaskMode::PerInvocation;
 	state.exact_subgroup_operations =
 	    !state.per_invocation_masks && ProgramRequiresExactSubgroupSize(program);

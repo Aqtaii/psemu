@@ -395,6 +395,11 @@ static bool MeshNoopSkips(const EmitterState& state, IR::Opcode op) {
 	// Son bolme: descriptor cozumleme (srt) mi, LDS okumalari (lds-oku) mi?
 	const bool skip_srt      = (mode & 32) != 0;
 	const bool skip_lds_read = (mode & 64) != 0;
+	// "duz": HAM ADRESLI erisimler (flat/global). Bagli descriptor'lardan
+	// gecmeyen tek yol bunlar; robustBufferAccess de korumaz. LoadSrtDword'un
+	// okudugu dword'ler burada isaretci olarak kullaniliyorsa, page fault'un
+	// gercek cikis noktasi burasidir.
+	const bool skip_flat = (mode & 128) != 0;
 	switch (op) {
 		case IR::Opcode::LoadSrtDword: return skip_memory || skip_srt;
 		case IR::Opcode::DsReadUbyte:
@@ -420,7 +425,10 @@ static bool MeshNoopSkips(const EmitterState& state, IR::Opcode op) {
 		case IR::Opcode::FlatLoadSbyte:
 		case IR::Opcode::FlatLoadUshort:
 		case IR::Opcode::FlatLoadSshort:
-		case IR::Opcode::FlatLoadDword: return skip_buffer || skip_memory;
+		case IR::Opcode::FlatLoadDword:
+		case IR::Opcode::FlatStoreByte:
+		case IR::Opcode::FlatStoreShort:
+		case IR::Opcode::FlatStoreDword: return skip_buffer || skip_memory || skip_flat;
 		case IR::Opcode::DsWriteByte:
 		case IR::Opcode::DsWriteShort:
 		case IR::Opcode::DsWriteB32:
