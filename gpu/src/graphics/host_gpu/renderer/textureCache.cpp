@@ -3632,8 +3632,26 @@ RenderTextureVulkanImage* TextureCache::FindRenderTargetByRange(CommandBuffer* c
 }
 
 TextureCache::RegionInfo TextureCache::QueryRegion(uint64_t vaddr, uint64_t size) {
-	if (vaddr == 0 || size == 0 || vaddr >= TRACKER_ADDRESS_SIZE ||
-	    size > TRACKER_ADDRESS_SIZE - vaddr) {
+	// NULL DESCRIPTOR SORGUSU: adres 0 icin dogru cevap BOS BOLGE'dir.
+	//
+	// Sifir adresinde ne goruntu ne metadata olabilir; bu bir hata degil,
+	// cevabi bilinen bir sorudur. EXIT buraya, null descriptor'lar nadirken
+	// savunma amaciyla konmustu. Artik mesru olarak varlar: sahte descriptor
+	// tespiti (commit c3e6488) bozuk V#'leri null tampona bagliyor ve null
+	// tamponun taban adresi 0. Cagiran da onu sorgulayinca cokuyorduk.
+	//
+	// Bu bir baypas degil: bos RegionInfo, gercegin ta kendisi.
+	if (vaddr == 0) {
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 8) {
+			printf("[NULL-BOLGE-SORGUSU] addr=0 size=0x%llx -> bos bolge donuluyor "
+			       "(cagiran donus adresi=%p)\n",
+			       (unsigned long long)size, __builtin_return_address(0));
+			fflush(stdout);
+		}
+		return {};
+	}
+	if (size == 0 || vaddr >= TRACKER_ADDRESS_SIZE || size > TRACKER_ADDRESS_SIZE - vaddr) {
 		EXIT("TextureCache: invalid region query, addr=0x%016" PRIx64 " size=0x%016" PRIx64 "\n",
 		     vaddr, size);
 	}

@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdio>
 #include <map>
 #include <vector>
 
@@ -80,6 +81,16 @@ public:
 private:
 	static uint64_t End(uint64_t address, uint64_t size) {
 		if (address == 0 || size == 0 || size > UINT64_MAX - address) {
+			// TANI: RangeSet'in "sifir adres yok" degismezi MESRU - burasi genel
+			// bir kapsayici. Dolayisiyla duzeltme cagiranda olmali, burada
+			// degil. Hangi cagiranin sifir adresle geldigini kaydediyoruz;
+			// sahte descriptor tespiti (commit c3e6488) null tampon bagladigi
+			// icin bu yol yeni yeni tetikleniyor.
+			std::printf("[ARALIK-GECERSIZ] adres=0x%016llx boyut=0x%016llx "
+			            "(cagiran donus adresi=%p)\n",
+			            static_cast<unsigned long long>(address),
+			            static_cast<unsigned long long>(size), __builtin_return_address(0));
+			std::fflush(stdout);
 			EXIT("invalid range-set address or size\n");
 		}
 		return address + size;
