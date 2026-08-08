@@ -1137,12 +1137,74 @@ void LogMergeClaimMap(const Graph& graph) {
 	}
 }
 
+// DONGUDEN BREAK YAPAN SECIM (olculen B sinifi).
+//
+// Desen: blok 9 dongu basligi (merge=20), blok 10 dongunun ICINDE bir secim
+// ve 10'un NCPD'si de 20 cikiyor. SPIR-V'de bir secim construct'i ile onu
+// kapsayan dongu AYNI merge blogunu paylasamaz.
+//
+// Cozum: secimin construct'indan dongu merge'ine giden kenarlari (yani
+// BREAK'leri) once kendi sentetik merge blogunda topla, oradan tek bir
+// kosulsuz dallanma ile dongu merge'ine git. GERI KENARA DOKUNMAZ - olculdu:
+// 10'un construct'indan cikan kenarlar 17->9 (geri kenar) ve 18->20 (break);
+// yalnizca ikincisi yeniden kablolanir, dongu korunur.
+//
+// Yeniden kablolamayi SplitSharedMergeBlock zaten yapiyor; eksik olan onu
+// SECIMIN construct'i ile cagirmakti. Disaridan cagrildiginda construct
+// onculu [18], dis oncul [19] olur - ikisi de dolu, yani bolme calisir.
+bool SplitOneLoopBreakSelection(Graph* graph, std::vector<uint32_t>* already_split) {
+	std::vector<uint32_t> loop_headers;
+	for (const auto& loop: graph->natural_loops) {
+		AddUnique(&loop_headers, loop.header);
+	}
+
+	const auto original_block_count = static_cast<uint32_t>(graph->blocks.size());
+	for (uint32_t block_id = 0; block_id < original_block_count; block_id++) {
+		const auto* block = graph->FindBlock(block_id);
+		// SONLANMA GARANTISI: her secim basligi EN COK BIR KEZ bolunur.
+		// Olculdu: bu guard olmadan ayni secim (44) 108 kez bolundu ve butce
+		// tukendi - bolme NCPD'yi degistirmediginde kosul tekrar saglaniyor.
+		// Basliklar sonlu oldugu icin bu olcut sonlanmayi garanti eder.
+		if (block == nullptr || block->terminator.kind != TerminatorKind::ConditionalBranch ||
+		    Contains(loop_headers, block_id) || Contains(*already_split, block_id)) {
+			continue;
+		}
+		const auto merge = graph->FindNearestCommonPostDominator(block->terminator.true_block,
+		                                                         block->terminator.false_block);
+		if (merge == UINT32_MAX) {
+			continue;
+		}
+		// Kapsayan dongu: bu secimi domine eden bir dongu basligi ve dongunun
+		// merge'i bizim NCPD'miz ile AYNI mi?
+		for (const auto& loop: graph->natural_loops) {
+			if (loop.merge != merge || loop.header == block_id ||
+			    !graph->Dominates(loop.header, block_id)) {
+				continue;
+			}
+			const auto construct = DominatedBlocks(*graph, block_id, merge);
+			AddUnique(already_split, block_id);
+			if (SplitSharedMergeBlock(graph, merge, construct, true)) {
+				std::printf("[CFG-BREAK-BOLME] secim=%u dongu_basligi=%u dongu_merge=%u "
+				            "construct_boyu=%zu -> sentetik merge eklendi\n",
+				            block_id, loop.header, merge, construct.size());
+				std::fflush(stdout);
+				return true;
+			}
+			break;
+		}
+	}
+	return false;
+}
+
 bool SplitSharedMergeBlocks(Graph* graph, std::string* error) {
 	const auto original_block_count = static_cast<uint32_t>(graph->blocks.size());
 	const auto split_budget =
 	    std::max<uint32_t>(16u, std::min<uint32_t>(128u, original_block_count));
+	// Break-bolmesi yapilmis secim basliklari; her biri en cok bir kez.
+	std::vector<uint32_t> break_split_headers;
 	for (uint32_t splits = 0; splits < split_budget; splits++) {
-		if (!SplitOneLoopMerge(graph) && !SplitOneSelectionMerge(graph)) {
+		if (!SplitOneLoopMerge(graph) && !SplitOneSelectionMerge(graph) &&
+		    !SplitOneLoopBreakSelection(graph, &break_split_headers)) {
 			// Mevcut bolme pasleri tukendi. Geriye cakisma kaldiysa haritayi
 			// dok - genellestirilmis cozum buradan yazilacak.
 			LogMergeClaimMap(*graph);
@@ -1625,6 +1687,35 @@ bool Structurize(Graph* graph, std::string* error) {
 			           fmt::format("conditional block {} has no structured merge", block.id),
 			           error);
 			return false;
+		}
+
+		// A SINIFI CAKISMA COZUMU: ic ice iki secim ayni merge'i talep ettiginde,
+		// ICTEKI icin zaten var olan sentetik yonlendiriciyi merge yap. Yeni
+		// blok URETMEZ, dolayisiyla sonlanir.
+		//
+		// Yalnizca basligin TEK ve NCPD ile ayni gercek cikisi varsa uygulanir.
+		// Dongu-break deseni (B sinifi) artik SplitOneLoopBreakSelection ile
+		// bolme asamasinda cozuluyor ve buraya ulasmiyor.
+		if (const auto claimed = merge_headers.find(merge);
+		    claimed != merge_headers.end() && claimed->second != block.id) {
+			const auto construct = DominatedBlocks(*graph, block.id, merge);
+			if (FindTrueExitBlock(*graph, block.id, construct) == merge) {
+				const auto* merge_block = graph->FindBlock(merge);
+				if (merge_block != nullptr) {
+					for (auto pred: merge_block->predecessors) {
+						if (!IsSyntheticMergeForwarder(*graph, pred, merge) ||
+						    !graph->Dominates(block.id, pred) ||
+						    merge_headers.find(pred) != merge_headers.end()) {
+							continue;
+						}
+						std::printf("[CFG-YENIDEN-HEDEF] A-sinifi: header=%u merge %u -> %u\n",
+						            block.id, merge, pred);
+						std::fflush(stdout);
+						merge = pred;
+						break;
+					}
+				}
+			}
 		}
 
 		if (!reserve_merge_block(block.id, merge)) {
