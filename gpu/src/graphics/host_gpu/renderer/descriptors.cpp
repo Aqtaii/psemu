@@ -1385,9 +1385,19 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 		// erisiyor; tampon bos ya da kisa ise page fault kacinilmaz.
 		if (program.stage == ShaderType::Mesh) {
 			static std::atomic<uint32_t> s_n {0};
-			if (s_n.fetch_add(1) < 8) {
-				printf("[SRT-TAMPON] asama=mesh flattened_srt=%llu dword\n",
-				       (unsigned long long)snapshot.flattened_srt.size());
+			if (s_n.fetch_add(1) < 4) {
+				// Shader bu 16 dword'u okuyup ICERIDE kullaniyor (LDS adresi,
+				// dongu siniri...). Icerik cozulen descriptor'larla tutarli mi,
+				// yoksa user_data penceresi kaydigi icin cop mu? Ham dokum.
+				printf("[SRT-TAMPON] asama=mesh flattened_srt=%llu dword | user_data_base=%u\n",
+				       (unsigned long long)snapshot.flattened_srt.size(), program.user_data_base);
+				for (size_t k = 0; k < snapshot.flattened_srt.size(); k += 4) {
+					printf("[SRT-ICERIK]   [%02zu] %08x %08x %08x %08x\n", k,
+					       snapshot.flattened_srt[k],
+					       k + 1 < snapshot.flattened_srt.size() ? snapshot.flattened_srt[k + 1] : 0,
+					       k + 2 < snapshot.flattened_srt.size() ? snapshot.flattened_srt[k + 2] : 0,
+					       k + 3 < snapshot.flattened_srt.size() ? snapshot.flattened_srt[k + 3] : 0);
+				}
 				fflush(stdout);
 			}
 		}

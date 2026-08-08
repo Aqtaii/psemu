@@ -479,8 +479,16 @@ bool EmitProgram(const IR::Program& program, const IR::ResourceSnapshot& resourc
 			std::vector<std::pair<int, uint32_t>> sorted(counts.begin(), counts.end());
 			std::sort(sorted.begin(), sorted.end(),
 			          [](const auto& a, const auto& b) { return a.second > b.second; });
-			std::printf("[MS-IR] toplam_komut=%u benzersiz_opcode=%zu blok=%zu\n", total,
-			            sorted.size(), program.blocks.size());
+			// dispatcher_fallback: yapisal olmayan kontrol akisini dev bir
+			// switch-dongu ile taklit eden YEDEK yol. Acikca farkli (ve kirilgan)
+			// bir kod uretir; acikse "hangi komut cokertiyor" analizi yaniltici
+			// olur, cunku komut cikarmak blok yapisini da degistirir.
+			std::printf("[MS-IR] toplam_komut=%u benzersiz_opcode=%zu blok=%zu "
+			            "dispatcher_fallback=%d cfg_failure=%d neden=%s\n",
+			            total, sorted.size(), program.blocks.size(),
+			            program.dispatcher_fallback ? 1 : 0,
+			            static_cast<int>(program.cfg_failure_kind),
+			            program.fallback_reason.empty() ? "-" : program.fallback_reason.c_str());
 			for (size_t i = 0; i < sorted.size() && i < 24; i++) {
 				std::printf("[MS-IR]   op=%d adet=%u\n", sorted[i].first, sorted[i].second);
 			}
