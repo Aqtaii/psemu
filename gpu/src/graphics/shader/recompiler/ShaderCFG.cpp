@@ -1057,12 +1057,95 @@ bool SplitOneSelectionMerge(Graph* graph) {
 	return false;
 }
 
+// Bir basligin GERCEK CIKIS blogu: domine ettigi kumeden disariya giden ilk
+// kenarin hedefi. NCPD bunu asabiliyor - olculdu: header 11 icin NCPD 20
+// donuyor ama gercek cikis 17 -> 18.
+//
+// Birden fazla farkli cikis varsa yapi zaten tek merge'e oturmuyor demektir;
+// o durumda UINT32_MAX donup karari cagirana birakiyoruz.
+uint32_t FindTrueExitBlock(const Graph& graph, uint32_t header,
+                           const std::vector<uint32_t>& construct) {
+	uint32_t exit_block = UINT32_MAX;
+	for (auto id: construct) {
+		const auto* block = graph.FindBlock(id);
+		if (block == nullptr) {
+			continue;
+		}
+		for (auto succ: block->successors) {
+			if (Contains(construct, succ) || succ == header) {
+				continue;
+			}
+			if (exit_block == UINT32_MAX) {
+				exit_block = succ;
+			} else if (exit_block != succ) {
+				return UINT32_MAX;  // birden fazla cikis
+			}
+		}
+	}
+	return exit_block;
+}
+
+// ON TARAMA: hangi merge blogunu hangi basliklar talep ediyor?
+// Su an YALNIZCA LOG - grafi degistirmiyor. Amac, cakisan basliklari ic-ice
+// gecme sirasina koyup her biri icin gercek cikis blogunu programatik olarak
+// yakaladigimizi dogrulamak. Elle yaptigimiz analizde header 11'in gercek
+// cikisinin 18 oldugunu bulmustuk; bunu kod da bulmali.
+void LogMergeClaimMap(const Graph& graph) {
+	std::vector<uint32_t> loop_headers;
+	for (const auto& loop: graph.natural_loops) {
+		AddUnique(&loop_headers, loop.header);
+	}
+
+	std::map<uint32_t, std::vector<uint32_t>>            merge_claims;
+	std::map<uint32_t, std::vector<uint32_t>>            constructs;
+	for (const auto& block: graph.blocks) {
+		if (block.terminator.kind != TerminatorKind::ConditionalBranch ||
+		    Contains(loop_headers, block.id)) {
+			continue;
+		}
+		const auto merge = graph.FindNearestCommonPostDominator(block.terminator.true_block,
+		                                                        block.terminator.false_block);
+		if (merge == UINT32_MAX) {
+			continue;
+		}
+		merge_claims[merge].push_back(block.id);
+		constructs[block.id] = DominatedBlocks(graph, block.id, merge);
+	}
+
+	for (const auto& [merge, headers]: merge_claims) {
+		if (headers.size() < 2) {
+			continue;
+		}
+		// Ic-ice sirasi: construct'i KUCUK olan en ictedir.
+		auto sorted = headers;
+		std::sort(sorted.begin(), sorted.end(), [&](uint32_t a, uint32_t b) {
+			return constructs[a].size() < constructs[b].size();
+		});
+		std::printf("[CFG-HARITA] merge=%u talep_eden_baslik_sayisi=%zu (icten disa)\n", merge,
+		            sorted.size());
+		for (auto header: sorted) {
+			const auto& construct  = constructs[header];
+			const auto  true_exit  = FindTrueExitBlock(graph, header, construct);
+			std::printf("[CFG-HARITA]   header=%u construct_boyu=%zu construct=[%s] "
+			            "gercek_cikis=%s ncpd=%u %s\n",
+			            header, construct.size(), VectorToString(construct).c_str(),
+			            true_exit == UINT32_MAX ? "COKLU/YOK"
+			                                    : std::to_string(true_exit).c_str(),
+			            merge, true_exit != UINT32_MAX && true_exit != merge ? "<-- NCPD ASIYOR" : "");
+		}
+		std::fflush(stdout);
+	}
+}
+
 bool SplitSharedMergeBlocks(Graph* graph, std::string* error) {
 	const auto original_block_count = static_cast<uint32_t>(graph->blocks.size());
 	const auto split_budget =
 	    std::max<uint32_t>(16u, std::min<uint32_t>(128u, original_block_count));
 	for (uint32_t splits = 0; splits < split_budget; splits++) {
 		if (!SplitOneLoopMerge(graph) && !SplitOneSelectionMerge(graph)) {
+			// Mevcut bolme pasleri tukendi. Geriye cakisma kaldiysa haritayi
+			// dok - genellestirilmis cozum buradan yazilacak.
+			LogMergeClaimMap(*graph);
 			return true;
 		}
 		RebuildPredecessors(graph);
