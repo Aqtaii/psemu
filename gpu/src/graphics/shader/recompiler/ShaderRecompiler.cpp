@@ -59,6 +59,7 @@ const char* StageName(ShaderType stage) {
 		case ShaderType::Compute: return "CS";
 		case ShaderType::Vertex: return "VS";
 		case ShaderType::Pixel: return "PS";
+		case ShaderType::Mesh: return "MS";
 		default: return "unknown";
 	}
 }

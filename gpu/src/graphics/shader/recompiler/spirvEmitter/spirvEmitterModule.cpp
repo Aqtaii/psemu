@@ -199,6 +199,12 @@ static uint32_t AllocateSharedOutputVariable(EmitterState* state, uint32_t& vari
 }
 
 void AllocateOutputVariables(EmitterState* state) {
+	if (state->stage == ShaderType::Mesh) {
+		// Mesh primitif indeks dizisi de bir cikti degiskeni: kimligi BURADA
+		// ayrilmali. EmitHeaderAndTypes daha SONRA calisiyor, orada ayirsaydik
+		// EntryPoint arayuz listesine 0 girerdi.
+		state->mesh_prim_indices_variable = AllocateInterfaceVariable(state);
+	}
 	for (auto& binding: state->outputs) {
 		switch (binding.kind) {
 			case IR::StageOutputKind::Position:
@@ -277,6 +283,11 @@ void AddOutputAnnotationsAndNames(EmitterState* state) {
 		state->builder.AddAnnotation(
 		    {OpMemberDecorate, state->per_vertex_type, 0, DecorationBuiltIn, BuiltInPosition});
 		state->builder.AddAnnotation({OpDecorate, state->per_vertex_type, DecorationBlock});
+	}
+	if (state->stage == ShaderType::Mesh && state->mesh_prim_indices_variable != 0) {
+		state->builder.AddName(state->mesh_prim_indices_variable, "gl_PrimitiveTriangleIndicesEXT");
+		state->builder.AddAnnotation({OpDecorate, state->mesh_prim_indices_variable,
+		                              DecorationBuiltIn, BuiltInPrimitiveTriangleIndicesEXT});
 	}
 	if (state->depth_variable != 0) {
 		state->builder.AddName(state->depth_variable, "gl_FragDepth");
@@ -428,6 +439,15 @@ void EmitHeaderAndTypes(EmitterState* state) {
 	state->ptr_output_vec4_float        = state->builder.AllocateId();
 	state->per_vertex_type              = state->builder.AllocateId();
 	state->ptr_output_per_vertex        = state->builder.AllocateId();
+	if (state->stage == ShaderType::Mesh) {
+		state->mesh_per_vertex_array_type = state->builder.AllocateId();
+		state->ptr_mesh_per_vertex_array  = state->builder.AllocateId();
+		state->mesh_param_array_type      = state->builder.AllocateId();
+		state->ptr_mesh_param_array       = state->builder.AllocateId();
+		state->mesh_prim_array_type       = state->builder.AllocateId();
+		state->ptr_mesh_prim_array        = state->builder.AllocateId();
+		state->ptr_output_vec3_uint       = state->builder.AllocateId();
+	}
 	state->storage_runtime_array_type   = state->builder.AllocateId();
 	state->storage_buffer_type          = state->builder.AllocateId();
 	state->ptr_storage_buffer           = state->builder.AllocateId();
@@ -550,8 +570,10 @@ void EmitHeaderAndTypes(EmitterState* state) {
 		// maxMeshOutputPrimitives icin garanti ettigi asgari tavan, yani her
 		// uyumlu cihazda gecerli. (Yer tutucu 1 birakmak garanti ihlal olurdu.)
 		state->builder.AddExecutionMode({state->main_func, ExecutionModeLocalSize, 1u, 1u, 1u});
-		state->builder.AddExecutionMode({state->main_func, ExecutionModeOutputVertices, 256u});
-		state->builder.AddExecutionMode({state->main_func, ExecutionModeOutputPrimitivesEXT, 256u});
+		state->builder.AddExecutionMode(
+		    {state->main_func, ExecutionModeOutputVertices, MESH_OUTPUT_MAX});
+		state->builder.AddExecutionMode(
+		    {state->main_func, ExecutionModeOutputPrimitivesEXT, MESH_OUTPUT_MAX});
 		state->builder.AddExecutionMode({state->main_func, ExecutionModeOutputTrianglesEXT});
 	}
 	if (state->stage == ShaderType::Pixel) {
@@ -663,18 +685,48 @@ void EmitHeaderAndTypes(EmitterState* state) {
 	    {OpTypePointer, state->ptr_output_int, StorageClassOutput, state->int_type});
 	state->builder.AddType(
 	    {OpTypePointer, state->ptr_output_vec4_float, StorageClassOutput, state->vec4_float_type});
+	const bool mesh = state->stage == ShaderType::Mesh;
 	if (state->per_vertex_variable != 0) {
 		state->builder.AddType({OpTypeStruct, state->per_vertex_type, state->vec4_float_type});
 		state->builder.AddType({OpTypePointer, state->ptr_output_per_vertex, StorageClassOutput,
 		                        state->per_vertex_type});
-		state->builder.AddType({OpVariable, state->ptr_output_per_vertex,
-		                        state->per_vertex_variable, StorageClassOutput});
+		if (mesh) {
+			// gl_MeshVerticesEXT: per-vertex yapisinin DIZISI.
+			const auto count = ConstantU32(state, MESH_OUTPUT_MAX);
+			state->builder.AddType({OpTypeArray, state->mesh_per_vertex_array_type,
+			                        state->per_vertex_type, count});
+			state->builder.AddType({OpTypePointer, state->ptr_mesh_per_vertex_array,
+			                        StorageClassOutput, state->mesh_per_vertex_array_type});
+			state->builder.AddType({OpVariable, state->ptr_mesh_per_vertex_array,
+			                        state->per_vertex_variable, StorageClassOutput});
+		} else {
+			state->builder.AddType({OpVariable, state->ptr_output_per_vertex,
+			                        state->per_vertex_variable, StorageClassOutput});
+		}
+	}
+	if (mesh) {
+		const auto count = ConstantU32(state, MESH_OUTPUT_MAX);
+		state->builder.AddType(
+		    {OpTypeArray, state->mesh_param_array_type, state->vec4_float_type, count});
+		state->builder.AddType({OpTypePointer, state->ptr_mesh_param_array, StorageClassOutput,
+		                        state->mesh_param_array_type});
+		// gl_PrimitiveTriangleIndicesEXT: uvec3 dizisi. GFX10 ucunu TEK dword'e
+		// paketliyor (v12 = v2 | (v0 << 10) | (v1 << 20)); acmayi EmitExport yapar.
+		state->builder.AddType(
+		    {OpTypeArray, state->mesh_prim_array_type, state->vec3_uint_type, count});
+		state->builder.AddType({OpTypePointer, state->ptr_mesh_prim_array, StorageClassOutput,
+		                        state->mesh_prim_array_type});
+		state->builder.AddType(
+		    {OpTypePointer, state->ptr_output_vec3_uint, StorageClassOutput, state->vec3_uint_type});
+		state->builder.AddType({OpVariable, state->ptr_mesh_prim_array,
+		                        state->mesh_prim_indices_variable, StorageClassOutput});
 	}
 	for (const auto& binding: state->outputs) {
 		if (binding.kind == IR::StageOutputKind::Parameter ||
 		    binding.kind == IR::StageOutputKind::Mrt) {
-			state->builder.AddType({OpVariable, state->ptr_output_vec4_float, binding.variable_id,
-			                        StorageClassOutput});
+			state->builder.AddType({OpVariable,
+			                        mesh ? state->ptr_mesh_param_array : state->ptr_output_vec4_float,
+			                        binding.variable_id, StorageClassOutput});
 		}
 	}
 	if (state->depth_variable != 0) {

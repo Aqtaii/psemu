@@ -22,6 +22,12 @@
 
 namespace Libs::Graphics::ShaderRecompiler::Spirv::Emitter {
 
+// Mesh cikti dizilerinin boyu. ExecutionModeOutputVertices/OutputPrimitives ile
+// AYNI olmak zorunda. Asama 3/4'te VGT_GS_MAX_VERT_OUT ve
+// GE_MAX_OUTPUT_PER_SUBGROUP'tan turetilecek; simdilik Vulkan'in her uyumlu
+// cihazda garanti ettigi asgari tavan.
+constexpr uint32_t MESH_OUTPUT_MAX = 256;
+
 // Gercek is grubu LDS'ine (StorageClassWorkgroup) sahip asamalar. Digerlerinde
 // LDS cagri-yerel bir diziye duser ve lane'ler arasi paylasimi sessizce bozar.
 // Tek noktada tutuluyor: bu karar uc ayri yerde soruluyor, biri unutulursa
@@ -375,6 +381,17 @@ struct EmitterState {
 	uint32_t                               ptr_output_vec4_float          = 0;
 	uint32_t                               per_vertex_type                = 0;
 	uint32_t                               ptr_output_per_vertex          = 0;
+	// Mesh asamasi: cikti degiskenleri DIZIDIR. Her cagri kendi lane indeksine
+	// yazar - olculen NGG GS'te bu indeks v13 = (dalga_id << 6) + mbcnt, yani
+	// tam olarak gl_LocalInvocationIndex.
+	uint32_t                               mesh_per_vertex_array_type     = 0;
+	uint32_t                               ptr_mesh_per_vertex_array      = 0;
+	uint32_t                               mesh_param_array_type          = 0;
+	uint32_t                               ptr_mesh_param_array           = 0;
+	uint32_t                               mesh_prim_array_type           = 0;
+	uint32_t                               ptr_mesh_prim_array            = 0;
+	uint32_t                               ptr_output_vec3_uint           = 0;
+	uint32_t                               mesh_prim_indices_variable     = 0;
 	uint32_t                               storage_runtime_array_type     = 0;
 	uint32_t                               storage_buffer_type            = 0;
 	uint32_t                               ptr_storage_buffer             = 0;

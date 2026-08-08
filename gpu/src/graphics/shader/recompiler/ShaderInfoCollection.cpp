@@ -82,6 +82,10 @@ bool ValidateOptions(const Program& program, const ShaderInfoOptions& options, s
 			}
 			return (options.compute->thread_ids_num >= 0 && options.compute->thread_ids_num <= 3) ||
 			       Fail("compute thread ID count is out of range");
+		case ShaderType::Mesh:
+			// NGG birlesik ES-GS'in metadata'si asama kayitlarindan (VGT_GS_*,
+			// GE_*) gelir, ayri bir input yapisi yoktur; dogrulanacak bir sey yok.
+			return true;
 		default: return Fail("unsupported shader stage for info collection");
 	}
 }
@@ -150,6 +154,15 @@ void CollectComputeInputs(const Program& program, const ShaderComputeInputInfo* 
 	}
 }
 
+// Mesh asamasinda cikti dizilerinin indeksi HER ZAMAN gl_LocalInvocationIndex
+// olur: olculen NGG GS bu indeksi v13 = (dalga_id << 6) + mbcnt olarak kendi
+// hesapliyor ve hem pozisyon hem primitif disavurumunu onunla suruyor. Bu
+// yuzden kosulsuz bildiriyoruz - shader'da baska bir LDS ipucu aramaya gerek yok.
+void CollectMeshInputs(ShaderInfo* info) {
+	AddInput(info, StageInputKind::LocalInvocationIndex, 0, 1, "gl_LocalInvocationIndex");
+	AddInput(info, StageInputKind::WorkgroupId, 0, 3, "gl_WorkGroupID");
+}
+
 void CollectOutputs(const Program& program, const ShaderPixelInputInfo* pixel, ShaderInfo* info) {
 	for (const auto& block: program.blocks) {
 		for (const auto& inst: block.instructions) {
@@ -214,6 +227,7 @@ bool CollectShaderInfo(Program* program, const ShaderInfoOptions& options, std::
 		case ShaderType::Vertex: CollectVertexInputs(*program, options.vertex, &next); break;
 		case ShaderType::Pixel: CollectPixelInputs(options.pixel, &next); break;
 		case ShaderType::Compute: CollectComputeInputs(*program, options.compute, &next); break;
+		case ShaderType::Mesh: CollectMeshInputs(&next); break;
 		default: return false;
 	}
 	CollectOutputs(*program, options.pixel, &next);

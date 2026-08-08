@@ -94,9 +94,54 @@ void EmitMrtZExport(EmitterState* state, const IR::Instruction& inst) {
 	}
 }
 
+// GFX10 NGG primitif disavurumu (exp target=0x14) UC vertex indeksini TEK
+// dword'e paketler. Olculen paketleme:
+//     v0 = (v0 << 10) | v2
+//     v12 = (v1 << 20) | v0        =>  v12 = i0 | (i1 << 10) | (i2 << 20)
+// SPIR-V'nin gl_PrimitiveTriangleIndicesEXT'i ise uvec3 ister; birebir
+// uymuyor, acmak gerekiyor. Alan genisligi 9 bit (AMD yerlesimi: [8:0],
+// [18:10], [28:20]; ust bitler kenar bayraklari). 9 bit 0-511'i kapsiyor,
+// MESH_OUTPUT_MAX=256 icin fazlasiyla yeterli - ve 10 bit maskelemek bayrak
+// bitini iceri sizdirma riski tasirdi.
+static void EmitPrimitiveIndicesExport(EmitterState* state, const IR::Instruction& inst,
+                                       uint32_t index) {
+	constexpr uint32_t INDEX_MASK = 0x1ffu;
+	if (state->mesh_prim_indices_variable == 0 || inst.src_count == 0) {
+		return;
+	}
+	const auto packed = EmitValueLoad(state, inst.src[0]);
+
+	uint32_t components[3] = {};
+	for (uint32_t i = 0; i < 3; i++) {
+		const auto shifted = state->builder.AllocateId();
+		const auto masked  = state->builder.AllocateId();
+		state->builder.AddFunction({OpShiftRightLogical, state->uint_type, shifted, packed,
+		                            ConstantU32(state, i * 10u)});
+		state->builder.AddFunction(
+		    {OpBitwiseAnd, state->uint_type, masked, shifted, ConstantU32(state, INDEX_MASK)});
+		components[i] = masked;
+	}
+
+	const auto vector  = state->builder.AllocateId();
+	const auto pointer = state->builder.AllocateId();
+	state->builder.AddFunction({OpCompositeConstruct, state->vec3_uint_type, vector, components[0],
+	                            components[1], components[2]});
+	state->builder.AddFunction({OpAccessChain, state->ptr_output_vec3_uint, pointer,
+	                            state->mesh_prim_indices_variable, index});
+	state->builder.AddFunction({OpStore, pointer, vector});
+}
+
 void EmitExport(EmitterState* state, const IR::Instruction& inst) {
-	if (inst.export_info.kind == IR::ExportTargetKind::Null ||
-	    inst.export_info.kind == IR::ExportTargetKind::Primitive) {
+	const bool mesh = state->stage == ShaderType::Mesh;
+
+	if (inst.export_info.kind == IR::ExportTargetKind::Null) {
+		return;
+	}
+	if (inst.export_info.kind == IR::ExportTargetKind::Primitive) {
+		// Mesh disinda primitif disavurumu hala anlamsiz: yazacak dizi yok.
+		if (mesh) {
+			EmitPrimitiveIndicesExport(state, inst, EmitLocalInvocationIndex(state));
+		}
 		return;
 	}
 
@@ -115,10 +160,29 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 	}
 
 	const auto value = ApplyMrtExportMapping(state, inst, EmitExportVec4F32(state, inst));
+
+	// Mesh'te her cikti bir DIZI: cagri kendi lane indeksine yazar. Olculen NGG
+	// GS'te bu indeks v13 = (dalga_id << 6) + mbcnt, yani gl_LocalInvocationIndex.
+	// Sinir denetimi (v13 < vertex_sayisi) shader'in KENDISINDE exec maskesi
+	// olarak zaten var; burada tekrar uretmiyoruz.
 	if (inst.export_info.kind == IR::ExportTargetKind::Position) {
 		const auto pointer = state->builder.AllocateId();
+		if (mesh) {
+			state->builder.AddFunction({OpAccessChain, state->ptr_output_vec4_float, pointer,
+			                            variable, EmitLocalInvocationIndex(state),
+			                            ConstantU32(state, 0)});
+		} else {
+			state->builder.AddFunction({OpAccessChain, state->ptr_output_vec4_float, pointer,
+			                            variable, ConstantU32(state, 0)});
+		}
+		state->builder.AddFunction({OpStore, pointer, value});
+		return;
+	}
+
+	if (mesh) {
+		const auto pointer = state->builder.AllocateId();
 		state->builder.AddFunction({OpAccessChain, state->ptr_output_vec4_float, pointer, variable,
-		                            ConstantU32(state, 0)});
+		                            EmitLocalInvocationIndex(state)});
 		state->builder.AddFunction({OpStore, pointer, value});
 		return;
 	}

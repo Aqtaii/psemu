@@ -14,6 +14,7 @@ const char* StageName(ShaderType stage) {
 		case ShaderType::Pixel: return "pixel";
 		case ShaderType::Fetch: return "fetch";
 		case ShaderType::Compute: return "compute";
+		case ShaderType::Mesh: return "mesh";
 		default: return "unknown";
 	}
 }
