@@ -3,6 +3,9 @@
 #include "graphics/shader/recompiler/SpirvEmitter.h"
 #include "graphics/shader/recompiler/spirvEmitter/spirvEmitterInternal.h"
 
+#include <cstdlib>
+#include <cstring>
+
 namespace Libs::Graphics::ShaderRecompiler::Spirv::Emitter {
 
 uint32_t PixelParameterMappedLocation(const EmitterState& state, uint32_t attr) {
@@ -765,6 +768,24 @@ uint32_t MeshOutputPrimitives(const EmitterState& state) {
 uint32_t MeshLocalSizeX(const EmitterState& state) {
 	const auto v = state.mesh_local_size_x;
 	return v == 0 ? std::max<uint32_t>(state.wave_size, 1u) : v;
+}
+
+uint32_t LdsArrayDwords(const EmitterState& state) {
+	if (state.needs_function_lds) {
+		return 8192u;
+	}
+	if (state.stage == ShaderType::Mesh && state.mesh_lds_dwords != 0) {
+		return state.mesh_lds_dwords;
+	}
+	return 1024u;
+}
+
+bool MeshEagerAllocEnabled() {
+	static const bool enabled = [] {
+		const char* env = std::getenv("PSEMU_MESH_ALLOC");
+		return env != nullptr && std::strcmp(env, "erken") == 0;
+	}();
+	return enabled;
 }
 
 uint32_t ExecutionModelForStage(ShaderType stage) {

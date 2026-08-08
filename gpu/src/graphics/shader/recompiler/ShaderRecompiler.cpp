@@ -740,6 +740,7 @@ bool TryRecompile(std::span<const uint32_t> code, const CompileOptions& options,
 	ir.mesh_output_vertices   = options.mesh_output_vertices;
 	ir.mesh_output_primitives = options.mesh_output_primitives;
 	ir.mesh_local_size_x      = options.mesh_local_size_x;
+	ir.mesh_lds_dwords        = options.mesh_lds_dwords;
 	LOGF("%s phase end: stage=%s hash=0x%016" PRIx64 " IR LowerProgram blocks=%" PRIu64
 	     " elapsed_ms=%" PRIu64 "\n",
 	     GetDumpLabel(options), StageName(options.stage), options.shader_hash,

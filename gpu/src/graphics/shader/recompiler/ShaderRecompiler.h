@@ -44,6 +44,10 @@ struct CompileOptions {
 	uint32_t mesh_output_vertices   = 0;
 	uint32_t mesh_output_primitives = 0;
 	uint32_t mesh_local_size_x      = 0;
+	// Is grubu LDS boyu (dword). OLCULDU: Astro Bot GS'i 11336 bayt offset
+	// kullaniyor, emitter'in varsayilan 1024 dword'u (4096 bayt) YETMIYOR -
+	// her erisim sinir disi, sonuc ErrorDeviceLost.
+	uint32_t mesh_lds_dwords        = 0;
 };
 
 struct CompileResult {

@@ -33,6 +33,14 @@ struct EmitterState;
 [[nodiscard]] uint32_t MeshOutputVertices(const EmitterState& state);
 [[nodiscard]] uint32_t MeshOutputPrimitives(const EmitterState& state);
 [[nodiscard]] uint32_t MeshLocalSizeX(const EmitterState& state);
+// DENEY anahtari: PSEMU_MESH_ALLOC=erken ise tahsis giris blogunda,
+// kosulsuz ve sabit limitlerle yapilir (bkz. EmitFunction).
+[[nodiscard]] bool     MeshEagerAllocEnabled();
+// LDS dizisinin dword sayisi. TEK KAYNAK: dizi bildirimi ve sinir denetimi
+// ayni degeri kullanmak zorunda, yoksa ya sinir disi yazariz ya da gecerli
+// erisimleri sessizce dusururuz. Mesh'te donanim degeri gelir (olculdu:
+// Astro Bot GS'i 11336 bayt offset kullaniyor, varsayilan 4096 bayt yetmiyor).
+[[nodiscard]] uint32_t LdsArrayDwords(const EmitterState& state);
 
 // Gercek is grubu LDS'ine (StorageClassWorkgroup) sahip asamalar. Digerlerinde
 // LDS cagri-yerel bir diziye duser ve lane'ler arasi paylasimi sessizce bozar.
@@ -354,6 +362,7 @@ struct EmitterState {
 	uint32_t                               mesh_output_vertices           = 0;
 	uint32_t                               mesh_output_primitives         = 0;
 	uint32_t                               mesh_local_size_x              = 0;
+	uint32_t                               mesh_lds_dwords                = 0;
 	bool                                   exact_subgroup_operations      = false;
 	bool                                   per_invocation_masks           = false;
 	uint32_t                               void_type                      = 0;

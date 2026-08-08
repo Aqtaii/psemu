@@ -1068,6 +1068,21 @@ void EmitFunction(EmitterState* state, const IR::Program& program) {
 	EmitComputeInputRegisters(state);
 	EmitPixelInputRegisters(state);
 	EmitVertexInputRegisters(state);
+
+	// DENEY (PSEMU_MESH_ALLOC=erken): mesh tahsisini GIRIS BLOGUNA, sabit
+	// donanim limitleriyle al.
+	//
+	// Neden: olculen NGG GS'te GS_ALLOC_REQ kosullu ("s_and_b32 vcc_lo, s3,
+	// 0x0f000000" + "s_cbranch_scc1") ve yalnizca BIR dalga gonderiyor - yani
+	// is grubu genelinde TEKDUZE DEGIL. spirv-val ve glslang bunu statik olarak
+	// kabul etti, ama Vulkan mesh tahsisinin tekduze olmasini bekliyor olabilir.
+	// Giris blogu kosulsuz ve tekduze; burada tahsis edip sendmsg'i no-op'a
+	// cevirirsek, device lost'un sebebi bu muydu sorusu KESIN cevaplanir.
+	if (state->stage == ShaderType::Mesh && MeshEagerAllocEnabled()) {
+		state->builder.AddFunction({OpSetMeshOutputsEXT,
+		                            ConstantU32(state, MeshOutputVertices(*state)),
+		                            ConstantU32(state, MeshOutputPrimitives(*state))});
+	}
 	if (state->dispatcher_fallback) {
 		EmitDispatcherFunction(state, program);
 		state->builder.AddFunction({OpFunctionEnd});

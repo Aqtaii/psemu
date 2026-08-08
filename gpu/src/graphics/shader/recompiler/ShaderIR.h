@@ -758,6 +758,7 @@ struct Program {
 	uint32_t                mesh_output_vertices   = 0;
 	uint32_t                mesh_output_primitives = 0;
 	uint32_t                mesh_local_size_x      = 0;
+	uint32_t                mesh_lds_dwords        = 0;
 };
 
 bool LowerProgram(const Decoder::Program& decoded, const CFG::Graph& cfg, ShaderType stage,

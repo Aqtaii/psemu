@@ -1630,6 +1630,73 @@ void PsemuProbeMeshCompile(uint64_t gs_addr, uint32_t user_sgpr_count, const uin
 	}
 }
 
+// NGG birlesik ES-GS'i TEK PARCA hale getirir (splice).
+//
+// Donanimda ES, sonundaki "s_setpc_b64 s6" ile GS'e atlar; s[6:7]'yi donanim
+// calisma zamaninda yukler. Recompiler statik calistigi icin o hedefi
+// bilemiyor. Adres araligini birlestirmek de olmuyor: ES gercek kodu 224 bayt,
+// GS +0x700'de, aradaki 0x620 bayt kod DEGIL ve decoder dogrusal cozumleyip
+// hemen patliyor (olculdu: "unsupported scalar source operand 0x73 at pc 0x40").
+//
+// Cozum: atlamayi ORTADAN KALDIRMAK.
+//   1) ES'i decode et, sondaki s_setpc_b64'u bul
+//   2) ES'i O KOMUTTAN ONCE kirp (setpc ve ardindaki dolgu atilir)
+//   3) GS kodunu hemen ardina yapistir
+// Artik atlama yok: ES gorevini yapip LDS'i doldurur ve fiziksel olarak
+// ardindaki GS koduna dogal akisla (fall-through) devam eder. ES'in icindeki
+// "s_cbranch_execz 0x38" de kirpma noktasinin ICINDE kaldigi icin bozulmuyor.
+static bool SpliceMergedEsGs(uint64_t es_addr, uint64_t gs_addr, std::vector<uint32_t>* out) {
+	EXIT_IF(out == nullptr);
+	ShaderMappedData es_data {};
+	ShaderMappedData gs_data {};
+	if (!ShaderGetMappedData(es_addr, &es_data) || !ShaderGetMappedData(gs_addr, &gs_data) ||
+	    es_data.code_size_bytes == 0 || gs_data.code_size_bytes == 0 ||
+	    (es_data.code_size_bytes % sizeof(uint32_t)) != 0 ||
+	    (gs_data.code_size_bytes % sizeof(uint32_t)) != 0) {
+		return false;
+	}
+	const std::span<const uint32_t> es {reinterpret_cast<const uint32_t*>(es_addr),
+	                                    es_data.code_size_bytes / sizeof(uint32_t)};
+	const std::span<const uint32_t> gs {reinterpret_cast<const uint32_t*>(gs_addr),
+	                                    gs_data.code_size_bytes / sizeof(uint32_t)};
+
+	// ES'i coz. Kismi cozumleme yeterli: setpc'den SONRAKI cop zaten hataya
+	// yol aciyor, ama o noktaya kadar cozulmus komutlar elimizde kaliyor.
+	ShaderRecompiler::Decoder::Program es_program;
+	std::string                        es_error;
+	ShaderRecompiler::Decoder::DecodeProgram(es, &es_program, &es_error);
+
+	uint32_t cut_dwords = 0;
+	for (const auto& inst: es_program.instructions) {
+		if (inst.opcode == ShaderRecompiler::Decoder::Opcode::SSetpcB64) {
+			cut_dwords = inst.pc / sizeof(uint32_t);
+			break;
+		}
+	}
+	if (cut_dwords == 0) {
+		printf("[MS-SPLICE] ES'te s_setpc_b64 bulunamadi (es=0x%llx, %llu komut) - splice iptal\n",
+		       (unsigned long long)es_addr, (unsigned long long)es_program.instructions.size());
+		fflush(stdout);
+		return false;
+	}
+
+	out->clear();
+	out->reserve(cut_dwords + gs.size());
+	out->insert(out->end(), es.begin(), es.begin() + cut_dwords);
+	out->insert(out->end(), gs.begin(), gs.end());
+
+	static std::atomic<uint32_t> s_n {0};
+	if (s_n.fetch_add(1) < 8) {
+		printf("[MS-SPLICE] es=0x%llx (%llu dword, setpc pc=0x%x -> %u dword kirpildi) + "
+		       "gs=0x%llx (%llu dword) = %llu dword tek parca\n",
+		       (unsigned long long)es_addr, (unsigned long long)es.size(),
+		       cut_dwords * 4u, cut_dwords, (unsigned long long)gs_addr,
+		       (unsigned long long)gs.size(), (unsigned long long)out->size());
+		fflush(stdout);
+	}
+	return true;
+}
+
 bool ShaderCompileInfoMS(const HW::VertexShaderInfo* regs, const HW::ShaderRegisters* sh,
                          ShaderLaneMaskMode lane_mask_mode, ShaderVertexInputInfo* info,
                          std::span<const uint32_t>* spirv) {
@@ -1678,22 +1745,24 @@ bool ShaderCompileInfoMS(const HW::VertexShaderInfo* regs, const HW::ShaderRegis
 		}
 	}
 
-	// OLCULDU: ES girisinden derlemek CALISMIYOR. ES gercek kodu 224 bayt ve
-	// 0x3c'deki "s_setpc_b64 s6" ile bitiyor; GS ise +0x700'de. Aradaki 0x620
-	// bayt KOD DEGIL, ve decoder dogrusal cozumleyip kontrol akisini takip
-	// etmedigi icin hemen 0x40'ta patliyor:
-	//   "unsupported scalar source operand 0x00000073 at pc 0x00000040"
-	// Iki yariyi ek yerinden birlestirmek (splice) + setpc hedefini GS
-	// bolumunun basina baglamak gerekiyor; bu recompiler'da yeni bir yetenek.
-	// O gelene kadar GS yarisindan derlemeye devam - device lost duruyor ama
-	// en azindan derlenip GPU'ya ulasiyor ve yol olculebilir kaliyor.
-	const auto code = ShaderGetMappedCode(gs_addr, "ShaderRecompiler MS", hash);
+	// SPLICE: ES + GS tek parca. Basarisiz olursa GS yarisina duseriz - o yol
+	// device lost uretiyor ama derleniyor, yani olculebilir kaliyor.
+	std::vector<uint32_t>     spliced;
+	std::span<const uint32_t> code;
+	const bool                splice_ok = SpliceMergedEsGs(es_addr, gs_addr, &spliced);
+	if (splice_ok) {
+		code = spliced;
+	} else {
+		code = ShaderGetMappedCode(gs_addr, "ShaderRecompiler MS", hash);
+	}
 
 	ShaderRecompiler::CompileOptions options;
 	options.stage          = ShaderType::Mesh;
 	options.lane_mask_mode = lane_mask_mode;
-	options.shader_hash    = hash;
-	options.shader_base    = shader_addr;
+	options.shader_hash = hash;
+	// Splice edildiyse kod ES adresinden basliyor; shader_base bunu yansitmali
+	// yoksa pc-goreli cozumlemeler yanlis yere bakar.
+	options.shader_base = splice_ok ? es_addr : gs_addr;
 	// OLCULDU (commit fc1e0c7): taban=8 -> "descriptor source 3 dword 0 unknown
 	// value"; taban=0 -> gecti. Birlesik ES-GS'in GS yarisi user SGPR
 	// penceresini 0'dan sayiyor.
@@ -1712,14 +1781,23 @@ bool ShaderCompileInfoMS(const HW::VertexShaderInfo* regs, const HW::ShaderRegis
 	options.mesh_output_primitives = sh->m_geMaxOutputPerSubgroup;  // olculdu: 0xd8 = 216
 	// v13 = (dalga_id << 6) + mbcnt -> is grubu dalga_boyu katlarinda.
 	options.mesh_local_size_x = 64;
+	// LDS: OLCULDU, shader 11336 bayt offset kullaniyor. Emitter'in varsayilan
+	// 1024 dword'u (4096 bayt) YETMIYOR - her erisim sinir disi. 4096 dword
+	// (16 KB) hem bu shader'i kapsiyor hem de Vulkan'in her uyumlu cihazda
+	// garanti ettigi asgari paylasimli bellek. rsrc2.lds_size'in granularitesi
+	// dogrulanmadigi icin ondan TURETMIYORUZ; ham degeri loga basip sonra
+	// baglayacagiz.
+	options.mesh_lds_dwords = 4096;
 	{
 		static std::atomic<uint32_t> s_n {0};
 		if (s_n.fetch_add(1) < 8) {
 			printf("[MS-LIMIT] gs_max_vert=%u(0x%x) max_cikis_alt_grup=%u(0x%x) "
-			       "ngg_alt_grup=0x%x gs_ornek=%u esgs_ring=%u -> LocalSize=%u\n",
+			       "ngg_alt_grup=0x%x gs_ornek=%u esgs_ring=%u rsrc2_lds=%u -> LocalSize=%u "
+			       "lds=%u dword\n",
 			       sh->m_vgtGsMaxVertOut, sh->m_vgtGsMaxVertOut, sh->m_geMaxOutputPerSubgroup,
 			       sh->m_geMaxOutputPerSubgroup, sh->m_geNggSubgrpCntl, sh->m_vgtGsInstanceCnt,
-			       sh->m_vgtEsgsRingItemsize, options.mesh_local_size_x);
+			       sh->m_vgtEsgsRingItemsize, regs->gs_regs.rsrc2.lds_size,
+			       options.mesh_local_size_x, options.mesh_lds_dwords);
 			fflush(stdout);
 		}
 	}

@@ -456,6 +456,7 @@ bool EmitProgram(const IR::Program& program, const IR::ResourceSnapshot& resourc
 	state.mesh_output_vertices   = program.mesh_output_vertices;
 	state.mesh_output_primitives = program.mesh_output_primitives;
 	state.mesh_local_size_x      = program.mesh_local_size_x;
+	state.mesh_lds_dwords        = program.mesh_lds_dwords;
 	state.per_invocation_masks = program.lane_mask_mode == ShaderLaneMaskMode::PerInvocation;
 	state.exact_subgroup_operations =
 	    !state.per_invocation_masks && ProgramRequiresExactSubgroupSize(program);
