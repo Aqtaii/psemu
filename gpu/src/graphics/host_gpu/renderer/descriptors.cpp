@@ -1337,6 +1337,22 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 	for (uint32_t i = 0; i < program.info.buffers.size(); i++) {
 		ShaderBufferResource descriptor;
 		CopyNativeDescriptor(snapshot.buffers[i], descriptor.fields);
+		// TANI: mesh yolunda SRT okumasi SINIR ICINDE (0-15 / 16 dword) ama yine
+		// de page fault uretiyor. Demek ki sorun okunan DEGERLERDE: onlardan
+		// turetilen tampon adresleri. Cozulen adres/boyutu yazdiriyoruz.
+		if (program.stage == ShaderType::Mesh) {
+			static std::atomic<uint32_t> s_n {0};
+			if (s_n.fetch_add(1) < 32) {
+				const uint64_t base = (static_cast<uint64_t>(descriptor.fields[1] & 0xffffu) << 32u) |
+				                      descriptor.fields[0];
+				printf("[SRT-TAMPON-COZUM] mesh tampon[%u] adres=0x%012llx kayit=%u stride=%u "
+				       "ham=%08x %08x %08x %08x\n",
+				       i, (unsigned long long)base, descriptor.NumRecords(), descriptor.Stride(),
+				       descriptor.fields[0], descriptor.fields[1], descriptor.fields[2],
+				       descriptor.fields[3]);
+				fflush(stdout);
+			}
+		}
 		descriptors.buffers.push_back(
 		    NativeStorageBuffer(submit_id, buffer, descriptor, program.info.buffers[i]));
 	}
@@ -1364,6 +1380,17 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 	        program.bindings, ShaderRecompiler::IR::DescriptorBindingKind::FlattenedSrt) !=
 	    nullptr) {
 		descriptors.flattened_srt = NativeUpload(buffer, snapshot.flattened_srt);
+		// TANI: mesh yolunda TEK bir LoadSrtDword komutu GPU'yu olduruyor
+		// (olculdu, commit a1d4463). O komut sabit indeksle bu tampona
+		// erisiyor; tampon bos ya da kisa ise page fault kacinilmaz.
+		if (program.stage == ShaderType::Mesh) {
+			static std::atomic<uint32_t> s_n {0};
+			if (s_n.fetch_add(1) < 8) {
+				printf("[SRT-TAMPON] asama=mesh flattened_srt=%llu dword\n",
+				       (unsigned long long)snapshot.flattened_srt.size());
+				fflush(stdout);
+			}
+		}
 	}
 
 	std::vector<uint32_t> user_data;

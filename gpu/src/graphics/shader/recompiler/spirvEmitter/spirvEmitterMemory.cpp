@@ -1202,6 +1202,13 @@ void EmitLoadSrtDword(EmitterState* state, const IR::Instruction& inst) {
 		                             inst.src_count != 0 ? inst.src[0].imm : 0,
 		                             "invalid flattened SRT load");
 	}
+	if (state->stage == ShaderType::Mesh) {
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 16) {
+			printf("[SRT-OKUMA] asama=mesh dword_indeks=%u (pc=0x%08x)\n", inst.src[0].imm, inst.pc);
+			fflush(stdout);
+		}
+	}
 	const auto pointer = state->builder.AllocateId();
 	const auto value   = state->builder.AllocateId();
 	state->builder.AddFunction({OpAccessChain, state->ptr_storage_buffer_uint, pointer,
