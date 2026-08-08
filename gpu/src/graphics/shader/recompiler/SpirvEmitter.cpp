@@ -459,12 +459,40 @@ bool EmitProgram(const IR::Program& program, const IR::ResourceSnapshot& resourc
 	state.mesh_local_size_x      = program.mesh_local_size_x;
 	state.mesh_lds_dwords        = program.mesh_lds_dwords;
 
-	// TANI: mesh programinin IR OPCODE HISTOGRAMI.
+	// TANI: CFG DURUMU - TUM ASAMALAR.
 	//
-	// Kirpma deneylerinin (PSEMU_MESH_NOOP) KAPSAMINI dogrulamak icin sart.
-	// "tampon" ve "duz" modlarinda atlanan komut sayisini teyit edemedigimiz
-	// icin o deneylerin sonuclari belirsiz kaldi: shader'da o opcode hic yoksa
-	// deney bir sey kanitlamaz. Once icerigi olcuyoruz, sonra deney kuruyoruz.
+	// Mesh programinin yapilandirilamayip yedek dispatcher'a dustugunu bulduk
+	// (duplicate structured merge block). Kritik soru: bu mesh'e mi ozgu, yoksa
+	// oyunun calisan shader'lari da ayni taklit kodda mi kosuyor?
+	//   - Digerleri de fallback'te ve HAYATTA ise -> sorun dispatcher'in
+	//     s_barrier/LDS ile birlesmesinde, yani mesh'e ozgu.
+	//   - Yalnizca mesh fallback'te ise -> CFG yapilandiricisini onarma vakti.
+	// Asama basina toplam/fallback sayaci tutup periyodik ozet basiyoruz.
+	{
+		static std::atomic<uint32_t> s_total[8] {};
+		static std::atomic<uint32_t> s_fallback[8] {};
+		const auto                   idx = std::min<size_t>(static_cast<size_t>(program.stage), 7);
+		const auto                   n   = s_total[idx].fetch_add(1, std::memory_order_relaxed) + 1;
+		if (program.dispatcher_fallback) {
+			s_fallback[idx].fetch_add(1, std::memory_order_relaxed);
+		}
+		// Her yeni fallback'te ve her 32 derlemede bir ozet.
+		if (program.dispatcher_fallback || (n % 32) == 0) {
+			static const char* kNames[] = {"Unknown", "Vertex", "Pixel",   "Fetch",
+			                               "Compute", "Mesh",   "asama-6", "asama-7"};
+			std::printf("[CFG-DURUM] asama=%s bu_program: fallback=%d cfg_failure=%d blok=%zu "
+			            "neden=%s | asama_toplami: %u/%u fallback\n",
+			            kNames[idx], program.dispatcher_fallback ? 1 : 0,
+			            static_cast<int>(program.cfg_failure_kind), program.blocks.size(),
+			            program.fallback_reason.empty() ? "-" : program.fallback_reason.c_str(),
+			            s_fallback[idx].load(std::memory_order_relaxed), n);
+			std::fflush(stdout);
+		}
+	}
+
+	// Mesh programinin IR OPCODE HISTOGRAMI. Kirpma deneylerinin
+	// (PSEMU_MESH_NOOP) KAPSAMINI dogrulamak icin sart: shader'da o opcode hic
+	// yoksa deney bir sey kanitlamaz (bir kez oldu, "duz" modu 0 komut atladi).
 	if (program.stage == ShaderType::Mesh) {
 		static std::atomic<uint32_t> s_dumped {0};
 		if (s_dumped.fetch_add(1) < 2) {
