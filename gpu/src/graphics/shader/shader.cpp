@@ -262,6 +262,61 @@ static void PsemuDumpFailedShaderDisasm(const char* kind, uint64_t shader_hash,
 	fflush(stdout);
 }
 
+// TANI: ES/GS adresinden dogrudan disassembly dokumu. Cizim ShouldSkipGeShader'da
+// atildigi icin bu shader'lar derleme yoluna hic girmiyor; yine de ne yaptiklarini
+// okumamiz gerekiyor. Adres basina tek dosya.
+void PsemuDumpShaderAtAddress(const char* kind, uint64_t shader_addr) {
+	if (shader_addr == 0) {
+		return;
+	}
+	static std::mutex            mtx;
+	static std::vector<uint64_t> done;
+	{
+		std::lock_guard lock(mtx);
+		for (const auto& a : done) {
+			if (a == shader_addr) {
+				return;
+			}
+		}
+		if (done.size() >= 16) {
+			return;
+		}
+		done.push_back(shader_addr);
+	}
+	ShaderMappedData data;
+	if (!ShaderGetMappedData(shader_addr, &data) || data.code_size_bytes == 0 ||
+	    (data.code_size_bytes % sizeof(uint32_t)) != 0) {
+		printf("[SHADER-DOKUM] %s 0x%016llx: ShaderMap'te yok veya boyut gecersiz (0x%08x)\n", kind,
+		       static_cast<unsigned long long>(shader_addr), data.code_size_bytes);
+		fflush(stdout);
+		return;
+	}
+	const std::span<const uint32_t> code {reinterpret_cast<const uint32_t*>(shader_addr),
+	                                      data.code_size_bytes / sizeof(uint32_t)};
+	ShaderRecompiler::Decoder::Program program;
+	std::string                       decode_error;
+	const bool decoded = ShaderRecompiler::Decoder::DecodeProgram(code, &program, &decode_error);
+	std::error_code ec;
+	std::filesystem::create_directories("tools/dumps", ec);
+	const auto path = fmt::format("tools/dumps/{}_{:016x}_disasm.txt", kind, shader_addr);
+	FILE*      f    = std::fopen(path.c_str(), "wb");
+	if (f == nullptr) {
+		return;
+	}
+	std::fprintf(f, "; %s shader=0x%016llx dwords=%llu decode_ok=%d\n", kind,
+	             static_cast<unsigned long long>(shader_addr),
+	             static_cast<unsigned long long>(code.size()), static_cast<int>(decoded));
+	if (!decode_error.empty()) {
+		std::fprintf(f, "; decode_error=%s\n", decode_error.c_str());
+	}
+	const auto text = ShaderRecompiler::Decoder::ProgramToString(program);
+	std::fwrite(text.data(), 1, text.size(), f);
+	std::fclose(f);
+	printf("[SHADER-DOKUM] %s -> %s (%llu komut, decode_ok=%d)\n", kind, path.c_str(),
+	       static_cast<unsigned long long>(program.instructions.size()), static_cast<int>(decoded));
+	fflush(stdout);
+}
+
 static void ExitShaderRecompilerFailure(const char* label, uint64_t shader_hash,
                                         const char* reason) {
 	if (ShaderFailureIsFatal()) {

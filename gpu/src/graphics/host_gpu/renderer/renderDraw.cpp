@@ -535,6 +535,11 @@ static bool ShouldSkipGeShader(const HW::Context* ctx, const HW::UserConfig* ucf
 				       (unsigned long long)vertex_info.es_regs.data_addr,
 				       (unsigned long long)vertex_info.gs_regs.data_addr);
 				fflush(stdout);
+				// Atlanan cizimin ES ve GS shader'larini diske dok: GS gercekten
+				// vertex cogaltiyor mu, yoksa gecirgen/eleyici mi? Cevap "ucuz
+				// kestirme yeter mi, yoksa tam NGG GS mi gerekiyor"u belirler.
+				PsemuDumpShaderAtAddress("es", vertex_info.es_regs.data_addr);
+				PsemuDumpShaderAtAddress("gs", vertex_info.gs_regs.data_addr);
 			}
 		}
 		const auto log_id = g_shader_stage_log_count.fetch_add(1);

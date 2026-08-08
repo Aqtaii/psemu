@@ -215,6 +215,10 @@ struct ShaderMappedData {
 void ShaderInit();
 void ShaderMapUserData(uint64_t addr, const ShaderMappedData& data);
 
+// TANI: verilen guest adresindeki shader'i tools/dumps/ altina disassemble eder.
+// Derleme yoluna hic girmeyen (atlanan) shader'lari okumak icin.
+void PsemuDumpShaderAtAddress(const char* kind, uint64_t shader_addr);
+
 void     ShaderDbgDumpInputInfo(const ShaderVertexInputInfo* info);
 void     ShaderDbgDumpInputInfo(const ShaderPixelInputInfo* info);
 void     ShaderDbgDumpInputInfo(const ShaderComputeInputInfo* info);
