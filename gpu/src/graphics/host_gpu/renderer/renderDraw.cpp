@@ -1329,6 +1329,36 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 			SetDrawDebugPhase(buffer, submit_id, draw, 0x500u);
 		}
 
+		// TANI: 1x1 derinlik hedefi KUKLA MI?
+		//
+		// textureCache.cpp:1114'teki takma ad, 1920x1080 bir dokunun icine
+		// kapsanmis 1x1 / pitch=128 bir derinlik hedefi. Bu sekil ya sahte bir
+		// depth attachment (pipeline gecerli bir ek istiyor) ya da htile
+		// uzerinden hizli temizleme demektir - ikisinde de gercek geometri yok.
+		// Cizim gelip gelmedigini sayiyoruz: gelmiyorsa emeklilik kurallarini
+		// karmasiklastirmak yerine bayat kaynagin cache'e girisini engellemek
+		// dogru cozum olur.
+		if (state->depth_info.width == 1 && state->depth_info.height == 1 &&
+		    state->depth_info.vulkan_buffer != nullptr) {
+			static std::atomic<uint64_t> s_draws {0};
+			const auto                   n = s_draws.fetch_add(1, std::memory_order_relaxed) + 1;
+			if (n <= 8 || (n % 512) == 0) {
+				printf("[KUKLA-DERINLIK] 1x1 hedefe CIZIM #%llu | test=%d yaz=%d temizle=%d "
+				       "meta_temizle=%d htile=%d addr=0x%llx boyut=0x%llx stencil=0x%llx "
+				       "index_count=%u instance=%u mesh=%d\n",
+				       (unsigned long long)n, state->depth_info.depth_test_enable ? 1 : 0,
+				       state->depth_info.depth_write_enable ? 1 : 0,
+				       state->depth_info.depth_clear_enable ? 1 : 0,
+				       state->depth_info.depth_meta_clear_enable ? 1 : 0,
+				       state->depth_info.htile ? 1 : 0,
+				       (unsigned long long)state->depth_info.depth_buffer_vaddr,
+				       (unsigned long long)state->depth_info.depth_buffer_size,
+				       (unsigned long long)state->depth_info.stencil_buffer_vaddr, draw.index_count,
+				       draw.instance_count, state->mesh ? 1 : 0);
+				fflush(stdout);
+			}
+		}
+
 		if (state->mesh) {
 			EmitMeshDraw(state->vk_buffer, draw);
 		} else {
