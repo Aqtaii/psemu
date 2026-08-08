@@ -1550,6 +1550,39 @@ bool Structurize(Graph* graph, std::string* error) {
 			std::printf("  SINIF=%s cakisma_no=%u gercek_cikis=%s\n",
 			            exit_new == merge ? "A" : "B", conflict_count,
 			            exit_new == UINT32_MAX ? "COKLU/YOK" : std::to_string(exit_new).c_str());
+			// Bu basliklardan biri DONGU BASLIGI mi? Cikis kenarlarindan biri
+			// geri kenarsa, ortada "coklu cikis" degil bir DONGU vardir ve
+			// cakisma "donguden break yapan secim" desenidir.
+			{
+				bool  new_is_loop = false;
+				bool  old_is_loop = false;
+				for (const auto& loop: graph->natural_loops) {
+					new_is_loop = new_is_loop || loop.header == header;
+					old_is_loop = old_is_loop || loop.header == other;
+				}
+				std::printf("  DONGU: yeni_header=%d eski_header=%d\n", new_is_loop ? 1 : 0,
+				            old_is_loop ? 1 : 0);
+			}
+			// B sinifi icin CIKIS KENARLARINI dok. "Sentetik hub" tasarimi
+			// tum cikislari tek bir bloga toplayip oradan NCPD'ye dallandirmayi
+			// ongoruyor; bu ancak cikislarin HEPSI zaten NCPD'ye gidiyorsa
+			// anlamsal olarak dogru olur. Farkli hedefler varsa yeniden
+			// kablolama sessizce yanlis kod uretir - once olcuyoruz.
+			if (exit_new != merge) {
+				std::printf("  CIKIS_KENARLARI:");
+				for (auto id: construct_new) {
+					const auto* b = graph->FindBlock(id);
+					if (b == nullptr) {
+						continue;
+					}
+					for (auto succ: b->successors) {
+						if (!Contains(construct_new, succ)) {
+							std::printf(" %u->%u", id, succ);
+						}
+					}
+				}
+				std::printf("\n");
+			}
 			std::fflush(stdout);
 			SetFailure(
 			    graph, FailureKind::StructuredControlFlow, header,
