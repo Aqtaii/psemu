@@ -1638,10 +1638,21 @@ bool ShaderCompileInfoMS(const HW::VertexShaderInfo* regs, const HW::ShaderRegis
 	EXIT_IF(spirv == nullptr);
 	*spirv = {};
 
-	const uint64_t shader_addr = regs->gs_regs.data_addr;
-	if (shader_addr == 0) {
+	// NGG birlesik ES-GS TEK PROGRAMDIR: dalga ES girisinden baslar, ES kosar,
+	// sonra "s_setpc_b64 s6" ile GS'e atlar. Onceki denemede yalnizca GS
+	// yarisindan derliyorduk; GS ise LDS okuyor (8 ds_read_b32 + 6 ds_read_b128)
+	// ve o LDS'i dolduran kod ES'te. Sonuc: baslatilmamis LDS'ten uretilen
+	// gecersiz primitif indeksleri -> ErrorDeviceLost.
+	//
+	// Bu yuzden giris ES adresi. ES'in kendi eslenmis boyu GS'i KAPSAMIYOR
+	// (olculdu: ES 56 dword, GS +0x700'de), o yuzden span'i elle birlestiriyoruz:
+	// es_addr'den gs_addr+gs_boyu'na kadar.
+	const uint64_t es_addr = regs->es_regs.data_addr;
+	const uint64_t gs_addr = regs->gs_regs.data_addr;
+	if (es_addr == 0 || gs_addr == 0) {
 		return false;
 	}
+	const uint64_t shader_addr = gs_addr;
 	// Mesh yolunda giris derleyicisi (input assembler) yok: shader verisini
 	// kendisi okur. Vertex tampon/oznitelik alanlarini bos birakiyoruz.
 	*info                  = {};
@@ -1667,7 +1678,16 @@ bool ShaderCompileInfoMS(const HW::VertexShaderInfo* regs, const HW::ShaderRegis
 		}
 	}
 
-	const auto code = ShaderGetMappedCode(shader_addr, "ShaderRecompiler MS", hash);
+	// OLCULDU: ES girisinden derlemek CALISMIYOR. ES gercek kodu 224 bayt ve
+	// 0x3c'deki "s_setpc_b64 s6" ile bitiyor; GS ise +0x700'de. Aradaki 0x620
+	// bayt KOD DEGIL, ve decoder dogrusal cozumleyip kontrol akisini takip
+	// etmedigi icin hemen 0x40'ta patliyor:
+	//   "unsupported scalar source operand 0x00000073 at pc 0x00000040"
+	// Iki yariyi ek yerinden birlestirmek (splice) + setpc hedefini GS
+	// bolumunun basina baglamak gerekiyor; bu recompiler'da yeni bir yetenek.
+	// O gelene kadar GS yarisindan derlemeye devam - device lost duruyor ama
+	// en azindan derlenip GPU'ya ulasiyor ve yol olculebilir kaliyor.
+	const auto code = ShaderGetMappedCode(gs_addr, "ShaderRecompiler MS", hash);
 
 	ShaderRecompiler::CompileOptions options;
 	options.stage          = ShaderType::Mesh;
