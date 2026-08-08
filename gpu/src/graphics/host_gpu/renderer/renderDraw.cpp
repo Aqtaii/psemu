@@ -458,6 +458,38 @@ static bool PixelShaderHasDepthOrCoverageSideEffects(const HW::ShaderRegisters& 
 	       db.shader_execute_on_noop;
 }
 
+// Mesh yolu acik mi? Cihaz VK_EXT_mesh_shader'i destekliyor olmali VE
+// PSEMU_MESH=1 verilmis olmali.
+//
+// VARSAYILAN KAPALI, cunku olculdu: kapi acildiginda cizimler artik GE'de
+// dusmuyor, ama daha ilk mesh cizimi emit edilmeden textureCache.cpp:2293'te
+// "unsupported depth-target alias" ile cikiliyor (derinlik 0x...+0x10000,
+// mevcut 0x...+0x870000). Bu cizimler daha once hic calismadigi icin o
+// derinlik hedefi yapilandirmasi doku onbellegine hic ugramamisti - yani
+// mesh shader'in degil, uzun sure uykuda kalmis bir takma ad (aliasing)
+// yolunun sinirina caripiyoruz.
+//
+//   PSEMU_MESH=0 (varsayilan) -> eski davranis, FLIP=29, kararli
+//   PSEMU_MESH=1              -> mesh yolu, su an T+150'de cikiyor
+bool PsemuMeshPathEnabled() {
+	static const bool enabled = [] {
+		if (g_render_ctx == nullptr || g_render_ctx->GetGraphicCtx() == nullptr ||
+		    !g_render_ctx->GetGraphicCtx()->mesh_shader_enabled) {
+			return false;
+		}
+		const char* env = std::getenv("PSEMU_MESH");
+		return env != nullptr && env[0] == '1';
+	}();
+	return enabled;
+}
+
+// Cizim NGG birlesik ES-GS mi? (ES ve GS ikisi de dolu, GS gercek geometry
+// shader.) Olculdu: Astro Bot sahne geometrisini yalnizca bu yoldan gonderiyor.
+static bool IsNggMergedEsGs(const HW::Shader* sh_ctx) {
+	const auto& vs = sh_ctx->GetVs();
+	return vs.es_regs.data_addr != 0 && vs.gs_regs.data_addr != 0;
+}
+
 static bool ShouldSkipGeShader(const HW::Context* ctx, const HW::UserConfig* ucfg,
                                const HW::Shader* sh_ctx) {
 	EXIT_IF(ctx == nullptr);
@@ -495,6 +527,13 @@ static bool ShouldSkipGeShader(const HW::Context* ctx, const HW::UserConfig* ucf
 	    sh_regs.m_vgtGsMaxVertOut != 0x00000000 ||
 	    !is_known_gs_out_prim_type(sh_regs.m_vgtGsOutPrimType) ||
 	    sh_regs.m_geMaxOutputPerSubgroup > 0x00000040;
+
+	// MESH YOLU: birlesik ES-GS'i artik atmiyoruz, mesh shader olarak
+	// derleyip cizecegiz. Asama 1-4a'da bu shader'in gecerli SPIR-V'ye
+	// derlendigi olculdu (commit fc1e0c7).
+	if (PsemuMeshPathEnabled() && IsNggMergedEsGs(sh_ctx)) {
+		return false;
+	}
 
 	if (unsupported_stage_mask || unsupported_gs_stage || ge_group_size || ge_shader_regs) {
 		// TANI: sahne geometrisini tasiyan cok-ornekli dolayli cizimlerin HEPSI bu
@@ -575,6 +614,8 @@ struct DrawRenderState {
 	ShaderVertexInputInfo     vs_input_info;
 	ShaderPixelInputInfo      ps_input_info;
 	std::span<const uint32_t> vs_shader;
+	// Mesh yolu: vs_shader/vs_input_info MESH shader'ini tasir, vertex degil.
+	bool                      mesh = false;
 	std::span<const uint32_t> ps_shader;
 };
 
@@ -887,8 +928,16 @@ static bool RefreshShaders(HW::Context* ctx, HW::Shader* sh_ctx, const DrawCallI
 	if (log_phases) {
 		LogDrawPhase(draw.name, "ShaderCompileInfoVS");
 	}
-	if (!ShaderCompileInfoVS(&vertex_shader_info, &shader_regs, lane_mask_mode,
-	                         &state->vs_input_info, &state->vs_shader)) {
+	state->mesh = PsemuMeshPathEnabled() && IsNggMergedEsGs(sh_ctx);
+	if (state->mesh) {
+		if (!ShaderCompileInfoMS(&vertex_shader_info, &shader_regs, lane_mask_mode,
+		                         &state->vs_input_info, &state->vs_shader)) {
+			printf("[CIZIM-ATLA] MS derlenemedi (draw=%s) -> cizim atlandi\n", draw.name);
+			fflush(stdout);
+			return false;
+		}
+	} else if (!ShaderCompileInfoVS(&vertex_shader_info, &shader_regs, lane_mask_mode,
+	                                &state->vs_input_info, &state->vs_shader)) {
 		// Gevsek modda (bkz. shader.cpp ShaderFailureIsFatal) shader.cpp
 		// EXIT etmez; buraya duseriz ve CIZIMI ATLARIZ.
 		printf("[CIZIM-ATLA] VS derlenemedi (draw=%s) -> cizim atlandi\n", draw.name);
@@ -1053,6 +1102,28 @@ static bool IsHostExpandedRectListDrawSupported(const ShaderVertexInputInfo& vs_
 	return true;
 }
 
+// NGG'de bir is grubu, GS'in bir alt grubudur. Misafir tarafta "kac ilkel
+// cizilecek" bilgisi cizim argumanlarindadir; is grubu sayisini oradan
+// turetiyoruz.
+//
+// Olculen shader is grubu basina en cok GE_MAX_OUTPUT_PER_SUBGROUP (0xd8=216)
+// ilkel uretiyor ve her cagri BIR ilkel yaziyor; LocalSize su an 1 oldugu icin
+// (Asama 1'de yer tutucu) her is grubu tek cagri kosuyor. Bu ILK DENEME: dogru
+// oranlar Asama 4c'de NGG alt grup yapilandirmasindan baglanacak.
+static void EmitMeshDraw(vk::CommandBuffer vk_buffer, const DrawCallInfo& draw) {
+	const uint32_t work = draw.index_count * std::max<uint32_t>(draw.instance_count, 1u);
+	const uint32_t groups = std::clamp<uint32_t>(work, 1u, 65535u);
+
+	static std::atomic<uint64_t> s_n {0};
+	const auto                   n = s_n.fetch_add(1, std::memory_order_relaxed) + 1;
+	if (n <= 8 || (n % 4096) == 0) {
+		printf("[MESH-CIZIM] #%llu gruplar=%u (index_count=%u instance=%u)\n",
+		       (unsigned long long)n, groups, draw.index_count, draw.instance_count);
+		fflush(stdout);
+	}
+	vk_buffer.drawMeshTasksEXT(groups, 1, 1);
+}
+
 static void EmitDrawPrimitives(const HW::UserConfig* ucfg, vk::CommandBuffer vk_buffer,
                                const ShaderVertexInputInfo& vs_input_info, const DrawCallInfo& draw,
                                const DrawEmitInfo& emit) {
@@ -1185,7 +1256,7 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 		auto* pipeline = g_render_ctx->GetPipelineCache()->CreateGraphicsPipeline(
 		    state->framebuffer, state->color_info, state->color_count, &state->depth_info,
 		    &state->vs_input_info, ctx, sh_ctx, &state->ps_input_info, topology, state->ps_active,
-		    state->vs_shader, state->ps_shader);
+		    state->vs_shader, state->ps_shader, state->mesh);
 
 		if (set_bind_debug) {
 			SetDrawDebugPhase(buffer, submit_id, draw, 0x100u);
@@ -1196,8 +1267,11 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 		SetDynamicParams(state->vk_buffer, dynamic_params);
 
 		ClearBounceCopies();
-		// EXIT_NOT_IMPLEMENTED(vs_input_info.buffers_num > 1);
-		BindDrawVertexBuffers(submit_id, buffer, draw, state->vk_buffer, state->vs_input_info);
+		// Mesh yolunda giris derleyicisi (IA) yok: shader verisini kendisi okur.
+		if (!state->mesh) {
+			// EXIT_NOT_IMPLEMENTED(vs_input_info.buffers_num > 1);
+			BindDrawVertexBuffers(submit_id, buffer, draw, state->vk_buffer, state->vs_input_info);
+		}
 
 		LogDrawPhase(draw.name, "BindDescriptorsVS");
 		if (set_auto_debug) {
@@ -1205,7 +1279,10 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 		}
 		BindDescriptors(submit_id, buffer, vk::PipelineBindPoint::eGraphics,
 		                pipeline->pipeline_layout, state->vs_input_info.stage,
-		                vk::ShaderStageFlagBits::eVertex, DescriptorCache::Stage::Vertex);
+		                state->mesh ? vk::ShaderStageFlagBits::eMeshEXT
+		                            : vk::ShaderStageFlagBits::eVertex,
+		                state->mesh ? DescriptorCache::Stage::Mesh
+		                            : DescriptorCache::Stage::Vertex);
 
 		// TANI: bu cizim EKRAN tamponuna mi gidiyor? Oyleyse baglanan
 		// dokulari [EKRAN-GIRDI] olarak ayikliyoruz (bkz. descriptors.cpp).
@@ -1232,7 +1309,9 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 		}
 		// Index data may use this command buffer's host stream. Resolve it only after the other
 		// fault-capable bindings, and rebuild it whenever a fault reset changes the generation.
-		BindDrawIndexBuffer(buffer, state->vk_buffer, index_source);
+		if (!state->mesh) {
+			BindDrawIndexBuffer(buffer, state->vk_buffer, index_source);
+		}
 		if (buffer->GetRecordingGeneration() != recording_generation) {
 			continue;
 		}
@@ -1249,7 +1328,11 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 			SetDrawDebugPhase(buffer, submit_id, draw, 0x500u);
 		}
 
-		EmitDrawPrimitives(ucfg, state->vk_buffer, state->vs_input_info, draw, emit);
+		if (state->mesh) {
+			EmitMeshDraw(state->vk_buffer, draw);
+		} else {
+			EmitDrawPrimitives(ucfg, state->vk_buffer, state->vs_input_info, draw, emit);
+		}
 
 		if (set_auto_debug) {
 			SetDrawDebugPhase(buffer, submit_id, draw, 0x600u);
@@ -1258,7 +1341,8 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 		FlushBounceCopies(state->vk_buffer, true);
 		vk::PipelineStageFlags shader_write_stages = {};
 		if (HasShaderBufferWrites(state->vs_input_info.stage)) {
-			shader_write_stages |= vk::PipelineStageFlagBits::eVertexShader;
+			shader_write_stages |= state->mesh ? vk::PipelineStageFlagBits::eMeshShaderEXT
+			                                   : vk::PipelineStageFlagBits::eVertexShader;
 		}
 		if (state->ps_active) {
 			if (HasShaderBufferWrites(state->ps_input_info.stage)) {

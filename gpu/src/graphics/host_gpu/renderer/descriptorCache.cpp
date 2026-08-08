@@ -17,6 +17,7 @@ vk::ShaderStageFlags StageFlags(DescriptorCache::Stage stage) {
 		case DescriptorCache::Stage::Vertex: return vk::ShaderStageFlagBits::eVertex;
 		case DescriptorCache::Stage::Pixel: return vk::ShaderStageFlagBits::eFragment;
 		case DescriptorCache::Stage::Compute: return vk::ShaderStageFlagBits::eCompute;
+		case DescriptorCache::Stage::Mesh: return vk::ShaderStageFlagBits::eMeshEXT;
 		default: EXIT("unknown descriptor stage\n");
 	}
 }

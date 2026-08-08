@@ -236,6 +236,14 @@ ShaderId ShaderGetIdPS(const HW::PixelShaderInfo* regs, const ShaderPixelInputIn
 ShaderId ShaderGetIdCS(const HW::ComputeShaderInfo* regs, const ShaderComputeInputInfo* input_info,
                        bool include_bind_specialization);
 // Returned SPIR-V spans are read-only views backed by the shader program cache.
+// NGG birlesik ES-GS'i Vulkan mesh shader'i olarak derler. Kod GS adresinden
+// gelir (ES yalnizca LDS'e yazip GS'e atlayan bir prologdur, bkz. commit
+// 6ae5c59) ve user SGPR penceresi 0'dan sayilir - VS yolunun 8'i burada
+// kaynak cozumlemesini kiriyor (olculdu, bkz. commit fc1e0c7).
+bool ShaderCompileInfoMS(const HW::VertexShaderInfo* regs, const HW::ShaderRegisters* sh,
+                         ShaderLaneMaskMode lane_mask_mode, ShaderVertexInputInfo* info,
+                         std::span<const uint32_t>* spirv);
+
 bool ShaderCompileInfoVS(const HW::VertexShaderInfo* regs, const HW::ShaderRegisters* sh,
                          ShaderLaneMaskMode lane_mask_mode, ShaderVertexInputInfo* input_info,
                          std::span<const uint32_t>* spirv);

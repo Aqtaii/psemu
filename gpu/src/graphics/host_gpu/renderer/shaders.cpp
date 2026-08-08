@@ -489,7 +489,7 @@ void CreatePipelineInternal(PipelineCache::GraphicsPipeline* pipeline, vk::Rende
                             std::span<const uint32_t>       ps_shader,
                             const PipelineStaticParameters& static_params, uint32_t vs_hash0,
                             uint32_t vs_crc32, uint32_t ps_hash0, uint32_t ps_crc32,
-                            bool ps_active) {
+                            bool ps_active, bool mesh) {
 	EXIT_IF(g_render_ctx == nullptr);
 	EXIT_IF(pipeline == nullptr);
 	EXIT_IF(render_pass == nullptr);
@@ -537,12 +537,15 @@ void CreatePipelineInternal(PipelineCache::GraphicsPipeline* pipeline, vk::Rende
 	vert_shader_stage_info.sType               = vk::StructureType::ePipelineShaderStageCreateInfo;
 	vert_shader_stage_info.pNext               = nullptr;
 	vert_shader_stage_info.flags               = {};
-	vert_shader_stage_info.stage               = vk::ShaderStageFlagBits::eVertex;
+	// Mesh yolunda rasterizer oncesi asama VERTEX degil MESH'tir.
+	const auto pre_raster_stage =
+	    mesh ? vk::ShaderStageFlagBits::eMeshEXT : vk::ShaderStageFlagBits::eVertex;
+	vert_shader_stage_info.stage               = pre_raster_stage;
 	vert_shader_stage_info.module              = vert_shader_module;
 	vert_shader_stage_info.pName               = "main";
 	vert_shader_stage_info.pSpecializationInfo = nullptr;
 	EXIT_IF(!vs_input_info->stage);
-	ConfigureSubgroupSize(gctx, vk::ShaderStageFlagBits::eVertex, *vs_input_info->stage.program,
+	ConfigureSubgroupSize(gctx, pre_raster_stage, *vs_input_info->stage.program,
 	                      &vert_subgroup_size, &vert_shader_stage_info);
 
 	vk::PipelineShaderStageCreateInfo                     frag_shader_stage_info {};
@@ -697,10 +700,12 @@ void CreatePipelineInternal(PipelineCache::GraphicsPipeline* pipeline, vk::Rende
 	vertex_input_info.sType = vk::StructureType::ePipelineVertexInputStateCreateInfo;
 	vertex_input_info.pNext = nullptr;
 	vertex_input_info.flags = {};
-	vertex_input_info.vertexBindingDescriptionCount   = vs_input_info->buffers_num;
-	vertex_input_info.pVertexBindingDescriptions      = input_desc;
-	vertex_input_info.vertexAttributeDescriptionCount = vs_input_info->resources_num;
-	vertex_input_info.pVertexAttributeDescriptions    = input_attr;
+	// Mesh yolunda giris derleyicisi (IA) devrede degil: vertex baglama ve
+	// oznitelik tanimlari TAMAMEN bos olmali, shader verisini kendisi okur.
+	vertex_input_info.vertexBindingDescriptionCount   = mesh ? 0u : vs_input_info->buffers_num;
+	vertex_input_info.pVertexBindingDescriptions      = mesh ? nullptr : input_desc;
+	vertex_input_info.vertexAttributeDescriptionCount = mesh ? 0u : vs_input_info->resources_num;
+	vertex_input_info.pVertexAttributeDescriptions    = mesh ? nullptr : input_attr;
 
 	vk::PipelineInputAssemblyStateCreateInfo input_assembly {};
 	input_assembly.sType    = vk::StructureType::ePipelineInputAssemblyStateCreateInfo;
@@ -938,8 +943,10 @@ void CreatePipelineInternal(PipelineCache::GraphicsPipeline* pipeline, vk::Rende
 	pipeline_info.flags               = {};
 	pipeline_info.stageCount          = shader_stage_count;
 	pipeline_info.pStages             = shader_stages;
-	pipeline_info.pVertexInputState   = &vertex_input_info;
-	pipeline_info.pInputAssemblyState = &input_assembly;
+	// Mesh pipeline'inda bu iki durum YOK SAYILIR; spec nullptr olmalarina izin
+	// veriyor ve nullptr birakmak "IA yok" niyetini acikca belgeliyor.
+	pipeline_info.pVertexInputState   = mesh ? nullptr : &vertex_input_info;
+	pipeline_info.pInputAssemblyState = mesh ? nullptr : &input_assembly;
 	pipeline_info.pTessellationState  = nullptr;
 	pipeline_info.pViewportState      = &viewport_state;
 	pipeline_info.pRasterizationState = &rasterizer;

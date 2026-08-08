@@ -112,6 +112,9 @@ struct ShaderStageProgramKeyHash {
 struct ShaderProgramPermutation {
 	std::vector<uint32_t>                                spirv;
 	std::shared_ptr<const ShaderRecompiler::IR::Program> program;
+	// Mesh yolunda onbellek isabetinde kaynak anlik goruntusunu de geri
+	// vermemiz gerekiyor; VS/PS yollari onu ayrica yeniden kuruyor.
+	std::shared_ptr<const ShaderRecompiler::IR::ResourceSnapshot> resources;
 };
 
 static std::unordered_map<ShaderStageProgramKey,
@@ -1625,6 +1628,87 @@ void PsemuProbeMeshCompile(uint64_t gs_addr, uint32_t user_sgpr_count, const uin
 		DumpShaderRecompilerSpirv("ms_sondaj", options.shader_hash, result.spirv);
 		return;
 	}
+}
+
+bool ShaderCompileInfoMS(const HW::VertexShaderInfo* regs, const HW::ShaderRegisters* sh,
+                         ShaderLaneMaskMode lane_mask_mode, ShaderVertexInputInfo* info,
+                         std::span<const uint32_t>* spirv) {
+	EXIT_IF(regs == nullptr);
+	EXIT_IF(info == nullptr);
+	EXIT_IF(spirv == nullptr);
+	*spirv = {};
+
+	const uint64_t shader_addr = regs->gs_regs.data_addr;
+	if (shader_addr == 0) {
+		return false;
+	}
+	// Mesh yolunda giris derleyicisi (input assembler) yok: shader verisini
+	// kendisi okur. Vertex tampon/oznitelik alanlarini bos birakiyoruz.
+	*info                  = {};
+	info->buffers_num      = 0;
+	info->resources_num    = 0;
+	const uint64_t hash    = (regs->gs_regs.chksum != 0) ? regs->gs_regs.chksum : shader_addr;
+	ShaderId       program_id {};
+	program_id.hash0 = static_cast<uint32_t>(hash);
+	program_id.crc32 = static_cast<uint32_t>(hash >> 32u);
+	const auto key = MakeShaderStageProgramKey(ShaderType::Mesh, hash, program_id,
+	                                           lane_mask_mode);
+
+	{
+		std::scoped_lock lock(g_shader_program_cache_mutex);
+		if (auto iter = g_shader_program_cache.find(key); iter != g_shader_program_cache.end()) {
+			if (!iter->second.empty()) {
+				const auto& permutation = iter->second.front();
+				info->stage.program     = permutation->program;
+				info->stage.resources   = permutation->resources;
+				*spirv                  = MakeShaderSpirvView(permutation->spirv);
+				return true;
+			}
+		}
+	}
+
+	const auto code = ShaderGetMappedCode(shader_addr, "ShaderRecompiler MS", hash);
+
+	ShaderRecompiler::CompileOptions options;
+	options.stage          = ShaderType::Mesh;
+	options.lane_mask_mode = lane_mask_mode;
+	options.shader_hash    = hash;
+	options.shader_base    = shader_addr;
+	// OLCULDU (commit fc1e0c7): taban=8 -> "descriptor source 3 dword 0 unknown
+	// value"; taban=0 -> gecti. Birlesik ES-GS'in GS yarisi user SGPR
+	// penceresini 0'dan sayiyor.
+	options.user_data_base       = 0;
+	options.user_data_count      = std::max<uint32_t>(regs->gs_regs.rsrc2.user_sgpr, 16u);
+	options.user_data            = regs->gs_user_sgpr.value;
+	options.descriptor_set       = 0;
+	options.push_constant_offset = 0;
+	options.dump_ir              = false;
+	options.early_dump           = false;
+	options.dump_label           = "ShaderRecompiler MS";
+
+	ShaderRecompiler::CompileResult result;
+	std::string                     error;
+	if (!ShaderRecompiler::TryRecompile(code, options, &result, &error)) {
+		ExitShaderRecompilerFailure("ShaderRecompiler MS", options.shader_hash, error.c_str());
+		return false;
+	}
+	if (!SpirvValidateBinary("ShaderRecompiler MS", options.shader_hash, result.spirv)) {
+		DumpShaderRecompilerSpirv("ms", options.shader_hash, result.spirv);
+		ExitShaderRecompilerFailure("ShaderRecompiler MS", options.shader_hash,
+		                            "SPIR-V validation failed");
+		return false;
+	}
+
+	ShaderProgramPermutation permutation {};
+	permutation.spirv     = std::move(result.spirv);
+	permutation.program =
+	    std::make_shared<const ShaderRecompiler::IR::Program>(std::move(result.program));
+	permutation.resources =
+	    std::make_shared<const ShaderRecompiler::IR::ResourceSnapshot>(std::move(result.resources));
+	info->stage.program   = permutation.program;
+	info->stage.resources = permutation.resources;
+	*spirv = AddShaderProgramPermutation("MS", hash, key, std::move(permutation));
+	return true;
 }
 
 bool ShaderCompileSpirvVS(const HW::VertexShaderInfo* regs, const HW::ShaderRegisters* sh,

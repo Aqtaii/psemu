@@ -35,6 +35,9 @@ struct PipelineStaticParameters {
 	bool                       negative_one_to_one      = false;
 	int                        scissor_ltrb[4]          = {0};
 	vk::PrimitiveTopology      topology                 = vk::PrimitiveTopology::ePointList;
+	// NGG birlesik ES-GS mesh yolu. Onbellek anahtarinin parcasi: ayni shader
+	// kimligi hem vertex hem mesh pipeline'i uretemez.
+	bool                       mesh                     = false;
 	bool                       with_depth               = false;
 	bool                       depth_test_enable        = false;
 	bool                       depth_write_enable       = false;
@@ -74,7 +77,8 @@ static_assert(std::is_standard_layout_v<PipelineStaticParameters>);
 static_assert(alignof(PipelineStaticParameters) == 1);
 static_assert(sizeof(PipelineStaticParameters) ==
               sizeof(float[3]) + sizeof(float[3]) + sizeof(bool) + sizeof(int[4]) +
-                  sizeof(vk::PrimitiveTopology) + sizeof(bool) * 3 + sizeof(vk::CompareOp) +
+                  sizeof(vk::PrimitiveTopology) + sizeof(bool) /* mesh */ + sizeof(bool) * 3 +
+                  sizeof(vk::CompareOp) +
                   sizeof(bool) + sizeof(float) * 2 + sizeof(bool) +
                   sizeof(PipelineStencilStaticState) * 2 + sizeof(uint32_t) +
                   sizeof(uint32_t[RENDER_COLOR_ATTACHMENTS_MAX]) + sizeof(bool) * 3 +
@@ -106,7 +110,8 @@ public:
 	    VulkanFramebuffer* framebuffer, RenderColorInfo* colors, uint32_t color_count,
 	    RenderDepthInfo* depth, ShaderVertexInputInfo* vs_input_info, HW::Context* ctx,
 	    HW::Shader* sh_ctx, ShaderPixelInputInfo* ps_input_info, vk::PrimitiveTopology topology,
-	    bool ps_active, std::span<const uint32_t> vs_spirv, std::span<const uint32_t> ps_spirv);
+	    bool ps_active, std::span<const uint32_t> vs_spirv, std::span<const uint32_t> ps_spirv,
+	    bool mesh);
 	ComputePipeline* CreateComputePipeline(ShaderComputeInputInfo*      input_info,
 	                                       const HW::ComputeShaderInfo* cs_regs,
 	                                       std::span<const uint32_t>    cs_spirv);
@@ -191,7 +196,7 @@ void CreatePipelineInternal(PipelineCache::GraphicsPipeline* pipeline, vk::Rende
                             std::span<const uint32_t>       ps_shader,
                             const PipelineStaticParameters& static_params, uint32_t vs_hash0,
                             uint32_t vs_crc32, uint32_t ps_hash0, uint32_t ps_crc32,
-                            bool ps_active);
+                            bool ps_active, bool mesh);
 void CreatePipelineInternal(PipelineCache::ComputePipeline* pipeline,
                             const ShaderComputeInputInfo*   input_info,
                             std::span<const uint32_t>       cs_shader);

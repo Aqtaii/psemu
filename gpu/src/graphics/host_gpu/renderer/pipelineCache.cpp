@@ -42,7 +42,8 @@ PipelineCache::GraphicsPipeline* PipelineCache::CreateGraphicsPipeline(
     VulkanFramebuffer* framebuffer, RenderColorInfo* colors, uint32_t color_count,
     RenderDepthInfo* depth, ShaderVertexInputInfo* vs_input_info, HW::Context* ctx,
     HW::Shader* sh_ctx, ShaderPixelInputInfo* ps_input_info, vk::PrimitiveTopology topology,
-    bool ps_active, std::span<const uint32_t> vs_spirv, std::span<const uint32_t> ps_spirv) {
+    bool ps_active, std::span<const uint32_t> vs_spirv, std::span<const uint32_t> ps_spirv,
+    bool mesh) {
 	KYTY_PROFILER_BLOCK("PipelineCache::CreatePipeline(Gfx)", profiler::colors::DeepOrangeA200);
 
 	EXIT_IF(framebuffer == nullptr);
@@ -89,6 +90,7 @@ PipelineCache::GraphicsPipeline* PipelineCache::CreateGraphicsPipeline(
 
 	static_params.negative_one_to_one = !ctx->GetClipControl().dx_clip_space;
 	static_params.topology            = topology;
+	static_params.mesh                = mesh;
 	static_params.with_depth =
 	    (depth->format != vk::Format::eUndefined && depth->vulkan_buffer != nullptr);
 	static_params.depth_test_enable  = depth->depth_test_enable;
@@ -153,7 +155,7 @@ PipelineCache::GraphicsPipeline* PipelineCache::CreateGraphicsPipeline(
 	                 ps_id.crc32);
 	CreatePipelineInternal(cached.get(), framebuffer->render_pass, vs_input_info, vs_spirv,
 	                       ps_input_info, ps_spirv, static_params, vs_id.hash0, vs_id.crc32,
-	                       ps_id.hash0, ps_id.crc32, ps_active);
+	                       ps_id.hash0, ps_id.crc32, ps_active, mesh);
 	LogPipelineTrace("CreatePipelineInternal done", vs_id.hash0, vs_id.crc32, ps_id.hash0,
 	                 ps_id.crc32);
 
