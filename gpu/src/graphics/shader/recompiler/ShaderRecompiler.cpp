@@ -168,6 +168,49 @@ bool NeedsDispatcherForStructuredLoopHeader(const IR::Program& ir, std::string* 
 		}
 	}
 
+	// TESHIS KALKANI (PSEMU_CFG_KALKAN=1) - COZUM DEGIL, SONDA.
+	//
+	// Olculdu: 31 secim basligindan 8'i bolen komut tasiyor ve bunlardan
+	// blok=5 (merge=44 dogru=45 yanlis=6) spirv-val'in sikayet ettigi
+	// yapinin BIREBIR aynisi. Bu kalkan o bloklari da yakalayip programi
+	// dispatcher yedegine gonderir.
+	//
+	// Amac TEK BIR SORUYU yanitlamak: bu 8 blok korununca modul spirv-val'den
+	// GECIYOR MU?
+	//   geciyorsa  -> yapisal kusur BUNDAN ibaret; gercek cozume (bolen
+	//                 komutlari dallanmasiz yapmak) guvenle gecilir
+	//   gecmiyorsa -> baska kusur da var; koca bir refactor bosa gitmezdi
+	//
+	// VARSAYILAN KAPALI: dispatcher yedegi KIRILGAN (bkz. yedek dispatcher
+	// notlari) ve oyunun kendi yolunu bozabilir.
+	static const bool selection_shield = [] {
+		const char* env = std::getenv("PSEMU_CFG_KALKAN");
+		return env != nullptr && env[0] == '1';
+	}();
+	if (selection_shield) {
+		for (const auto& block: ir.blocks) {
+			const bool is_selection_header =
+			    !block.terminator.loop_header &&
+			    block.terminator.kind == CFG::TerminatorKind::ConditionalBranch &&
+			    block.terminator.merge_block != UINT32_MAX;
+			if (!is_selection_header) {
+				continue;
+			}
+			for (const auto& inst: block.instructions) {
+				if (!InstructionMaySplitSpirvBlock(inst)) {
+					continue;
+				}
+				if (reason != nullptr) {
+					*reason = fmt::format(
+					    "selection header block {} contains an instruction whose SPIR-V "
+					    "lowering emits internal control flow: {}",
+					    block.id, IR::InstructionToString(inst).c_str());
+				}
+				return true;
+			}
+		}
+	}
+
 	for (const auto& block: ir.blocks) {
 		if (!block.terminator.loop_header) {
 			continue;
