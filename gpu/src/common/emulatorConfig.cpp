@@ -38,7 +38,18 @@ uint32_t GetVblankFrequency() {
 }
 
 bool VulkanValidationEnabled() {
-	return g_config->vulkan_validation_enabled;
+	// TANI ANAHTARI: PSEMU_VK_VALIDATE=1.
+	//
+	// `shader_validation_enabled` ile BIREBIR ayni desen: yapilandirma alani
+	// `false` SABIT ve kodun hicbir yerinden set edilmiyordu, yani Vulkan
+	// dogrulama katmanlari da PRATIKTE HIC KOSMAMISTI. spirv-val'i acmak
+	// gecenin donum noktasi oldu (moduller sessizce gecersizdi); ayni sinifta
+	// ikinci bir kor nokta olmasin.
+	static const bool env_on = [] {
+		const char* env = std::getenv("PSEMU_VK_VALIDATE");
+		return env != nullptr && env[0] == '1';
+	}();
+	return g_config->vulkan_validation_enabled || env_on;
 }
 
 bool ShaderValidationEnabled() {

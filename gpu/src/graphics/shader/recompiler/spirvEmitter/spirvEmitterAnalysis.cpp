@@ -766,6 +766,30 @@ uint32_t MeshOutputPrimitives(const EmitterState& state) {
 // Is grubu basina cagri sayisi. Olculen shader v13 = (dalga_id << 6) + mbcnt
 // hesapliyor, yani wave64 varsayiyor; bu yuzden varsayilan dalga boyu.
 uint32_t MeshLocalSizeX(const EmitterState& state) {
+	// DENEY (PSEMU_MESH_LOCALSIZE=<n>): HELLO `local_size_x = 1` ile calisip
+	// 54823 piksel cizdi; recompile edilen program 64 kullaniyor. Mod 3/4'te
+	// 64 cagrinin HEPSI ayni uc vertex'e ayni degerleri yaziyor - teknik
+	// olarak yaris durumu ve Vulkan mesh ciktilarinda tanimsiz davranis.
+	// Govde ve veri elendikten sonra geriye kalan supheliler arasinda EN
+	// TEPEDEKI bu; tek deger, tek kosuda sinanir.
+	static const uint32_t override_value = [] {
+		const char* env = std::getenv("PSEMU_MESH_LOCALSIZE");
+		return env != nullptr ? static_cast<uint32_t>(std::atoi(env)) : 0u;
+	}();
+	if (override_value != 0) {
+		// KAPSAM KANITI: `[MS-LIMIT]` satiri LocalSize'i shader.cpp'de AYRICA
+		// hesapliyor ve ezmeyi gormuyor; yalnizca ona bakip "LocalSize suclu
+		// degil" demek yanlis olurdu.
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 4) {
+			printf("[MS-LOCALSIZE] EZILDI: %u -> %u\n",
+			       state.mesh_local_size_x == 0 ? std::max<uint32_t>(state.wave_size, 1u)
+			                                    : state.mesh_local_size_x,
+			       override_value);
+			fflush(stdout);
+		}
+		return override_value;
+	}
 	const auto v = state.mesh_local_size_x;
 	return v == 0 ? std::max<uint32_t>(state.wave_size, 1u) : v;
 }
