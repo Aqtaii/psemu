@@ -1267,17 +1267,20 @@ bool SplitOneNestedSelectionMerge(Graph* graph, std::vector<uint32_t>* already_s
 		if (headers.size() < 2) {
 			continue;
 		}
-		for (auto inner: headers) {
+		// N-1 KURALI: `headers` blok kimligi sirasinda dolduruluyor (AddUnique +
+		// artan block_id taramasi), yani DETERMINISTIK - `headers[0]` her
+		// kosuda ayni blok. Ilk baslik orijinal merge'u TUTAR; geri kalan N-1
+		// baslik kendi sentetik yonlendiricisini alir.
+		//
+		// DOMINANS SARTI KALDIRILDI (olculdu): 45 red'in TAMAMI bu sarttan
+		// dusuyordu - cakisan secimler IC ICE DEGIL KARDES. Ilk denemede bu
+		// gevsetme CFG'yi indirgenemez yapmisti; yukaridaki GERI KENAR
+		// KORUMASI o eksigi kapatiyor.
+		for (size_t hi = 1; hi < headers.size(); hi++) {
+			const auto inner = headers[hi];
 			if (std::find(already_split->begin(), already_split->end(), inner) !=
 			    already_split->end()) {
 				decline(inner, merge, "ZATEN_BOLUNDU");
-				continue;
-			}
-			const bool nested = std::any_of(headers.begin(), headers.end(), [&](uint32_t other) {
-				return other != inner && graph->Dominates(other, inner);
-			});
-			if (!nested) {
-				decline(inner, merge, "DOMINANS");
 				continue;
 			}
 			const auto* merge_block = graph->FindBlock(merge);
@@ -1285,11 +1288,37 @@ bool SplitOneNestedSelectionMerge(Graph* graph, std::vector<uint32_t>* already_s
 				decline(inner, merge, "MERGE_BLOK_YOK");
 				continue;
 			}
+			// GERI KENAR KORUMASI.
+			//
+			// Olculdu (kardes bolme denemesi): `Dominates(inner, pred)` filtresi
+			// GERI KENAR uzerindeki oncalleri de yakaliyordu. Onlari yeni
+			// yonlendiriciden gecirince geri kenar artik dongu basligina degil
+			// SENTETIK BLOGA iniyor:
+			//   "Back-edges ('263' -> '229') can only be formed between a block
+			//    and a loop header"  +  "irreducible CFG: cyclic component has
+			//    multiple entries"
+			// Ic ice vakada gorunmemisti cunku orada oncaller dongu govdesinin
+			// icindeydi; kenarlar dongu sinirlarina yayilinca ortaya cikti.
+			const auto is_back_edge_target = [&](uint32_t target) {
+				return std::any_of(graph->natural_loops.begin(), graph->natural_loops.end(),
+				                   [&](const NaturalLoop& loop) { return loop.header == target; });
+			};
 			std::vector<uint32_t> preds_in;
+			bool                  skipped_back_edge = false;
 			for (auto pred: merge_block->predecessors) {
-				if (graph->Dominates(inner, pred)) {
-					AddUnique(&preds_in, pred);
+				if (!graph->Dominates(inner, pred)) {
+					continue;
 				}
+				// pred -> merge bir geri kenarsa (merge bir dongu basligi ve
+				// pred o dongunun icinde), yeniden baglamak dongvyu bozar.
+				if (is_back_edge_target(merge) && graph->Dominates(merge, pred)) {
+					skipped_back_edge = true;
+					continue;
+				}
+				AddUnique(&preds_in, pred);
+			}
+			if (skipped_back_edge) {
+				decline(inner, merge, "GERI_KENAR_ATLANDI");
 			}
 			const auto total_preds = merge_block->predecessors.size();
 			if (preds_in.empty()) {
@@ -1375,6 +1404,29 @@ bool SplitOneNestedSelectionMerge(Graph* graph, std::vector<uint32_t>* already_s
 //
 // SONLANMA: her dongu basligi en cok bir kez bolunur.
 bool SplitIndependentSelectionInLoopHeader(Graph* graph, std::vector<uint32_t>* already_split) {
+	// VARSAYILAN KAPALI (PSEMU_CFG_BASLIKBOLME=1) - GUVENLI DEGIL.
+	//
+	// Olculdu ([INDIRGENEMEZ] sondasi): her indirgenebilirlik kaybinin hemen
+	// oncesinde BU PAS var.
+	//   bolme #6 -> [CFG-BASLIK-BOLME] dongu_basligi=9  -> secim_blogu=34
+	//   bolme #9 -> [CFG-BASLIK-BOLME] dongu_basligi=11 -> secim_blogu=72
+	//   sonuc: "irreducible CFG: cyclic component has multiple entries" +
+	//          "Back-edges ('263' -> '229') can only be formed between a
+	//           block and a loop header"
+	//
+	// Dongu basliginin terminator'ini yeni bir bloga tasimak dongvyu COK
+	// GIRISLI hale getiriyor. commit cb30ddb'de "regresyon temiz" denmisti;
+	// o dogrulama YANILTICIYDI - varsayilan yolda program zaten dispatcher'a
+	// dusuyor ve indirgenebilirlik hic onem kazanmiyordu. Yapisal yol
+	// acilinca gercek etki ortaya cikti.
+	static const bool enabled = [] {
+		const char* env = std::getenv("PSEMU_CFG_BASLIKBOLME");
+		return env != nullptr && env[0] == '1';
+	}();
+	if (!enabled) {
+		return false;
+	}
+
 	for (const auto& loop: graph->natural_loops) {
 		const auto header_id = loop.header;
 		if (std::find(already_split->begin(), already_split->end(), header_id) !=
@@ -1501,7 +1553,17 @@ bool SplitSharedMergeBlocks(Graph* graph, std::string* error) {
 			return true;
 		}
 		RebuildPredecessors(graph);
+		const bool was_irreducible = graph->irreducible;
 		RecomputeAnalyses(graph);
+		// SONDA: hangi bolme indirgenebilirligi BOZUYOR? Geri kenar korumasi
+		// hic tetiklenmedi (GERI_KENAR_ATLANDI=0), yani mekanizma hakkindaki
+		// modelim yanlisti. Tahmin yerine BAYRAGA bakiyoruz: irreducible
+		// false'tan true'ya hangi bolmede geciyor?
+		if (!was_irreducible && graph->irreducible && CfgTraceEnabled()) {
+			std::printf("[INDIRGENEMEZ] bolme #%u sonrasi CFG indirgenemez oldu (blok=%zu)\n",
+			            splits, graph->blocks.size());
+			std::fflush(stdout);
+		}
 	}
 	SetFailure(graph, FailureKind::StructuredControlFlow, graph->entry_block,
 	           fmt::format("CFG shared merge splitting exceeded budget: original_blocks={} "
