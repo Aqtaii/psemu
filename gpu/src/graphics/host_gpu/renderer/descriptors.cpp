@@ -17,6 +17,7 @@
 #include "graphics/host_gpu/objects/textureCommon.h"
 #include "graphics/host_gpu/renderer/debug.h"
 #include "graphics/host_gpu/renderer/descriptorCache.h"
+#include "graphics/host_gpu/regionDefinitions.h"
 #include "graphics/host_gpu/renderer/framebufferCache.h"
 #include "graphics/host_gpu/renderer/imageView.h"
 #include "graphics/host_gpu/renderer/render.h"
@@ -379,6 +380,40 @@ static BufferView NativeStorageBuffer(uint64_t submit_id, CommandBuffer* command
 	}
 	const auto size = stride != 0 ? static_cast<uint64_t>(stride) * records : records;
 	if (address == 0 || size == 0) {
+		BindNullStorageBuffer(command_buffer, &result);
+		return result;
+	}
+	// DUSUK ADRES = "BU BIR DESCRIPTOR DEGIL" (ikinci sinyal).
+	//
+	// Olculdu: mesh tampon[1] ham={00000191 00000000 00000192 00000001} ->
+	// adres=0x191, kayit=402, stride=0. Boyut 402 bayt oldugu icin asagidaki
+	// maxStorageBufferRange kapisindan RAHATCA geciyor ve "gercek" tampon gibi
+	// baglaniyordu. Sonuc zinciri: BufferCache 0x191'i izlemeye aliyor ->
+	// MemoryTracker onu bolge 0'a dusuruyor -> bolge 0'in tabani
+	// (index * TRACKER_REGION_SIZE) SIFIR -> ApplyProtection sayfa 0 icin
+	// UpdatePageWatchers(vaddr=0) cagiriyor -> PageManager fatal.
+	//
+	// Bolge 0'in tamami (< 4 MB) izlenemez: tabani sifir oldugu icin ilk
+	// sayfasi her zaman vaddr=0 uretir, ayrica hicbir OS dusuk bellegi
+	// tahsis etmez. Gercek misafir tamponlari olculen adreslerde ~0x207_xxxx_xxxx
+	// civarinda. Dolayisiyla bu araliga dusen bir taban, yanlis yorumlanmis
+	// sabit blogudur.
+	//
+	// NOT: orta menzilli sahte adresler (ornegin bir float'in bit deseni,
+	// 0x44f00000 = 1.15 GB) bu kapiya takilmaz. Oyle bir vaka cikarsa dogru
+	// arac VirtualQuery ile "bu sayfa surecimizde commit edilmis mi" testidir.
+	if (address < TRACKER_REGION_SIZE) {
+		static std::atomic<uint32_t> s_n_low {0};
+		if (s_n_low.fetch_add(1) < 32) {
+			printf("[SAHTE-DESCRIPTOR] asama=%s dusuk_adres=0x%012llx < bolge0_siniri=0x%llx -> "
+			       "null tampon baglandi | boyut=0x%llx stride=%u kayit=%u ham=%08x %08x %08x "
+			       "%08x\n",
+			       StageNameForLog(t_current_descriptor_stage), (unsigned long long)address,
+			       (unsigned long long)TRACKER_REGION_SIZE, (unsigned long long)size, stride,
+			       records, descriptor.fields[0], descriptor.fields[1], descriptor.fields[2],
+			       descriptor.fields[3]);
+			fflush(stdout);
+		}
 		BindNullStorageBuffer(command_buffer, &result);
 		return result;
 	}

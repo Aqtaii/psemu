@@ -7,6 +7,7 @@
 #include "graphics/host_gpu/regionDefinitions.h"
 
 #include <atomic>
+#include <cstdio>
 #include <mutex>
 #include <utility>
 
@@ -286,6 +287,7 @@ public:
 	}
 
 	void ApplyProtection(const RegionBits& changed, bool track) {
+		g_psemu_region_site = "ApplyProtection";
 		ForEachRange(changed, [this, track](uint64_t vaddr, uint64_t size) {
 			m_page_manager.UpdatePageWatchers(track, vaddr, size);
 		});
@@ -295,6 +297,7 @@ public:
 		if (mode != PageWatchMode::Write && mode != PageWatchMode::ReadWrite) {
 			EXIT("unsupported GPU page-watch mode\n");
 		}
+		g_psemu_region_site = "ApplyGpuProtection";
 		ForEachRange(changed, [this, track, mode](uint64_t vaddr, uint64_t size) {
 			m_page_manager.UpdatePageWatchers(track, vaddr, size, mode);
 		});
@@ -343,6 +346,16 @@ private:
 				page++;
 			}
 			if (start != page) {
+				// TANI: bolge 0'in tabani sifir (index * TRACKER_REGION_SIZE), bu
+				// yuzden sayfa 0 isaretlenirse PageManager'a vaddr=0 gidiyor.
+				// Kim isaretlemis, kac sayfa? Sadece bu vakada bas.
+				if (m_cpu_addr == 0 && start == 0) {
+					std::printf("[BOLGE-SIFIR] taban=0 sayfa=[%zu,%zu) boyut=0x%llx ISARET=%s\n",
+					            start, page,
+					            static_cast<unsigned long long>((page - start) * TRACKER_PAGE_SIZE),
+					            g_psemu_region_site);
+					std::fflush(stdout);
+				}
 				func(m_cpu_addr + start * TRACKER_PAGE_SIZE, (page - start) * TRACKER_PAGE_SIZE);
 			}
 		}

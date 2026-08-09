@@ -163,6 +163,13 @@ private:
 			const auto bytes   = std::min(TRACKER_REGION_SIZE - offset, remaining);
 			auto*      manager = m_regions[index].load(std::memory_order_acquire);
 			if (manager == nullptr && create) {
+				// TANI: bolge 0'in tabani sifir; onu ilk kim var ediyor?
+				if (index == 0) {
+					printf("[BOLGE0-YARAT] istek_vaddr=0x%llx boyut=0x%llx ofset=0x%llx\n",
+					       (unsigned long long)vaddr, (unsigned long long)size,
+					       (unsigned long long)offset);
+					fflush(stdout);
+				}
 				manager = GetOrCreateRegion(index);
 			}
 			if (manager != nullptr) {

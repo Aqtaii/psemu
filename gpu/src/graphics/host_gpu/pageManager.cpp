@@ -87,9 +87,15 @@ private:
 	std::atomic_flag& m_lock;
 };
 
+// KESKIN NISANCI ISARETI: sifir adresle gelen cagirani ASLR/sembol
+// cozumlemesiyle ugrasmadan bulmak icin, her genel API kendi etiketini
+// birakiyor. Ayni teknik RangeSet'te tek derlemede sonuc vermisti.
+thread_local const char* t_pm_site = "?";
+
 void ValidateRange(uint64_t vaddr, uint64_t size) {
 	if (vaddr == 0 || size == 0 || vaddr >= ADDRESS_SIZE || size > ADDRESS_SIZE - vaddr) {
-		Fatal("invalid range vaddr=0x%016" PRIx64 ", size=0x%016" PRIx64, vaddr, size);
+		Fatal("invalid range vaddr=0x%016" PRIx64 ", size=0x%016" PRIx64 " ISARET=%s", vaddr,
+		      size, t_pm_site);
 	}
 }
 
@@ -344,6 +350,7 @@ bool PageManager::HasGpuAccess(uint64_t vaddr, uint64_t size, GpuAccess access) 
 
 void PageManager::UpdatePageWatchers(bool track, uint64_t vaddr, uint64_t size,
                                      PageWatchMode mode) {
+	t_pm_site = "UpdatePageWatchers";
 	if (g_in_fault_resolution) {
 		FailFast("page watchers changed during fault resolution");
 	}
@@ -418,6 +425,7 @@ void PageManager::UpdatePageWatchers(bool track, uint64_t vaddr, uint64_t size,
 }
 
 void PageManager::OnGpuMap(uint64_t vaddr, uint64_t size, GpuAccess access) {
+	t_pm_site = "OnGpuMap";
 	if (g_in_fault_resolution) {
 		FailFast("GPU mapping changed during fault resolution");
 	}
@@ -442,6 +450,7 @@ void PageManager::OnGpuMap(uint64_t vaddr, uint64_t size, GpuAccess access) {
 }
 
 void PageManager::OnGpuUnmap(uint64_t vaddr, uint64_t size, GpuAccess access) {
+	t_pm_site = "OnGpuUnmap";
 	if (g_in_fault_resolution) {
 		FailFast("GPU unmapping changed during fault resolution");
 	}
@@ -487,6 +496,7 @@ PageManager::BackingWrite::~BackingWrite() {
 }
 
 void PageManager::BeginBackingWrite(uint64_t vaddr, uint64_t size) noexcept {
+	t_pm_site = "BeginBackingWrite";
 	if (g_in_fault_resolution) {
 		FailFast("backing write began during fault resolution");
 	}
@@ -548,6 +558,7 @@ void PageManager::BeginBackingWrite(uint64_t vaddr, uint64_t size) noexcept {
 }
 
 void PageManager::EndBackingWrite(uint64_t vaddr, uint64_t size) noexcept {
+	t_pm_site = "EndBackingWrite";
 	if (g_in_fault_resolution) {
 		FailFast("backing write ended during fault resolution");
 	}

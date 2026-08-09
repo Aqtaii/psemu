@@ -15,6 +15,12 @@ constexpr size_t   TRACKER_REGION_PAGES = TRACKER_REGION_SIZE / TRACKER_PAGE_SIZ
 enum class DirtySource { Cpu, Gpu };
 using RegionBits = std::bitset<TRACKER_REGION_PAGES>;
 
+// KESKIN NISANCI ISARETI: PageManager'a vaddr=0 ile kimin geldigini bulmak
+// icin RegionManager cagirma noktalari buraya kendi etiketini birakiyor.
+// pageManager.cpp bu basligi dogrudan, regionManager.h ise regionDefinitions
+// uzerinden goruyor; boylece tek degisken iki TU'da paylasiliyor.
+inline thread_local const char* g_psemu_region_site = "?";
+
 } // namespace Libs::Graphics
 
 #endif // EMULATOR_SRC_GRAPHICS_HOST_GPU_REGIONDEFINITIONS_H_
