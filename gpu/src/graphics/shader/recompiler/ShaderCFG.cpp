@@ -8,6 +8,20 @@
 #include <stack>
 
 namespace Libs::Graphics::ShaderRecompiler::CFG {
+
+// PSEMU_CFG_HARITA=1: yapilandirici izleri. Sentetik blok yaratimi ve
+// merge/continue atamalari. Amac, AYNI sentetik blogun hem bir dongunun
+// continue/merge'i hem de bir secimin merge'i olarak atandigi ani
+// suclustu yakalamak - SPIR-V'de bir blok yalnizca TEK bir yapinin
+// merge'i olabilir.
+bool CfgTraceEnabled() {
+	static const bool on = [] {
+		const char* env = std::getenv("PSEMU_CFG_HARITA");
+		return env != nullptr && env[0] == '1';
+	}();
+	return on;
+}
+
 namespace {
 
 using Decoder::Instruction;
@@ -905,7 +919,12 @@ uint32_t AppendSyntheticMergeBlock(Graph* graph, uint32_t old_merge) {
 	block.terminator.kind       = TerminatorKind::Branch;
 	block.terminator.condition  = BranchCondition::Always;
 	block.terminator.true_block = old_merge;
+	const auto new_id           = block.id;
 	graph->blocks.push_back(std::move(block));
+	if (CfgTraceEnabled()) {
+		std::printf("[SENTETIK-YARAT] id=%u -> hedef=%u\n", new_id, old_merge);
+		std::fflush(stdout);
+	}
 	return graph->blocks.back().id;
 }
 
@@ -1685,6 +1704,12 @@ bool Structurize(Graph* graph, std::string* error) {
 		header->terminator.loop_header    = true;
 		header->terminator.merge_block    = loop.merge;
 		header->terminator.continue_block = loop.continue_block;
+		if (CfgTraceEnabled()) {
+			std::printf("[ATAMA] id=%u nereye=LoopMerge (baslik=%u)\n", loop.merge, loop.header);
+			std::printf("[ATAMA] id=%u nereye=LoopContinue (baslik=%u)\n", loop.continue_block,
+			            loop.header);
+			std::fflush(stdout);
+		}
 	}
 
 	for (auto& block: graph->blocks) {
@@ -1801,6 +1826,12 @@ bool Structurize(Graph* graph, std::string* error) {
 			return false;
 		}
 		block.terminator.merge_block = merge;
+		if (CfgTraceEnabled()) {
+			std::printf("[ATAMA] id=%u nereye=SelectionMerge (baslik=%u dogru=%u yanlis=%u)\n",
+			            merge, block.id, block.terminator.true_block,
+			            block.terminator.false_block);
+			std::fflush(stdout);
+		}
 	}
 
 	return true;
