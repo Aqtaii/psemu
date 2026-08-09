@@ -1419,11 +1419,14 @@ bool SplitIndependentSelectionInLoopHeader(Graph* graph, std::vector<uint32_t>* 
 	// o dogrulama YANILTICIYDI - varsayilan yolda program zaten dispatcher'a
 	// dusuyor ve indirgenebilirlik hic onem kazanmiyordu. Yapisal yol
 	// acilinca gercek etki ortaya cikti.
-	static const bool enabled = [] {
+	// KAPI: 1 = normal, 2 = MoveBlockBefore atlanir (bisection).
+	// (Once `env[0] == '1'` yaziliydi ve `=2` verilince pas hic calismiyordu;
+	// mod 2 deneyi bu yuzden bir kez bosa gitti.)
+	static const int mode = [] {
 		const char* env = std::getenv("PSEMU_CFG_BASLIKBOLME");
-		return env != nullptr && env[0] == '1';
+		return env != nullptr ? std::atoi(env) : 0;
 	}();
-	if (!enabled) {
+	if (mode <= 0) {
 		return false;
 	}
 
@@ -1520,6 +1523,20 @@ bool SplitIndependentSelectionInLoopHeader(Graph* graph, std::vector<uint32_t>* 
 		            loop.continue_block, loop.body_blocks.size(), loop.exit_blocks.size());
 		std::fflush(stdout);
 		AddUnique(already_split, header_id);
+		// BISECTION (PSEMU_CFG_BASLIKBOLME=2): yeniden siralamayi ATLA.
+		//
+		// `MoveBlockBefore` hem blok sirasini degistiriyor hem TUM kimlikleri
+		// remap ediyor. [CFG-BASLIK-BOLME] remap ONCESI, [INDIRGENEMEZ] remap
+		// SONRASI numara basiyor; bu yuzden "hangi blok fazladan giris oldu"
+		// sorusu iki farkli uzayda kaliyor ve yanitlanamiyor.
+		//
+		// Mod 2'de siralama hic yapilmaz. Indirgenemezlik YINE olusursa suclu
+		// KABLOLAMA; kaybolursa suclu SIRALAMA/REMAP. Tek kosuda ayrilir.
+		if (mode >= 2) {
+			std::printf("[CFG-BASLIK-BOLME] mod 2: MoveBlockBefore ATLANDI\n");
+			std::fflush(stdout);
+			return true;
+		}
 		MoveBlockBefore(graph, selection_id, std::min(t, f));
 		return true;
 	}
@@ -1598,6 +1615,25 @@ bool SplitSharedMergeBlocks(Graph* graph, std::string* error) {
 		if (!was_irreducible && graph->irreducible && CfgTraceEnabled()) {
 			std::printf("[INDIRGENEMEZ] bolme #%u sonrasi CFG indirgenemez oldu (blok=%zu)\n",
 			            splits, graph->blocks.size());
+			// HANGI GIRISLER COKLASTI? Hata metni "cyclic component has
+			// multiple entries" diyor ama HANGILERI oldugunu soylemiyor.
+			// `entry_blocks` tam olarak bunu tasiyor - tahmin etmeye gerek yok.
+			for (const auto& scc: graph->components) {
+				if (!scc.irreducible) {
+					continue;
+				}
+				std::string entries;
+				for (auto e: scc.entry_blocks) {
+					entries += fmt::format(" {}", e);
+				}
+				std::string blocks;
+				for (uint32_t i = 0; i < scc.blocks.size() && i < 12; i++) {
+					blocks += fmt::format(" {}", scc.blocks[i]);
+				}
+				std::printf("[INDIRGENEMEZ]   bilesen: giris=[%s ] (%zu adet) bloklar=[%s%s ]\n",
+				            entries.c_str(), scc.entry_blocks.size(), blocks.c_str(),
+				            scc.blocks.size() > 12 ? " ..." : "");
+			}
 			std::fflush(stdout);
 		}
 	}
