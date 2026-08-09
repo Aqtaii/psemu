@@ -1168,6 +1168,79 @@ void EmitFunction(EmitterState* state, const IR::Program& program) {
 		                            ConstantU32(state, MeshOutputVertices(*state)),
 		                            ConstantU32(state, MeshOutputPrimitives(*state))});
 	}
+
+	// MOD 3 (PSEMU_MESH_FIXPOS=3): "hello ucgeni oyunun govdesinin ICINDE".
+	//
+	// Mod 2 sabit sayilar + sabit indekslerle de siyah kaldi. Geriye tek
+	// aciklama kaliyor: disavurum blogu calisma aninda TEKDUZE DEGIL - NGG'de
+	// GS_ALLOC_REQ ve POS0 kosullu, tek dalga/tek lane yurutuyor. Vulkan ise
+	// OpSetMeshOutputsEXT'i is grubu genelinde tekduze bekliyor; ustelik yalniz
+	// lane 0 yaziyorsa vertex 1-2 hic yazilmaz ve ucgen dejenere olur.
+	//
+	// Burasi GIRIS BLOGU: kosulsuz ve tekduze. Tahsis + uc kose + indeksler
+	// hepsi burada yazilir; oyunun kendi disavurumlari da (mod >= 1 oldugu icin)
+	// ayni degerleri yazmaya devam eder, zarari yok.
+	//
+	//   ucgen cikarsa -> sorun TEKDUZELIK; NGG kosullu tahsisini is grubu
+	//                    genelinde yeniden yapilandirmamiz gerekiyor
+	//   siyah kalirsa -> sorun shader'da DEGIL; boru tesisati recompile edilen
+	//                    programda hello'dakinden farkli davraniyor
+	if (state->stage == ShaderType::Mesh && MeshFixedPositionMode() >= 3) {
+		state->builder.AddFunction(
+		    {OpSetMeshOutputsEXT, ConstantU32(state, 3u), ConstantU32(state, 1u)});
+
+		if (state->per_vertex_variable != 0) {
+			const float corners[3][2] = {{-0.8f, -0.8f}, {0.8f, -0.8f}, {0.0f, 0.8f}};
+			for (uint32_t i = 0; i < 3; i++) {
+				const auto value   = state->builder.AllocateId();
+				const auto pointer = state->builder.AllocateId();
+				state->builder.AddFunction({OpCompositeConstruct, state->vec4_float_type, value,
+				                            ConstantF32Value(state, corners[i][0]),
+				                            ConstantF32Value(state, corners[i][1]),
+				                            ConstantF32Value(state, 0.0f),
+				                            ConstantF32Value(state, 1.0f)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_output_vec4_float, pointer,
+				                            state->per_vertex_variable, ConstantU32(state, i),
+				                            ConstantU32(state, 0)});
+				state->builder.AddFunction({OpStore, pointer, value});
+			}
+		}
+		if (state->mesh_prim_indices_variable != 0) {
+			const auto vector  = state->builder.AllocateId();
+			const auto pointer = state->builder.AllocateId();
+			state->builder.AddFunction({OpCompositeConstruct, state->vec3_uint_type, vector,
+			                            ConstantU32(state, 0), ConstantU32(state, 1),
+			                            ConstantU32(state, 2)});
+			state->builder.AddFunction({OpAccessChain, state->ptr_output_vec3_uint, pointer,
+			                            state->mesh_prim_indices_variable, ConstantU32(state, 0)});
+			state->builder.AddFunction({OpStore, pointer, vector});
+		}
+		printf("[MS-GIRIS] mod %d: giris blogunda kosulsuz tahsis(3,1) + 3 kose + indeks(0,1,2) "
+		       "yazildi (per_vertex=%u prim_idx=%u)\n",
+		       MeshFixedPositionMode(), state->per_vertex_variable,
+		       state->mesh_prim_indices_variable);
+		fflush(stdout);
+
+		// MOD 4: oyunun GOVDESINE hic girme, hemen don.
+		//
+		// Mod 3'te veri HELLO ile birebir ayni ve kosulsuz yazildigi halde
+		// siyah kaldi. Geriye iki degisken kaldi: (a) oyunun shader govdesi,
+		// (b) programin kendi bildirimleri (LocalSize=64 vs HELLO'nun 1,
+		// cikti limitleri, arayuz). Mod 4 govdeyi tamamen cikarir; bildirimler
+		// ve boru tesisati aynen kalir.
+		//
+		//   ucgen cikarsa -> suclu GOVDE (takiliyor, donmuyor ya da durumu
+		//                    bozuyor)
+		//   siyah kalirsa -> suclu BILDIRIMLER/BORU TESISATI; HELLO ile
+		//                    recompile edilen programin farki orada
+		if (MeshFixedPositionMode() >= 4) {
+			printf("[MS-GIRIS] mod 4: govde ATLANDI, dogrudan OpReturn\n");
+			fflush(stdout);
+			EmitReturn(state);
+			state->builder.AddFunction({OpFunctionEnd});
+			return;
+		}
+	}
 	if (state->dispatcher_fallback) {
 		EmitDispatcherFunction(state, program);
 		state->builder.AddFunction({OpFunctionEnd});

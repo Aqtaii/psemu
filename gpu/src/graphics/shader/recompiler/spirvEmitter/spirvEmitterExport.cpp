@@ -94,6 +94,40 @@ void EmitMrtZExport(EmitterState* state, const IR::Instruction& inst) {
 	}
 }
 
+// PSEMU_MESH_FIXPOS=1 deneyi: lane indeksine gore garantili hello-triangle
+// kosesi uretir. Kosler HELLO deneyinde EKRANA DUSTUGU DOGRULANAN degerler
+// (bkz. meshHelloSpirv.h / hello.mesh):
+//     idx%3 == 0 -> (-0.8, -0.8, 0, 1)
+//     idx%3 == 1 -> ( 0.8, -0.8, 0, 1)
+//     idx%3 == 2 -> ( 0.0,  0.8, 0, 1)
+// Dallanmasiz: ic ice OpSelect. Skaler kosullu OpSelect'in vektor
+// operandlarla kullanimi SPIR-V 1.4'te gecerli - Mesh zaten 1.4 uretiyor
+// (Asama 1'deki kosullu versiyonlama).
+static uint32_t EmitFixedTrianglePosition(EmitterState* state, uint32_t lane) {
+	const auto make = [&](float x, float y) {
+		const auto v = state->builder.AllocateId();
+		state->builder.AddFunction({OpCompositeConstruct, state->vec4_float_type, v,
+		                            ConstantF32Value(state, x), ConstantF32Value(state, y),
+		                            ConstantF32Value(state, 0.0f), ConstantF32Value(state, 1.0f)});
+		return v;
+	};
+	const auto c0 = make(-0.8f, -0.8f);
+	const auto c1 = make(0.8f, -0.8f);
+	const auto c2 = make(0.0f, 0.8f);
+
+	const auto m = state->builder.AllocateId();
+	state->builder.AddFunction({OpUMod, state->uint_type, m, lane, ConstantU32(state, 3)});
+	const auto eq0 = state->builder.AllocateId();
+	const auto eq1 = state->builder.AllocateId();
+	state->builder.AddFunction({OpIEqual, state->bool_type, eq0, m, ConstantU32(state, 0)});
+	state->builder.AddFunction({OpIEqual, state->bool_type, eq1, m, ConstantU32(state, 1)});
+	const auto pick1 = state->builder.AllocateId();
+	const auto pick0 = state->builder.AllocateId();
+	state->builder.AddFunction({OpSelect, state->vec4_float_type, pick1, eq1, c1, c2});
+	state->builder.AddFunction({OpSelect, state->vec4_float_type, pick0, eq0, c0, pick1});
+	return pick0;
+}
+
 // GFX10 NGG primitif disavurumu (exp target=0x14) UC vertex indeksini TEK
 // dword'e paketler. Olculen paketleme:
 //     v0 = (v0 << 10) | v2
@@ -109,6 +143,26 @@ static void EmitPrimitiveIndicesExport(EmitterState* state, const IR::Instructio
 	if (state->mesh_prim_indices_variable == 0 || inst.src_count == 0) {
 		return;
 	}
+	// MOD 3: indeksler giris blogunda yazildi; burasi tamamen susar.
+	if (MeshFixedPositionMode() >= 3) {
+		return;
+	}
+
+	// MOD 2: paketli indeksi acmak yerine SABIT (0,1,2) yaz. Deneyin amaci
+	// 3x10-bit acma isini supheli listesinden cikarmak. Yazma yeri de sabit
+	// primitif 0 - oyunun lane indeksi de degiskenlerden biri olmasin.
+	if (MeshFixedPositionMode() >= 2) {
+		const auto vector  = state->builder.AllocateId();
+		const auto pointer = state->builder.AllocateId();
+		state->builder.AddFunction({OpCompositeConstruct, state->vec3_uint_type, vector,
+		                            ConstantU32(state, 0), ConstantU32(state, 1),
+		                            ConstantU32(state, 2)});
+		state->builder.AddFunction({OpAccessChain, state->ptr_output_vec3_uint, pointer,
+		                            state->mesh_prim_indices_variable, ConstantU32(state, 0)});
+		state->builder.AddFunction({OpStore, pointer, vector});
+		return;
+	}
+
 	const auto packed = EmitValueLoad(state, inst.src[0]);
 
 	uint32_t components[3] = {};
@@ -173,14 +227,32 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 	if (inst.export_info.kind == IR::ExportTargetKind::Position) {
 		const auto pointer = state->builder.AllocateId();
 		if (mesh) {
+			const auto lane = EmitLocalInvocationIndex(state);
 			state->builder.AddFunction({OpAccessChain, state->ptr_output_vec4_float, pointer,
-			                            variable, EmitLocalInvocationIndex(state),
-			                            ConstantU32(state, 0)});
+			                            variable, lane, ConstantU32(state, 0)});
+			// KAPSAM KANITI: deneyin gercekten uygulandigini gostermeden
+			// "siyah kaldi" sonucu ANLAMSIZDIR - sifir komut ezip "kanit"
+			// gibi gorunen bir deney bu oturumda zaten bir kez yasandi.
+			const bool fix = MeshFixedPositionEnabled();
+			{
+				static std::atomic<uint32_t> s_pos {0};
+				const auto n = s_pos.fetch_add(1) + 1;
+				if (n <= 8) {
+					printf("[MS-POS] mesh POS0 disavurumu #%u (pc=0x%08x) fixpos=%d\n", n, inst.pc,
+					       fix ? 1 : 0);
+					fflush(stdout);
+				}
+			}
+			// MOD 3: pozisyonlar giris blogunda yazildi; oyunun yazmasi susar.
+			if (MeshFixedPositionMode() < 3) {
+				const auto stored = fix ? EmitFixedTrianglePosition(state, lane) : value;
+				state->builder.AddFunction({OpStore, pointer, stored});
+			}
 		} else {
 			state->builder.AddFunction({OpAccessChain, state->ptr_output_vec4_float, pointer,
 			                            variable, ConstantU32(state, 0)});
+			state->builder.AddFunction({OpStore, pointer, value});
 		}
-		state->builder.AddFunction({OpStore, pointer, value});
 		return;
 	}
 

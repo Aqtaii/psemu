@@ -396,7 +396,47 @@ void EmitSendmsg(EmitterState* state, const IR::Instruction& inst) {
 	if (state->stage != ShaderType::Mesh || inst.src_count < 2u ||
 	    inst.src[0].kind != IR::OperandKind::ImmediateU32 ||
 	    (inst.src[0].imm & MESSAGE_ID_BITS) != GS_ALLOC_REQ) {
+		// SUPHELI #2'NIN ON KOSULU: OpSetMeshOutputsEXT hic yayilmazsa cikti
+		// sayisi sifir kalir ve HICBIR SEY rasterlenmez - ekran siyah olur,
+		// üstelik tek bir hata mesaji bile cikmadan. Reddedilen her sendmsg'i
+		// SEBEBIYLE birlikte kaydet.
+		if (state->stage == ShaderType::Mesh) {
+			static std::atomic<uint32_t> s_rej {0};
+			if (s_rej.fetch_add(1) < 16) {
+				printf("[MS-ALLOC] sendmsg REDDEDILDI (pc=0x%08x) src_count=%u src0_kind=%d "
+				       "src0_imm=0x%x\n",
+				       inst.pc, inst.src_count,
+				       inst.src_count > 0 ? static_cast<int>(inst.src[0].kind) : -1,
+				       (inst.src_count > 0 && inst.src[0].kind == IR::OperandKind::ImmediateU32)
+				           ? inst.src[0].imm
+				           : 0u);
+				fflush(stdout);
+			}
+		}
 		EmitControlNop(state, inst);
+		return;
+	}
+	{
+		static std::atomic<uint32_t> s_ok {0};
+		const auto n = s_ok.fetch_add(1) + 1;
+		if (n <= 8) {
+			printf("[MS-ALLOC] GS_ALLOC_REQ -> OpSetMeshOutputsEXT #%u (pc=0x%08x)\n", n, inst.pc);
+			fflush(stdout);
+		}
+	}
+
+	// MOD 3: tahsis GIRIS BLOGUNDA kosulsuz yapildi. OpSetMeshOutputsEXT
+	// SADECE BIR KEZ cagrilabilir - burada tekrar cagirmak gecersiz olurdu.
+	if (MeshFixedPositionMode() >= 3) {
+		EmitControlNop(state, inst);
+		return;
+	}
+
+	// MOD 2: m0'dan cikarim yerine SABIT (3 vertex, 1 primitif). Deneyin
+	// amaci m0 sayilarini supheli listesinden cikarmak.
+	if (MeshFixedPositionMode() >= 2) {
+		state->builder.AddFunction(
+		    {OpSetMeshOutputsEXT, ConstantU32(state, 3u), ConstantU32(state, 1u)});
 		return;
 	}
 

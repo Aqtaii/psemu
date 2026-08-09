@@ -787,6 +787,40 @@ uint32_t LdsArrayDwords(const EmitterState& state) {
 // boylece hicbir sey rasterlenmez ve geriye yalnizca shader'in kendi
 // hesaplamasi kalir. Hala cokuyorsa sorun kod govdesinde (ornegin sonsuz
 // dongu), durursa ciktilarda.
+// BISECTION ICINDE BISECTION (PSEMU_MESH_FIXPOS=1).
+//
+// Oyunun KENDI mesh shader'i kosar - m0 okumasi, GS_ALLOC_REQ sayilari,
+// primitif indeks dizilimi, vertex sayisi, PS parametreleri, hepsi aynen
+// kalir. Tek degistirdigimiz sey POS0 disavuruminda gl_Position'a yazilan
+// deger: oyunun hesapladigi pozisyon atilir, yerine lane indeksine gore
+// (idx % 3) garantili hello-triangle kosesi yazilir.
+//
+//   ucgen cikarsa  -> m0/GS_ALLOC/indeks/vertex sayisi DOGRU, sorun
+//                     yalnizca pozisyon matematiginde (w bolmesi, NaN...)
+//   siyah kalirsa  -> shader ekrana cikacak vertex/primitif URETMIYOR,
+//                     supheli GS_ALLOC sayilari
+// MOD 2 ("iskeleti oyunun, verisi bizim"): pozisyona ek olarak cikti
+// sayilarini ve primitif indekslerini de ezer -> SetMeshOutputsEXT(3,1) ve
+// indeksler (0,1,2). Boylece oyunun shader GOVDESI aynen kosar ama ekrana
+// cikan ucgen tamamen bizim verimizdir.
+//
+//   mod 2'de ucgen cikarsa -> govde kosuyor, dısavurum bloguna ULASILIYOR;
+//                             hata VERIDE (m0 sayilari ya da indeks acma)
+//   mod 2'de de siyah      -> dısavurum blogu calisma aninda HIC CALISMIYOR
+//                             (exec maskesi / s_cbranch kosullu tahsis)
+int MeshFixedPositionMode() {
+	static const int mode = [] {
+		const char* env = std::getenv("PSEMU_MESH_FIXPOS");
+		if (env == nullptr) {
+			return 0;
+		}
+		return std::atoi(env);
+	}();
+	return mode;
+}
+
+bool MeshFixedPositionEnabled() { return MeshFixedPositionMode() >= 1; }
+
 int MeshNoopMode() {
 	static const int mode = [] {
 		const char* env = std::getenv("PSEMU_MESH_NOOP");

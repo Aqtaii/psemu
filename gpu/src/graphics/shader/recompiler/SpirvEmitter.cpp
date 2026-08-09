@@ -517,7 +517,11 @@ bool EmitProgram(const IR::Program& program, const IR::ResourceSnapshot& resourc
 			            program.dispatcher_fallback ? 1 : 0,
 			            static_cast<int>(program.cfg_failure_kind),
 			            program.fallback_reason.empty() ? "-" : program.fallback_reason.c_str());
-			for (size_t i = 0; i < sorted.size() && i < 24; i++) {
+			// TAVAN YOK: 24'luk kesim, dusuk sayili ama KRITIK opcode'lari
+			// (ornegin Export=339, adet 2-3) gizliyordu ve "bu komut programda
+			// yok" gibi YANLIS bir sonuca goturuyordu. Bu oturumda ayni tuzaga
+			// alti kez dusuldu; histogram artik tam basiliyor.
+			for (size_t i = 0; i < sorted.size(); i++) {
 				std::printf("[MS-IR]   op=%d adet=%u\n", sorted[i].first, sorted[i].second);
 			}
 			std::fflush(stdout);

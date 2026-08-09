@@ -36,6 +36,8 @@ struct EmitterState;
 // DENEY anahtari: PSEMU_MESH_ALLOC=erken ise tahsis giris blogunda,
 // kosulsuz ve sabit limitlerle yapilir (bkz. EmitFunction).
 [[nodiscard]] int      MeshNoopMode();
+[[nodiscard]] bool     MeshFixedPositionEnabled();
+[[nodiscard]] int      MeshFixedPositionMode();
 [[nodiscard]] bool     MeshEagerAllocEnabled();
 // LDS dizisinin dword sayisi. TEK KAYNAK: dizi bildirimi ve sinir denetimi
 // ayni degeri kullanmak zorunda, yoksa ya sinir disi yazariz ya da gecerli
@@ -211,6 +213,9 @@ enum : uint32_t {
 	OpFMul                         = 133,
 	OpUDiv                         = 134,
 	OpFDiv                         = 136,
+	// SPIR-V cekirdegi: 134 UDiv, 135 SDiv, 136 FDiv, 137 UMod. Yukaridaki
+	// 134/136 zaten bu sirayi dogruluyor, yani 137 tahmin degil.
+	OpUMod                         = 137,
 	OpIAddCarry                    = 149,
 	// SPIR-V cekirdek numaralandirmasi: 149 IAddCarry, 150 ISubBorrow,
 	// 151 UMulExtended, 152 SMulExtended. Buradaki 151/152 zaten bu sirayi
