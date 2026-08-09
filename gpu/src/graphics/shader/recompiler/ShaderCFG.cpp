@@ -857,6 +857,22 @@ uint32_t MoveBlockBefore(Graph* graph, uint32_t block_id, uint32_t before_id) {
 		id_map[new_blocks[i].id] = i;
 	}
 
+	// ROSETTA TASI: bu pas TUM blok kimliklerini yeniden numaralandiriyor ve
+	// birden fazla kez calisabiliyor. Yapilandirma anindaki loglar ile yayim
+	// anindaki kimlikler bu yuzden AYNI SEY DEGIL - gece boyunca ucu capraz
+	// okundu. Yalnizca DEGISEN girdileri bas (degismeyenler gurultu).
+	if (CfgTraceEnabled()) {
+		std::string changes;
+		for (uint32_t i = 0; i < id_map.size(); i++) {
+			if (id_map[i] != UINT32_MAX && id_map[i] != i) {
+				changes += fmt::format(" {}->{}", i, id_map[i]);
+			}
+		}
+		std::printf("[REMAP] blok=%u once=%u degisen=%s\n", block_pos, before_pos,
+		            changes.empty() ? " (yok)" : changes.c_str());
+		std::fflush(stdout);
+	}
+
 	graph->blocks      = std::move(new_blocks);
 	graph->entry_block = RemapId(graph->entry_block, id_map);
 	for (auto& block: graph->blocks) {
@@ -1832,6 +1848,42 @@ bool Structurize(Graph* graph, std::string* error) {
 			            block.terminator.false_block);
 			std::fflush(stdout);
 		}
+	}
+
+	// NIHAI DENETIM - YAYIM UZAYINDA.
+	//
+	// Butun paslar bitti; grafik artik emitter'in gorecegi haldedir, yani
+	// spirv-val'in kimlikleriyle AYNI uzayda. Cakismayi burada ararsak
+	// hicbir ceviriye ihtiyac kalmaz. SPIR-V kurali: bir blok yalnizca TEK
+	// bir yapinin merge'i olabilir; ayrica bir dongunun merge/continue'su
+	// baska bir yapinin merge'i olamaz.
+	if (CfgTraceEnabled()) {
+		std::map<uint32_t, std::string> roles;
+		const auto claim = [&](uint32_t id, const char* role, uint32_t owner) {
+			if (id == UINT32_MAX) {
+				return;
+			}
+			auto& entry = roles[id];
+			const auto text = fmt::format("{}(baslik={})", role, owner);
+			if (!entry.empty()) {
+				std::printf("[CAKISMA] blok=%u ZATEN %s iken simdi %s\n", id, entry.c_str(),
+				            text.c_str());
+				std::fflush(stdout);
+				entry += " + ";
+			}
+			entry += text;
+		};
+		for (const auto& block: graph->blocks) {
+			if (block.terminator.loop_header) {
+				claim(block.terminator.merge_block, "LoopMerge", block.id);
+				claim(block.terminator.continue_block, "LoopContinue", block.id);
+			} else if (block.terminator.kind == TerminatorKind::ConditionalBranch) {
+				claim(block.terminator.merge_block, "SelectionMerge", block.id);
+			}
+		}
+		std::printf("[NIHAI] yayim uzayinda blok=%zu, rol sahibi=%zu\n", graph->blocks.size(),
+		            roles.size());
+		std::fflush(stdout);
 	}
 
 	return true;
