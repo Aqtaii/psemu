@@ -1238,6 +1238,31 @@ bool SplitOneNestedSelectionMerge(Graph* graph, std::vector<uint32_t>* already_s
 		}
 	}
 
+	// KUYRUK UZUNLUGU: kac merge birden fazla baslik tarafindan talep
+	// ediliyor? "Birini coz, sirakini gor" dongusunun KAC HALKA surecegini
+	// tahmin etmek yerine SAYIYORUZ.
+	if (CfgTraceEnabled()) {
+		uint32_t contested = 0;
+		for (const auto& [merge, headers]: claims) {
+			if (headers.size() >= 2) {
+				contested++;
+			}
+		}
+		if (contested != 0) {
+			std::printf("[NESTED-KUYRUK] cakisan_merge=%u (toplam merge talebi=%zu)\n", contested,
+			            claims.size());
+			std::fflush(stdout);
+		}
+	}
+
+	const bool trace = CfgTraceEnabled();
+	const auto decline = [&](uint32_t inner, uint32_t merge, const char* reason) {
+		if (trace) {
+			std::printf("[NESTED-RED] inner=%u merge=%u neden=%s\n", inner, merge, reason);
+			std::fflush(stdout);
+		}
+	};
+
 	for (const auto& [merge, headers]: claims) {
 		if (headers.size() < 2) {
 			continue;
@@ -1245,16 +1270,19 @@ bool SplitOneNestedSelectionMerge(Graph* graph, std::vector<uint32_t>* already_s
 		for (auto inner: headers) {
 			if (std::find(already_split->begin(), already_split->end(), inner) !=
 			    already_split->end()) {
+				decline(inner, merge, "ZATEN_BOLUNDU");
 				continue;
 			}
 			const bool nested = std::any_of(headers.begin(), headers.end(), [&](uint32_t other) {
 				return other != inner && graph->Dominates(other, inner);
 			});
 			if (!nested) {
+				decline(inner, merge, "DOMINANS");
 				continue;
 			}
 			const auto* merge_block = graph->FindBlock(merge);
 			if (merge_block == nullptr) {
+				decline(inner, merge, "MERGE_BLOK_YOK");
 				continue;
 			}
 			std::vector<uint32_t> preds_in;
@@ -1264,7 +1292,12 @@ bool SplitOneNestedSelectionMerge(Graph* graph, std::vector<uint32_t>* already_s
 				}
 			}
 			const auto total_preds = merge_block->predecessors.size();
-			if (preds_in.empty() || preds_in.size() == total_preds) {
+			if (preds_in.empty()) {
+				decline(inner, merge, "ICERIDE_ONCUL_YOK");
+				continue;
+			}
+			if (preds_in.size() == total_preds) {
+				decline(inner, merge, "TUM_ONCULLER_ICERIDE");
 				continue;
 			}
 
