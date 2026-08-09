@@ -1977,7 +1977,19 @@ bool ShaderCompileSpirvPS(const HW::PixelShaderInfo* regs, const HW::ShaderRegis
 	options.user_data_count      = std::max<uint32_t>(regs->ps_regs.rsrc2.user_sgpr, 16u);
 	options.user_data            = regs->ps_user_sgpr.value;
 	options.descriptor_set       = input_info->descriptor_set;
-	options.push_constant_offset = 0;
+	// AYRIK PUSH CONSTANT OFSETI - PS, MS/VS ile AYNI ARALIGI PAYLASAMAZ.
+	//
+	// Dogrulama katmani yakaladi (VUID-vkCmdPushConstants-offset-01796):
+	//   "stageFlags (VK_SHADER_STAGE_FRAGMENT_BIT), offset (0), size (64)"
+	// Kural: bir bayti kapsayan HER araligin stage'leri, push cagrisinin
+	// stage'lerinde yer almali. MS/VS ve PS ikisi de offset 0'da aralik
+	// istiyordu; tek asamanin bayragiyla push etmek digerinin araligini
+	// ihlal ediyordu. Ihlal 16-bayt YUVARLAMADAN ONCE DE VARDI (56'da da
+	// ortusuyorlardi) - yalnizca dogrulama kapali oldugu icin gorunmuyordu.
+	//
+	// MS/VS [0,64) kullaniyor (16 user SGPR x 4 bayt); PS [64,128) alir.
+	// Vulkan'in garanti ettigi asgari maxPushConstantsSize 128'dir.
+	options.push_constant_offset = 64;
 	options.pixel_input_info     = input_info;
 	options.dump_ir              = true;
 	options.early_dump           = true;
