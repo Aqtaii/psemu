@@ -629,6 +629,12 @@ static vk::Device VulkanCreateDevice(vk::PhysicalDevice physical_device, vk::Sur
 	device_features.samplerAnisotropy                    = VK_TRUE;
 	device_features.robustBufferAccess                   = VK_TRUE;
 	device_features.depthBounds                          = VK_TRUE;
+	// Dogrulama katmani yakaladi (VUID-VkPipelineRasterizationStateCreateInfo-
+	// depthClampEnable-00782): shaders.cpp `depthClampEnable = VK_TRUE`
+	// kuruyor ama bu OZELLIK etkinlestirilmemisti; ozellik acilmadan o bayrak
+	// gecersiz ve `vkCreateGraphicsPipelines` BASARISIZ oluyordu - yani mesh
+	// PSO'su hic yaratilamiyordu. Katmanlar hic acilmadigi icin sessiz kalmis.
+	device_features.depthClamp                           = VK_TRUE;
 	device_features.shaderStorageImageWriteWithoutFormat = VK_TRUE;
 	device_features.shaderStorageImageReadWithoutFormat  = VK_TRUE;
 	device_features.shaderImageGatherExtended            = VK_TRUE;
@@ -694,10 +700,18 @@ static vk::Device VulkanCreateDevice(vk::PhysicalDevice physical_device, vk::Sur
 	create_info.flags                = {};
 	create_info.pQueueCreateInfos    = queue_create_info.data();
 	create_info.queueCreateInfoCount = queue_create_info_num;
-	create_info.enabledLayerCount =
-	    (r->enable_validation_layers ? static_cast<uint32_t>(r->required_layers.size()) : 0);
-	create_info.ppEnabledLayerNames =
-	    (r->enable_validation_layers ? r->required_layers.data() : nullptr);
+	// CIHAZ KATMANLARI KALDIRILDI (Vulkan 1.0'dan beri).
+	//
+	// Dogrulama katmanlari ilk kez acilinca (PSEMU_VK_VALIDATE=1) bu kod yolu
+	// da ilk kez sinandi ve katman aninda yakaladi:
+	//   "vkCreateDevice(): pCreateInfo->enabledLayerCount is 1 (not zero).
+	//    Device Layers have never worked since Vulkan 1.0 and only Instance
+	//    Layers should be used instead."  (VUID-VkDeviceCreateInfo-
+	//    enabledLayerCount-12384)
+	// Instance katmanlari (asagida, inst_info) zaten dogru sekilde
+	// ayarlaniyor; cihaz tarafinda ISTISNASIZ 0 olmali.
+	create_info.enabledLayerCount   = 0;
+	create_info.ppEnabledLayerNames = nullptr;
 	create_info.enabledExtensionCount   = static_cast<uint32_t>(device_extensions.size());
 	create_info.ppEnabledExtensionNames = device_extensions.data();
 	create_info.pEnabledFeatures        = &device_features;

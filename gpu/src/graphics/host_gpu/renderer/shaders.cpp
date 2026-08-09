@@ -427,7 +427,27 @@ static void CreateLayout(vk::DescriptorSetLayout* set_layouts, uint32_t* set_lay
 
 		push_constant_info[index].stageFlags = vk_stage;
 		push_constant_info[index].offset     = bindings.push_constant_offset;
-		push_constant_info[index].size       = bindings.push_constant_size;
+		// 16 BAYT HIZALAMASI - shader blogu ile ARALIK ayni formulden turemeli.
+		//
+		// Vulkan dogrulama katmani ilk kez acilinca (PSEMU_VK_VALIDATE=1)
+		// yakalandi:
+		//   "compute shader has a push constant buffer Block with range
+		//    [0, 64] which is outside the VkPushConstantRange of [0, 56]"
+		//   (VUID-VkComputePipelineCreateInfo-layout-10069)
+		//
+		// Sebep: emitter blogu 16'nin katina YUVARLIYOR
+		//   row_count = max((push_constant_size + 15) / 16, 1)  // 56 -> 4
+		//   her satir 4 uint = 16 bayt  =>  blok 64 bayt
+		// ama aralik ham `push_constant_size` (56) olarak kaliyordu. Blok,
+		// araligin ICINDE olmak zorunda; aralik da ayni sekilde yuvarlanmali.
+		//
+		// Not: pushConstants() cagrisinda hala 56 bayt gonderiliyor - bu
+		// gecerlidir, aralik yalnizca blogu KAPSAMAK zorundadir.
+		constexpr uint32_t PUSH_CONSTANT_ROW_BYTES = 16u;
+		push_constant_info[index].size =
+		    ((bindings.push_constant_size + PUSH_CONSTANT_ROW_BYTES - 1u) /
+		     PUSH_CONSTANT_ROW_BYTES) *
+		    PUSH_CONSTANT_ROW_BYTES;
 		(*push_constant_info_num)++;
 	}
 
