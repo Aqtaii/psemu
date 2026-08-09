@@ -120,6 +120,54 @@ bool InstructionMaySplitSpirvBlock(const IR::Instruction& inst) {
 }
 
 bool NeedsDispatcherForStructuredLoopHeader(const IR::Program& ir, std::string* reason) {
+	// OLCUM (PSEMU_CFG_HARITA=1): asagidaki koruma YALNIZCA dongu basliklarini
+	// tariyor - fonksiyonun adi bile bunu soyluyor. Seçim basliklari hic
+	// bakilmiyor. Oysa SPIR-V'de bir baslik blogunun OpSelectionMerge'u o
+	// blogun SON komutlarindan biri olmak zorunda; araya blok bolen bir komut
+	// girerse terminator baska bir bloga kayar.
+	//
+	// Olculen yapi (disassembly):
+	//   %649 = OpLabel ... OpSelectionMerge %696  <- EMITTER'in secimi
+	//   %696 = OpLabel ... OpSelectionMerge %264  <- CFG'nin secimi, KAYMIS
+	//
+	// Burasi hipotezi sinar: seçim basligi olup ICINDE bolen komut tasiyan
+	// bloklari sayar. Sifir cikarsa hipotez yanlis, davranis DEGISMEZ.
+	{
+		static const bool trace = [] {
+			const char* env = std::getenv("PSEMU_CFG_HARITA");
+			return env != nullptr && env[0] == '1';
+		}();
+		if (trace) {
+			uint32_t selection_headers = 0;
+			uint32_t tainted           = 0;
+			for (const auto& block: ir.blocks) {
+				const bool is_selection_header =
+				    !block.terminator.loop_header &&
+				    block.terminator.kind == CFG::TerminatorKind::ConditionalBranch &&
+				    block.terminator.merge_block != UINT32_MAX;
+				if (!is_selection_header) {
+					continue;
+				}
+				selection_headers++;
+				for (const auto& inst: block.instructions) {
+					if (!InstructionMaySplitSpirvBlock(inst)) {
+						continue;
+					}
+					tainted++;
+					printf("[BLOK-BOLUNMESI] blok=%u terminator=SecimBasligi merge=%u dogru=%u "
+					       "yanlis=%u | bolen_komut=%s\n",
+					       block.id, block.terminator.merge_block, block.terminator.true_block,
+					       block.terminator.false_block, IR::InstructionToString(inst).c_str());
+					fflush(stdout);
+					break;
+				}
+			}
+			printf("[BLOK-BOLUNMESI] ozet: secim_basligi=%u bunlardan_bolunen=%u\n",
+			       selection_headers, tainted);
+			fflush(stdout);
+		}
+	}
+
 	for (const auto& block: ir.blocks) {
 		if (!block.terminator.loop_header) {
 			continue;
