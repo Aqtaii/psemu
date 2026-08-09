@@ -1702,12 +1702,54 @@ bool Structurize(Graph* graph, std::string* error) {
 		// dongunun merge'iyle cakisiyordu (44/11 -> 45, 42/9 -> 43).
 		//
 		// Tanim: ardillarindan biri, bu blogu domine eden bir dongu basligi.
+		//
+		// GENISLETME (olculdu): yukaridaki kural YETMIYOR. Dallar dogrudan
+		// BASLIGA gitmek zorunda degil - dongunun MERGE ya da CONTINUE
+		// blogana da gidebilirler. Olculen vaka (mesh, hash e8473143):
+		//
+		//   baslik  ic=5  dogru=ic45 yanlis=ic6  merge=ic44
+		//   ic11    DONGU BASLIGI    merge=ic45  continue=ic44
+		//
+		// Yani ic5'teki secim, dogru dali olarak dongunun MERGE'ini (ic45 =
+		// `break`), kendi merge'i olarak da dongunun CONTINUE'sunu (ic44 =
+		// `continue`) sahipleniyordu. Ikisi de DONGU yapisina ait; SPIR-V'de
+		// bir blok yalnizca TEK bir yapinin merge'i olabilir. Sonuc:
+		// spirv-val "block '265' exits the selection headed by '696', but
+		// not via a structured exit".
+		//
+		// Ilke: bir dal `break`, digeri `continue` ise o kollar BIRBIRIYLE
+		// hicbir zaman birlesmez - biri dongunun disina cikar, digeri basina
+		// sarar. Ortada bir secim birlesmesi YOKTUR, dolayisiyla
+		// OpSelectionMerge de olmamalidir.
 		{
+			// KAPSAM SONDASI: genisletilmis kural ILK DENEMEDE ISE YARAMADI ve
+			// hata BIREBIR ayni kaldi. Kuralı yazarken "bu blok dongunun
+			// icinde" diye VARSAYDIM, olcmedim. Burasi tam olarak o varsayimi
+			// sinar: her dongu icin dominans ve uc hedefin eslesme durumu.
+			static const bool trace = [] {
+				const char* env = std::getenv("PSEMU_CFG_HARITA");
+				return env != nullptr && env[0] == '1';
+			}();
+
 			bool is_latch = false;
 			for (const auto& loop: graph->natural_loops) {
-				if ((block.terminator.true_block == loop.header ||
-				     block.terminator.false_block == loop.header) &&
-				    graph->Dominates(loop.header, block.id)) {
+				const bool dominated = graph->Dominates(loop.header, block.id);
+				const auto targets_loop_structure = [&](uint32_t successor) {
+					return successor != UINT32_MAX &&
+					       (successor == loop.header || successor == loop.merge ||
+					        successor == loop.continue_block);
+				};
+				const bool hits = targets_loop_structure(block.terminator.true_block) ||
+				                  targets_loop_structure(block.terminator.false_block);
+				if (trace) {
+					std::printf("[CFG-LATCH] blok=%u dogru=%u yanlis=%u | dongu(baslik=%u "
+					            "latch=%u merge=%u continue=%u) domine=%d hedef_tuttu=%d\n",
+					            block.id, block.terminator.true_block,
+					            block.terminator.false_block, loop.header, loop.latch, loop.merge,
+					            loop.continue_block, dominated ? 1 : 0, hits ? 1 : 0);
+					std::fflush(stdout);
+				}
+				if (dominated && hits) {
 					is_latch = true;
 					break;
 				}
