@@ -216,6 +216,29 @@ static bool SpirvValidateBinary(const char* label, uint64_t shader_hash,
 			fflush(stdout);
 		}
 	}
+	// TANI: spirv-val kimlikle konusuyor (%265, %696); yapiyi gormeden hangi
+	// emitter'in seçimi acik biraktigini TAHMIN etmek zorunda kaliyorduk.
+	// PSEMU_SPIRV_DUMP=<dizin> verilirse gecersiz modulun disassembly'si
+	// oraya yazilir. Her hash icin BIR KEZ - ayni shader defalarca derleniyor.
+	{
+		static const char* dir = std::getenv("PSEMU_SPIRV_DUMP");
+		if (dir != nullptr) {
+			static std::mutex              mutex;
+			static std::set<uint64_t>      seen;
+			const std::lock_guard          lock(mutex);
+			if (seen.insert(shader_hash).second) {
+				const auto path =
+				    fmt::format("{}/spirv_gecersiz_{}_{:016x}.txt", dir, label, shader_hash);
+				if (FILE* f = std::fopen(path.c_str(), "wb"); f != nullptr) {
+					std::fprintf(f, "%s\n=== HATA ===\n%s\n=== DISASSEMBLY ===\n%s\n", path.c_str(),
+					             messages.c_str(), disassembly.c_str());
+					std::fclose(f);
+					printf("[SPIRV-DOKUM] %s\n", path.c_str());
+					fflush(stdout);
+				}
+			}
+		}
+	}
 	return false;
 }
 

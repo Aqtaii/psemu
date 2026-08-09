@@ -1254,9 +1254,34 @@ void EmitFunction(EmitterState* state, const IR::Program& program) {
 		EmitReturn(state);
 	}
 
+	// KENAR HARITASI (PSEMU_CFG_HARITA=1).
+	//
+	// spirv-val hatalari SPIR-V kimlikleriyle konusuyor ("block '265' exits
+	// the selection headed by '696'"), bizim tum sondalarimiz ise IC BLOK
+	// numaralariyla. Ikisi arasinda koprü yoktu. Burasi tam olarak SPIR-V
+	// etiketinin bilindigi yer; her blok icin etiket <-> ic kimlik esleme
+	// tablosunu, ardillari ve merge/continue bloklarini birlikte doker.
+	// Boylece spirv-val'in isaret ettigi kimlik dogrudan aranabilir hale gelir.
+	const bool dump_map = state->stage == ShaderType::Mesh && CfgMapDumpEnabled();
+	if (dump_map) {
+		printf("[CFG-KENAR] === asama=Mesh blok_sayisi=%zu ===\n", program.blocks.size());
+	}
 	for (const auto& block: program.blocks) {
 		if (block.id >= state->reachable_blocks.size() || !state->reachable_blocks[block.id]) {
 			continue;
+		}
+		if (dump_map) {
+			const auto& t     = block.terminator;
+			const auto  self  = BlockLabel(*state, block.id);
+			const auto  tl    = t.true_block != UINT32_MAX ? BlockLabel(*state, t.true_block) : 0;
+			const auto  fl    = t.false_block != UINT32_MAX ? BlockLabel(*state, t.false_block) : 0;
+			const auto  ml    = t.merge_block != UINT32_MAX ? BlockLabel(*state, t.merge_block) : 0;
+			const auto  cl    = t.continue_block != UINT32_MAX ? BlockLabel(*state, t.continue_block) : 0;
+			printf("[CFG-KENAR] %%%u (ic=%u) tur=%d dongu_basligi=%d | dogru=%%%u(ic=%u) "
+			       "yanlis=%%%u(ic=%u) | merge=%%%u(ic=%u) continue=%%%u(ic=%u)\n",
+			       self, block.id, static_cast<int>(t.kind), t.loop_header ? 1 : 0, tl,
+			       t.true_block, fl, t.false_block, ml, t.merge_block, cl, t.continue_block);
+			fflush(stdout);
 		}
 		state->builder.AddFunction({OpLabel, BlockLabel(*state, block.id)});
 		for (const auto& inst: block.instructions) {

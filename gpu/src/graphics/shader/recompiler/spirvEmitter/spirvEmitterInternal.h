@@ -38,6 +38,7 @@ struct EmitterState;
 [[nodiscard]] int      MeshNoopMode();
 [[nodiscard]] bool     MeshFixedPositionEnabled();
 [[nodiscard]] int      MeshFixedPositionMode();
+[[nodiscard]] bool     CfgMapDumpEnabled();
 [[nodiscard]] bool     MeshEagerAllocEnabled();
 // LDS dizisinin dword sayisi. TEK KAYNAK: dizi bildirimi ve sinir denetimi
 // ayni degeri kullanmak zorunda, yoksa ya sinir disi yazariz ya da gecerli

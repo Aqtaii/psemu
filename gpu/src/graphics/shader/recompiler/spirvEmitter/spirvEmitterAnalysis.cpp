@@ -808,6 +808,16 @@ uint32_t LdsArrayDwords(const EmitterState& state) {
 //                             hata VERIDE (m0 sayilari ya da indeks acma)
 //   mod 2'de de siyah      -> dısavurum blogu calisma aninda HIC CALISMIYOR
 //                             (exec maskesi / s_cbranch kosullu tahsis)
+// PSEMU_CFG_HARITA=1: SPIR-V etiketi <-> ic blok kimligi esleme tablosu.
+// spirv-val kimliklerle konusuyor, sondalarimiz ic numaralarla; koprü bu.
+bool CfgMapDumpEnabled() {
+	static const bool on = [] {
+		const char* env = std::getenv("PSEMU_CFG_HARITA");
+		return env != nullptr && env[0] == '1';
+	}();
+	return on;
+}
+
 int MeshFixedPositionMode() {
 	static const int mode = [] {
 		const char* env = std::getenv("PSEMU_MESH_FIXPOS");
