@@ -1883,6 +1883,40 @@ bool Structurize(Graph* graph, std::string* error) {
 		}
 		std::printf("[NIHAI] yayim uzayinda blok=%zu, rol sahibi=%zu\n", graph->blocks.size(),
 		            roles.size());
+
+		// MERGE GECERLILIK DENETIMI.
+		//
+		// Iki rakip teori var ve bu denetim onlari ayirir:
+		//   (a) sucLU BOLUNME - bolen komut basligi ikiye ayiriyor
+		//   (b) sucLU MERGE SECIMI - CFG, yapinin ICINE geri dallanan bir
+		//       blogu merge ilan ediyor
+		// Olculen supheli: %264 seçimin merge'i ama %265'e (kendi DOGRU
+		// dalina) dallaniyor. Bir merge blogu kendi construct'inin icine
+		// donuyorsa post-dominate etmiyordur ve yapi bozuktur.
+		//
+		// Kural: merge'in ardillarindan hicbiri, basligin domine ettigi ve
+		// merge'in domine ETMEDIGI bir blok olamaz (yani construct'in ici).
+		for (const auto& block: graph->blocks) {
+			if (block.terminator.loop_header ||
+			    block.terminator.kind != TerminatorKind::ConditionalBranch ||
+			    block.terminator.merge_block == UINT32_MAX) {
+				continue;
+			}
+			const auto* merge = graph->FindBlock(block.terminator.merge_block);
+			if (merge == nullptr) {
+				continue;
+			}
+			for (auto succ: merge->successors) {
+				if (graph->Dominates(block.id, succ) &&
+				    !graph->Dominates(block.terminator.merge_block, succ)) {
+					std::printf("[MERGE-BOZUK] baslik=%u merge=%u -> merge, construct ICINE "
+					            "dallaniyor (hedef=%u) | dogru=%u yanlis=%u\n",
+					            block.id, block.terminator.merge_block, succ,
+					            block.terminator.true_block, block.terminator.false_block);
+					std::fflush(stdout);
+				}
+			}
+		}
 		std::fflush(stdout);
 	}
 
