@@ -1894,29 +1894,51 @@ bool Structurize(Graph* graph, std::string* error) {
 		// dalina) dallaniyor. Bir merge blogu kendi construct'inin icine
 		// donuyorsa post-dominate etmiyordur ve yapi bozuktur.
 		//
-		// Kural: merge'in ardillarindan hicbiri, basligin domine ettigi ve
-		// merge'in domine ETMEDIGI bir blok olamaz (yani construct'in ici).
+		// DOGRU DEGISMEZ: merge, HER IKI DALI DA POST-DOMINE ETMELI.
+		//
+		// Ilk denemede yanlis seyi sinadim ("merge construct icine geri
+		// dallaniyor mu") ve 0 cikinca teoriyi curuk sandim. Disassembly'nin
+		// statik izi gercegi gosterdi:
+		//   %696 = OpSelectionMerge %264 / OpBranchConditional %756 %265 %226
+		//   %265 = OpBranch %266     <- DOGRU DAL, %264'e HIC UGRAMADAN
+		//   %264 = OpBranch %266        DIS secimin merge'ine atliyor
+		// %265'in hicbir yolu %264'ten gecmiyor; yani %264 o dali post-domine
+		// ETMIYOR ve merge olarak SAHTE.
+		//
+		// Gercek birlesme noktasi %266 ama o zaten DIS secimin merge'i - bir
+		// blok yalnizca TEK bir yapinin merge'i olabilir. Dogru hamle,
+		// AppendSyntheticMergeBlock ile araya bir yonlendirici koymakti;
+		// yapilmamis, yerine rastgele bir blok merge ilan edilmis.
+		uint32_t checked = 0;
+		uint32_t fake    = 0;
 		for (const auto& block: graph->blocks) {
 			if (block.terminator.loop_header ||
 			    block.terminator.kind != TerminatorKind::ConditionalBranch ||
 			    block.terminator.merge_block == UINT32_MAX) {
 				continue;
 			}
-			const auto* merge = graph->FindBlock(block.terminator.merge_block);
-			if (merge == nullptr) {
-				continue;
-			}
-			for (auto succ: merge->successors) {
-				if (graph->Dominates(block.id, succ) &&
-				    !graph->Dominates(block.terminator.merge_block, succ)) {
-					std::printf("[MERGE-BOZUK] baslik=%u merge=%u -> merge, construct ICINE "
-					            "dallaniyor (hedef=%u) | dogru=%u yanlis=%u\n",
-					            block.id, block.terminator.merge_block, succ,
-					            block.terminator.true_block, block.terminator.false_block);
-					std::fflush(stdout);
+			checked++;
+			const auto merge = block.terminator.merge_block;
+			const auto bad_branch = [&](uint32_t branch, const char* name) {
+				if (branch == UINT32_MAX || branch == merge) {
+					return false;
 				}
+				if (graph->PostDominates(merge, branch)) {
+					return false;
+				}
+				std::printf("[MERGE-BOZUK] baslik=%u merge=%u | %s dali=%u -> merge o dali "
+				            "POST-DOMINE ETMIYOR\n",
+				            block.id, merge, name, branch);
+				std::fflush(stdout);
+				return true;
+			};
+			const bool t = bad_branch(block.terminator.true_block, "dogru");
+			const bool f = bad_branch(block.terminator.false_block, "yanlis");
+			if (t || f) {
+				fake++;
 			}
 		}
+		std::printf("[MERGE-BOZUK] ozet: secim=%u sahte_merge=%u\n", checked, fake);
 		std::fflush(stdout);
 	}
 
