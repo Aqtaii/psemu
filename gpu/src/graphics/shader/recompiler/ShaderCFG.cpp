@@ -2102,12 +2102,19 @@ bool Structurize(Graph* graph, std::string* error) {
 		//
 		// Once KAC tane oldugunu sayiyoruz - donusumun maliyeti buna bagli.
 		if (CfgTraceEnabled() && loop.exit_blocks.size() > 1) {
+			// SPIR-V'de dongu yapisi = basligin DOMINE ETTIGI, merge'un domine
+			// ETMEDIGI bloklar. Cikis bloklari bu tanima gore ZATEN ICERIDEYSE
+			// onlara dallanmak MESRUDUR ve `cikis=2` bir sorun degildir - o
+			// zaman hata baska yerden gelir. Hub donusumu (seçici degisken
+			// gerektiren buyuk is) ONCESINDE bunu bilmek sart.
 			std::string exits;
 			for (auto e: loop.exit_blocks) {
-				exits += fmt::format(" {}", e);
+				const bool inside =
+				    graph->Dominates(loop.header, e) && !graph->Dominates(loop.merge, e);
+				exits += fmt::format(" {}(yapida={})", e, inside ? 1 : 0);
 			}
-			std::printf("[COK-CIKIS] dongu_basligi=%u cikis_sayisi=%zu [%s] merge=%u\n", loop.header,
-			            loop.exit_blocks.size(), exits.c_str(), loop.merge);
+			std::printf("[COK-CIKIS] dongu_basligi=%u cikis_sayisi=%zu [%s ] merge=%u\n",
+			            loop.header, loop.exit_blocks.size(), exits.c_str(), loop.merge);
 			std::fflush(stdout);
 		}
 		header->terminator.loop_header    = true;
