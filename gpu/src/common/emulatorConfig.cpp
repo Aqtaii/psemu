@@ -42,7 +42,15 @@ bool VulkanValidationEnabled() {
 }
 
 bool ShaderValidationEnabled() {
-	return g_config->shader_validation_enabled;
+	// TANI ANAHTARI: PSEMU_SHADER_VALIDATE=1. Yapilandirma alani hicbir
+	// yerden set edilmiyordu, yani spirv-val PRATIKTE HIC KOSMUYORDU - mesh
+	// modulunun gecerli olup olmadigini bu yuzden hic bilemedik. Gecersiz bir
+	// modul surucu tarafindan sessizce hicbir sey cizmeden kabul edilebilir.
+	static const bool env_on = [] {
+		const char* env = std::getenv("PSEMU_SHADER_VALIDATE");
+		return env != nullptr && env[0] == '1';
+	}();
+	return g_config->shader_validation_enabled || env_on;
 }
 
 ShaderOptimizationType GetShaderOptimizationType() {

@@ -205,6 +205,17 @@ static bool SpirvValidateBinary(const char* label, uint64_t shader_hash,
 	LOGF_COLOR(Log::Color::BrightRed, "%s SPIR-V validation failed hash=0x%016" PRIx64 ":\n%s",
 	           label, shader_hash, messages.c_str());
 	LOGF("%s\n", disassembly.c_str());
+	// TANI: LOGF_COLOR ciktisi stdout'a dusmuyor, elimizde yalnizca ozet
+	// satir kaliyordu - yani spirv-val'in SEBEBI hic gorunmuyordu. Mesaji
+	// dogrudan bas; disassembly'yi degil, o cok uzun.
+	{
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 16) {
+			printf("[SPIRV-GECERSIZ] %s hash=0x%016llx:\n%s", label,
+			       static_cast<unsigned long long>(shader_hash), messages.c_str());
+			fflush(stdout);
+		}
+	}
 	return false;
 }
 
