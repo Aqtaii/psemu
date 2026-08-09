@@ -1440,9 +1440,19 @@ bool SplitIndependentSelectionInLoopHeader(Graph* graph, std::vector<uint32_t>* 
 		const auto t = header->terminator.true_block;
 		const auto f = header->terminator.false_block;
 		// Dongu sinirina dokunan bir dal varsa bu MESRU dongu kosuludur.
+		//
+		// EKSIK OLAN: `exit_blocks`. Olculdu ->
+		//   dongu_basligi=9 dallar=(19[CIKIS],10[GOVDE]) merge=20 cikis=2
+		// Dal 19 bir CIKIS blogu ama merge (20) DEGIL; eski kosul yalnizca
+		// merge/continue/header'a bakiyordu, dolayisiyla MESRU bir dongu
+		// cikis testini "bagimsiz secim" sanip boldu. Cikis testini basliktan
+		// disari tasiyinca dongu cikisini kontrol edemez hale geliyor ve
+		// grafik indirgenemez oluyor.
 		const auto touches_loop = [&](uint32_t b) {
 			return b == UINT32_MAX || b == loop.merge || b == loop.continue_block ||
-			       b == loop.header;
+			       b == loop.header ||
+			       std::find(loop.exit_blocks.begin(), loop.exit_blocks.end(), b) !=
+			           loop.exit_blocks.end();
 		};
 		if (touches_loop(t) || touches_loop(f)) {
 			continue;
@@ -1479,9 +1489,35 @@ bool SplitIndependentSelectionInLoopHeader(Graph* graph, std::vector<uint32_t>* 
 			}
 		}
 
-		std::printf("[CFG-BASLIK-BOLME] dongu_basligi=%u -> secim_blogu=%u | dallar=(%u,%u) "
-		            "dongu(merge=%u continue=%u)\n",
-		            header_id, selection_id, t, f, loop.merge, loop.continue_block);
+		// DAL YONU: dallar dongunun ICINDE mi DISINDA mi? Blok numarasindan
+		// cikarim yapmak yaniltici; `body_blocks`/`exit_blocks` listelerinden
+		// OKUYORUZ. Icerideyse basligi bolmek yerine dallanmalari araya
+		// sentetik bloklar koyarak yapilandirmak gerekir; disaridaysa secim
+		// dongunun ONUNE (pre-header) tasinabilir.
+		const auto where = [&](uint32_t b) -> const char* {
+			if (std::find(loop.body_blocks.begin(), loop.body_blocks.end(), b) !=
+			    loop.body_blocks.end()) {
+				return "GOVDE";
+			}
+			if (std::find(loop.exit_blocks.begin(), loop.exit_blocks.end(), b) !=
+			    loop.exit_blocks.end()) {
+				return "CIKIS";
+			}
+			if (b == loop.merge) {
+				return "MERGE";
+			}
+			if (b == loop.continue_block) {
+				return "CONTINUE";
+			}
+			if (b == loop.header) {
+				return "BASLIK";
+			}
+			return "DISARIDA";
+		};
+		std::printf("[CFG-BASLIK-BOLME] dongu_basligi=%u -> secim_blogu=%u | dallar=(%u[%s],%u[%s]) "
+		            "dongu(merge=%u continue=%u govde=%zu cikis=%zu)\n",
+		            header_id, selection_id, t, where(t), f, where(f), loop.merge,
+		            loop.continue_block, loop.body_blocks.size(), loop.exit_blocks.size());
 		std::fflush(stdout);
 		AddUnique(already_split, header_id);
 		MoveBlockBefore(graph, selection_id, std::min(t, f));
@@ -2054,6 +2090,25 @@ bool Structurize(Graph* graph, std::string* error) {
 		}
 		if (!reserve_merge_block(loop.header, loop.merge)) {
 			return false;
+		}
+		// COK CIKISLI DONGU SAYIMI.
+		//
+		// Olculdu: dongu 9'un `cikis=2` ve merge yalnizca biri. SPIR-V'de bir
+		// dongu TEK merge blogundan cikmak zorunda; ikinci cikis yapisiz
+		// kaliyor ve "Selection must be structured" oradan geliyor. Yani
+		// teshis "baslikta sikismis bagimsiz secim" DEGIL, "COK CIKISLI
+		// DONGU". Dogru donusum: tum cikis kenarlarini tek bir sentetik
+		// hub'a yonlendir, hub merge olsun, gercek hedefe oradan dallanilsin.
+		//
+		// Once KAC tane oldugunu sayiyoruz - donusumun maliyeti buna bagli.
+		if (CfgTraceEnabled() && loop.exit_blocks.size() > 1) {
+			std::string exits;
+			for (auto e: loop.exit_blocks) {
+				exits += fmt::format(" {}", e);
+			}
+			std::printf("[COK-CIKIS] dongu_basligi=%u cikis_sayisi=%zu [%s] merge=%u\n", loop.header,
+			            loop.exit_blocks.size(), exits.c_str(), loop.merge);
+			std::fflush(stdout);
 		}
 		header->terminator.loop_header    = true;
 		header->terminator.merge_block    = loop.merge;
