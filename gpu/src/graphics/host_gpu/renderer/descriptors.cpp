@@ -881,6 +881,21 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
               const ShaderRecompiler::IR::DescriptorValue& value) {
 	ShaderTextureResource descriptor;
 	CopyNativeDescriptor(value, descriptor.fields);
+	// TANI: sifir adresli GORUNTU descriptor'i. PageManager "invalid range
+	// vaddr=0x0" ile duruyor ve en guclu aday bu yol - asagidaki sifir
+	// kontrolu simdiye kadar YALNIZCA loglama icindi, akis sifir adresle
+	// devam ediyor.
+	if (descriptor.Base40() == 0 && t_current_descriptor_stage == ShaderType::Mesh) {
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 16) {
+			std::printf("[SIFIR-GORUNTU] asama=Mesh goruntu descriptor'i sifir adresli | "
+			            "ham=%08x %08x %08x %08x %08x %08x %08x %08x\n",
+			            descriptor.fields[0], descriptor.fields[1], descriptor.fields[2],
+			            descriptor.fields[3], descriptor.fields[4], descriptor.fields[5],
+			            descriptor.fields[6], descriptor.fields[7]);
+			std::fflush(stdout);
+		}
+	}
 	{ // Her DISTINCT texture'i bir kez logla + KULLANIM SAYACI tut.
 	  // Amac: font atlas'i (320x512) gercekten cizimlerde kullaniliyor mu?
 	  // Kullanilmiyorsa text hic cizilmiyor (mantik/parse sorunu); yogun
