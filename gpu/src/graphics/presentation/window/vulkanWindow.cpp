@@ -856,8 +856,23 @@ static VKAPI_ATTR vk::Bool32 VKAPI_CALL VulkanDebugMessengerCallback(
 	}
 
 	if (error) {
-		EXIT_COLOR(severity_style, "[Vulkan][%s][%u]: %s\n", severity_str,
-		           static_cast<uint32_t>(message_types), callback_data->pMessage);
+		// PSEMU_VK_VALIDATE_FATAL=0 -> hatalar OLDURMEZ, yalnizca basilir.
+		//
+		// Neden gerekli: dogrulama acikken ILK hata sureci sonlandiriyor ve
+		// kosu mesh derlemesine hic ULASAMIYOR ([MS-ARAYUZ] satiri hic
+		// cikmadi). Oysa amac TUM VUID'leri tek kosuda toplamak - VS/PS
+		// arayuz uyusmazligi mesh'in onunu tikiyor.
+		// Varsayilan DAVRANIS DEGISMEDI: bayrak verilmezse eskisi gibi olur.
+		static const bool fatal = [] {
+			const char* env = std::getenv("PSEMU_VK_VALIDATE_FATAL");
+			return env == nullptr || env[0] != '0';
+		}();
+		if (fatal) {
+			EXIT_COLOR(severity_style, "[Vulkan][%s][%u]: %s\n", severity_str,
+			           static_cast<uint32_t>(message_types), callback_data->pMessage);
+		}
+		printf("[VK-HATA] %s\n", callback_data->pMessage);
+		fflush(stdout);
 	}
 
 	if (!skip) {

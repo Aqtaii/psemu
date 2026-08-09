@@ -205,6 +205,24 @@ void AllocateOutputVariables(EmitterState* state) {
 		// EntryPoint arayuz listesine 0 girerdi.
 		state->mesh_prim_indices_variable = AllocateInterfaceVariable(state);
 	}
+	// ARAYUZ DOKUMU: mesh hangi location'larda cikti beyan ediyor?
+	//
+	// Dogrulama katmani (VUID-RuntimeSpirv-OpEntryPoint-08743):
+	//   "Fragment has a declared Input at Location 0 but the previous stage
+	//    has no Output declared there"
+	// `meshHelloSpirv.h` notu tam bunu soyluyordu: Astro Bot'un PS'i
+	// location 0 ve 1'de parametre bekliyor; HELLO onlari BEYAN ETTIGI icin
+	// pipeline kabul edilmisti. Recompile edilen mesh ayni beyani yapiyor mu?
+	if (state->stage == ShaderType::Mesh) {
+		std::string list;
+		for (const auto& b: state->outputs) {
+			list += fmt::format(" tur={}/idx={}", static_cast<int>(b.kind), b.index);
+		}
+		printf("[MS-ARAYUZ] mesh cikti beyanlari (%zu adet):%s\n", state->outputs.size(),
+		       list.empty() ? " (YOK)" : list.c_str());
+		fflush(stdout);
+	}
+
 	for (auto& binding: state->outputs) {
 		switch (binding.kind) {
 			case IR::StageOutputKind::Position:

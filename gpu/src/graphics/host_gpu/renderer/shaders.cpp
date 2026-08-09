@@ -880,9 +880,27 @@ void CreatePipelineInternal(PipelineCache::GraphicsPipeline* pipeline, vk::Rende
 	uint32_t              push_constant_info_num = 0;
 
 	EXIT_IF(!vs_input_info->stage);
+	// PIPELINE LAYOUT ASAMASI: mesh pipeline'inda VERTEX DEGIL MESH.
+	//
+	// Fonksiyon zaten `mesh` parametresi aliyor ve satir 562'de shader
+	// asamasi icin kullaniyordu; burada KULLANILMAMISTI. Sonuc: mesh
+	// cizimleri, VERTEX icin kurulmus bir layout'a baglanmaya calisiyordu.
+	// Dogrulama katmani birebir soyledi:
+	//   "Binding 0 ... from VkPipelineLayout has stageFlags
+	//    VK_SHADER_STAGE_VERTEX_BIT but binding 0 ... trying to bind, has
+	//    stageFlags VK_SHADER_STAGE_MESH_BIT_EXT"
+	//    (VUID-vkCmdBindDescriptorSets-pDescriptorSets-00358)
+	// ve push constant araliklarinda mesh asamasi HIC YOKTU:
+	//   "range [0, 16) for VK_SHADER_STAGE_VERTEX_BIT
+	//    range [64, 96) for VK_SHADER_STAGE_FRAGMENT_BIT"
+	//    (VUID-VkGraphicsPipelineCreateInfo-layout-07987)
+	//
+	// `MESH-CIZIM` sayaci cizimin KAYDEDILDIGINI soyluyordu; kaynaklar
+	// gecersiz oldugu icin hicbir sey cizilmiyordu.
 	CreateLayout(set_layouts, &set_layouts_num, push_constant_info, &push_constant_info_num,
-	             *vs_input_info->stage.program, vk::ShaderStageFlagBits::eVertex,
-	             DescriptorCache::Stage::Vertex);
+	             *vs_input_info->stage.program,
+	             mesh ? vk::ShaderStageFlagBits::eMeshEXT : vk::ShaderStageFlagBits::eVertex,
+	             mesh ? DescriptorCache::Stage::Mesh : DescriptorCache::Stage::Vertex);
 	if (ps_active) {
 		EXIT_IF(!ps_input_info->stage);
 		CreateLayout(set_layouts, &set_layouts_num, push_constant_info, &push_constant_info_num,
