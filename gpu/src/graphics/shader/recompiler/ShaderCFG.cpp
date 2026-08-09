@@ -1476,6 +1476,23 @@ bool SplitIndependentSelectionInLoopHeader(Graph* graph, std::vector<uint32_t>* 
 		const auto selection_id = selection.id;
 		graph->blocks.push_back(std::move(selection));
 
+		// SARKAN ISARETCI - BU BUG'IN KOKUYDU.
+		//
+		// `header` yukarida `graph->FindBlock()` ile alinmisti; `push_back`
+		// vektoru yeniden tahsis edince o isaretci GECERSIZ oluyor ve
+		// asagidaki yazmalar bosa gidiyordu. Kenar dogrulamasi bunu
+		// birebir gosterdi:
+		//   baslik 9 ardillar=[10 11]   <- [70] olmaliydi, HIC GUNCELLENMEMIS
+		//   secim 70 onculler=[9] ardillar=[10 11]   <- dogru
+		//   dal 10  onculler=[70]                    <- dogru
+		// Yani 9->10 ve 9->11 kenarlari DURUYOR, ustune 9->70->{10,11}
+		// ekleniyor; 10 ve 11 hem iceriden hem disaridan giriliyor ->
+		// cok girisli SCC -> indirgenemez CFG.
+		header = graph->FindBlock(header_id);
+		if (header == nullptr) {
+			return false;
+		}
+
 		// Baslik artik yalnizca dongu yapisini ilan eder ve kosulsuz dallanir.
 		header->terminator.kind        = TerminatorKind::Branch;
 		header->terminator.condition   = BranchCondition::Always;
@@ -1522,6 +1539,48 @@ bool SplitIndependentSelectionInLoopHeader(Graph* graph, std::vector<uint32_t>* 
 		            header_id, selection_id, t, where(t), f, where(f), loop.merge,
 		            loop.continue_block, loop.body_blocks.size(), loop.exit_blocks.size());
 		std::fflush(stdout);
+		// KENAR DOGRULAMASI: kablolama gercekten istedigimiz sekle geldi mi?
+		// Beklenen -> baslik.ardillar=[secim], secim.onculler=[baslik],
+		//             secim.ardillar=[t, f]
+		// Sapma varsa oncul/ardil guncelleme kodunda ya da
+		// ReplaceTerminatorTarget kullaniminda bug var demektir.
+		{
+			const auto* h = graph->FindBlock(header_id);
+			const auto* s = graph->FindBlock(selection_id);
+			std::string hs, sp, ss;
+			if (h != nullptr) {
+				for (auto x: h->successors) {
+					hs += fmt::format(" {}", x);
+				}
+			}
+			if (s != nullptr) {
+				for (auto x: s->predecessors) {
+					sp += fmt::format(" {}", x);
+				}
+				for (auto x: s->successors) {
+					ss += fmt::format(" {}", x);
+				}
+			}
+			// Dal hedeflerinin onculleri de kritik: baslik cikmis, secim
+			// girmis olmali.
+			std::string tp, fp;
+			if (const auto* tb = graph->FindBlock(t); tb != nullptr) {
+				for (auto x: tb->predecessors) {
+					tp += fmt::format(" {}", x);
+				}
+			}
+			if (const auto* fb = graph->FindBlock(f); fb != nullptr) {
+				for (auto x: fb->predecessors) {
+					fp += fmt::format(" {}", x);
+				}
+			}
+			std::printf("[KABLOLAMA-KONTROL] baslik %u ardillar=[%s ] | secim %u onculler=[%s ] "
+			            "ardillar=[%s ] | dal %u onculler=[%s ] | dal %u onculler=[%s ]\n",
+			            header_id, hs.c_str(), selection_id, sp.c_str(), ss.c_str(), t, tp.c_str(),
+			            f, fp.c_str());
+			std::fflush(stdout);
+		}
+
 		AddUnique(already_split, header_id);
 		// BISECTION (PSEMU_CFG_BASLIKBOLME=2): yeniden siralamayi ATLA.
 		//
