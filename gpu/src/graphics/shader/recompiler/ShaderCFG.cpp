@@ -1828,6 +1828,36 @@ bool Structurize(Graph* graph, std::string* error) {
 						    merge_headers.find(pred) != merge_headers.end()) {
 							continue;
 						}
+						// POST-DOMINANCE SARTI - BU KOSUL EKSIKTI, HATANIN
+						// KAYNAGI BUYDU (bu oturumda yazilan A-sinifi yamasi).
+						//
+						// Olculdu: `[CFG-YENIDEN-HEDEF] header=5 merge 46 -> 44`.
+						// NCPD DOGRU cevabi (46) vermisti; burasi onu 46'nin
+						// oncalu olan sentetik yonlendirici 44'e cevirdi. Ama
+						// 44 yalnizca YANLIS dal uzerinde; DOGRU dal (45) ona
+						// hic ugramadan 46'ya atliyor. Yani 44 bir birlesme
+						// noktasi degil, sadece bir yol ustundeki durak ->
+						// spirv-val: "block '265' exits the selection headed
+						// by '696', but not via a structured exit".
+						//
+						// Bir merge adayi HER IKI DALI DA post-domine
+						// etmelidir; aksi halde o dal merge'e ugramadan
+						// yapidan kacar.
+						const auto post_dominates_branch = [&](uint32_t branch) {
+							return branch == UINT32_MAX || branch == pred ||
+							       graph->PostDominates(pred, branch);
+						};
+						if (!post_dominates_branch(block.terminator.true_block) ||
+						    !post_dominates_branch(block.terminator.false_block)) {
+							if (CfgTraceEnabled()) {
+								std::printf("[CFG-YENIDEN-HEDEF] RED: header=%u aday=%u dallari "
+								            "post-domine etmiyor (dogru=%u yanlis=%u)\n",
+								            block.id, pred, block.terminator.true_block,
+								            block.terminator.false_block);
+								std::fflush(stdout);
+							}
+							continue;
+						}
 						std::printf("[CFG-YENIDEN-HEDEF] A-sinifi: header=%u merge %u -> %u\n",
 						            block.id, merge, pred);
 						std::fflush(stdout);
