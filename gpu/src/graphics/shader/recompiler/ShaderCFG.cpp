@@ -944,6 +944,18 @@ uint32_t AppendSyntheticMergeBlock(Graph* graph, uint32_t old_merge) {
 	return graph->blocks.back().id;
 }
 
+// HEDEFSIZ SURUM: blogun kendisi bos bir yonlendirici mi? Karar koruma
+// kalkani icin gerekli - orada merge'un NEREYE yonlendirdigini bilmiyoruz,
+// yalnizca "bu bir bolme pasinin urettigi sentetik blok mu" diye soruyoruz.
+bool IsSyntheticForwarderBlock(const Graph& graph, uint32_t block_id) {
+	const auto* block = graph.FindBlock(block_id);
+	return block != nullptr && block->inst_begin == block->inst_end &&
+	       block->successors.size() == 1u &&
+	       block->terminator.kind == TerminatorKind::Branch &&
+	       block->terminator.condition == BranchCondition::Always &&
+	       block->terminator.true_block == block->successors.front();
+}
+
 bool IsSyntheticMergeForwarder(const Graph& graph, uint32_t block_id, uint32_t merge) {
 	const auto* block = graph.FindBlock(block_id);
 	return block != nullptr && block->inst_begin == block->inst_end &&
@@ -1293,6 +1305,16 @@ bool SplitOneNestedSelectionMerge(Graph* graph, std::vector<uint32_t>* already_s
 				            succs.c_str(), sb->terminator.true_block);
 				std::fflush(stdout);
 			}
+			// KARAR KORUMA - PARCA 1/3: kararı YAZ.
+			// Pas simdiye kadar yalnizca onculleri yeniden bagliyordu ve
+			// merge_block'a HIC dokunmuyordu; dolayisiyla korunacak bir karar
+			// da yoktu. Atama asamasi NCPD'yi sifirdan hesaplayip yine
+			// catisan blogu buluyordu (46 -> 50 -> 51).
+			// MoveBlockBefore'dan ONCE yaziyoruz: remap merge_block alanini da
+			// tasiyor (bkz. RemapId zinciri), yani kimlik kaymasi guvenli.
+			if (auto* ih = graph->FindBlock(inner); ih != nullptr) {
+				ih->terminator.merge_block = synthetic;
+			}
 			AddUnique(already_split, inner);
 			MoveBlockBefore(graph, synthetic, merge);
 			return true;
@@ -1458,10 +1480,31 @@ bool SplitSharedMergeBlocks(Graph* graph, std::string* error) {
 }
 
 void ClearStructuredTerminators(Graph* graph) {
+	// KARAR KORUMA - PARCA 2/3: kalkan.
+	//
+	// Bu fonksiyon KOSULSUZ siliyordu ve bolme paslarinin urettigi her karar
+	// buharlasiyordu; atama asamasi sifirdan hesaplayip yine catisan blogu
+	// buluyordu (cakisma 46 -> 50 -> 51 diye numara degistirip duruyordu).
+	//
+	// YALNIZCA SENTETIK YONLENDIRICILER korunur. "Bos degilse koru" demek
+	// TEHLIKELI olurdu: `loop_header` bayragi da burada sifirlaniyor ve dongu
+	// merge/continue'lari hemen sonra `natural_loops`'tan YENIDEN kuruluyor;
+	// onlari korursak iki kaynak catisir.
 	for (auto& block: graph->blocks) {
+		const auto kept = block.terminator.merge_block;
+
 		block.terminator.merge_block    = UINT32_MAX;
 		block.terminator.continue_block = UINT32_MAX;
 		block.terminator.loop_header    = false;
+
+		if (kept != UINT32_MAX && IsSyntheticForwarderBlock(*graph, kept)) {
+			block.terminator.merge_block = kept;
+			if (CfgTraceEnabled()) {
+				std::printf("[KARAR-KORUMA] blok=%u merge=%u KORUNDU (sentetik yonlendirici)\n",
+				            block.id, kept);
+				std::fflush(stdout);
+			}
+		}
 	}
 }
 
@@ -1998,6 +2041,24 @@ bool Structurize(Graph* graph, std::string* error) {
 			if (is_latch) {
 				continue;
 			}
+		}
+
+		// KARAR KORUMA - PARCA 3/3: saygi.
+		// Temizlikten SAG KURTULMUS bir merge varsa, o bir bolme pasinin
+		// bilincli karari demektir (kalkan yalnizca sentetik yonlendiricileri
+		// birakiyor). NCPD'yi hic cagirma; yeniden hesaplamak tam da catismayi
+		// geri getiren seydi.
+		if (block.terminator.merge_block != UINT32_MAX) {
+			if (!reserve_merge_block(block.id, block.terminator.merge_block)) {
+				return false;
+			}
+			if (CfgTraceEnabled()) {
+				std::printf("[KARAR-KORUMA] blok=%u korunan merge=%u kabul edildi (NCPD "
+				            "atlandi)\n",
+				            block.id, block.terminator.merge_block);
+				std::fflush(stdout);
+			}
+			continue;
 		}
 
 		auto merge = graph->FindNearestCommonPostDominator(block.terminator.true_block,
