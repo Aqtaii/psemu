@@ -80,10 +80,36 @@ void EmitStructuredPrefix(EmitterState* state, const CFG::Terminator& term) {
 		}
 		return;
 	}
+	// SONDA: merge HIC ATANMAMIS kosullu dallanma. Bu durumda asagidaki blok
+	// hic calismiyor, OpSelectionMerge basilmiyor ve spirv-val "Selection must
+	// be structured" diyor. Merge'u atanmadan birakan tek yer LATCH DISLAMASI
+	// (bu oturumda genisletildi) - gercek bir secim yanlislikla latch
+	// sayiliyorsa hata buradan cikar.
+	if (term.kind == CFG::TerminatorKind::ConditionalBranch && term.merge_block == UINT32_MAX) {
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 32) {
+			printf("[MERGE-ATANMAMIS] kosullu dallanma, merge=YOK | dogru=%u yanlis=%u "
+			       "dongu_basligi=%d\n",
+			       term.true_block, term.false_block, term.loop_header ? 1 : 0);
+			fflush(stdout);
+		}
+	}
 	if (term.kind == CFG::TerminatorKind::ConditionalBranch && term.merge_block != UINT32_MAX) {
 		const auto merge_label = BlockLabel(*state, term.merge_block);
 		if (merge_label != 0) {
 			state->builder.AddFunction({OpSelectionMerge, merge_label, SelectionControlNone});
+		} else {
+			// SONDA: etiket 0 = merge blogu YAYILMAMIS (ulasilamaz sayilip
+			// budanmis ya da block_labels'a hic girmemis). Bu durumda
+			// OpSelectionMerge HIC basilmiyor ve spirv-val "Selection must be
+			// structured" diyor. Sessizce gecmek, hatayi gizliyordu.
+			const bool reachable = term.merge_block < state->reachable_blocks.size() &&
+			                       state->reachable_blocks[term.merge_block];
+			printf("[MERGE-KAYIP] merge=%u etiket ALAMADI | ulasilabilir=%d "
+			       "(reachable_blocks boyut=%zu) dogru=%u yanlis=%u\n",
+			       term.merge_block, reachable ? 1 : 0, state->reachable_blocks.size(),
+			       term.true_block, term.false_block);
+			fflush(stdout);
 		}
 	}
 }

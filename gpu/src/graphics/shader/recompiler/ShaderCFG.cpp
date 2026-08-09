@@ -1187,6 +1187,120 @@ void LogMergeClaimMap(const Graph& graph) {
 // Yeniden kablolamayi SplitSharedMergeBlock zaten yapiyor; eksik olan onu
 // SECIMIN construct'i ile cagirmakti. Disaridan cagrildiginda construct
 // onculu [18], dis oncul [19] olur - ikisi de dolu, yani bolme calisir.
+// IC ICE GECMIS IKI SECIM AYNI MERGE'I PAYLASIYORSA, ICTEKINE KENDI
+// SENTETIK YONLENDIRICISINI VER.  (SONDA SURUMU - bkz. [CFG-IC-BOLME])
+//
+// Ilk denemede bu pas hatayi "Selection must be structured"a cevirdi. En
+// olasi mekanizma: yaratilan sentetik blok ULASILAMAZ sayilip etiket
+// alamiyor, `BlockLabel` 0 donuyor ve OpSelectionMerge HIC basilmiyor.
+// Bu surum ayni isi yapiyor ama yarattigi blogun kablolamasini da dokuyor.
+bool SplitOneNestedSelectionMerge(Graph* graph, std::vector<uint32_t>* already_split) {
+	// VARSAYILAN KAPALI (PSEMU_CFG_ICBOLME=1).
+	//
+	// Pas ASIL ISINI YAPIYOR: merge cakismasi cozuluyor ve program
+	// dispatcher'a HIC dusmuyor (0/32; kapaliyken 7/7). Ama baska bir yerde
+	// gecersizlik doguruyor: "Selection must be structured", MS gecersiz=15,
+	// MESH-CIZIM=0. Kapaliyken MS gecersiz=0 ve MESH-CIZIM=8.
+	// Ikisini birden kaybetmemek icin bayrakla ayrildi.
+	static const bool enabled = [] {
+		const char* env = std::getenv("PSEMU_CFG_ICBOLME");
+		return env != nullptr && env[0] == '1';
+	}();
+	if (!enabled) {
+		return false;
+	}
+
+	const auto original_block_count = static_cast<uint32_t>(graph->blocks.size());
+
+	std::map<uint32_t, std::vector<uint32_t>> claims;
+	for (uint32_t block_id = 0; block_id < original_block_count; block_id++) {
+		const auto* block = graph->FindBlock(block_id);
+		if (block == nullptr || block->terminator.loop_header ||
+		    block->terminator.kind != TerminatorKind::ConditionalBranch) {
+			continue;
+		}
+		const auto merge = graph->FindNearestCommonPostDominator(block->terminator.true_block,
+		                                                         block->terminator.false_block);
+		if (merge != UINT32_MAX) {
+			AddUnique(&claims[merge], block_id);
+		}
+	}
+
+	for (const auto& [merge, headers]: claims) {
+		if (headers.size() < 2) {
+			continue;
+		}
+		for (auto inner: headers) {
+			if (std::find(already_split->begin(), already_split->end(), inner) !=
+			    already_split->end()) {
+				continue;
+			}
+			const bool nested = std::any_of(headers.begin(), headers.end(), [&](uint32_t other) {
+				return other != inner && graph->Dominates(other, inner);
+			});
+			if (!nested) {
+				continue;
+			}
+			const auto* merge_block = graph->FindBlock(merge);
+			if (merge_block == nullptr) {
+				continue;
+			}
+			std::vector<uint32_t> preds_in;
+			for (auto pred: merge_block->predecessors) {
+				if (graph->Dominates(inner, pred)) {
+					AddUnique(&preds_in, pred);
+				}
+			}
+			const auto total_preds = merge_block->predecessors.size();
+			if (preds_in.empty() || preds_in.size() == total_preds) {
+				continue;
+			}
+
+			const auto synthetic = AppendSyntheticMergeBlock(graph, merge);
+			if (auto* sb = graph->FindBlock(synthetic); sb != nullptr) {
+				sb->predecessors = preds_in;
+				SortUnique(&sb->predecessors);
+			}
+			for (auto pred: preds_in) {
+				auto* b = graph->FindBlock(pred);
+				if (b == nullptr) {
+					continue;
+				}
+				ReplaceValue(&b->successors, merge, synthetic);
+				ReplaceTerminatorTarget(&b->terminator, merge, synthetic);
+			}
+			if (auto* om = graph->FindBlock(merge); om != nullptr) {
+				for (auto pred: preds_in) {
+					RemoveValue(&om->predecessors, pred);
+				}
+				AddUnique(&om->predecessors, synthetic);
+				SortUnique(&om->predecessors);
+			}
+			// SONDA: yaratilan blogun kablolamasi. Ardili yoksa ya da
+			// onculu kalmadiysa "cikmaz sokak" sayilip budanir.
+			if (const auto* sb = graph->FindBlock(synthetic); sb != nullptr) {
+				std::string preds;
+				for (auto p: sb->predecessors) {
+					preds += fmt::format(" {}", p);
+				}
+				std::string succs;
+				for (auto s: sb->successors) {
+					succs += fmt::format(" {}", s);
+				}
+				std::printf("[CFG-IC-BOLME] ic_baslik=%u merge=%u -> sentetik=%u | tasinan=%zu/%zu "
+				            "| sentetik.onculler=[%s] sentetik.ardillar=[%s] terminator_hedef=%u\n",
+				            inner, merge, synthetic, preds_in.size(), total_preds, preds.c_str(),
+				            succs.c_str(), sb->terminator.true_block);
+				std::fflush(stdout);
+			}
+			AddUnique(already_split, inner);
+			MoveBlockBefore(graph, synthetic, merge);
+			return true;
+		}
+	}
+	return false;
+}
+
 bool SplitOneLoopBreakSelection(Graph* graph, std::vector<uint32_t>* already_split) {
 	std::vector<uint32_t> loop_headers;
 	for (const auto& loop: graph->natural_loops) {
@@ -1237,9 +1351,11 @@ bool SplitSharedMergeBlocks(Graph* graph, std::string* error) {
 	    std::max<uint32_t>(16u, std::min<uint32_t>(128u, original_block_count));
 	// Break-bolmesi yapilmis secim basliklari; her biri en cok bir kez.
 	std::vector<uint32_t> break_split_headers;
+	std::vector<uint32_t> nested_split_headers;
 	for (uint32_t splits = 0; splits < split_budget; splits++) {
 		if (!SplitOneLoopMerge(graph) && !SplitOneSelectionMerge(graph) &&
-		    !SplitOneLoopBreakSelection(graph, &break_split_headers)) {
+		    !SplitOneLoopBreakSelection(graph, &break_split_headers) &&
+		    !SplitOneNestedSelectionMerge(graph, &nested_split_headers)) {
 			// Mevcut bolme pasleri tukendi. Geriye cakisma kaldiysa haritayi
 			// dok - genellestirilmis cozum buradan yazilacak.
 			LogMergeClaimMap(*graph);
