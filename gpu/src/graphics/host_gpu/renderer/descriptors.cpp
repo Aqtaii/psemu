@@ -1208,6 +1208,36 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 			            PsemuNextEventSeq());
 			std::fflush(stdout);
 		}
+		// CACHE MISS OTOPSISI.
+		//
+		// Olculdu: kompozisyon okumasinin VkImage isaretcisi NULL
+		// (`vk_image=0000000000000000 [SIRA #N KOMPOZISYON-OKUMA]`) ve
+		// okudugu sahne dokusu tamamen siyah. Mesh ise 1920x1080 bir
+		// RenderTexture'a (tur=2) DOGRU state ile ciziyor.
+		// Sorulan soru: istenen adres/boyut, mesh'in yazdigiyla ortusuyor mu?
+		// Ortusuyor ama boyut farkliysa, onbellegin "kati metadata eslesmesi"
+		// kurali DRS (dinamik cozunurluk) yuzunden isabet ettirmiyordur.
+		// DIKKAT: kosul `image == nullptr` DEGIL. Log satiri
+		// `image != nullptr ? image->image : nullptr` basiyor; yani
+		// `vk_image=0` iki farkli durumu ortuyor:
+		//   (a) nesne yok            -> image == nullptr
+		//   (b) nesne VAR ama VkImage tutamaci NULL -> image->image == nullptr
+		// Ilk surum yalnizca (a)'ya bakiyordu ve 16 null okumanin HICBIRINDE
+		// tetiklenmedi - demek ki vaka (b). Onbellek bir VulkanImage nesnesi
+		// donduruyor ama Vulkan goruntusu YARATILMAMIS.
+		if ((image == nullptr || image->image == nullptr) && width > 64 && height > 64) {
+			static std::atomic<uint32_t> s_miss {0};
+			if (s_miss.fetch_add(1) < 64) {
+				const auto region = g_render_ctx->GetTextureCache()->QueryRegion(address, size.size);
+				std::printf("[CACHE-MISS] kompozisyon okumasi BASARISIZ | istenen adres=0x%016llx "
+				            "%ux%u boyut=0x%llx tile=%u | bolgede gpu_uretti=%llu goruntu_bayti=%llu\n",
+				            static_cast<unsigned long long>(address), width, height,
+				            static_cast<unsigned long long>(size.size), static_cast<uint32_t>(tile),
+				            static_cast<unsigned long long>(region.gpu_image_bytes),
+				            static_cast<unsigned long long>(region.image_bytes));
+				std::fflush(stdout);
+			}
+		}
 		// ANA SAHNE DOKUSUNU DOK: 1x1 LUT'lari atla, gercek boyutlu ve
 		// onbellekte cozulmus olani icerigiyle birlikte diske yaz.
 		if (image != nullptr && width > 64 && height > 64) {
