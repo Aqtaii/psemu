@@ -853,6 +853,28 @@ int MeshFixedPositionMode() {
 	return mode;
 }
 
+// TELEMETRI: oyunun KENDI hesapladigi vertex sayisini ekrana kodlar.
+// FIXPOS'tan BAGIMSIZ - oyun kendi davranisini surdurur, yalnizca sabit
+// hello ucgeni `vertices > 0` kosuluna baglanir.
+// 1 = ucgen YALNIZCA `vertices > 0` iken yazilir  (sayiyi olcer)
+// 2 = ucgen KOSULSUZ yazilir                      (blogun CALISIP calismadigini olcer)
+//
+// Ikisi SART: mod 1 siyah cikarsa bu tek basina "sayi sifir" demek DEGILDIR -
+// enjeksiyon noktasi oyunun kontrol akisinin ICINDE, dolayisiyla blok hic
+// calismamis da olabilir. Mod 2 o karistiriciyi ayirir.
+int MeshTelemetryMode() {
+	static const int mode = [] {
+		const char* env = std::getenv("PSEMU_TELEMETRY_MESH");
+		if (env == nullptr) {
+			return 0;
+		}
+		return std::atoi(env);
+	}();
+	return mode;
+}
+
+bool MeshTelemetryEnabled() { return MeshTelemetryMode() > 0; }
+
 bool MeshFixedPositionEnabled() { return MeshFixedPositionMode() >= 1; }
 
 int MeshNoopMode() {

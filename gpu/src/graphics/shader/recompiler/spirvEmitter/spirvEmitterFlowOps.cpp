@@ -451,6 +451,82 @@ void EmitSendmsg(EmitterState* state, const IR::Instruction& inst) {
 	    {OpShiftRightLogical, state->uint_type, shifted, m0, ConstantU32(state, 12u)});
 	state->builder.AddFunction(
 	    {OpBitwiseAnd, state->uint_type, primitives, shifted, ConstantU32(state, COUNT_MASK)});
+
+	// TELEMETRI (`PSEMU_TELEMETRY_MESH=1`): GPU tarafindaki bir skaleri
+	// okumanin tek kanali framebuffer. Statik analiz tikandi - SCC zinciri,
+	// mbcnt (lo+hi) ve s_cselect lowering'lerinin hepsi donanim semantigine
+	// SADIK cikti. Kalan bilinmeyen bir CALISMA ZAMANI degeri: oyunun
+	// hesapladigi vertex sayisi.
+	//
+	// Sonucu ekrana KODLUYORUZ: sabit HELLO ucgeni YALNIZCA
+	// `vertices > 0` iken yazilir. Tahsis her iki dalda da yapilir ki
+	// OpSetMeshOutputsEXT tekduze ve tam bir kez cagrilsin.
+	//
+	//   KIRMIZI ucgen -> vertex sayisi > 0, yani m0/vcc zinciri SAGLAM;
+	//                    suclu kapinin diger operandi (lane indeksi v13)
+	//   SIYAH ekran   -> vertex sayisi GERCEKTEN 0; suc m0/vcc_lo zincirinin
+	//                    ilk halkasinda
+	if (MeshTelemetryEnabled()) {
+		state->builder.AddFunction(
+		    {OpSetMeshOutputsEXT, ConstantU32(state, 3u), ConstantU32(state, 1u)});
+
+		// MOD 2: kosulu tamamen kaldir. Ucgen KOSULSUZ yazilir; boylece
+		// "sayi sifir mi" ile "blok hic calismiyor mu" ayrilir.
+		const bool conditional = MeshTelemetryMode() < 2;
+		uint32_t   merge_block = 0;
+		if (conditional) {
+			const auto nonzero     = state->builder.AllocateId();
+			const auto write_block = state->builder.AllocateId();
+			merge_block            = state->builder.AllocateId();
+			state->builder.AddFunction(
+			    {OpUGreaterThan, state->bool_type, nonzero, vertices, ConstantU32(state, 0u)});
+			state->builder.AddFunction({OpSelectionMerge, merge_block, 0u});
+			state->builder.AddFunction({OpBranchConditional, nonzero, write_block, merge_block});
+			state->builder.AddFunction({OpLabel, write_block});
+		}
+		if (state->per_vertex_variable != 0) {
+			const float corners[3][2] = {{-0.8f, -0.8f}, {0.8f, -0.8f}, {0.0f, 0.8f}};
+			for (uint32_t i = 0; i < 3; i++) {
+				const auto value   = state->builder.AllocateId();
+				const auto pointer = state->builder.AllocateId();
+				state->builder.AddFunction({OpCompositeConstruct, state->vec4_float_type, value,
+				                            ConstantF32Value(state, corners[i][0]),
+				                            ConstantF32Value(state, corners[i][1]),
+				                            ConstantF32Value(state, 0.0f),
+				                            ConstantF32Value(state, 1.0f)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_output_vec4_float, pointer,
+				                            state->per_vertex_variable, ConstantU32(state, i),
+				                            ConstantU32(state, 0)});
+				state->builder.AddFunction({OpStore, pointer, value});
+			}
+		}
+		if (state->mesh_prim_indices_variable != 0) {
+			const auto vector  = state->builder.AllocateId();
+			const auto pointer = state->builder.AllocateId();
+			state->builder.AddFunction({OpCompositeConstruct, state->vec3_uint_type, vector,
+			                            ConstantU32(state, 0), ConstantU32(state, 1),
+			                            ConstantU32(state, 2)});
+			state->builder.AddFunction({OpAccessChain, state->ptr_output_vec3_uint, pointer,
+			                            state->mesh_prim_indices_variable, ConstantU32(state, 0)});
+			state->builder.AddFunction({OpStore, pointer, vector});
+		}
+		if (conditional) {
+			state->builder.AddFunction({OpBranch, merge_block});
+			state->builder.AddFunction({OpLabel, merge_block});
+		}
+		{
+			static std::atomic<uint32_t> s_t {0};
+			if (s_t.fetch_add(1) < 32) {
+				printf("[MS-TELEMETRI] mod=%d hello enjekte edildi (pc=0x%08x, per_vertex=%u "
+				       "prim_idx=%u)\n",
+				       MeshTelemetryMode(), inst.pc, state->per_vertex_variable,
+				       state->mesh_prim_indices_variable);
+				fflush(stdout);
+			}
+		}
+		return;
+	}
+
 	state->builder.AddFunction({OpSetMeshOutputsEXT, vertices, primitives});
 }
 
