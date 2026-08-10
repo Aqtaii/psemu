@@ -896,7 +896,28 @@ void TextureCache::RetireImages(const std::vector<CachedImage*>& retire,
 				     (*it)->buffer_modified,
 				     (*it)->kind == CachedImage::Kind::StorageTexture && (*it)->info.IsCpuDirty());
 			}
-			(*it)->gpu_modified  = false;
+			// DENEY (PSEMU_RT_KIRLI_KORU=1): render hedefinin kirli bayragini
+			// emeklilikte SILME.
+			//
+			// Olculdu (kararli kimlikle): id=33/36/40 once gpu_modified=true
+			// yapiliyor, sonra gpu_mod=0 ile oluyor - ve TEK temizleme noktasi
+			// BURASI (dokuz sondam bunu kacirmisti; `(*it)` duz kelime
+			// olmadigi icin regex eslesmedi).
+			//
+			// Bu blok yalnizca goruntu NATIVE IMAGE KAYNAGI oldugunda calisir:
+			// icerik yeni goruntuye devrediliyor ve bayragin birakilmasi
+			// sahiplik devrinin parcasi. Tasarim geregi MESRU gorunuyor -
+			// dolayisiyla bu bypass bir COZUM DEGIL, devrin icerigi gercekten
+			// tasiyip tasimadigini sinayan bir OLCUM.
+			//   piksel gelirse -> devir icerigi KAYBEDIYOR
+			//   siyah kalirsa  -> devir masum, sorun baska yerde
+			static const bool keep_rt_dirty = [] {
+				const char* env = std::getenv("PSEMU_RT_KIRLI_KORU");
+				return env != nullptr && env[0] == '1';
+			}();
+			if (!keep_rt_dirty || (*it)->kind != CachedImage::Kind::RenderTarget) {
+				(*it)->gpu_modified = false;
+			}
 			native_image_retired = true;
 		}
 		if ((!sampled && !storage && !target && !native_image) || (*it)->gpu_modified ||
