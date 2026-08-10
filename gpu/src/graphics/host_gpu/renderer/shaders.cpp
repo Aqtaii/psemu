@@ -939,9 +939,25 @@ void CreatePipelineInternal(PipelineCache::GraphicsPipeline* pipeline, vk::Rende
 	depth_stencil_info.pNext            = nullptr;
 	depth_stencil_info.flags            = {};
 	bool depth_write = static_params.depth_write_enable;
-	depth_stencil_info.depthTestEnable  = (static_params.depth_test_enable && depth_write ? VK_TRUE : VK_FALSE);
-	depth_stencil_info.depthWriteEnable = (depth_write ? VK_TRUE : VK_FALSE);
-	depth_stencil_info.depthCompareOp   = depth_write ? static_params.depth_compare_op : vk::CompareOp::eAlways;
+	// DENEY (PSEMU_NO_DEPTH=1): derinlik testini tamamen devre disi birak.
+	//
+	// Gerekce: mesh yolunda artik ne gecersiz modul, ne dispatcher, ne
+	// descriptor/layout uyusmazligi, ne arayuz eksigi var (mesh VUID=0) ve
+	// FIXPOS ile ekrani kaplayan saf NDC koordinatlari yaziyoruz - yine de
+	// sifir piksel. Vertex'ler rasterizer'a variyor ama pikseller eleniyor.
+	// En olasi eleyici: TERS-Z. PS5 motorlari genellikle 1.0=yakin kullanir;
+	// bizim yazdigimiz z=0.0, compare op `eGreater` ise depth-fail yer.
+	// Bu deney o hipotezi TEK KOSUDA sinar (varsayilan DEGISMEZ).
+	static const bool no_depth = [] {
+		const char* env = std::getenv("PSEMU_NO_DEPTH");
+		return env != nullptr && env[0] == '1';
+	}();
+	depth_stencil_info.depthTestEnable =
+	    (!no_depth && static_params.depth_test_enable && depth_write ? VK_TRUE : VK_FALSE);
+	depth_stencil_info.depthWriteEnable = (!no_depth && depth_write ? VK_TRUE : VK_FALSE);
+	depth_stencil_info.depthCompareOp =
+	    no_depth ? vk::CompareOp::eAlways
+	             : (depth_write ? static_params.depth_compare_op : vk::CompareOp::eAlways);
 	depth_stencil_info.depthBoundsTestEnable =
 	    (static_params.depth_bounds_test_enable ? VK_TRUE : VK_FALSE);
 	depth_stencil_info.stencilTestEnable = (static_params.stencil_test_enable ? VK_TRUE : VK_FALSE);

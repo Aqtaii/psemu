@@ -369,19 +369,29 @@ static PipelineDynamicParameters BuildGraphicsDynamicParams(const HW::Context&  
 	// Bos scissor ya da hedef disina tasan/sifir viewport, cizimi sessizce
 	// yok eder ve sayacta yine "cizim" olarak gorunur.
 	{
+		// TAVAN KALDIRILDI: 40'lik kesim yalnizca ILK cizimleri basiyordu ve
+		// mesh cizimleri (kare icinde cok daha sonra) HIC gorunmuyordu -
+		// "mesh cizimi hangi hedefe, hangi scissor ile gidiyor" sorusu bu
+		// yuzden yanitsiz kaldi. Bu oturumda ayni tuzaga alti kez dusuldu.
 		static std::atomic<uint32_t> s_n {0};
-		if (s_n.fetch_add(1) < 40) {
+		if (s_n.fetch_add(1) < 200000) {
 			printf("[CIZIM-ALAN] viewport=%.1fx%.1f (olcek %.1f,%.1f) scissor=(%d,%d)-(%d,%d) "
-			       "renk_yazma=%d hedef=0x%016llx %ux%u\n",
+			       "renk_yazma=%d hedef=0x%016llx %ux%u tur=%d\n",
 			       static_cast<double>(ret.viewport_scale[0] * 2.0f),
 			       static_cast<double>(ret.viewport_scale[1] * 2.0f),
 			       static_cast<double>(ret.viewport_scale[0]),
 			       static_cast<double>(ret.viewport_scale[1]), ret.scissor_ltrb[0],
 			       ret.scissor_ltrb[1], ret.scissor_ltrb[2], ret.scissor_ltrb[3],
 			       static_cast<int>(ret.color_write_enable[0]),
+			       // HEDEF TURU: `[HEDEF-SAYIM]` cizimleri "ekran" ve "diger"
+			       // diye `ci.type` ile ayiriyor ve olculdu ki cizimlerin
+			       // yalnizca %4.5'i ekran hedefine gidiyor. Mesh cizimi hangi
+			       // grupta? Viewport/scissor/renk_yazma hepsi DOGRU cikti;
+			       // geriye "dogru sey YANLIS HEDEFE ciziliyor" ihtimali kaldi.
 			       static_cast<unsigned long long>(color_count != 0 ? colors[0].base_addr : 0),
 			       color_count != 0 ? colors[0].extent.width : 0,
-			       color_count != 0 ? colors[0].extent.height : 0);
+			       color_count != 0 ? colors[0].extent.height : 0,
+			       color_count != 0 ? static_cast<int>(colors[0].type) : -1);
 			fflush(stdout);
 		}
 	}
