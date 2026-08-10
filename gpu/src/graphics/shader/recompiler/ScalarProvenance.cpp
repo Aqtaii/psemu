@@ -279,6 +279,23 @@ public:
 		m_user_data.scc = ScalarProvenance::Unknown;
 		m_user_data.m0  = ScalarProvenance::Unknown;
 
+		// KESKIN NISANCI - "HAYALET UNKNOWN" MEKANIZMA 1: ATANMAMIS OKUMA.
+		// Yukaridaki kural, user data PENCERESININ DISINDAKI her SGPR'yi
+		// daha ilk komut kosmadan `Unknown` yapiyor. Descriptor o pencerenin
+		// disindaysa hicbir komut ona dokunmadan zehirlenir - "tanimsiz yazma
+		// yok ama yine de Unknown" ve tek dugumlu `path 1:1(unknown)` bununla
+		// birebir aciklanir. Pencereyi bas ki descriptor source ile
+		// karsilastirilabilsin.
+		if (PsemuGfxTrace()) {
+			std::printf("[KOKEN-PENCERE] hash=0x%016llx asama=%u user_data_base=%u "
+			            "user_data_count=%u -> UserData araligi s%u..s%u, DISI Unknown\n",
+			            static_cast<unsigned long long>(m_program->shader_hash),
+			            static_cast<uint32_t>(m_program->stage), m_program->user_data_base,
+			            m_program->user_data_count, m_program->user_data_base,
+			            m_program->user_data_base + m_program->user_data_count - 1);
+			std::fflush(stdout);
+		}
+
 		if (block_count == 0) {
 			return true;
 		}
@@ -442,6 +459,18 @@ private:
 	uint32_t OperandValue(const Operand& operand, const ScalarState& state) {
 		uint32_t reg = 0;
 		if (ScalarRegister(operand, reg)) {
+			// KESKIN NISANCI - MEKANIZMA 1'IN OKUMA TARAFI: kaynagi olmayan
+			// SGPR okumasi. Deger nobetciyse bu yazmaca ya hic yazilmadi ya da
+			// user data penceresinin disinda kaldi (bkz. [KOKEN-PENCERE]).
+			if (PsemuGfxTrace() && state.regs[reg] == ScalarProvenance::Unknown) {
+				static std::atomic<uint32_t> s_nm {0};
+				if (s_nm.fetch_add(1) < 4000) {
+					std::printf("[SGPR-MISS] hash=0x%016llx pc=0x%08x sgpr=%u ATANMAMIS OKUMA\n",
+					            static_cast<unsigned long long>(m_program->shader_hash),
+					            m_probe_pc, reg);
+					std::fflush(stdout);
+				}
+			}
 			return state.regs[reg];
 		}
 		if (operand.kind == OperandKind::Register && operand.reg.file == RegisterFile::Scc) {
@@ -865,6 +894,7 @@ private:
 	ScalarState Execute(BasicBlock& block, ScalarState state, bool attach_sources) {
 		for (size_t index = 0; index < block.instructions.size();) {
 			auto&    inst      = block.instructions[index];
+			m_probe_pc         = inst.pc; // [SGPR-MISS] sondasi icin: OperandValue'nun pc'si yok
 			uint32_t first_dst = 0;
 			if (ScalarMemoryLoad(inst.op) && inst.memory.component_count > 1 &&
 			    ScalarRegister(inst.dst, first_dst)) {
@@ -946,6 +976,24 @@ private:
 			if (*phi == ScalarProvenance::Undefined) {
 				*phi = AddValue({ScalarValueOp::Phi, block.start_pc});
 			}
+			// KESKIN NISANCI - MEKANIZMA 2: PHI'YE SIZAN UNKNOWN.
+			// Phi'nin KENDISI cokmuyor (Unknown'i arguman olarak tasiyor);
+			// cokme `ContainsUnknown`'da oluyor: phi argumanlarindan HERHANGI
+			// biri Unknown ise tum zincir unknown sayiliyor (defansif).
+			// Yani mesru bir yol dogru degeri tasisa bile, olu/tanimsiz bir
+			// yol descriptor'i gecersiz kilar. Hangi yuvada oldugunu bas.
+			if (PsemuGfxTrace() &&
+			    std::find(incoming.begin(), incoming.end(), ScalarProvenance::Unknown) !=
+			        incoming.end()) {
+				static std::atomic<uint32_t> s_np {0};
+				if (s_np.fetch_add(1) < 4000) {
+					std::printf("[PHI-COLLAPSE] hash=0x%016llx blok_pc=0x%08x phi=%u "
+					            "arguman_sayisi=%zu (Unknown ICERIYOR)\n",
+					            static_cast<unsigned long long>(m_program->shader_hash),
+					            block.start_pc, *phi, incoming.size());
+					std::fflush(stdout);
+				}
+			}
 			m_graph.values[*phi].phi_args = std::move(incoming);
 			return *phi;
 		};
@@ -1006,6 +1054,7 @@ private:
 
 	Program*                          m_program;
 	ScalarProvenance&                 m_graph;
+	uint32_t                          m_probe_pc = 0; // yalnizca [SGPR-MISS] sondasi icin
 	ScalarState                       m_user_data;
 	std::vector<ScalarState>          m_entry;
 	std::vector<ScalarState>          m_exit;
