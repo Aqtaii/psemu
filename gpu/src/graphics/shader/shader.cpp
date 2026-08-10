@@ -197,6 +197,30 @@ static bool SpirvValidateBinary(const char* label, uint64_t shader_hash,
 	});
 
 	if (core.Validate(spirv)) {
+		// TANI: mod 3 (giris blogunda kosulsuz) KIRMIZI veriyor, mod 2 (ayni
+		// degerler, oyunun KENDI disavurum noktasinda) SIYAH. Yani degerler
+		// dogru, disavurum noktasi CALISMIYOR. Bunu gormek icin GECERLI
+		// modulun de dokumu gerekiyor - eski kapi yalnizca GECERSIZ modulleri
+		// yaziyordu ve mesh programlari artik gecerli.
+		static const char* dump_all = std::getenv("PSEMU_SPIRV_DUMP_GECERLI");
+		if (dump_all != nullptr) {
+			static std::mutex         mutex;
+			static std::set<uint64_t> seen;
+			const std::lock_guard     lock(mutex);
+			if (seen.insert(shader_hash).second) {
+				std::string disassembly;
+				SpirvDisassemble(spirv.data(), spirv.size(), &disassembly);
+				const auto path =
+				    fmt::format("{}/spirv_gecerli_{}_{:016x}.txt", dump_all, label, shader_hash);
+				if (FILE* f = std::fopen(path.c_str(), "wb"); f != nullptr) {
+					std::fprintf(f, "%s\n=== DISASSEMBLY ===\n%s\n", path.c_str(),
+					             disassembly.c_str());
+					std::fclose(f);
+					printf("[SPIRV-DOKUM-GECERLI] %s\n", path.c_str());
+					fflush(stdout);
+				}
+			}
+		}
 		return true;
 	}
 
