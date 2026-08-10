@@ -1,6 +1,10 @@
 #include "graphics/shader/recompiler/ScalarProvenance.h"
 
+#include "graphics/host_gpu/psemuGfxTrace.h"
+
 #include <algorithm>
+#include <atomic>
+#include <cstdio>
 #include <array>
 #include <compare>
 #include <deque>
@@ -720,6 +724,32 @@ private:
 				const auto op = Operation(inst.op);
 				if (op != ScalarValueOp::Unknown) {
 					value = Define(inst, op, before);
+				} else if (PsemuGfxTrace()) {
+					// KESKIN NISANCI: dort compute shader SPIR-V'ye HIC
+					// ulasmiyor, "descriptor source N dword 0 contains an
+					// unknown value 1 (unknown)" ile duruyorlar. Deger 1 =
+					// ScalarProvenance::Unknown, yani KANONIK nobetci: koken
+					// analizi bir komutu tanimayip pes etmis. Zincir tek dugum
+					// oldugu icin hangi komut oldugunu mesaj SOYLEMIYOR.
+					//
+					// Burasi SKALER YAZMACA yazan ve tanninmayan her komut -
+					// yani bir descriptor'i zehirleyebilecek TEK yer. Hash ve
+					// pc ile bas ki basarisiz dort shader'a filtrelenebilsin;
+					// `Operation()` icinden basmak tum shader'lari kariştirip
+					// 300'luk tavana aninda dayaniyordu.
+					static std::atomic<uint32_t> s_n {0};
+					if (s_n.fetch_add(1) < 4000) {
+						// dst SART: hata mesaji "descriptor source 30" diyor ve bu
+						// bir SGPR indeksi. Zehirleyen komut, o yazmaca yazan
+						// SON tanimsiz komuttur - hedef yazmac basilmadan
+						// baglanti kurulamaz.
+						std::printf("[KOKEN-BILINMEYEN] hash=0x%016llx pc=0x%08x opcode=%u "
+						            "sgpr=%u\n",
+						            static_cast<unsigned long long>(m_program->shader_hash),
+						            inst.pc, static_cast<uint32_t>(inst.op),
+						            static_cast<uint32_t>(dst));
+						std::fflush(stdout);
+					}
 				}
 				break;
 			}
