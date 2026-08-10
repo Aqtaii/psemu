@@ -42,6 +42,8 @@ struct EmitterState;
 [[nodiscard]] int      MeshTelemetryMode();
 [[nodiscard]] int      MeshProbeBlock();
 [[nodiscard]] bool     MeshProbeCond();
+[[nodiscard]] uint32_t EmitNggCompactedIndex(EmitterState* state);
+[[nodiscard]] bool     MeshCompactionEnabled();
 [[nodiscard]] int      MeshProbeLo();
 [[nodiscard]] int      MeshProbeHi();
 void                   EmitMeshProbeTriangle(EmitterState* state, uint32_t block_id, uint32_t ordinal, bool with_alloc);
@@ -157,6 +159,7 @@ enum : uint32_t {
 	ScopeDevice                    = 1,
 	ScopeWorkgroup                 = 2,
 	ScopeSubgroup                  = 3,
+	GroupOperationExclusiveScan    = 2,
 	MemorySemanticsNone            = 0,
 	MemorySemanticsAcquireRelease  = 0x00000008u,
 	MemorySemanticsUniformMemory   = 0x00000040u,
@@ -294,6 +297,7 @@ enum : uint32_t {
 	OpKill                         = 252,
 	OpReturn                       = 253,
 	OpGroupNonUniformBallot        = 339,
+	OpGroupNonUniformBallotBitCount = 342,
 	OpGroupNonUniformBallotFindLSB = 343,
 	OpGroupNonUniformShuffle       = 345,
 	// SPV_EXT_mesh_shader: NGG'nin s_sendmsg GS_ALLOC_REQ karsiligi.

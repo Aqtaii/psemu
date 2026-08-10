@@ -116,6 +116,57 @@ void EmitMrtZExport(EmitterState* state, const IR::Instruction& inst) {
 	}
 }
 
+// NGG VERTEX COMPACTION.
+//
+// AMD donaniminda `exp pos0` bir yuva indeksi ALMAZ: donanim o anki exec
+// maskesinden hayatta kalan lane'leri otomatik SIKISTIRIR ve 0,1,2...
+// yuvalarina sirayla dizer. Lane 35/42/61 hayattaysa yuvalari 0/1/2 olur.
+//
+// Emulator ise `outPerVertex[gl_LocalInvocationIndex]` ile 1:1 esleme
+// yapiyordu; lane 35 dogrudan 35. yuvaya yazmaya calisiyor, tahsis edilen
+// yuva sayisi asildigi icin yazim cope gidiyor ve ilkel dejenere oluyor.
+// OLCULDU (6099300): deger ayni fonksiyondan gelirken yuva `lane` ise
+// SIYAH, `lane%3` ise KIRMIZI - yani ulasan lane indeksleri 3'ten buyuk.
+//
+// Dogru karsilik: aktif lane'ler arasinda KACINCI oldugumuz. SPIR-V'de
+// bunun tam esdegeri ballot + EXCLUSIVE SCAN bit sayimi.
+//
+// NOT: emulatorun `exec`i 64-bit lane maskesi DEGIL, invocation basina
+// 0/1 boolean. Bu yuzden `popcount(exec & below)` DOGRU SONUC VERMEZ;
+// once ballot ile gercek capraz-lane resmi toplanmali. EmitExecActiveBool
+// tam olarak "bu cagri aktif mi" yuklemini veriyor.
+uint32_t EmitNggCompactedIndex(EmitterState* state) {
+	// YUKLEM SECIMI KRITIK. Ilk denemede `EmitExecActiveBool` kullandim -
+	// YANLIS: o, emule edilen `exec` yazmacini okuyor ve bu yazmac
+	// invocation basina 0/1'e cokmus durumda (bkz. `exec_lo = select(c,1,0)`).
+	// Tum lane'lerde 1 ise ballot 64 bit dolu cikar, exclusive scan yine
+	// 0..63 verir - yani lane indeksinin AYNISI. Olculdu: COMPACT+FIXPOS1
+	// SIYAH kaldi.
+	//
+	// Dogru yuklem SPIR-V'nin KENDI aktif-invocation kumesi: sabit `true`
+	// ile alinan ballot, o komutu O AN yuruten cagrilari verir - donanimdaki
+	// `exec`in disavurum anindaki karsiligi budur.
+	const auto active = state->builder.AllocateId();
+	state->builder.AddFunction({OpINotEqual, state->bool_type, active, ConstantU32(state, 1),
+	                            ConstantU32(state, 0)});
+	const auto ballot = state->builder.AllocateId();
+	const auto index  = state->builder.AllocateId();
+	state->builder.AddFunction({OpGroupNonUniformBallot, state->vec4_uint_type, ballot,
+	                            ConstantU32(state, ScopeSubgroup), active});
+	state->builder.AddFunction({OpGroupNonUniformBallotBitCount, state->uint_type, index,
+	                            ConstantU32(state, ScopeSubgroup), GroupOperationExclusiveScan,
+	                            ballot});
+	return index;
+}
+
+bool MeshCompactionEnabled() {
+	static const bool on = [] {
+		const char* env = std::getenv("PSEMU_MESH_COMPACT");
+		return env != nullptr && env[0] == '1';
+	}();
+	return on;
+}
+
 // PSEMU_MESH_FIXPOS=1 deneyi: lane indeksine gore garantili hello-triangle
 // kosesi uretir. Kosler HELLO deneyinde EKRANA DUSTUGU DOGRULANAN degerler
 // (bkz. meshHelloSpirv.h / hello.mesh):
@@ -392,7 +443,8 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 		}
 		const auto pointer = state->builder.AllocateId();
 		if (mesh) {
-			const auto lane = EmitLocalInvocationIndex(state);
+			const auto lane = MeshCompactionEnabled() ? EmitNggCompactedIndex(state)
+			                                          : EmitLocalInvocationIndex(state);
 			state->builder.AddFunction({OpAccessChain, state->ptr_output_vec4_float, pointer,
 			                            variable, lane, ConstantU32(state, 0)});
 			// KAPSAM KANITI: deneyin gercekten uygulandigini gostermeden
