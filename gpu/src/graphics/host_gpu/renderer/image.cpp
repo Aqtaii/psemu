@@ -378,9 +378,42 @@ void UploadVideoOut(GraphicContext* ctx, VideoOutVulkanImage* image, const Video
 	Transfer::ScratchBuffer scratch(info.size);
 	printf("[IMG-MARK] ScratchBuffer HAZIR; detiling oncesi\n");
 	fflush(stdout);
+	// KESKIN NISANCI: sunulan kare siyah ama sahne dokusu %81 KIRMIZI
+	// (PSEMU_PS_FIXCOLOR deneyi). Son kare KONUK BELLEK uzerinden tasiniyor;
+	// burasi o baytlarin GPU'ya girdigi TEK kapi. Iki tarafi da say:
+	//   konuk_dolu=0    -> kompozisyon bu tampona HIC yazmamis (yukari bak)
+	//   konuk_dolu>0 ve linear_dolu=0 -> DETILING yok ediyor
+	//   ikisi de >0     -> kayip daha asagida (yukleme/sunum)
+	{
+		const auto* guest_bytes = reinterpret_cast<const uint8_t*>(info.address);
+		uint64_t    guest_nonzero = 0;
+		for (uint64_t i = 0; i < info.size; i++) {
+			if (guest_bytes[i] != 0) {
+				guest_nonzero++;
+			}
+		}
+		printf("[VO-YUKLE-ICERIK] konuk_adres=0x%016llx boyut=%llu konuk_dolu=%llu %ux%u "
+		       "pitch=%u bpe=%u bgra16=%d\n",
+		       (unsigned long long)info.address, (unsigned long long)info.size,
+		       (unsigned long long)guest_nonzero, info.width, info.height, info.pitch,
+		       info.bytes_per_element, (int)info.bgra16);
+		fflush(stdout);
+	}
 	TileConvertTiledToLinearRenderTarget(
 	    scratch.Data(), reinterpret_cast<const void*>(info.address), info.width, info.height,
 	    info.pitch, info.bytes_per_element, info.size);
+	{
+		const auto* linear_bytes   = static_cast<const uint8_t*>(scratch.Data());
+		uint64_t    linear_nonzero = 0;
+		for (uint64_t i = 0; i < info.size; i++) {
+			if (linear_bytes[i] != 0) {
+				linear_nonzero++;
+			}
+		}
+		printf("[VO-YUKLE-ICERIK] detiling sonrasi linear_dolu=%llu\n",
+		       (unsigned long long)linear_nonzero);
+		fflush(stdout);
+	}
 	if (info.bgra16) {
 		auto* pixels = static_cast<uint16_t*>(scratch.Data());
 		for (uint64_t i = 0; i < info.size / sizeof(uint16_t); i += 4) {

@@ -2762,6 +2762,37 @@ void TextureCache::RefreshVideoOut(VideoOutVulkanImage* image, bool render_targe
 	//
 	// Artik yalnizca konuk tarafta DAHA YENI bayt yokken GPU icerigi
 	// korunuyor. Varsa yenileme calisiyor ve kare goruntuye yukleniyor.
+	// SIYAH EKRAN: KONUK YUKLEMESI GPU ICERIGINI EZIYOR.
+	//
+	// Olculdu (PSEMU_PS_FIXCOLOR=1 ile PS ciktisi kirmiziya zorlanarak):
+	//   - EKRAN cizimleri (RenderColorType::DisplayBuffer, [CIZIM-ALAN] tur=1)
+	//     tam da VideoOut adreslerini hedefliyor:
+	//       hedef=0x...38fc0000 3840x2160  x3
+	//       hedef=0x...3afa0000 3840x2160  x1
+	//   - Ayni adreslerdeki KONUK BELLEK ise TAMAMEN SIFIR:
+	//       [VO-YUKLE-ICERIK] konuk_dolu=0  (5/5 kayit), linear_dolu=0
+	//   - Sahne dokusu %81 KIRMIZI, sunulan kare 0/518400 SIYAH.
+	// Yani icerik GPU'da; konuk yukleme onun uzerine sifir yaziyor.
+	//
+	// Ustteki yorum "oyun son kareyi bir TAMPON uzerinden yaziyor" diyor ve
+	// kosulsuz atlamanin yanlis oldugunu kaydediyor. Bu oyunun bu durumunda
+	// olcum TERSINI soyluyor: cizim dogrudan yuzeye gidiyor, konuk taraf bos.
+	// Iki davranis da mesru olabilecegi icin BAYRAKLA ayrildi, varsayilan
+	// DAVRANIS DEGISMEDI.
+	static const bool no_reupload = [] {
+		const char* env = std::getenv("PSEMU_VO_NO_REUPLOAD");
+		return env != nullptr && env[0] == '1';
+	}();
+	if (no_reupload) {
+		static std::atomic<uint64_t> c = 0;
+		if (c.fetch_add(1) < 40) {
+			std::fprintf(stderr,
+			             "[VO-REFRESH] addr=0x%016llx KONUK-YUKLEME IPTAL (PSEMU_VO_NO_REUPLOAD)\n",
+			             static_cast<unsigned long long>(cached.video_out.address));
+			std::fflush(stderr);
+		}
+		return;
+	}
 	{
 		const auto& vo         = cached.video_out;
 		const bool  guest_newer = cached.buffer_modified ||
