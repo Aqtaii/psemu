@@ -240,7 +240,48 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 		return;
 	}
 
-	const auto value = ApplyMrtExportMapping(state, inst, EmitExportVec4F32(state, inst));
+	auto value = ApplyMrtExportMapping(state, inst, EmitExportVec4F32(state, inst));
+
+	// BISECTION - `PSEMU_PS_FIXCOLOR=1`: PS'in MRT0'a yazdigi RGB'yi ez.
+	//
+	// Olculdu: rasterizasyon, renk maskesi (0xf), harmanlama (kapali),
+	// hedef baglama ve dogrulama TEMIZ; cizimler gorunur alanin TAMAMINA
+	// alfa=1.0 yaziyor ama RGB=0. Yani siyahi ureten, PS'in KENDI ciktisi.
+	// Bu deney o hipotezi ikiye boler:
+	//   ekran KIRMIZI olursa -> rasterizer/OM/sunum zinciri KUSURSUZ,
+	//                            sorun yalnizca shader girdileri/govdesinde
+	//   ekran SIYAH kalirsa  -> disavurum ile ekran arasinda HALA
+	//                            gorulmemis bir katman var
+	//
+	// KAPSAM KANITI SART: deneyin uygulandigini gostermeden "siyah kaldi"
+	// sonucu ANLAMSIZDIR - bu oturumda sifir komut ezip "kanit" gibi
+	// gorunen bir deney zaten bir kez yasandi (FIXPOS mod 1-4, shader
+	// gecersizken kosmustu ve hicbiri GPU'ya ulasmamisti).
+	if (inst.export_info.kind == IR::ExportTargetKind::Mrt) {
+		static const bool fix_color = [] {
+			const char* env = std::getenv("PSEMU_PS_FIXCOLOR");
+			return env != nullptr && env[0] == '1';
+		}();
+		if (fix_color) {
+			const auto red = state->builder.AllocateId();
+			state->builder.AddFunction({OpCompositeConstruct, state->vec4_float_type, red,
+			                            ConstantF32(state, 0x3f800000u), ConstantF32(state, 0u),
+			                            ConstantF32(state, 0u),
+			                            ConstantF32(state, 0x3f800000u)});
+			value = red;
+			if (PsemuGfxTrace()) {
+				static std::atomic<uint32_t> s_n {0};
+				if (s_n.fetch_add(1) < 200) {
+					std::printf("[PS-SABITRENK] MRT disavurumu EZILDI -> (1,0,0,1) hedef=%u "
+					            "compr=%d en=0x%01x\n",
+					            static_cast<uint32_t>(inst.export_info.target),
+					            static_cast<int>(inst.export_info.compr),
+					            static_cast<uint32_t>(inst.export_info.en));
+					std::fflush(stdout);
+				}
+			}
+		}
+	}
 
 	// Mesh'te her cikti bir DIZI: cagri kendi lane indeksine yazar. Olculen NGG
 	// GS'te bu indeks v13 = (dalga_id << 6) + mbcnt, yani gl_LocalInvocationIndex.
