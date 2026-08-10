@@ -288,6 +288,62 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 	// Sinir denetimi (v13 < vertex_sayisi) shader'in KENDISINDE exec maskesi
 	// olarak zaten var; burada tekrar uretmiyoruz.
 	if (inst.export_info.kind == IR::ExportTargetKind::Position) {
+		// TAM KAPSAM DISAVURUMU (`PSEMU_MESH_OMNILANE=1`).
+		//
+		// Olculdu: bloklar calisiyor, tahsis calisiyor, vertex sayisi > 0,
+		// pozisyon degerleri dogru - ama FIXPOS 1/2 SIYAH, FIXPOS 3 KIRMIZI.
+		// Uc modun degerleri ayni; tek fark mod 3'un UC YUVAYA DA acikca
+		// yazmasi. Yani suphe: disavuruma yalnizca TEK lane ulasiyor (ya da
+		// hepsi ayni lane indeksini uretiyor) ve tek vertex yazilip ilkel
+		// dejenere oluyor.
+		//
+		// Bu kip lane indeksini TAMAMEN devre disi birakir: buraya ulasan
+		// HER cagri ucgenin UC kosesini birden yazar. Tahsisi ve oyunun
+		// disavurumlarini DEGISTIRMEZ (mod 3'ten farki bu) - yani soru
+		// yalnizca "bu noktaya birisi ulasiyor mu".
+		//   KIRMIZI -> en az bir cagri ULASIYOR; kusur lane indeksi/exec
+		//              maskesi emulasyonunda MUHURLENIR
+		//   SIYAH   -> hicbir cagri saglam varamiyor; bu "sayi > 0"
+		//              telemetrisiyle CELISIR ve baska bir yola cikar
+		static const bool omni_lane = [] {
+			const char* env = std::getenv("PSEMU_MESH_OMNILANE");
+			return env != nullptr && env[0] == '1';
+		}();
+		if (mesh && omni_lane) {
+			const float corners[3][2] = {{-0.8f, -0.8f}, {0.8f, -0.8f}, {0.0f, 0.8f}};
+			for (uint32_t slot = 0; slot < 3; slot++) {
+				const auto corner = state->builder.AllocateId();
+				const auto slot_ptr = state->builder.AllocateId();
+				state->builder.AddFunction({OpCompositeConstruct, state->vec4_float_type, corner,
+				                            ConstantF32Value(state, corners[slot][0]),
+				                            ConstantF32Value(state, corners[slot][1]),
+				                            ConstantF32Value(state, 0.0f),
+				                            ConstantF32Value(state, 1.0f)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_output_vec4_float, slot_ptr,
+				                            variable, ConstantU32(state, slot),
+				                            ConstantU32(state, 0)});
+				state->builder.AddFunction({OpStore, slot_ptr, corner});
+			}
+			if (state->mesh_prim_indices_variable != 0) {
+				const auto tri = state->builder.AllocateId();
+				const auto tri_ptr = state->builder.AllocateId();
+				state->builder.AddFunction({OpCompositeConstruct, state->vec3_uint_type, tri,
+				                            ConstantU32(state, 0), ConstantU32(state, 1),
+				                            ConstantU32(state, 2)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_output_vec3_uint, tri_ptr,
+				                            state->mesh_prim_indices_variable,
+				                            ConstantU32(state, 0)});
+				state->builder.AddFunction({OpStore, tri_ptr, tri});
+			}
+			static std::atomic<uint32_t> s_o {0};
+			if (s_o.fetch_add(1) < 32) {
+				std::printf("[MS-OMNILANE] POS0 noktasinda 3 kose + indeks LANE'DEN BAGIMSIZ "
+				            "yazildi (pc=0x%08x)\n",
+				            inst.pc);
+				std::fflush(stdout);
+			}
+			return;
+		}
 		const auto pointer = state->builder.AllocateId();
 		if (mesh) {
 			const auto lane = EmitLocalInvocationIndex(state);
