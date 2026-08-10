@@ -159,6 +159,7 @@ enum : uint32_t {
 	ScopeDevice                    = 1,
 	ScopeWorkgroup                 = 2,
 	ScopeSubgroup                  = 3,
+	GroupOperationReduce           = 0,
 	GroupOperationExclusiveScan    = 2,
 	MemorySemanticsNone            = 0,
 	MemorySemanticsAcquireRelease  = 0x00000008u,

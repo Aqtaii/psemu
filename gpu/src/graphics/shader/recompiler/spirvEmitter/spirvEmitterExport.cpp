@@ -409,6 +409,84 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 		//   SIYAH   -> ya tek lane geciyor (exec kapisi digerlerini oldurdu)
 		//              ya da hepsi ayni indeksi uretiyor (mbcnt boolean
 		//              cokusu). Iki halde de tek yuva yazilir.
+		// AKTIF LANE SAYIMI (`PSEMU_MESH_COUNT_PROBE=1`).
+		//
+		// `lane%3` KIRMIZI, compaction (0..N-1) SIYAH. Compaction aktif
+		// lane'leri yayar; `%3` ise N ne olursa olsun yazimlari 0,1,2'ye
+		// KATLAR. Yani `%3`un calismasi, N'in tahsis edilen vertex
+		// sayisindan BUYUK oldugunun dolayli gostergesi - compaction o
+		// yuzden aralik disina (OOB) tasip discard ediliyor.
+		//
+		// Bu kip dolayli gostergeyi DOGRUDAN olcuyor: disavurum aninda
+		// hayatta olan toplam cagri sayisini ballot+Reduce ile al, oyunun
+		// KENDI vertex sayisiyla (m0 & 0xfff) karsilastir ve yalnizca
+		// `aktif > vertex_sayisi` iken ucgeni yaz.
+		//   KIRMIZI -> exec maskesi lane'leri FILTRELEYEMIYOR; gereginden
+		//              fazla cagri disavuruma akiyor (OOB'un kaynagi)
+		//   SIYAH   -> aktif sayi sinir icinde; OOB baska bir sebepten
+		static const bool count_probe = [] {
+			const char* env = std::getenv("PSEMU_MESH_COUNT_PROBE");
+			return env != nullptr && env[0] == '1';
+		}();
+		if (mesh && count_probe) {
+			const auto true_id = state->builder.AllocateId();
+			const auto ballot  = state->builder.AllocateId();
+			const auto active  = state->builder.AllocateId();
+			state->builder.AddFunction({OpINotEqual, state->bool_type, true_id,
+			                            ConstantU32(state, 1), ConstantU32(state, 0)});
+			state->builder.AddFunction({OpGroupNonUniformBallot, state->vec4_uint_type, ballot,
+			                            ConstantU32(state, ScopeSubgroup), true_id});
+			state->builder.AddFunction({OpGroupNonUniformBallotBitCount, state->uint_type, active,
+			                            ConstantU32(state, ScopeSubgroup), GroupOperationReduce,
+			                            ballot});
+			const auto m0_ptr = PointerForRegister(*state, {IR::RegisterFile::M0, 0});
+			uint32_t   limit  = ConstantU32(state, 3u);
+			if (m0_ptr != 0) {
+				const auto m0_value = state->builder.AllocateId();
+				const auto verts    = state->builder.AllocateId();
+				state->builder.AddFunction({OpLoad, state->uint_type, m0_value, m0_ptr});
+				state->builder.AddFunction({OpBitwiseAnd, state->uint_type, verts, m0_value,
+				                            ConstantU32(state, 0xfffu)});
+				limit = verts;
+			}
+			const auto too_many = state->builder.AllocateId();
+			const auto write_b  = state->builder.AllocateId();
+			const auto merge_b  = state->builder.AllocateId();
+			state->builder.AddFunction(
+			    {OpUGreaterThan, state->bool_type, too_many, active, limit});
+			state->builder.AddFunction({OpSelectionMerge, merge_b, 0u});
+			state->builder.AddFunction({OpBranchConditional, too_many, write_b, merge_b});
+			state->builder.AddFunction({OpLabel, write_b});
+			const auto lane_id = EmitLocalInvocationIndex(state);
+			const auto slot    = state->builder.AllocateId();
+			state->builder.AddFunction(
+			    {OpUMod, state->uint_type, slot, lane_id, ConstantU32(state, 3u)});
+			const auto value   = EmitFixedTrianglePosition(state, lane_id);
+			const auto slot_ptr = state->builder.AllocateId();
+			state->builder.AddFunction({OpAccessChain, state->ptr_output_vec4_float, slot_ptr,
+			                            variable, slot, ConstantU32(state, 0)});
+			state->builder.AddFunction({OpStore, slot_ptr, value});
+			if (state->mesh_prim_indices_variable != 0) {
+				const auto tri     = state->builder.AllocateId();
+				const auto tri_ptr = state->builder.AllocateId();
+				state->builder.AddFunction({OpCompositeConstruct, state->vec3_uint_type, tri,
+				                            ConstantU32(state, 0), ConstantU32(state, 1),
+				                            ConstantU32(state, 2)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_output_vec3_uint, tri_ptr,
+				                            state->mesh_prim_indices_variable,
+				                            ConstantU32(state, 0)});
+				state->builder.AddFunction({OpStore, tri_ptr, tri});
+			}
+			state->builder.AddFunction({OpBranch, merge_b});
+			state->builder.AddFunction({OpLabel, merge_b});
+			static std::atomic<uint32_t> s_c {0};
+			if (s_c.fetch_add(1) < 32) {
+				std::printf("[MS-COUNT-PROBE] aktif_lane > m0_vertex_sayisi ise ucgen (pc=0x%08x)\n",
+				            inst.pc);
+				std::fflush(stdout);
+			}
+			return;
+		}
 		static const bool lane_probe = [] {
 			const char* env = std::getenv("PSEMU_MESH_LANE_PROBE");
 			return env != nullptr && env[0] == '1';
