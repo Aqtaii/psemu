@@ -344,6 +344,52 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 			}
 			return;
 		}
+		// LANE KIMLIK TELEMETRISI (`PSEMU_MESH_LANE_PROBE=1`).
+		//
+		// OMNILANE kirmizi verdi: disavuruma EN AZ BIR cagri ulasiyor ve
+		// oyunun kendi tahsisi ucgene yetiyor. Kalan soru: oraya KAC FARKLI
+		// lane indeksi ulasiyor?
+		//
+		// Bu kip HELLO kosesini `lane % 3`e gore secer VE ayni indeksi yuva
+		// olarak kullanir (`outPerVertex[lane % 3]`). Oyunun kendi pozisyon
+		// matematigi denkleme GIRMEZ.
+		//   KIRMIZI -> en az 3 FARKLI lane indeksi geliyor; mbcnt ve exec
+		//              maskesi calisiyor, suc oyunun veri okumasinda
+		//   SIYAH   -> ya tek lane geciyor (exec kapisi digerlerini oldurdu)
+		//              ya da hepsi ayni indeksi uretiyor (mbcnt boolean
+		//              cokusu). Iki halde de tek yuva yazilir.
+		static const bool lane_probe = [] {
+			const char* env = std::getenv("PSEMU_MESH_LANE_PROBE");
+			return env != nullptr && env[0] == '1';
+		}();
+		if (mesh && lane_probe) {
+			const auto lane   = EmitLocalInvocationIndex(state);
+			const auto corner = state->builder.AllocateId();
+			state->builder.AddFunction(
+			    {OpUMod, state->uint_type, corner, lane, ConstantU32(state, 3u)});
+			const auto value    = EmitFixedTrianglePosition(state, lane);
+			const auto slot_ptr = state->builder.AllocateId();
+			state->builder.AddFunction({OpAccessChain, state->ptr_output_vec4_float, slot_ptr,
+			                            variable, corner, ConstantU32(state, 0)});
+			state->builder.AddFunction({OpStore, slot_ptr, value});
+			if (state->mesh_prim_indices_variable != 0) {
+				const auto tri     = state->builder.AllocateId();
+				const auto tri_ptr = state->builder.AllocateId();
+				state->builder.AddFunction({OpCompositeConstruct, state->vec3_uint_type, tri,
+				                            ConstantU32(state, 0), ConstantU32(state, 1),
+				                            ConstantU32(state, 2)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_output_vec3_uint, tri_ptr,
+				                            state->mesh_prim_indices_variable,
+				                            ConstantU32(state, 0)});
+				state->builder.AddFunction({OpStore, tri_ptr, tri});
+			}
+			static std::atomic<uint32_t> s_l {0};
+			if (s_l.fetch_add(1) < 32) {
+				std::printf("[MS-LANE-PROBE] POS0: kose ve yuva = lane%%3 (pc=0x%08x)\n", inst.pc);
+				std::fflush(stdout);
+			}
+			return;
+		}
 		const auto pointer = state->builder.AllocateId();
 		if (mesh) {
 			const auto lane = EmitLocalInvocationIndex(state);
