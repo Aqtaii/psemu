@@ -838,10 +838,11 @@ void TextureCache::RetireImages(const std::vector<CachedImage*>& retire,
 			                             ? dying->video_out.height
 			                             : dying->info.height;
 			std::printf("[GORUNTU-OLUM] %-28s | 0x%016llx %ux%u tur=%u gpu_mod=%d buffer_mod=%d "
-			            "native=%d\n",
+			            "native=%d img=%p\n",
 			            reason, static_cast<unsigned long long>(dying->Address()), dying_w, dying_h,
 			            static_cast<uint32_t>(dying->kind), dying->gpu_modified,
-			            dying->buffer_modified, dying == native_image_source);
+			            dying->buffer_modified, dying == native_image_source,
+			            static_cast<const void*>(dying->image));
 			std::fflush(stdout);
 		}
 	}
@@ -3150,6 +3151,20 @@ void TextureCache::MarkGpuWritten(VulkanImage* image) {
 				m_memory_tracker.MarkRegionAsGpuModified(cached->Address(i), cached->Size(i));
 			}
 			cached->gpu_modified = true;
+		}
+		// KESKIN NISANCI: bu satir MESH hedefi icin CALISIYOR MU?
+		//
+		// Cozulmemis celiski: (1) isaretleme cagriliyor [olculdu: 12 ve 3 kez],
+		// (2) burada kosulsuz set ediliyor [kod], (3) hic temizlenmiyor
+		// [olculdu: 0], (4) ayni nesne gpu_mod=0 ile oluyor [olculdu, img
+		// birebir ayni]. Dordu birden dogru olamaz. Uc'u olcum, biri kod
+		// okumasi - ve kod okumasi bu oturumda BES kez yanildi.
+		if (PsemuGfxTrace()) {
+			std::printf("[GPUMOD-SET] img=%p adres=0x%016llx tur=%u -> gpu_mod=%d\n",
+			            static_cast<const void*>(cached->image),
+			            static_cast<unsigned long long>(cached->Address()),
+			            static_cast<uint32_t>(cached->kind), cached->gpu_modified ? 1 : 0);
+			std::fflush(stdout);
 		}
 		// VideoOut: gpu_modified ile buffer_modified AYNI ANDA duramaz - o
 		// birlesim "goruntu daha yeni" ve "tampon daha yeni" demektir, yani

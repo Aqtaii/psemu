@@ -376,7 +376,11 @@ static PipelineDynamicParameters BuildGraphicsDynamicParams(const HW::Context&  
 		static std::atomic<uint32_t> s_n {0};
 		if (s_n.fetch_add(1) < 200000) {
 			printf("[CIZIM-ALAN] viewport=%.1fx%.1f (olcek %.1f,%.1f) scissor=(%d,%d)-(%d,%d) "
-			       "renk_yazma=%d hedef=0x%016llx %ux%u tur=%d\n",
+			       // NESNE KIMLIGI: `[GORUNTU-OLUM]` de ayni isaretciyi
+			       // basiyor. Cizilen goruntu ile OLEN goruntu AYNI NESNE mi?
+			       // Farkliysa ayni adreste iki CachedImage var demektir
+			       // (aliasing) ve mesh'in ciktisi baska bir nesnede kaliyor.
+			       "renk_yazma=%d hedef=0x%016llx %ux%u tur=%d img=%p\n",
 			       static_cast<double>(ret.viewport_scale[0] * 2.0f),
 			       static_cast<double>(ret.viewport_scale[1] * 2.0f),
 			       static_cast<double>(ret.viewport_scale[0]),
@@ -391,7 +395,8 @@ static PipelineDynamicParameters BuildGraphicsDynamicParams(const HW::Context&  
 			       static_cast<unsigned long long>(color_count != 0 ? colors[0].base_addr : 0),
 			       color_count != 0 ? colors[0].extent.width : 0,
 			       color_count != 0 ? colors[0].extent.height : 0,
-			       color_count != 0 ? static_cast<int>(colors[0].type) : -1);
+			       color_count != 0 ? static_cast<int>(colors[0].type) : -1,
+			       static_cast<const void*>(color_count != 0 ? colors[0].vulkan_buffer : nullptr));
 			fflush(stdout);
 		}
 	}
@@ -782,6 +787,24 @@ static bool PrepareDrawRenderState(uint64_t submit_id, CommandBuffer* buffer, HW
 			                         &state->color_info[state->color_count],
 			                         render_target_slice_offset, slot);
 			if (state->color_info[state->color_count].vulkan_buffer != nullptr) {
+				// KESKIN NISANCI: bu cagri MESH hedefi icin de calisiyor mu?
+				//
+				// Olculdu: mesh'in cizdigi NESNENIN TA KENDISI gpu_mod=0 ile
+				// oluyor (img isaretcileri BIREBIR AYNI - aliasing YOK).
+				// `MarkGpuWritten` bulundugunda kosulsuz set ediyor ve
+				// bulamazsa EXIT ile cokuyor; hic temizlenmedigi de olculdu.
+				// Geriye tek aciklama kaliyor: bu satir MESH icin HIC
+				// CALISMIYOR. Kod okuyarak "calisiyor" demistim - dogrula.
+				{
+					static std::atomic<uint32_t> s_n {0};
+					if (s_n.fetch_add(1) < 400) {
+						printf("[GPU-YAZILDI-ISARET] slot=%u img=%p mesh=%d\n", slot,
+						       static_cast<const void*>(
+						           state->color_info[state->color_count].vulkan_buffer),
+						       state->mesh ? 1 : 0);
+						fflush(stdout);
+					}
+				}
 				MarkRenderTargetGpuWritten(state->color_info[state->color_count]);
 				// TANI: EKRAN TAMPONUNA kac cizim gidiyor, hedef temizleme
 				// rengi ne, ve renk yazma maskesi acik mi?
