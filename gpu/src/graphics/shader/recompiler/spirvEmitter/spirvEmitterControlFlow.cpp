@@ -219,6 +219,36 @@ void EmitMeshProbeTriangle(EmitterState* state, uint32_t block_id, uint32_t ordi
 		state->builder.AddFunction(
 		    {OpSetMeshOutputsEXT, ConstantU32(state, 3u), ConstantU32(state, 1u)});
 	}
+	// KOSULLU KIP (`PSEMU_MESH_PROBE_COND=1`): ucgeni yalnizca oyunun KENDI
+	// hesapladigi vertex sayisi > 0 ise yaz. Sayiyi `m0`dan turetiyoruz
+	// (m0 = vertex | primitif<<12) - yeni degisken gerekmiyor, m0 zaten
+	// kalici bir yazmac.
+	//
+	// Bu deney DAHA ONCE (6514eea) tahsis noktasinda kosulmustu ve yaziminin
+	// UZERINE oyunun POS0'i yazdigi icin sonucu ANLAMSIZDI. Artik yazimin
+	// hayatta kaldigi blok araligini biliyoruz (69..72), yani ayni soru
+	// nihayet dogru yerde sorulabiliyor:
+	//   KIRMIZI -> sayi > 0; kusur lane kapisinda ya da pozisyonlarda
+	//   SIYAH   -> sayi GERCEKTEN 0; kusur m0 zincirinin kendisinde
+	uint32_t cond_merge = 0;
+	if (MeshProbeCond()) {
+		const auto m0_pointer = PointerForRegister(*state, {IR::RegisterFile::M0, 0});
+		if (m0_pointer != 0) {
+			const auto m0_value  = state->builder.AllocateId();
+			const auto vertices  = state->builder.AllocateId();
+			const auto nonzero   = state->builder.AllocateId();
+			const auto write_blk = state->builder.AllocateId();
+			cond_merge           = state->builder.AllocateId();
+			state->builder.AddFunction({OpLoad, state->uint_type, m0_value, m0_pointer});
+			state->builder.AddFunction({OpBitwiseAnd, state->uint_type, vertices, m0_value,
+			                            ConstantU32(state, 0xfffu)});
+			state->builder.AddFunction(
+			    {OpUGreaterThan, state->bool_type, nonzero, vertices, ConstantU32(state, 0u)});
+			state->builder.AddFunction({OpSelectionMerge, cond_merge, 0u});
+			state->builder.AddFunction({OpBranchConditional, nonzero, write_blk, cond_merge});
+			state->builder.AddFunction({OpLabel, write_blk});
+		}
+	}
 	if (state->per_vertex_variable != 0) {
 		const float corners[3][2] = {{-0.8f, -0.8f}, {0.8f, -0.8f}, {0.0f, 0.8f}};
 		for (uint32_t i = 0; i < 3; i++) {
@@ -244,6 +274,10 @@ void EmitMeshProbeTriangle(EmitterState* state, uint32_t block_id, uint32_t ordi
 		state->builder.AddFunction({OpAccessChain, state->ptr_output_vec3_uint, pointer,
 		                            state->mesh_prim_indices_variable, ConstantU32(state, 0)});
 		state->builder.AddFunction({OpStore, pointer, vector});
+	}
+	if (cond_merge != 0) {
+		state->builder.AddFunction({OpBranch, cond_merge});
+		state->builder.AddFunction({OpLabel, cond_merge});
 	}
 	static std::atomic<uint32_t> s_n {0};
 	if (s_n.fetch_add(1) < 32) {

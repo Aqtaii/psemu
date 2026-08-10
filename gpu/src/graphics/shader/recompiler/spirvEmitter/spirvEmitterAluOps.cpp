@@ -1089,6 +1089,32 @@ void EmitAlignBitU32(EmitterState* state, const IR::Instruction& inst) {
 }
 
 void EmitSelectU32(EmitterState* state, const IR::Instruction& inst) {
+	// DENEY (`PSEMU_MESH_CSELECT_FALSE=1`): mesh asamasinda `s_cselect_b32`
+	// SCC'yi yok sayip DAIMA yanlis dali (src2) alsin.
+	//
+	// Olculen zincir (ekran shader'i 0x486334af, f8c37d9):
+	//   s5     = scc ? 1 : vcc_lo        <- BURASI
+	//   vcc_hi = max(s5, 1)
+	//   kapi   = vcc_hi > v13            = vertex_sayisi > lane_indeksi
+	// `scc` 1 olursa s5=1 -> yalnizca lane 0 yazar -> tek vertex ->
+	// dejenere ucgen -> sifir fragment. src2 (vcc_lo) gercek sayiyi tasiyor.
+	//
+	// KABA BIR DENEY: mesh'teki TUM s_cselect'leri etkiler, yalnizca bu
+	// zinciri degil. Amaci "kapi gercekten bu mu" sorusunu yanitlamak;
+	// kalici duzeltme, SCC'nin neden yanlis oldugunu bulmaktan gecer.
+	static const bool cselect_false = [] {
+		const char* env = std::getenv("PSEMU_MESH_CSELECT_FALSE");
+		return env != nullptr && env[0] == '1';
+	}();
+	if (cselect_false && state->stage == ShaderType::Mesh) {
+		EmitStoreU32(state, inst.dst, EmitValueLoad(state, inst.src[2]));
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 32) {
+			std::printf("[MS-CSELECT] s_cselect SCC yok sayildi -> src2 (pc=0x%08x)\n", inst.pc);
+			std::fflush(stdout);
+		}
+		return;
+	}
 	const auto cond = EmitConditionBool(state, inst.src[0]);
 	const auto ret  = state->builder.AllocateId();
 	state->builder.AddFunction({OpSelect, state->uint_type, ret, cond,

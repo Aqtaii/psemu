@@ -888,6 +888,14 @@ int MeshProbeBlock() {
 
 // ARALIK KIPI: [lo, hi] araligindaki TUM bloklara yazim koy.
 // Kirmizi -> aralikta CALISAN en az bir blok var. Ikili arama boyle daraltilir.
+bool MeshProbeCond() {
+	static const bool on = [] {
+		const char* env = std::getenv("PSEMU_MESH_PROBE_COND");
+		return env != nullptr && env[0] == '1';
+	}();
+	return on;
+}
+
 int MeshProbeLo() {
 	static const int v = [] {
 		const char* env = std::getenv("PSEMU_MESH_PROBE_LO");

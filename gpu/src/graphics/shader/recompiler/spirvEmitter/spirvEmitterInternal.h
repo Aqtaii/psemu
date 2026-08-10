@@ -41,6 +41,7 @@ struct EmitterState;
 [[nodiscard]] bool     MeshTelemetryEnabled();
 [[nodiscard]] int      MeshTelemetryMode();
 [[nodiscard]] int      MeshProbeBlock();
+[[nodiscard]] bool     MeshProbeCond();
 [[nodiscard]] int      MeshProbeLo();
 [[nodiscard]] int      MeshProbeHi();
 void                   EmitMeshProbeTriangle(EmitterState* state, uint32_t block_id, uint32_t ordinal, bool with_alloc);
