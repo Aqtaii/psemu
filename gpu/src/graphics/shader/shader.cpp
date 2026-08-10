@@ -1836,6 +1836,24 @@ bool ShaderCompileInfoMS(const HW::VertexShaderInfo* regs, const HW::ShaderRegis
 	// value"; taban=0 -> gecti. Birlesik ES-GS'in GS yarisi user SGPR
 	// penceresini 0'dan sayiyor.
 	options.user_data_base       = 0;
+	// KESKIN NISANCI: olculdu ki GS_ALLOC_REQ blogu HIC CALISMIYOR
+	// (PSEMU_TELEMETRY_MESH=2 kosulsuz yazim bile siyah). Kosul
+	// `s3 & 0x0f000000` ve uretilen modulde s3 PUSH CONSTANT'tan (user data
+	// slot 2) yukleniyor. Donanimda NGG dalga bilgisi user data DEGIL,
+	// `user_sgpr` sayisinin ARDINDAN gelen bir SISTEM SGPR'idir. Asagidaki
+	// 16'lik ZORLA TABAN, gercek user_sgpr daha kucukse s3'u user data
+	// sanmaya yol acar. Once GERCEK degeri gor.
+	{
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 8) {
+			std::printf("[NGG-USERSGPR] gs rsrc2.user_sgpr=%u -> tabanli user_data_count=%u "
+			            "(taban 16 uygulaniyor mu=%d)\n",
+			            static_cast<uint32_t>(regs->gs_regs.rsrc2.user_sgpr),
+			            std::max<uint32_t>(regs->gs_regs.rsrc2.user_sgpr, 16u),
+			            static_cast<int>(regs->gs_regs.rsrc2.user_sgpr < 16u));
+			std::fflush(stdout);
+		}
+	}
 	options.user_data_count      = std::max<uint32_t>(regs->gs_regs.rsrc2.user_sgpr, 16u);
 	options.user_data            = regs->gs_user_sgpr.value;
 	options.descriptor_set       = 0;

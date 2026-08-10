@@ -230,6 +230,62 @@ void EmitRegisterVariables(EmitterState* state) {
 		state->builder.AddFunction(
 		    {OpStore, binding.pointer_id, EmitInitialRegisterValue(state, binding.reg)});
 	}
+
+	// NGG DALGA BILGISI ENJEKSIYONU (`PSEMU_NGG_WAVEINFO_SGPR=<n>`).
+	//
+	// Olculdu (PSEMU_TELEMETRY_MESH=2): GS_ALLOC_REQ blogu HIC calismiyor -
+	// kosulsuz yazim bile siyah, ayni yazimlar giris blogunda KIRMIZI.
+	// Kosul `s_and_b32 vcc_lo, s3, 0x0f000000` + `s_cbranch_scc1`; uretilen
+	// modulde s3 push constant'tan (user data) geliyor. Donanimda NGG dalga
+	// bilgisi user data DEGIL, `user_sgpr` sayisinin ARDINDAN gelen bir
+	// SISTEM SGPR'idir - ve olculdu ki gercek user_sgpr 0/4/8 olabiliyorken
+	// psemu 16'lik bir taban zorluyor ([NGG-USERSGPR]).
+	//
+	// NGG payload'un TAM yerlesimini bilmiyoruz. Bu yuzden burasi bir
+	// DUZELTME DEGIL, HIPOTEZ TESTI: verilen yazmaca dalga-bilgisi bitlerini
+	// (0x0f000000) OR'la ve blogun calisip calismadigina bak.
+	//   ucgen/geometri cikarsa -> kapi GERCEKTEN bu SGPR; dogru NGG payload
+	//                             emulasyonu yazilmali
+	//   siyah kalirsa          -> kapi baska bir girdide
+	if (state->stage == ShaderType::Mesh) {
+		static const int wave_info_sgpr = [] {
+			const char* env = std::getenv("PSEMU_NGG_WAVEINFO_SGPR");
+			return env != nullptr ? std::atoi(env) : -1;
+		}();
+		if (wave_info_sgpr >= 0) {
+			const auto pointer = PointerForRegister(
+			    *state, {IR::RegisterFile::Scalar, static_cast<uint32_t>(wave_info_sgpr)});
+			if (pointer != 0) {
+				// POLARITE DOKUMDEN OKUNDU, TAHMIN EDILMEDI:
+				//   8814  vcc_lo = s3 & 0x0f000000
+				//   8835  OpBranchConditional (vcc_lo != 0) -> ATLA / tahsis
+				// Yani tahsis, bu bitler SIFIRKEN calisiyor. Ilk denemede
+				// bitleri KURMUSTUM (OR) - bu atlamayi garantiledi ve ekran
+				// siyah kaldi. Kod icindeki not ("s_and_b32 + s_cbranch_scc1")
+				// kosulun TUTMASI gerektigi izlenimi veriyordu; dal polaritesi
+				// tersiymis.
+				const auto old_value = state->builder.AllocateId();
+				const auto masked    = state->builder.AllocateId();
+				state->builder.AddFunction({OpLoad, state->uint_type, old_value, pointer});
+				state->builder.AddFunction({OpBitwiseAnd, state->uint_type, masked, old_value,
+				                            ConstantU32(state, ~0x0f000000u)});
+				state->builder.AddFunction({OpStore, pointer, masked});
+				static std::atomic<uint32_t> s_n {0};
+				if (s_n.fetch_add(1) < 32) {
+					std::printf("[NGG-WAVEINFO] s%d &= ~0x0f000000 (tahsis bitleri TEMIZLENDI)\n",
+					            wave_info_sgpr);
+					std::fflush(stdout);
+				}
+			} else {
+				static std::atomic<uint32_t> s_m {0};
+				if (s_m.fetch_add(1) < 8) {
+					std::printf("[NGG-WAVEINFO] s%d bu shader'da YOK - enjeksiyon atlandi\n",
+					            wave_info_sgpr);
+					std::fflush(stdout);
+				}
+			}
+		}
+	}
 }
 
 void EmitComputeInputRegisters(EmitterState* state) {
