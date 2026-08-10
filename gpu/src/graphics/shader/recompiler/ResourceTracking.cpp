@@ -206,6 +206,28 @@ private:
 		return false;
 	}
 
+	// DENEY KAPISI - `PSEMU_DESC_TOLERE=1`.
+	//
+	// Amac: cozulemeyen descriptor'lari tolere edip dort compute shader'in
+	// DERLENMESINI saglamak ve G-Buffer'in isik alip almadigini gormek.
+	//
+	// BU BIR DUZELTME DEGIL. Dogrulama burada titizlik yapmiyor; emulator
+	// "bu descriptor'in adresini BILMIYORUM" diyor. Tolere edince dogru
+	// descriptor elde etmiyoruz, BILINMEYEN bir descriptor elde ediyoruz;
+	// materyalizasyon baglayacak gercek bir V#/T# bulamaz. Beklenen sonuc
+	// sahte/null kaynak baglanmasi - yani muhtemelen yine siyah. Deneyin
+	// degeri, "toleransi acinca isik gelir" yolunu UCUZA ELEMEKTE.
+	//
+	// Varsayilan KAPALI: acik birakmak gecersiz descriptor'lari sessizce
+	// GPU'ya gecirir.
+	[[nodiscard]] static bool DescriptorToleranceEnabled() {
+		static const bool on = [] {
+			const char* env = std::getenv("PSEMU_DESC_TOLERE");
+			return env != nullptr && env[0] == '1';
+		}();
+		return on;
+	}
+
 	bool ValidateSource(uint32_t source, uint32_t dwords, uint32_t pc, std::string* error) const {
 		const auto* descriptor = GetDescriptorSource(m_program, source);
 		if (descriptor == nullptr || descriptor->dword_count != dwords) {
@@ -224,6 +246,12 @@ private:
 					                    : UINT32_MAX;
 					chain += fmt::format("{}{}:{}({})", chain.empty() ? "" : " -> ", id, op,
 					                     ScalarValueToString(m_program.provenance, id));
+				}
+				if (DescriptorToleranceEnabled()) {
+					std::printf("[DESC-TOLERE] KAPI-1 asildi: source=%u dword=%u deger=%u yol=%s\n",
+					            source, i, value, chain.c_str());
+					std::fflush(stdout);
+					continue;
 				}
 				return Fail(
 				    pc, error,
@@ -259,6 +287,11 @@ private:
 			                        source, detail));
 		}
 		if (!DescriptorSourceResolved(m_program, source) && !dynamic) {
+			if (DescriptorToleranceEnabled()) {
+				std::printf("[DESC-TOLERE] KAPI-2 asildi: source=%u cozulemedi\n", source);
+				std::fflush(stdout);
+				return true;
+			}
 			return Fail(pc, error, fmt::format("descriptor source {} is unresolved", source));
 		}
 		return true;
