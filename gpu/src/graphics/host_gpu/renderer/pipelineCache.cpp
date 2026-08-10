@@ -7,6 +7,7 @@
 #include "graphics/host_gpu/renderer/colorRenderTarget.h"
 #include "graphics/host_gpu/renderer/debug.h"
 #include "graphics/host_gpu/renderer/depthRenderTarget.h"
+#include "graphics/host_gpu/psemuGfxTrace.h"
 #include "graphics/host_gpu/renderer/framebufferCache.h"
 
 #include <atomic>
@@ -64,6 +65,26 @@ PipelineCache::GraphicsPipeline* PipelineCache::CreateGraphicsPipeline(
 		                     ? colors[i].export_mapping.ApplyMask(render_target_mask_slot(
 		                           ctx->GetRenderTargetMask(), colors[i].target_slot))
 		                     : 0);
+	}
+	// KESKIN NISANCI: indirilen hedef her pikselde RGB=0, A=1.0 iceriyor
+	// (dolu_bayt = piksel sayisi, ilk_dolu=7, en_parlak=0x3C). Bu desenin en
+	// dogal aciklamasi renk yazma maskesinin YALNIZCA alfayi gecirmesi
+	// (color_mask=0x8). Maske iki girdiden dogar; ikisini de ayri ayri bas ki
+	// hangisi kirpiyorsa gorunsun.
+	if (PsemuGfxTrace()) {
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 400) {
+			for (uint32_t i = 0; i < color_count; i++) {
+				std::printf("[RENK-MASKE] mesh=%d ek=%u/%u slot=%u ham_slot_maske=0x%01x "
+				            "esleme=0x%02x -> color_mask=0x%01x tampon=%p\n",
+				            static_cast<int>(mesh), i, color_count, colors[i].target_slot,
+				            render_target_mask_slot(ctx->GetRenderTargetMask(),
+				                                    colors[i].target_slot),
+				            static_cast<uint32_t>(colors[i].export_mapping.packed), color_mask[i],
+				            static_cast<const void*>(colors[i].vulkan_buffer));
+				std::fflush(stdout);
+			}
+		}
 	}
 	const HW::ModeControl& mc = ctx->GetModeControl();
 
@@ -126,6 +147,32 @@ PipelineCache::GraphicsPipeline* PipelineCache::CreateGraphicsPipeline(
 	static_params.blend_color_green = bclr.green;
 	static_params.blend_color_blue  = bclr.blue;
 	static_params.blend_color_alpha = bclr.alpha;
+
+	// KESKIN NISANCI: renk maskesi 0xf/0x7 cikti (RGB yazilabilir), hedef yine
+	// RGB=0 donuyor. Geriye harmanlama kaliyor: srcblend=ZERO ya da
+	// dst=ZERO/ONE kombinasyonu, yazilan rengi sessizce yok eder ve cizim
+	// yine "yapildi" gorunur. Maskeyle ayni yerden bas ki iki girdi tek
+	// satirda karsilastirilabilsin.
+	if (PsemuGfxTrace() && mesh) {
+		static std::atomic<uint32_t> s_nb {0};
+		if (s_nb.fetch_add(1) < 400) {
+			for (uint32_t i = 0; i < color_count; i++) {
+				std::printf("[HARMAN] mesh=1 ek=%u maske=0x%01x harman_acik=%d bypass=%d "
+				            "renk_src=%u renk_op=%u renk_dst=%u alfa_ayri=%d alfa_src=%u "
+				            "alfa_op=%u alfa_dst=%u\n",
+				            i, color_mask[i], static_cast<int>(static_params.blend_enable[i]),
+				            static_cast<int>(static_params.blend_bypass[i]),
+				            static_cast<uint32_t>(static_params.color_srcblend[i]),
+				            static_cast<uint32_t>(static_params.color_comb_fcn[i]),
+				            static_cast<uint32_t>(static_params.color_destblend[i]),
+				            static_cast<int>(static_params.separate_alpha_blend[i]),
+				            static_cast<uint32_t>(static_params.alpha_srcblend[i]),
+				            static_cast<uint32_t>(static_params.alpha_comb_fcn[i]),
+				            static_cast<uint32_t>(static_params.alpha_destblend[i]));
+				std::fflush(stdout);
+			}
+		}
+	}
 
 	NormalizeStaticParamsForDynamicState(static_params);
 

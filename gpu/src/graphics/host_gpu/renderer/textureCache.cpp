@@ -3011,6 +3011,23 @@ bool TextureCache::ClearImageFromBuffer(CommandBuffer* command, uint64_t vaddr, 
 		if (!DecodePackedColorClear(match->image->format, packed_clear, &clear)) {
 			return false;
 		}
+		// KESKIN NISANCI: indirilen hedef KUSURSUZ TEKDUZE (0,0,0,1) - bu bir
+		// cizim ciktisi degil, TEMIZLEME ciktisinin imzasi. Render pass hic
+		// temizlemiyor (color_clear_enable daima false, loadOp=eLoad), yani
+		// tek gercek temizleme yolu burasi. Mesh cizimlerinden SONRA
+		// atesleniyorsa cizimleri siliyor demektir; log satir sirasi soyler.
+		if (PsemuGfxTrace()) {
+			std::printf("[RENK-TEMIZLE] id=%llu adres=0x%016llx tur=%u %ux%u -> "
+			            "temizleme=(%.3f,%.3f,%.3f,%.3f) paket=0x%016llx\n",
+			            static_cast<unsigned long long>(match->unique_id),
+			            static_cast<unsigned long long>(match->Address()),
+			            static_cast<uint32_t>(match->kind), match->image->extent.width,
+			            match->image->extent.height, static_cast<double>(clear.float32[0]),
+			            static_cast<double>(clear.float32[1]), static_cast<double>(clear.float32[2]),
+			            static_cast<double>(clear.float32[3]),
+			            static_cast<unsigned long long>(packed_clear));
+			std::fflush(stdout);
+		}
 		GraphicsRenderColorImageBarrier(vk_buffer, match->image,
 		                                vk::ImageLayout::eTransferDstOptimal);
 		const vk::ImageSubresourceRange range {vk::ImageAspectFlagBits::eColor, 0,

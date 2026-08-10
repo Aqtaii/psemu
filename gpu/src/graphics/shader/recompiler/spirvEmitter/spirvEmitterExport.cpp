@@ -1,5 +1,10 @@
 #include "graphics/shader/recompiler/spirvEmitter/spirvEmitterInternal.h"
 
+#include "graphics/host_gpu/psemuGfxTrace.h"
+
+#include <atomic>
+#include <cstdio>
+
 namespace Libs::Graphics::ShaderRecompiler::Spirv::Emitter {
 
 uint32_t EmitExportComponentF32(EmitterState* state, const IR::Instruction& inst,
@@ -12,6 +17,23 @@ uint32_t EmitExportComponentF32(EmitterState* state, const IR::Instruction& inst
 }
 
 uint32_t EmitExportVec4F32(EmitterState* state, const IR::Instruction& inst) {
+	// KESKIN NISANCI: her renk hedefi tam olarak (0,0,0,1) donuyor - asagidaki
+	// `components` varsayilanlarinin BIREBIR kendisi. Yani hicbir bilesen
+	// yazilmiyor olabilir. Etkin-maske testi `en >> pair_index` (bit 0,1)
+	// kullaniyor; sikistirilmis disavurumda donanim cift secimini bit 0 ve 2
+	// ile yapar (bu dosyanin 74. satiri zaten `en & 0x5` biliyor). Karar
+	// vermeden ONCE gercek `en`/`compr` degerlerini olc.
+	if (PsemuGfxTrace()) {
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 200) {
+			std::printf("[DISAVURUM] tur=%u compr=%d en=0x%01x src_sayisi=%u hedef=%u\n",
+			            static_cast<uint32_t>(inst.export_info.kind),
+			            static_cast<int>(inst.export_info.compr),
+			            static_cast<uint32_t>(inst.export_info.en), inst.src_count,
+			            static_cast<uint32_t>(inst.export_info.target));
+			std::fflush(stdout);
+		}
+	}
 	if (inst.export_info.compr) {
 		uint32_t components[4] = {
 		    ConstantF32(state, 0u),
