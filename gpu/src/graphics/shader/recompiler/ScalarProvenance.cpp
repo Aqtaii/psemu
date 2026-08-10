@@ -892,10 +892,39 @@ private:
 	}
 
 	ScalarState Execute(BasicBlock& block, ScalarState state, bool attach_sources) {
+		// KESKIN NISANCI: "s29..s36'ya HIC yazan var mi?" sorusu.
+		//
+		// Yazma noktalari DAGINIK (702, 704, 732, 735, 746, 786, 791, 913) ve
+		// her birine ayri sonda koymak, bu oturumda uc kez yanilttigim kapsam
+		// hatasinin ta kendisi olurdu. Bunun yerine TEK KISILMA NOKTASI:
+		// komuttan once/sonra durumu karsilastir. Hicbir yol kacamaz ve
+		// opcode'dan tamamen bagimsizdir.
+		constexpr uint32_t PROBE_LO = 29;
+		constexpr uint32_t PROBE_HI = 36;
+		const auto         probe_writes = [&](uint32_t pc, const ScalarState& before,
+                                      const ScalarState& after) {
+            if (!PsemuGfxTrace()) {
+                return;
+            }
+            for (uint32_t reg = PROBE_LO; reg <= PROBE_HI && reg < ScalarRegisters; reg++) {
+                if (before.regs[reg] == after.regs[reg]) {
+                    continue;
+                }
+                static std::atomic<uint32_t> s_nw {0};
+                if (s_nw.fetch_add(1) < 20000) {
+                    std::printf("[SGPR-WRITE] hash=0x%016llx pc=0x%08x dst=%u %u -> %u\n",
+                                static_cast<unsigned long long>(m_program->shader_hash), pc, reg,
+                                before.regs[reg], after.regs[reg]);
+                    std::fflush(stdout);
+                }
+            }
+		};
+
 		for (size_t index = 0; index < block.instructions.size();) {
 			auto&    inst      = block.instructions[index];
 			m_probe_pc         = inst.pc; // [SGPR-MISS] sondasi icin: OperandValue'nun pc'si yok
-			uint32_t first_dst = 0;
+			const auto probe_state_before = state;
+			uint32_t   first_dst          = 0;
 			if (ScalarMemoryLoad(inst.op) && inst.memory.component_count > 1 &&
 			    ScalarRegister(inst.dst, first_dst)) {
 				const auto before = state;
@@ -915,6 +944,7 @@ private:
 						component_inst.scalar_value = component_state.regs[dst];
 					}
 				}
+				probe_writes(inst.pc, probe_state_before, state);
 				index += inst.memory.component_count;
 				continue;
 			}
@@ -931,6 +961,7 @@ private:
 					inst.scalar_value = state.regs[dst];
 				}
 			}
+			probe_writes(inst.pc, probe_state_before, state);
 			index++;
 		}
 		return state;
