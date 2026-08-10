@@ -2315,6 +2315,56 @@ bool Structurize(Graph* graph, std::string* error) {
 
 		auto merge = graph->FindNearestCommonPostDominator(block.terminator.true_block,
 		                                                   block.terminator.false_block);
+
+		// CONTINUE HEDEFI MERGE OLAMAZ.
+		//
+		// SPIR-V'de bir dongunun CONTINUE yapisi, LOOP yapisinin PARCASI
+		// DEGILDIR. Dolayisiyla dongu icindeki bir secim, merge'unu continue
+		// hedefine (ya da dongu merge'une) koyarsa yapidan kacmis olur.
+		//
+		// Olculdu - compute hash 0x...f500 (12288 is parcacikli gecis,
+		// [DISPATCH-ATLA] ile atlaniyordu):
+		//   %391 dongu basligi:  OpLoopMerge %500 %499   (continue = %499)
+		//   %16811 secim:        OpSelectionMerge %499   <- YASA DISI
+		//   spirv-val: "Header block '16811' is contained in the loop construct
+		//               headed by '391', but its merge block '499' is not"
+		//
+		// NCPD burada YANLIS DEGIL: iki dal gercekten %499'da birlesiyor.
+		// Kaynak desen `if (kosul) continue;` - bir dal continue kenarina
+		// gider (%498, saf yonlendirici), digeri govdeye duser (%399).
+		// Yasal bicimde merge DUSUS dalidir; continue kenari zaten mesru bir
+		// yapisal cikistir ve OpSelectionMerge gerektirmez.
+		//
+		// Kural DAR: yalnizca dallardan TAM BIRI continue/merge hedefine
+		// gidiyorsa ve digeri dongunun icinde kaliyorsa uygulanir. Ikisi de
+		// ya da hicbiri giderse bu o desen degildir, karar NCPD'de kalir.
+		for (const auto& loop: graph->natural_loops) {
+			if (merge != loop.continue_block && merge != loop.merge) {
+				continue;
+			}
+			if (!IsInsideLoopConstruct(*graph, loop, block.id)) {
+				continue;
+			}
+			const auto true_block  = block.terminator.true_block;
+			const auto false_block = block.terminator.false_block;
+			const auto leaves      = [&](uint32_t branch) {
+                return branch == merge || IsSyntheticMergeForwarder(*graph, branch, merge);
+			};
+			if (leaves(true_block) == leaves(false_block)) {
+				continue;
+			}
+			const auto fallthrough = leaves(true_block) ? false_block : true_block;
+			if (!IsInsideLoopConstruct(*graph, loop, fallthrough)) {
+				continue;
+			}
+			std::printf("[CFG-CONTINUE-MERGE] baslik=%u merge %u -> %u (dongu basligi=%u "
+			            "continue=%u dongu_merge=%u)\n",
+			            block.id, merge, fallthrough, loop.header, loop.continue_block, loop.merge);
+			std::fflush(stdout);
+			merge = fallthrough;
+			break;
+		}
+
 		if (merge == UINT32_MAX) {
 			SetFailure(graph, FailureKind::StructuredControlFlow, block.id,
 			           fmt::format("conditional block {} has no structured merge", block.id),
