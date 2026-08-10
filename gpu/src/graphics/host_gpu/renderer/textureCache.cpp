@@ -667,6 +667,13 @@ struct TextureCache::ReadbackWorker {
 				cache.PublishReadbackBacking(transfer.address, transfer.size);
 			}
 			selected->gpu_modified = false;
+			// KESKIN NISANCI: gpu_modified'i KIM temizliyor?
+			if (PsemuGfxTrace()) {
+				std::printf("[GPUMOD-TEMIZ] satir=669 adres=0x%016llx tur=%u\n",
+				            static_cast<unsigned long long>(selected->info.address),
+				            static_cast<uint32_t>(selected->kind));
+				std::fflush(stdout);
+			}
 			submissions_prepaused  = false;
 			state.store(State::Idle, std::memory_order_release);
 			state.notify_all();
@@ -1201,6 +1208,13 @@ void TextureCache::RetireSampledTargetAliases(GraphicContext* ctx, const ImageIn
 				    cached->Address(i), cached->Size(i), [](uint64_t, uint64_t) noexcept {});
 			}
 			cached->gpu_modified = false;
+			// KESKIN NISANCI: gpu_modified'i KIM temizliyor?
+			if (PsemuGfxTrace()) {
+				std::printf("[GPUMOD-TEMIZ] satir=1203 adres=0x%016llx tur=%u\n",
+				            static_cast<unsigned long long>(cached->info.address),
+				            static_cast<uint32_t>(cached->kind));
+				std::fflush(stdout);
+			}
 			continue;
 		}
 		const auto transfer = cached->kind == CachedImage::Kind::DepthTarget
@@ -1212,6 +1226,13 @@ void TextureCache::RetireSampledTargetAliases(GraphicContext* ctx, const ImageIn
 			PublishReadbackBacking(transfer.address, transfer.size);
 		}
 		cached->gpu_modified = false;
+		// KESKIN NISANCI: gpu_modified'i KIM temizliyor?
+		if (PsemuGfxTrace()) {
+			std::printf("[GPUMOD-TEMIZ] satir=1214 adres=0x%016llx tur=%u\n",
+			            static_cast<unsigned long long>(cached->info.address),
+			            static_cast<uint32_t>(cached->kind));
+			std::fflush(stdout);
+		}
 	}
 	std::vector<uint64_t> retire_depth_metadata;
 	for (auto* cached: retire) {
@@ -1304,6 +1325,13 @@ void TextureCache::ResolveStorageImageOverlaps(GraphicContext* ctx, const ImageI
 			PublishReadbackBacking(transfer.address, transfer.size);
 		}
 		cached->gpu_modified = false;
+		// KESKIN NISANCI: gpu_modified'i KIM temizliyor?
+		if (PsemuGfxTrace()) {
+			std::printf("[GPUMOD-TEMIZ] satir=1306 adres=0x%016llx tur=%u\n",
+			            static_cast<unsigned long long>(cached->info.address),
+			            static_cast<uint32_t>(cached->kind));
+			std::fflush(stdout);
+		}
 	}
 	RetireImages(retire, nullptr, "depolama-komsu-emekliligi");
 }
@@ -1346,6 +1374,13 @@ void TextureCache::RetireStorageDepthAliasLocked(GraphicContext* ctx, const Imag
 	m_memory_tracker.ForEachDownloadRange<true>(transfer.address, transfer.size,
 	                                            [](uint64_t, uint64_t) noexcept {});
 	selected->gpu_modified = false;
+	// KESKIN NISANCI: gpu_modified'i KIM temizliyor?
+	if (PsemuGfxTrace()) {
+		std::printf("[GPUMOD-TEMIZ] satir=1348 adres=0x%016llx tur=%u\n",
+		            static_cast<unsigned long long>(selected->info.address),
+		            static_cast<uint32_t>(selected->kind));
+		std::fflush(stdout);
+	}
 	RetireImages({selected}, nullptr, "depolama-derinlik-takma-adi");
 }
 
@@ -1984,6 +2019,13 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 			PublishReadbackBacking(transfer.address, transfer.size);
 		}
 		cached->gpu_modified = false;
+		// KESKIN NISANCI: gpu_modified'i KIM temizliyor?
+		if (PsemuGfxTrace()) {
+			std::printf("[GPUMOD-TEMIZ] satir=1986 adres=0x%016llx tur=%u\n",
+			            static_cast<unsigned long long>(cached->info.address),
+			            static_cast<uint32_t>(cached->kind));
+			std::fflush(stdout);
+		}
 		// BELIRLEYICI OLCUM: bosaltmanin INDIRDIGI veri dolu mu bos mu?
 		//
 		// Yukleme yolu dogrulandi (tam boyut yukleniyor), izleyici de temiz.
@@ -2403,6 +2445,13 @@ DepthStencilVulkanImage* TextureCache::FindDepthTarget(CommandBuffer* command, G
 		m_memory_tracker.UnmarkRegionAsGpuModified(retired_storage_source->info.address,
 		                                           retired_storage_source->info.size);
 		retired_storage_source->gpu_modified = false;
+		// KESKIN NISANCI: gpu_modified'i KIM temizliyor?
+		if (PsemuGfxTrace()) {
+			std::printf("[GPUMOD-TEMIZ] satir=2405 adres=0x%016llx tur=%u\n",
+			            static_cast<unsigned long long>(retired_storage_source->info.address),
+			            static_cast<uint32_t>(retired_storage_source->kind));
+			std::fflush(stdout);
+		}
 	}
 	const auto* transition_source =
 	    native_depth_source != nullptr
@@ -2755,6 +2804,13 @@ void TextureCache::UnregisterVideoOutSurfaces(const std::vector<VideoOutVulkanIm
 		if (cached->gpu_modified) {
 			m_memory_tracker.UnmarkRegionAsGpuModified(cached->Address(), cached->Size());
 			cached->gpu_modified = false;
+			// KESKIN NISANCI: gpu_modified'i KIM temizliyor?
+			if (PsemuGfxTrace()) {
+				std::printf("[GPUMOD-TEMIZ] satir=2757 adres=0x%016llx tur=%u\n",
+				            static_cast<unsigned long long>(cached->info.address),
+				            static_cast<uint32_t>(cached->kind));
+				std::fflush(stdout);
+			}
 		}
 		UnregisterImageLocked(*cached, true);
 	}
@@ -4054,6 +4110,13 @@ void TextureCache::UnmapMemory(uint64_t vaddr, uint64_t size) {
 			m_memory_tracker.UnmarkRegionAsGpuModified(cached->Address(i), cached->Size(i));
 		}
 		cached->gpu_modified = false;
+		// KESKIN NISANCI: gpu_modified'i KIM temizliyor?
+		if (PsemuGfxTrace()) {
+			std::printf("[GPUMOD-TEMIZ] satir=4056 adres=0x%016llx tur=%u\n",
+			            static_cast<unsigned long long>(cached->info.address),
+			            static_cast<uint32_t>(cached->kind));
+			std::fflush(stdout);
+		}
 	}
 	for (auto it = m_surface_metas.begin(); it != m_surface_metas.end();) {
 		const bool allocation_unmapped =
