@@ -1991,6 +1991,18 @@ bool ShaderCompileSpirvPS(const HW::PixelShaderInfo* regs, const HW::ShaderRegis
 	// Vulkan'in garanti ettigi asgari maxPushConstantsSize 128'dir.
 	options.push_constant_offset = 64;
 	options.pixel_input_info     = input_info;
+	// PS'in BEKLEDIGI girdi sayisi. Kalan VUID (OpEntryPoint-08743)
+	// "Fragment has Input at Location 0 but the previous stage has no Output
+	// declared there" diyor; VS'in beyanlariyla ([ARAYUZ] VS satiri)
+	// karsilastirmak icin bu sayi gerekli.
+	{
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 4) {
+			printf("[ARAYUZ] PS bekledigi girdi sayisi=%u (location 0..%d)\n",
+			       input_info->input_num, static_cast<int>(input_info->input_num) - 1);
+			fflush(stdout);
+		}
+	}
 	options.dump_ir              = true;
 	options.early_dump           = true;
 	options.dump_label           = "ShaderRecompiler PS";

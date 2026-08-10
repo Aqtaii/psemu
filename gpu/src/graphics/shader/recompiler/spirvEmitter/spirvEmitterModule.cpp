@@ -213,14 +213,69 @@ void AllocateOutputVariables(EmitterState* state) {
 	// `meshHelloSpirv.h` notu tam bunu soyluyordu: Astro Bot'un PS'i
 	// location 0 ve 1'de parametre bekliyor; HELLO onlari BEYAN ETTIGI icin
 	// pipeline kabul edilmisti. Recompile edilen mesh ayni beyani yapiyor mu?
-	if (state->stage == ShaderType::Mesh) {
+	{
+		// TUM ASAMALAR: VS ne beyan ediyor, PS ne bekliyor? Kalan VUID
+		// (OpEntryPoint-08743) "Fragment has Input at Location 0 but the
+		// previous stage (VERTEX) has no Output declared there" diyor.
+		// Yamayi yazmadan once EKSIK LOCATION'LARI gormek gerek.
+		const char* stage_name = state->stage == ShaderType::Mesh     ? "MS"
+		                         : state->stage == ShaderType::Vertex ? "VS"
+		                         : state->stage == ShaderType::Pixel  ? "PS"
+		                                                             : "??";
 		std::string list;
 		for (const auto& b: state->outputs) {
 			list += fmt::format(" tur={}/idx={}", static_cast<int>(b.kind), b.index);
 		}
-		printf("[MS-ARAYUZ] mesh cikti beyanlari (%zu adet):%s\n", state->outputs.size(),
+		printf("[ARAYUZ] %s cikti beyanlari (%zu adet):%s\n", stage_name, state->outputs.size(),
 		       list.empty() ? " (YOK)" : list.c_str());
 		fflush(stdout);
+	}
+
+	// DUMMY PARAMETRE DOLDURMA (mesh) - "Sifir VUID" icin.
+	//
+	// Olculdu: mesh yalnizca location 0 ve 1'de parametre beyan ediyor,
+	// fragment shader ise 2 ve 3'u de BEKLIYOR:
+	//   "Fragment has a declared Input at Location 2 but the previous stage
+	//    ([VK_SHADER_STAGE_MESH_BIT_EXT]) has no Output declared there"
+	//   (VUID-RuntimeSpirv-OpEntryPoint-08743, 5 VUID'in 4'u MESH'e ait)
+	// Vulkan bu durumda TUM grafik pipeline'ini reddediyor.
+	//
+	// `meshHelloSpirv.h`'deki not EKSIKMIS: "PS location 0 ve 1'de parametre
+	// bekliyor" deniyordu; gercek sahne PS'i 0-3 arasini bekliyor. HELLO'nun
+	// calismasi, esleştigi PS varyantinin yalnizca iki girdi istemesindendi.
+	//
+	// KABA AMA ETKILI: eksik parametre location'lari icin BEYAN uretilir.
+	// Iclerine deger YAZILMAZ; Vulkan yalnizca beyanin varligini arar.
+	// TEMIZ COZUM (uzun vade): mesh derlemesine `pixel_input_info` gecirip
+	// gercek beklentiye gore beyan uretmek - simdilik veri yolu yok.
+	if (state->stage == ShaderType::Mesh) {
+		constexpr uint32_t PARAM_PADDING_COUNT = 8;
+		uint32_t           added               = 0;
+		for (uint32_t idx = 0; idx < PARAM_PADDING_COUNT; idx++) {
+			const bool present =
+			    std::any_of(state->outputs.begin(), state->outputs.end(), [&](const auto& b) {
+				    return b.kind == IR::StageOutputKind::Parameter && b.index == idx;
+			    });
+			if (present) {
+				continue;
+			}
+			OutputBinding dummy {};
+			dummy.kind  = IR::StageOutputKind::Parameter;
+			dummy.index = idx;
+			// `location` AYRI BIR ALAN ve dekorasyon (OpDecorate ... Location)
+			// `binding.location` kullaniyor. Ilk denemede yalnizca `index`
+			// doldurulmustu; alti dummy de Location 0'a cakisti ve 2/3 bos
+			// kaldi - VUID'ler aynen durdu.
+			dummy.location   = idx;
+			dummy.debug_name = fmt::format("dummy_param_{}", idx);
+			state->outputs.push_back(dummy);
+			added++;
+		}
+		if (added != 0) {
+			printf("[ARAYUZ] MS dummy parametre beyani eklendi: %u adet (toplam %zu)\n", added,
+			       state->outputs.size());
+			fflush(stdout);
+		}
 	}
 
 	for (auto& binding: state->outputs) {
