@@ -875,6 +875,35 @@ int MeshTelemetryMode() {
 
 bool MeshTelemetryEnabled() { return MeshTelemetryMode() > 0; }
 
+// IKILI ARAMA: kosulsuz hello ucgeninin enjekte edilecegi BLOK SIRASI.
+// -1 = kapali. Giris blogu KIRMIZI, tahsis noktasi SIYAH veriyor; aradaki
+// ilk siyah blok yurutmeyi kesen kapidir.
+int MeshProbeBlock() {
+	static const int index = [] {
+		const char* env = std::getenv("PSEMU_MESH_PROBE_BLOCK");
+		return env != nullptr ? std::atoi(env) : -1;
+	}();
+	return index;
+}
+
+// ARALIK KIPI: [lo, hi] araligindaki TUM bloklara yazim koy.
+// Kirmizi -> aralikta CALISAN en az bir blok var. Ikili arama boyle daraltilir.
+int MeshProbeLo() {
+	static const int v = [] {
+		const char* env = std::getenv("PSEMU_MESH_PROBE_LO");
+		return env != nullptr ? std::atoi(env) : -1;
+	}();
+	return v;
+}
+
+int MeshProbeHi() {
+	static const int v = [] {
+		const char* env = std::getenv("PSEMU_MESH_PROBE_HI");
+		return env != nullptr ? std::atoi(env) : -1;
+	}();
+	return v;
+}
+
 bool MeshFixedPositionEnabled() { return MeshFixedPositionMode() >= 1; }
 
 int MeshNoopMode() {

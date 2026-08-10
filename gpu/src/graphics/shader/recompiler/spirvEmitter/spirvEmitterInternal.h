@@ -40,6 +40,10 @@ struct EmitterState;
 [[nodiscard]] int      MeshFixedPositionMode();
 [[nodiscard]] bool     MeshTelemetryEnabled();
 [[nodiscard]] int      MeshTelemetryMode();
+[[nodiscard]] int      MeshProbeBlock();
+[[nodiscard]] int      MeshProbeLo();
+[[nodiscard]] int      MeshProbeHi();
+void                   EmitMeshProbeTriangle(EmitterState* state, uint32_t block_id, uint32_t ordinal, bool with_alloc);
 [[nodiscard]] bool     CfgMapDumpEnabled();
 [[nodiscard]] bool     MeshEagerAllocEnabled();
 // LDS dizisinin dword sayisi. TEK KAYNAK: dizi bildirimi ve sinir denetimi

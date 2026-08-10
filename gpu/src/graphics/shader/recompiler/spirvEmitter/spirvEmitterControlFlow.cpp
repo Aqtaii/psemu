@@ -207,6 +207,52 @@ uint32_t EmitInitialRegisterValue(EmitterState* state, IR::Register reg) {
 	return ConstantU32(state, InitialRegisterValue(*state, reg));
 }
 
+// IKILI ARAMA SONDASI: verilen blogun basina KOSULSUZ hello ucgeni + tahsis
+// koyar. Tahsis burada yapildigi icin cagiran, oyunun kendi GS_ALLOC_REQ'ini
+// no-op'a cevirmelidir (OpSetMeshOutputsEXT yalnizca BIR KEZ cagrilabilir).
+void EmitMeshProbeTriangle(EmitterState* state, uint32_t block_id, uint32_t ordinal,
+                           bool with_alloc) {
+	// Tahsis GIRIS BLOGUNDA bir kez yapilir; burada yalnizca YAZIMLAR olur.
+	// Boylece ayni yazim TUM bloklara konulabilir (-2 kipi) - tahsis tekrari
+	// gecersiz olurdu.
+	if (with_alloc) {
+		state->builder.AddFunction(
+		    {OpSetMeshOutputsEXT, ConstantU32(state, 3u), ConstantU32(state, 1u)});
+	}
+	if (state->per_vertex_variable != 0) {
+		const float corners[3][2] = {{-0.8f, -0.8f}, {0.8f, -0.8f}, {0.0f, 0.8f}};
+		for (uint32_t i = 0; i < 3; i++) {
+			const auto value   = state->builder.AllocateId();
+			const auto pointer = state->builder.AllocateId();
+			state->builder.AddFunction({OpCompositeConstruct, state->vec4_float_type, value,
+			                            ConstantF32Value(state, corners[i][0]),
+			                            ConstantF32Value(state, corners[i][1]),
+			                            ConstantF32Value(state, 0.0f),
+			                            ConstantF32Value(state, 1.0f)});
+			state->builder.AddFunction({OpAccessChain, state->ptr_output_vec4_float, pointer,
+			                            state->per_vertex_variable, ConstantU32(state, i),
+			                            ConstantU32(state, 0)});
+			state->builder.AddFunction({OpStore, pointer, value});
+		}
+	}
+	if (state->mesh_prim_indices_variable != 0) {
+		const auto vector  = state->builder.AllocateId();
+		const auto pointer = state->builder.AllocateId();
+		state->builder.AddFunction({OpCompositeConstruct, state->vec3_uint_type, vector,
+		                            ConstantU32(state, 0), ConstantU32(state, 1),
+		                            ConstantU32(state, 2)});
+		state->builder.AddFunction({OpAccessChain, state->ptr_output_vec3_uint, pointer,
+		                            state->mesh_prim_indices_variable, ConstantU32(state, 0)});
+		state->builder.AddFunction({OpStore, pointer, vector});
+	}
+	static std::atomic<uint32_t> s_n {0};
+	if (s_n.fetch_add(1) < 32) {
+		std::printf("[MS-PROBE] ucgen blok sirasi=%u (ic id=%u) basina KOSULSUZ yazildi\n", ordinal,
+		            block_id);
+		std::fflush(stdout);
+	}
+}
+
 void EmitRegisterVariables(EmitterState* state) {
 	if (state->needs_function_lds) {
 		state->builder.AddFunction(
@@ -1267,6 +1313,13 @@ void EmitFunction(EmitterState* state, const IR::Program& program) {
 	//                    genelinde yeniden yapilandirmamiz gerekiyor
 	//   siyah kalirsa -> sorun shader'da DEGIL; boru tesisati recompile edilen
 	//                    programda hello'dakinden farkli davraniyor
+	if (state->stage == ShaderType::Mesh && (MeshProbeBlock() != -1 || MeshProbeLo() >= 0)) {
+		// PROBE: tahsis GIRIS BLOGUNDA (kosulsuz, tekduze). Yazimlar hedef
+		// blok(lar)da. Tahsis calisir ama yazim olmazsa ucgen dejenere olur
+		// ve ekran siyah kalir -> "o blok CALISMIYOR" demektir.
+		state->builder.AddFunction(
+		    {OpSetMeshOutputsEXT, ConstantU32(state, 3u), ConstantU32(state, 1u)});
+	}
 	if (state->stage == ShaderType::Mesh && MeshFixedPositionMode() >= 3) {
 		state->builder.AddFunction(
 		    {OpSetMeshOutputsEXT, ConstantU32(state, 3u), ConstantU32(state, 1u)});
@@ -1348,6 +1401,7 @@ void EmitFunction(EmitterState* state, const IR::Program& program) {
 	if (dump_map) {
 		printf("[CFG-KENAR] === asama=Mesh blok_sayisi=%zu ===\n", program.blocks.size());
 	}
+	uint32_t emitted_block_index = 0;
 	for (const auto& block: program.blocks) {
 		if (block.id >= state->reachable_blocks.size() || !state->reachable_blocks[block.id]) {
 			continue;
@@ -1366,10 +1420,35 @@ void EmitFunction(EmitterState* state, const IR::Program& program) {
 			fflush(stdout);
 		}
 		state->builder.AddFunction({OpLabel, BlockLabel(*state, block.id)});
+		// IKILI ARAMA (`PSEMU_MESH_PROBE_BLOCK=<n>`): kosulsuz hello ucgenini
+		// N'inci blogun BASINA koy ve ekrana bak.
+		//   KIRMIZI -> yurutme buraya ULASIYOR, kesinti DAHA ASAGIDA
+		//   SIYAH   -> buraya bile ulasilmiyor, kesinti DAHA YUKARIDA
+		// Elimizdeki iki referans: giris blogu KIRMIZI, tahsis noktasi SIYAH.
+		// Aradaki ilk siyah blok, yurutmeyi kesen kapidir.
+		const bool in_probe_range =
+		    MeshProbeLo() >= 0 && MeshProbeHi() >= 0 &&
+		    static_cast<int>(emitted_block_index) >= MeshProbeLo() &&
+		    static_cast<int>(emitted_block_index) <= MeshProbeHi();
+		if (state->stage == ShaderType::Mesh &&
+		    (MeshProbeBlock() == -2 || in_probe_range ||
+		     (MeshProbeBlock() >= 0 &&
+		      emitted_block_index == static_cast<uint32_t>(MeshProbeBlock())))) {
+			EmitMeshProbeTriangle(state, block.id, emitted_block_index, false);
+		}
+		emitted_block_index++;
 		for (const auto& inst: block.instructions) {
 			EmitInstruction(state, inst);
 		}
 		EmitTerminator(state, block.terminator);
+	}
+	if (state->stage == ShaderType::Mesh && MeshProbeBlock() >= 0) {
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 32) {
+			std::printf("[MS-PROBE] shader toplam blok=%u (istenen indeks=%d)\n",
+			            emitted_block_index, MeshProbeBlock());
+			std::fflush(stdout);
+		}
 	}
 
 	state->builder.AddFunction({OpFunctionEnd});

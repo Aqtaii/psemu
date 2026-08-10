@@ -427,7 +427,9 @@ void EmitSendmsg(EmitterState* state, const IR::Instruction& inst) {
 
 	// MOD 3: tahsis GIRIS BLOGUNDA kosulsuz yapildi. OpSetMeshOutputsEXT
 	// SADECE BIR KEZ cagrilabilir - burada tekrar cagirmak gecersiz olurdu.
-	if (MeshFixedPositionMode() >= 3) {
+	if (MeshFixedPositionMode() >= 3 || MeshProbeBlock() != -1 || MeshProbeLo() >= 0) {
+		// PROBE modunda tahsis sondanin blogunda yapiliyor;
+		// OpSetMeshOutputsEXT yalnizca BIR KEZ cagrilabilir.
 		EmitControlNop(state, inst);
 		return;
 	}
