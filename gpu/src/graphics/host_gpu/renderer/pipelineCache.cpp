@@ -94,6 +94,24 @@ PipelineCache::GraphicsPipeline* PipelineCache::CreateGraphicsPipeline(
 		ps_id = ShaderGetIdPS(&ps_regs, ps_input_info, true);
 	}
 
+	// KESKIN NISANCI: EKRAN TAMPONUNA yazan mesh shader'in KIMLIGI.
+	// Onceki turda 7 mesh programindan EN BUYUGUNUN dokumunu inceledim ve
+	// onun tahsis kapisina gore yama denedim - hedef yanlis olabilir.
+	// Ekran tamponuna baglanan boru hattinin hash'ini bas ki TAM O
+	// programin dokumu alinabilsin.
+	if (PsemuGfxTrace() && mesh) {
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 200) {
+			for (uint32_t i = 0; i < color_count; i++) {
+				std::printf("[EKRAN-SHADER] mesh=1 ek=%u tampon=%p tur=%u vs_hash0=0x%08x "
+				            "vs_crc32=0x%08x\n",
+				            i, static_cast<const void*>(colors[i].vulkan_buffer),
+				            static_cast<uint32_t>(colors[i].type), vs_id.hash0, vs_id.crc32);
+				std::fflush(stdout);
+			}
+		}
+	}
+
 	PipelineStaticParameters static_params {};
 	GraphicsPipeline         p {};
 	p.render_pass_id = framebuffer->render_pass_id;
