@@ -650,6 +650,48 @@ static bool MeshNoopSkips(const EmitterState& state, IR::Opcode op) {
 }
 
 void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
+	// KAPI GIRDILERI RADARI (`PSEMU_MESH_RING_RADAR=1`).
+	//
+	// OLCULDU: disavurum bolgesinden onceki SON exec yazimi
+	//     v_cmpx_lt_u32 exec, v28, v27      (blok 23, pc=0x5a8)
+	// Iki taraf da VEKTOR register - yani kapi tamamen lane basina ve veri
+	// gudumlu: "benim v28'im benim v27'imden kucuk mu". Lane 0'in gecip
+	// lane 1'in elenmesini aciklayabilecek tek mekanizma bu.
+	//
+	// Burada o karsilastirmanin GIRDILERINI lane 0 ve lane 1 icin ayri
+	// yuvalara aliyoruz. Her lane KENDI yuvasina yazar, aralarinda yaris yok:
+	//     lane 0 -> scan[84] = src0,  scan[85] = src1
+	//     lane 1 -> scan[86] = src0,  scan[87] = src1
+	if (state->stage == ShaderType::Mesh && MeshRingRadarEnabled() &&
+	    state->mesh_scan_variable != 0 && inst.op == IR::Opcode::CompareMaskLtU32 &&
+	    inst.dst.kind == IR::OperandKind::Register &&
+	    inst.dst.reg.file == IR::RegisterFile::Exec) {
+		const auto lane = EmitLocalInvocationIndex(state);
+		const auto iki  = state->builder.AllocateId();
+		state->builder.AddFunction(
+		    {OpULessThan, state->bool_type, iki, lane, ConstantU32(state, 2u)});
+		EmitIfCondition(state, iki, [&]() {
+			const uint32_t deger[2] = {EmitValueLoad(state, inst.src[0]),
+			                           EmitValueLoad(state, inst.src[1])};
+			for (uint32_t k = 0; k < 2; k++) {
+				const auto taban = state->builder.AllocateId();
+				const auto yuva  = state->builder.AllocateId();
+				const auto ptr   = state->builder.AllocateId();
+				state->builder.AddFunction(
+				    {OpIMul, state->uint_type, taban, lane, ConstantU32(state, 2u)});
+				state->builder.AddFunction(
+				    {OpIAdd, state->uint_type, yuva, taban, ConstantU32(state, 84u + k)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, ptr,
+				                            state->mesh_scan_variable, yuva});
+				state->builder.AddFunction({OpStore, ptr, deger[k]});
+			}
+		});
+		static std::atomic<uint32_t> s_g {0};
+		if (s_g.fetch_add(1) < 8) {
+			std::printf("[MS-KAPI] v_cmpx_lt girdileri yakalandi (pc=0x%x)\n", inst.pc);
+			std::fflush(stdout);
+		}
+	}
 	if (MeshNoopSkips(*state, inst.op)) {
 		static std::atomic<uint64_t> s_n {0};
 		const auto                   n = s_n.fetch_add(1, std::memory_order_relaxed) + 1;
