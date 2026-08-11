@@ -1429,6 +1429,94 @@ void EmitFunction(EmitterState* state, const IR::Program& program) {
 		}
 	}
 
+	// DALLANMA IZLEYICISI (derleme zamani, sifir GPU riski).
+	//
+	// Olculdu: 28/28 disavurum KOSULLU blokta (d434287). Exec kapisi ise bu
+	// modda eleyici DEGIL - per_invocation_masks yolunda kosul yalnizca
+	// "maskede herhangi bir bit var mi" (combined != 0) ve bu butun
+	// invocation'lar icin ayni sonucu verir. Demek ki lane'i eleyen sey BLOK
+	// KOSULU. Bu sonda o kosulu ve BESLENDIGI REGISTERI dokumler.
+	//
+	// Neden IR seviyesi: burasi GCN'e SPIR-V'den daha yakin - kosulun scc mi
+	// vcc mi oldugu ve onu YAZAN komutun hangi registerlari okudugu dogrudan
+	// gorunur. Aranan cevap "hangi SGPR kuruluyor olmali".
+	if (state->stage == ShaderType::Mesh) {
+		static std::atomic<uint32_t> s_t {0};
+		if (s_t.fetch_add(1) < 3) {
+			const auto kosul_adi = [](CFG::BranchCondition c) {
+				switch (c) {
+					case CFG::BranchCondition::Always: return "Always";
+					case CFG::BranchCondition::SccZero: return "SccZero";
+					case CFG::BranchCondition::SccNonZero: return "SccNonZero";
+					case CFG::BranchCondition::VccZero: return "VccZero";
+					case CFG::BranchCondition::VccNonZero: return "VccNonZero";
+					case CFG::BranchCondition::ExecZero: return "ExecZero";
+					case CFG::BranchCondition::ExecNonZero: return "ExecNonZero";
+					default: return "Unknown";
+				}
+			};
+			const auto kaynak_adi = [](const IR::Operand& o) {
+				static char buf[48];
+				if (o.kind != IR::OperandKind::Register) {
+					std::snprintf(buf, sizeof(buf), "sabit/diger");
+					return static_cast<const char*>(buf);
+				}
+				const char* dosya = o.reg.file == IR::RegisterFile::Scalar   ? "s"
+				                    : o.reg.file == IR::RegisterFile::Vector ? "v"
+				                    : o.reg.file == IR::RegisterFile::Exec   ? "exec"
+				                    : o.reg.file == IR::RegisterFile::Vcc    ? "vcc"
+				                                                             : "?";
+				std::snprintf(buf, sizeof(buf), "%s%u", dosya, o.reg.index);
+				return static_cast<const char*>(buf);
+			};
+			for (const auto& blok: program.blocks) {
+				bool disavurum_var = false;
+				for (const auto& i: blok.instructions) {
+					if (i.op == IR::Opcode::Export) {
+						disavurum_var = true;
+						break;
+					}
+				}
+				if (!disavurum_var) {
+					continue;
+				}
+				for (const auto oncul_id: blok.predecessors) {
+					const IR::BasicBlock* oncul = nullptr;
+					for (const auto& b: program.blocks) {
+						if (b.id == oncul_id) {
+							oncul = &b;
+							break;
+						}
+					}
+					if (oncul == nullptr ||
+					    oncul->terminator.kind != CFG::TerminatorKind::ConditionalBranch) {
+						continue;
+					}
+					std::printf("[MS-DAL] disavurum_blok=%u <- oncul=%u kosul=%s "
+					            "(true=%u false=%u)\n",
+					            blok.id, oncul_id, kosul_adi(oncul->terminator.condition),
+					            oncul->terminator.true_block, oncul->terminator.false_block);
+					// Kosulu YAZAN son komutu geriye dogru ara: scc/vcc hedefli.
+					for (auto it = oncul->instructions.rbegin();
+					     it != oncul->instructions.rend(); ++it) {
+						const bool yazar =
+						    it->dst.kind == IR::OperandKind::Register &&
+						    (it->dst.reg.file == IR::RegisterFile::Scc ||
+						     it->dst.reg.file == IR::RegisterFile::Vcc);
+						if (!yazar) {
+							continue;
+						}
+						std::printf("       kosulu yazan: pc=0x%x op=%d kaynaklar=[%s, %s]\n",
+						            it->pc, static_cast<int>(it->op), kaynak_adi(it->src[0]),
+						            kaynak_adi(it->src[1]));
+						break;
+					}
+				}
+			}
+			std::fflush(stdout);
+		}
+	}
+
 	EmitComputeInputRegisters(state);
 	EmitPixelInputRegisters(state);
 	EmitVertexInputRegisters(state);
