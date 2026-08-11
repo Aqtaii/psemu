@@ -1087,8 +1087,14 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 				(void)id;
 				return ConstantF32Value(state, -0.9f + deger / 64.0f * 1.8f);
 			};
-			const auto [x_slot, x_seen] = axis(72u, 64.0f);   // 40'a TAM ISABET (olcek 64)
-			const auto [y_slot, y_seen] = axis(73u, 64.0f);   // TOPLAM yazim (olcek 64)
+			// PSEMU_MESH_ANALOG_CIFT=0 -> 1. ve 2. yazimin indeksi
+			//                        =1 -> 3. ve 4. yazimin indeksi
+			static const uint32_t s_cift = [] {
+				const char* e2 = std::getenv("PSEMU_MESH_ANALOG_CIFT");
+				return (e2 != nullptr) ? static_cast<uint32_t>(std::atoi(e2)) : 0u;
+			}();
+			const auto [x_slot, x_seen] = axis(74u + s_cift * 2u, 4095.0f);
+			const auto [y_slot, y_seen] = axis(75u + s_cift * 2u, 4095.0f);
 			const auto x_off = s_sabit ? sabit(40.0f) : x_slot;
 			const auto y_off = s_sabit ? sabit(20.0f) : y_slot;
 			// HIC OLCUM YAPMAMIS shader ucgen CIZMESIN. 56 mesh shader var ve

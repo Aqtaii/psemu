@@ -1381,9 +1381,10 @@ void EmitFunction(EmitterState* state, const IR::Program& program) {
 		state->builder.AddFunction(
 		    {OpIEqual, state->bool_type, is0, lane, ConstantU32(state, 0)});
 		EmitIfCondition(state, is0, [&]() {
-			const uint32_t slot[5] = {69u, 70u, 71u, 72u, 73u};
-			const uint32_t init[5] = {0u, 0xFFFFFFFFu, 0u, 0u, 0u};
-			for (uint32_t i = 0; i < 5; i++) {
+			const uint32_t slot[9] = {69u, 70u, 71u, 72u, 73u, 74u, 75u, 76u, 77u};
+			const uint32_t init[9] = {0u, 0xFFFFFFFFu, 0u, 0u, 0u,
+			                          0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
+			for (uint32_t i = 0; i < 9; i++) {
 				const auto p = state->builder.AllocateId();
 				state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, p,
 				                            state->mesh_scan_variable,

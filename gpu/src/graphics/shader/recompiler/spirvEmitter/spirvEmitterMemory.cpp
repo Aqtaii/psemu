@@ -895,6 +895,25 @@ void EmitMemoryStoreU32(EmitterState* state, const IR::Instruction& inst, IR::Re
 				state->builder.AddFunction(
 				    {OpIAdd, state->uint_type, n_tot, c_tot, ConstantU32(state, 1u)});
 				state->builder.AddFunction({OpStore, p_tot, n_tot});
+				// DORT YAZIMIN INDEKSLERI (scan[74..77]).
+				//
+				// Olculdu: lane 0 TAM 4 LDS yazimi yapiyor ve HICBIRI dword
+				// 40'ta degil. GS ise 40'tan okuyor. Siradaki soru: o dort
+				// yazim tam olarak NEREYE gidiyor? Sapma bilinirse duzeltmenin
+				// adresi de bilinir. Sayac degeri kacinci yazimda oldugumuzu
+				// soyluyor; her birini kendi yuvasina koyuyoruz.
+				for (uint32_t k = 0; k < 4; k++) {
+					const auto esit = state->builder.AllocateId();
+					state->builder.AddFunction(
+					    {OpIEqual, state->bool_type, esit, c_tot, ConstantU32(state, k)});
+					EmitIfCondition(state, esit, [&]() {
+						const auto pk = state->builder.AllocateId();
+						state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, pk,
+						                            state->mesh_scan_variable,
+						                            ConstantU32(state, 74u + k)});
+						state->builder.AddFunction({OpStore, pk, index});
+					});
+				}
 			});
 			static std::atomic<uint32_t> s_wr {0};
 			if (s_wr.fetch_add(1) < 16) {
