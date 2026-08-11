@@ -1122,8 +1122,12 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 				const char* e2 = std::getenv("PSEMU_MESH_ANALOG_CIFT");
 				return (e2 != nullptr) ? static_cast<uint32_t>(std::atoi(e2)) : 0u;
 			}();
-			const auto [x_slot, x_seen] = axis(70u, 4095.0f);   // ES'in EN KUCUK yazimi
-			const auto [y_slot, y_seen] = axis(69u, 4095.0f);   // GS'in okuma indeksi
+			// OLCEK 64: lane 1 kosusunda GS okumasi 46 +-8 cikti ve bu aralikta
+			// hem 40 (lane'den bagimsiz) hem 52 (40 + 12*lane) var - karari
+			// belirsizlige birakmamak icin cozunurluk +-0'a cekiliyor.
+			// Beklenen degerler kucuk (24 / 36 / 40 / 52), 64 olcegine sigar.
+			const auto [x_slot, x_seen] = axis(70u, 64.0f);   // ES'in EN KUCUK yazimi
+			const auto [y_slot, y_seen] = axis(69u, 64.0f);   // GS'in okuma indeksi
 			const auto x_off = s_sabit ? sabit(40.0f) : x_slot;
 			const auto y_off = s_sabit ? sabit(20.0f) : y_slot;
 			// HIC OLCUM YAPMAMIS shader ucgen CIZMESIN. 56 mesh shader var ve
