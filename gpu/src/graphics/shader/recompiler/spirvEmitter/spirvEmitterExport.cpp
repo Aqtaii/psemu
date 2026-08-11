@@ -716,7 +716,7 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 		const int slot_test = MeshSlotTestMode();
 		// mod 9 ASAGIDA ele aliniyor (pozisyon saglamlik okumasi); burada
 		// yakalanirsa erken return yuzunden OLU KOD olur - olculdu.
-		if (mesh && slot_test > 0 && slot_test != 9 && slot_test != 10 && slot_test != 11 && slot_test != 12 && slot_test != 13 && slot_test != 14) {
+		if (mesh && slot_test > 0 && slot_test != 9 && slot_test != 10 && slot_test != 11 && slot_test != 12 && slot_test != 13 && slot_test != 14 && slot_test != 15 && slot_test != 16) {
 			const auto lane_id = EmitLocalInvocationIndex(state);
 			uint32_t   slot    = lane_id;
 			if (slot_test == 2) {
@@ -990,6 +990,208 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 		//   -0.6 = o okuma HIC yapilmadi (yakalama tutmadi)
 		//    0.0 = yapildi ama indeks BEKLENENDEN FARKLI -> teori yanlis
 		//    0.6 = indeks TAM beklendigi gibi -> teori dogru, kusur baska yerde
+		// MOD 15 - DELTA RADARI (iki eksenli).
+		// scan[66] = gercek dword indeksi + 1, scan[67] = (40 + 12*lane) + 1
+		//   X ekseni = GERCEK INDEKSIN buyuklugu
+		//     -0.7 = okuma yok | -0.35 = <64 | 0.0 = <1024
+		//      0.35 = <65536   |  0.7 = daha buyuk (cop suphesi)
+		//   Y ekseni = DELTA'nin buyuklugu (got - want, isaretsiz fark)
+		//     -0.7 = 0 | -0.35 = <64 | 0.0 = <1024 | 0.35 = <65536 | 0.7 = dev
+		// Sabit bir kayma -> kucuk delta kovasi; lane'e orantili ya da cop ->
+		// buyuk kovalar.
+		// MOD 16 - ANALOG OKUMA (tek ucgen, iki eksen).
+		// Kova yerine SAYININ KENDISI: deger konuma dogrusal gomuluyor.
+		//   eksen = -0.9 + min(deger, 4095)/4095 * 1.8
+		//   X = GS'in OKUDUGU dword indeksi  (scan[69])
+		//   Y = ES'in  YAZDIGI dword indeksi (scan[70])
+		// Ikisi de LANE 0 kanali - ayni invocation, karsilastirma birebir.
+		// Mevcut tahsis 3 kose / 1 primitif oldugu icin iki satir yerine iki
+		// EKSEN kullaniyoruz; boylece SetMeshOutputsEXT'e dokunmuyoruz.
+		// Yuva bosken (0) eksen -0.95'e, skalanin disina dusurulur.
+		if (mesh && MeshSlotTestMode() == 16 && state->mesh_scan_variable != 0) {
+			const auto axis = [&](uint32_t slot) {
+				const auto ptr   = state->builder.AllocateId();
+				const auto raw   = state->builder.AllocateId();
+				const auto seen  = state->builder.AllocateId();
+				const auto val   = state->builder.AllocateId();
+				const auto capc  = state->builder.AllocateId();
+				const auto capv  = state->builder.AllocateId();
+				const auto fval  = state->builder.AllocateId();
+				const auto scale = state->builder.AllocateId();
+				const auto onsc  = state->builder.AllocateId();
+				const auto out   = state->builder.AllocateId();
+				state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, ptr,
+				                            state->mesh_scan_variable, ConstantU32(state, slot)});
+				state->builder.AddFunction({OpLoad, state->uint_type, raw, ptr});
+				state->builder.AddFunction(
+				    {OpINotEqual, state->bool_type, seen, raw, ConstantU32(state, 0)});
+				state->builder.AddFunction(
+				    {OpISub, state->uint_type, val, raw, ConstantU32(state, 1u)});
+				state->builder.AddFunction(
+				    {OpULessThan, state->bool_type, capc, val, ConstantU32(state, 4095u)});
+				state->builder.AddFunction({OpSelect, state->uint_type, capv, capc, val,
+				                            ConstantU32(state, 4095u)});
+				state->builder.AddFunction({OpConvertUToF, state->float_type, fval, capv});
+				state->builder.AddFunction({OpFMul, state->float_type, scale, fval,
+				                            ConstantF32Value(state, 1.8f / 4095.0f)});
+				state->builder.AddFunction({OpFAdd, state->float_type, onsc, scale,
+				                            ConstantF32Value(state, -0.9f)});
+				state->builder.AddFunction({OpSelect, state->float_type, out, seen, onsc,
+				                            ConstantF32Value(state, -0.95f)});
+				return out;
+			};
+			const auto x_off = axis(69u);
+			const auto y_off = axis(70u);
+			const float corners[3][2] = {{-0.04f, -0.04f}, {0.04f, -0.04f}, {0.0f, 0.04f}};
+			for (uint32_t i = 0; i < 3; i++) {
+				const auto cx  = state->builder.AllocateId();
+				const auto cy  = state->builder.AllocateId();
+				const auto vec = state->builder.AllocateId();
+				const auto vp  = state->builder.AllocateId();
+				state->builder.AddFunction({OpFAdd, state->float_type, cx, x_off,
+				                            ConstantF32Value(state, corners[i][0])});
+				state->builder.AddFunction({OpFAdd, state->float_type, cy, y_off,
+				                            ConstantF32Value(state, corners[i][1])});
+				state->builder.AddFunction({OpCompositeConstruct, state->vec4_float_type, vec, cx,
+				                            cy, ConstantF32Value(state, 0.0f),
+				                            ConstantF32Value(state, 1.0f)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_output_vec4_float, vp,
+				                            variable, ConstantU32(state, i),
+				                            ConstantU32(state, 0)});
+				state->builder.AddFunction({OpStore, vp, vec});
+			}
+			if (state->mesh_prim_indices_variable != 0) {
+				const auto tri = state->builder.AllocateId();
+				const auto tp  = state->builder.AllocateId();
+				state->builder.AddFunction({OpCompositeConstruct, state->vec3_uint_type, tri,
+				                            ConstantU32(state, 0), ConstantU32(state, 1),
+				                            ConstantU32(state, 2)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_output_vec3_uint, tp,
+				                            state->mesh_prim_indices_variable,
+				                            ConstantU32(state, 0)});
+				state->builder.AddFunction({OpStore, tp, tri});
+			}
+			static std::atomic<uint32_t> s_an {0};
+			if (s_an.fetch_add(1) < 32) {
+				std::printf("[MS-ANALOG] X = GS okuma indeksi, Y = ES yazma indeksi (lane 0)\n");
+				std::fflush(stdout);
+			}
+			return;
+		}
+
+		if (mesh && MeshSlotTestMode() == 15 && state->mesh_scan_variable != 0) {
+			// scan[66] = 1 + (lane<<24 | indeks). Tek store oldugu icin lane ve
+			// indeks KESINLIKLE ayni invocation'a ait; beklenen degeri de o
+			// lane'den uretiyoruz, yani karsilastirma lane-ici.
+			const auto pg   = state->builder.AllocateId();
+			const auto raw  = state->builder.AllocateId();
+			const auto seen = state->builder.AllocateId();
+			const auto pk   = state->builder.AllocateId();
+			const auto ln   = state->builder.AllocateId();
+			const auto ix   = state->builder.AllocateId();
+			state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, pg,
+			                            state->mesh_scan_variable, ConstantU32(state, 66u)});
+			state->builder.AddFunction({OpLoad, state->uint_type, raw, pg});
+			state->builder.AddFunction(
+			    {OpINotEqual, state->bool_type, seen, raw, ConstantU32(state, 0)});
+			state->builder.AddFunction(
+			    {OpISub, state->uint_type, pk, raw, ConstantU32(state, 1u)});
+			state->builder.AddFunction({OpShiftRightLogical, state->uint_type, ln, pk,
+			                            ConstantU32(state, 24u)});
+			state->builder.AddFunction({OpBitwiseAnd, state->uint_type, ix, pk,
+			                            ConstantU32(state, 0xFFFFFFu)});
+			// beklenen = 40 + 12*lane, ayni lane'den
+			const auto l12  = state->builder.AllocateId();
+			const auto want = state->builder.AllocateId();
+			state->builder.AddFunction(
+			    {OpIMul, state->uint_type, l12, ln, ConstantU32(state, 12u)});
+			state->builder.AddFunction(
+			    {OpIAdd, state->uint_type, want, l12, ConstantU32(state, 40u)});
+			// mutlak fark
+			const auto ge   = state->builder.AllocateId();
+			const auto d1   = state->builder.AllocateId();
+			const auto d2   = state->builder.AllocateId();
+			const auto diff = state->builder.AllocateId();
+			state->builder.AddFunction({OpUGreaterThanEqual, state->bool_type, ge, ix, want});
+			state->builder.AddFunction({OpISub, state->uint_type, d1, ix, want});
+			state->builder.AddFunction({OpISub, state->uint_type, d2, want, ix});
+			state->builder.AddFunction({OpSelect, state->uint_type, diff, ge, d1, d2});
+			// "hic okunmadi" durumunu X ekseninde ayirt edebilmek icin: okuma
+			// olmadiysa indeksi 0'a zorla (kova -0.7), delta'yi da 0'a.
+			const auto ix1 = state->builder.AllocateId();
+			const auto g1  = state->builder.AllocateId();
+			const auto df0 = state->builder.AllocateId();
+			state->builder.AddFunction(
+			    {OpIAdd, state->uint_type, ix1, ix, ConstantU32(state, 1u)});
+			state->builder.AddFunction({OpSelect, state->uint_type, g1, seen, ix1,
+			                            ConstantU32(state, 0)});
+			state->builder.AddFunction({OpSelect, state->uint_type, df0, seen, diff,
+			                            ConstantU32(state, 0)});
+			// kova zinciri: her adim BIR ONCEKI sonucu taban alir
+			const auto bucket = [&](uint32_t value, bool zero_is_first) {
+				uint32_t   res      = ConstantF32Value(state, 0.7f);
+				const uint32_t lim[3] = {65536u, 1024u, 64u};
+				const float    pos[3] = {0.35f, 0.0f, -0.35f};
+				for (int i = 0; i < 3; i++) {
+					const auto c = state->builder.AllocateId();
+					const auto r = state->builder.AllocateId();
+					state->builder.AddFunction({OpULessThan, state->bool_type, c, value,
+					                            ConstantU32(state, lim[i])});
+					state->builder.AddFunction({OpSelect, state->float_type, r, c,
+					                            ConstantF32Value(state, pos[i]), res});
+					res = r;
+				}
+				if (zero_is_first) {
+					const auto z  = state->builder.AllocateId();
+					const auto rz = state->builder.AllocateId();
+					state->builder.AddFunction(
+					    {OpIEqual, state->bool_type, z, value, ConstantU32(state, 0)});
+					state->builder.AddFunction({OpSelect, state->float_type, rz, z,
+					                            ConstantF32Value(state, -0.7f), res});
+					res = rz;
+				}
+				return res;
+			};
+			const auto x_off = bucket(g1, true);
+			const auto y_off = bucket(df0, true);
+			const float corners[3][2] = {{-0.1f, -0.1f}, {0.1f, -0.1f}, {0.0f, 0.1f}};
+			for (uint32_t i = 0; i < 3; i++) {
+				const auto cx  = state->builder.AllocateId();
+				const auto cy  = state->builder.AllocateId();
+				const auto vec = state->builder.AllocateId();
+				const auto ptr = state->builder.AllocateId();
+				state->builder.AddFunction({OpFAdd, state->float_type, cx, x_off,
+				                            ConstantF32Value(state, corners[i][0])});
+				state->builder.AddFunction({OpFAdd, state->float_type, cy, y_off,
+				                            ConstantF32Value(state, corners[i][1])});
+				state->builder.AddFunction({OpCompositeConstruct, state->vec4_float_type, vec, cx,
+				                            cy, ConstantF32Value(state, 0.0f),
+				                            ConstantF32Value(state, 1.0f)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_output_vec4_float, ptr,
+				                            variable, ConstantU32(state, i),
+				                            ConstantU32(state, 0)});
+				state->builder.AddFunction({OpStore, ptr, vec});
+			}
+			if (state->mesh_prim_indices_variable != 0) {
+				const auto tri     = state->builder.AllocateId();
+				const auto tri_ptr = state->builder.AllocateId();
+				state->builder.AddFunction({OpCompositeConstruct, state->vec3_uint_type, tri,
+				                            ConstantU32(state, 0), ConstantU32(state, 1),
+				                            ConstantU32(state, 2)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_output_vec3_uint, tri_ptr,
+				                            state->mesh_prim_indices_variable,
+				                            ConstantU32(state, 0)});
+				state->builder.AddFunction({OpStore, tri_ptr, tri});
+			}
+			static std::atomic<uint32_t> s_dl {0};
+			if (s_dl.fetch_add(1) < 32) {
+				std::printf("[MS-DELTA] X=gercek indeks buyuklugu Y=delta buyuklugu "
+				            "(kovalar: yok/<64/<1024/<65536/dev)\n");
+				std::fflush(stdout);
+			}
+			return;
+		}
+
 		if (mesh && MeshSlotTestMode() == 14 && state->mesh_scan_variable != 0) {
 			const auto pg = state->builder.AllocateId();
 			const auto pw = state->builder.AllocateId();

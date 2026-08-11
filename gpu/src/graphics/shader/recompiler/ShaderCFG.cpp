@@ -1011,9 +1011,16 @@ bool SplitSharedMergeBlock(Graph* graph, uint32_t merge,
 	// bolunecek tek oncul zaten onceki bir bolmenin urettigi yonlendirici.
 	auto decline = [&](const char* reason) {
 		static std::atomic<uint32_t> s_n {0};
-		// Kapak YUKSEK: ilk olcumde 64 kaydin 64'u de ayni nedendi, gercek
-		// blokaj kesilmis logun arkasinda kalmisti.
-		if (s_n.fetch_add(1) < 100000) {
+		// Kapak bir ara 100000'e cikarilmisti: ilk olcumde 64 kaydin 64'u de
+		// ayni nedendi, gercek blokaj kesilmis logun arkasinda kalmisti.
+		// O soru cevaplandi ve kapak artik BEDEL: tek kosuda ~88 bin satir,
+		// her biri fflush'li, ve mesh asamasina varmadan koslar bitiyor.
+		// Varsayilan dusuk; gerektiginde PSEMU_CFG_BOLME_LOG ile acilir.
+		static const uint32_t s_cap = [] {
+			const char* e = std::getenv("PSEMU_CFG_BOLME_LOG");
+			return (e != nullptr) ? static_cast<uint32_t>(std::strtoul(e, nullptr, 10)) : 200u;
+		}();
+		if (s_n.fetch_add(1) < s_cap) {
 			std::printf("[CFG-BOLME-RED] merge=%u neden=%s | construct_onculleri=[%s] "
 			            "dis_onculler=[%s] zorla=%d\n",
 			            merge, reason, VectorToString(construct_predecessors).c_str(),

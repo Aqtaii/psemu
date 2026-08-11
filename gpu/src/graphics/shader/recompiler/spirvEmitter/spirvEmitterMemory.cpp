@@ -535,36 +535,64 @@ uint32_t EmitMemoryLoadDwordValueU32(EmitterState* state, const IR::Instruction&
 		// zincirde bookkeeping okumasi, sonucu `v8`e giden LDS okumasiydi
 		// (dokum 7499 -> 7506). `inst.dst` = VGPR 8 kosulu bunu kesin secer.
 		//
-		// scan[66] = o okumanin GERCEK dword indeksi + 1  (0 = hic olmadi)
-		// scan[67] = ayni anda beklenen indeks (40 + 12*lane) + 1
-		// Ikisi POS0'da karsilastirilip ekrana kodlanir.
+		// KUSUR VE DUZELTMESI: ilk surum indeksi scan[66]ya, beklenen degeri
+		// scan[67]ye AYRI AYRI yaziyordu. Ikisi de Workgroup bellegi ve tum
+		// lane'ler yaziyor - store'lar arasinda senkron yok. Yani scan[66]
+		// A lane'inden, scan[67] B lane'inden kalabilir; o zaman fark
+		// "lane'ler arasi" olur, formul dogru olsa bile "farkli" okunur.
+		// Bu yuzden artik TEK store yapiyoruz ve lane'i indeksin yanina
+		// PAKETLIYORUZ; boylece iki alan da kesinlikle ayni lane'e ait:
+		//
+		//   scan[66] = 1 + ((lane & 0xFF) << 24 | min(indeks, 0xFFFFFF))
+		//
+		// Beklenen deger POS0'da cozulen lane'den yeniden uretilir, boylece
+		// karsilastirma tamamen lane-ici olur. Indeks 0xFFFFFF'i asarsa
+		// doyuma girer - bu da zaten "DEV/cop" kovasina dusen bir cevaptir.
 		if (state->stage == ShaderType::Mesh && MeshRingRadarEnabled() &&
 		    state->mesh_scan_variable != 0 && inst.dst.kind == IR::OperandKind::Register &&
 		    inst.dst.reg.file == IR::RegisterFile::Vector && inst.dst.reg.index == 8u) {
-			const auto lane   = EmitLocalInvocationIndex(state);
-			const auto l12    = state->builder.AllocateId();
-			const auto want   = state->builder.AllocateId();
-			const auto got1   = state->builder.AllocateId();
-			const auto want1  = state->builder.AllocateId();
-			const auto p_got  = state->builder.AllocateId();
-			const auto p_want = state->builder.AllocateId();
+			const auto lane    = EmitLocalInvocationIndex(state);
+			const auto lane_lo = state->builder.AllocateId();
+			const auto lane_sh = state->builder.AllocateId();
+			const auto sat_c   = state->builder.AllocateId();
+			const auto idx_sat = state->builder.AllocateId();
+			const auto packed  = state->builder.AllocateId();
+			const auto value   = state->builder.AllocateId();
+			const auto p_slot  = state->builder.AllocateId();
 			state->builder.AddFunction(
-			    {OpIMul, state->uint_type, l12, lane, ConstantU32(state, 12u)});
+			    {OpBitwiseAnd, state->uint_type, lane_lo, lane, ConstantU32(state, 0xFFu)});
+			state->builder.AddFunction({OpShiftLeftLogical, state->uint_type, lane_sh, lane_lo,
+			                            ConstantU32(state, 24u)});
+			state->builder.AddFunction({OpULessThan, state->bool_type, sat_c, index,
+			                            ConstantU32(state, 0xFFFFFFu)});
+			state->builder.AddFunction({OpSelect, state->uint_type, idx_sat, sat_c, index,
+			                            ConstantU32(state, 0xFFFFFFu)});
 			state->builder.AddFunction(
-			    {OpIAdd, state->uint_type, want, l12, ConstantU32(state, 40u)});
+			    {OpBitwiseOr, state->uint_type, packed, lane_sh, idx_sat});
 			state->builder.AddFunction(
-			    {OpIAdd, state->uint_type, got1, index, ConstantU32(state, 1u)});
-			state->builder.AddFunction(
-			    {OpIAdd, state->uint_type, want1, want, ConstantU32(state, 1u)});
-			state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, p_got,
+			    {OpIAdd, state->uint_type, value, packed, ConstantU32(state, 1u)});
+			state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, p_slot,
 			                            state->mesh_scan_variable, ConstantU32(state, 66u)});
-			state->builder.AddFunction({OpStore, p_got, got1});
-			state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, p_want,
-			                            state->mesh_scan_variable, ConstantU32(state, 67u)});
-			state->builder.AddFunction({OpStore, p_want, want1});
+			state->builder.AddFunction({OpStore, p_slot, value});
+			// LANE 0 KANALI (analog okuma icin, scan[69]) - yazma tarafiyla
+			// birebir ayni yontem, boylece iki uc AYNI lane uzerinden
+			// dogrudan sayi olarak karsilastirilabilir.
+			const auto is0 = state->builder.AllocateId();
+			state->builder.AddFunction(
+			    {OpIEqual, state->bool_type, is0, lane, ConstantU32(state, 0)});
+			EmitIfCondition(state, is0, [&]() {
+				const auto p  = state->builder.AllocateId();
+				const auto v1 = state->builder.AllocateId();
+				state->builder.AddFunction(
+				    {OpIAdd, state->uint_type, v1, index, ConstantU32(state, 1u)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, p,
+				                            state->mesh_scan_variable, ConstantU32(state, 69u)});
+				state->builder.AddFunction({OpStore, p, v1});
+			});
 			static std::atomic<uint32_t> s_rr {0};
 			if (s_rr.fetch_add(1) < 16) {
-				std::printf("[MS-RADAR] v8'e giden LDS okumasi yakalandi (indeks kaydedildi)\n");
+				std::printf("[MS-RADAR] v8'e giden LDS okumasi yakalandi "
+				            "(lane|indeks + lane0 kanali)\n");
 				std::fflush(stdout);
 			}
 		}
@@ -768,6 +796,58 @@ void EmitMemoryStoreU32(EmitterState* state, const IR::Instruction& inst, IR::Re
 			state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, mark,
 			                            state->mesh_scan_variable, ConstantU32(state, 64u)});
 			state->builder.AddFunction({OpStore, mark, ConstantU32(state, 1u)});
+		}
+		// YAZMA OFSET RADARI (`PSEMU_MESH_RING_RADAR=1`).
+		//
+		// El sikismanin OTEKI ucu: ES'in LDS'e hangi dword indeksine YAZDIGI.
+		// Okuma radariyla ayni paketleme (tek store, lane indeksin yaninda)
+		// boylece yazma ve okuma indeksleri AYNI kosuda karsilastirilabilir.
+		//   scan[68] = 1 + ((lane & 0xFF) << 24 | min(indeks, 0xFFFFFF))
+		if (state->stage == ShaderType::Mesh && store_inst.memory.kind == IR::ResourceKind::Lds &&
+		    MeshRingRadarEnabled() && state->mesh_scan_variable != 0) {
+			const auto w_lane = EmitLocalInvocationIndex(state);
+			const auto w_lo   = state->builder.AllocateId();
+			const auto w_sh   = state->builder.AllocateId();
+			const auto w_sc   = state->builder.AllocateId();
+			const auto w_sat  = state->builder.AllocateId();
+			const auto w_pk   = state->builder.AllocateId();
+			const auto w_val  = state->builder.AllocateId();
+			const auto w_ptr  = state->builder.AllocateId();
+			state->builder.AddFunction(
+			    {OpBitwiseAnd, state->uint_type, w_lo, w_lane, ConstantU32(state, 0xFFu)});
+			state->builder.AddFunction(
+			    {OpShiftLeftLogical, state->uint_type, w_sh, w_lo, ConstantU32(state, 24u)});
+			state->builder.AddFunction(
+			    {OpULessThan, state->bool_type, w_sc, index, ConstantU32(state, 0xFFFFFFu)});
+			state->builder.AddFunction({OpSelect, state->uint_type, w_sat, w_sc, index,
+			                            ConstantU32(state, 0xFFFFFFu)});
+			state->builder.AddFunction({OpBitwiseOr, state->uint_type, w_pk, w_sh, w_sat});
+			state->builder.AddFunction(
+			    {OpIAdd, state->uint_type, w_val, w_pk, ConstantU32(state, 1u)});
+			state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, w_ptr,
+			                            state->mesh_scan_variable, ConstantU32(state, 68u)});
+			state->builder.AddFunction({OpStore, w_ptr, w_val});
+			// LANE 0 KANALI (analog okuma icin, scan[70]).
+			// Paketleme lane'i indeksin yanina koyuyor ama 24 bite sikistiriyor
+			// ve hangi lane'in kazandigi rastgele. Formulu SAYI olarak okumak
+			// icin tek bir lane yeter: lane 0'i ayri yuvaya, ham haliyle yaz.
+			const auto w_is0 = state->builder.AllocateId();
+			state->builder.AddFunction(
+			    {OpIEqual, state->bool_type, w_is0, w_lane, ConstantU32(state, 0)});
+			EmitIfCondition(state, w_is0, [&]() {
+				const auto p  = state->builder.AllocateId();
+				const auto v1 = state->builder.AllocateId();
+				state->builder.AddFunction(
+				    {OpIAdd, state->uint_type, v1, index, ConstantU32(state, 1u)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, p,
+				                            state->mesh_scan_variable, ConstantU32(state, 70u)});
+				state->builder.AddFunction({OpStore, p, v1});
+			});
+			static std::atomic<uint32_t> s_wr {0};
+			if (s_wr.fetch_add(1) < 16) {
+				std::printf("[MS-YAZMA] ES LDS yazimi yakalandi (lane|indeks + lane0 kanali)\n");
+				std::fflush(stdout);
+			}
 		}
 	});
 }
