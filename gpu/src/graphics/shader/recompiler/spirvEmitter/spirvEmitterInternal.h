@@ -47,6 +47,7 @@ struct EmitterState;
 [[nodiscard]] bool     MeshLdsCompactionEnabled();
 [[nodiscard]] bool     MeshEsSentinelEnabled();
 [[nodiscard]] bool     MeshRingFixEnabled();
+[[nodiscard]] bool     MeshRingRadarEnabled();
 [[nodiscard]] bool     NggSystemSgprEnabled();
 [[nodiscard]] int      MeshSlotTestMode();
 [[nodiscard]] uint32_t EmitLdsCompactedIndex(EmitterState* state);

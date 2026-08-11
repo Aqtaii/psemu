@@ -237,6 +237,14 @@ uint32_t EmitLdsCompactedIndex(EmitterState* state) {
 // okunur. Olculdu: pozisyonun geldigi LDS bolgesi TAMAMEN BOS (e19ab3c) ve
 // ofsetler/siralama STATIK olarak dogru - yani kusur adresleme degil
 // YURUTME. Bu sonda "ES blogu hic kosuyor mu" sorusunu dogrudan yanitlar.
+bool MeshRingRadarEnabled() {
+	static const bool on = [] {
+		const char* env = std::getenv("PSEMU_MESH_RING_RADAR");
+		return env != nullptr && env[0] == '1';
+	}();
+	return on;
+}
+
 bool MeshRingFixEnabled() {
 	static const bool on = [] {
 		const char* env = std::getenv("PSEMU_MESH_RING_FIX");
@@ -708,7 +716,7 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 		const int slot_test = MeshSlotTestMode();
 		// mod 9 ASAGIDA ele aliniyor (pozisyon saglamlik okumasi); burada
 		// yakalanirsa erken return yuzunden OLU KOD olur - olculdu.
-		if (mesh && slot_test > 0 && slot_test != 9 && slot_test != 10 && slot_test != 11 && slot_test != 12 && slot_test != 13) {
+		if (mesh && slot_test > 0 && slot_test != 9 && slot_test != 10 && slot_test != 11 && slot_test != 12 && slot_test != 13 && slot_test != 14) {
 			const auto lane_id = EmitLocalInvocationIndex(state);
 			uint32_t   slot    = lane_id;
 			if (slot_test == 2) {
@@ -977,6 +985,69 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 		//    0.0 = ILK okumada isaret YOKTU -> ES yazimi okumadan SONRA
 		//          (SPLICE SIRALAMA HATASI)
 		//    0.6 = ILK okumada isaret VARDI -> sira dogru, kusur baska yerde
+		// MOD 14 - RADAR OKUMASI: bookkeeping okumasinin GERCEK indeksi ile
+		// teorik `40 + 12*lane` degeri uyusuyor mu?
+		//   -0.6 = o okuma HIC yapilmadi (yakalama tutmadi)
+		//    0.0 = yapildi ama indeks BEKLENENDEN FARKLI -> teori yanlis
+		//    0.6 = indeks TAM beklendigi gibi -> teori dogru, kusur baska yerde
+		if (mesh && MeshSlotTestMode() == 14 && state->mesh_scan_variable != 0) {
+			const auto pg = state->builder.AllocateId();
+			const auto pw = state->builder.AllocateId();
+			const auto g  = state->builder.AllocateId();
+			const auto w  = state->builder.AllocateId();
+			const auto none = state->builder.AllocateId();
+			const auto same = state->builder.AllocateId();
+			const auto s1 = state->builder.AllocateId();
+			const auto x_off = state->builder.AllocateId();
+			state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, pg,
+			                            state->mesh_scan_variable, ConstantU32(state, 66u)});
+			state->builder.AddFunction({OpLoad, state->uint_type, g, pg});
+			state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, pw,
+			                            state->mesh_scan_variable, ConstantU32(state, 67u)});
+			state->builder.AddFunction({OpLoad, state->uint_type, w, pw});
+			state->builder.AddFunction(
+			    {OpIEqual, state->bool_type, none, g, ConstantU32(state, 0)});
+			state->builder.AddFunction({OpIEqual, state->bool_type, same, g, w});
+			state->builder.AddFunction({OpSelect, state->float_type, s1, same,
+			                            ConstantF32Value(state, 0.6f),
+			                            ConstantF32Value(state, 0.0f)});
+			state->builder.AddFunction({OpSelect, state->float_type, x_off, none,
+			                            ConstantF32Value(state, -0.6f), s1});
+			const float corners[3][2] = {{-0.12f, -0.12f}, {0.12f, -0.12f}, {0.0f, 0.12f}};
+			for (uint32_t i = 0; i < 3; i++) {
+				const auto cx  = state->builder.AllocateId();
+				const auto vec = state->builder.AllocateId();
+				const auto ptr = state->builder.AllocateId();
+				state->builder.AddFunction({OpFAdd, state->float_type, cx, x_off,
+				                            ConstantF32Value(state, corners[i][0])});
+				state->builder.AddFunction({OpCompositeConstruct, state->vec4_float_type, vec, cx,
+				                            ConstantF32Value(state, corners[i][1]),
+				                            ConstantF32Value(state, 0.0f),
+				                            ConstantF32Value(state, 1.0f)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_output_vec4_float, ptr,
+				                            variable, ConstantU32(state, i),
+				                            ConstantU32(state, 0)});
+				state->builder.AddFunction({OpStore, ptr, vec});
+			}
+			if (state->mesh_prim_indices_variable != 0) {
+				const auto tri     = state->builder.AllocateId();
+				const auto tri_ptr = state->builder.AllocateId();
+				state->builder.AddFunction({OpCompositeConstruct, state->vec3_uint_type, tri,
+				                            ConstantU32(state, 0), ConstantU32(state, 1),
+				                            ConstantU32(state, 2)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_output_vec3_uint, tri_ptr,
+				                            state->mesh_prim_indices_variable,
+				                            ConstantU32(state, 0)});
+				state->builder.AddFunction({OpStore, tri_ptr, tri});
+			}
+			static std::atomic<uint32_t> s_rd {0};
+			if (s_rd.fetch_add(1) < 32) {
+				std::printf("[MS-RADAR-OKU] -0.6=okuma yok 0.0=indeks FARKLI 0.6=indeks AYNI\n");
+				std::fflush(stdout);
+			}
+			return;
+		}
+
 		if (mesh && MeshSlotTestMode() == 13 && state->mesh_scan_variable != 0) {
 			const auto ptr_s = state->builder.AllocateId();
 			const auto val   = state->builder.AllocateId();

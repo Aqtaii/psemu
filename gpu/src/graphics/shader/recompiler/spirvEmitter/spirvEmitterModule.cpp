@@ -540,7 +540,11 @@ void EmitHeaderAndTypes(EmitterState* state) {
 	}
 	state->lds_array_type      = state->builder.AllocateId();
 	if (state->stage == ShaderType::Mesh &&
-	    (MeshLdsCompactionEnabled() || MeshEsSentinelEnabled())) {
+	    (MeshLdsCompactionEnabled() || MeshEsSentinelEnabled() || MeshRingRadarEnabled())) {
+		// NOT: tarama dizisi bu bayraklarin HERHANGI biri acikken tahsis
+		// edilmeli. Radar eklendiginde bu kosul guncellenmemisti ve bir kosu
+		// SESSIZCE veri uretmedi (iki sonda da 0 kayit) - kapsam sayaci
+		// yakaladi.
 		state->mesh_scan_array_type = state->builder.AllocateId();
 		state->ptr_mesh_scan_array  = state->builder.AllocateId();
 		state->ptr_mesh_scan_uint   = state->builder.AllocateId();

@@ -529,6 +529,45 @@ uint32_t EmitMemoryLoadDwordValueU32(EmitterState* state, const IR::Instruction&
 			    {OpSelect, state->uint_type, merged, already, old_val, fresh});
 			state->builder.AddFunction({OpStore, slot_ptr, merged});
 		}
+		// INDEKS RADARI (`PSEMU_MESH_RING_RADAR=1`).
+		//
+		// Yakalama noktasi artik SABIT OFSET TAHMINI degil, HEDEF YAZMAC:
+		// zincirde bookkeeping okumasi, sonucu `v8`e giden LDS okumasiydi
+		// (dokum 7499 -> 7506). `inst.dst` = VGPR 8 kosulu bunu kesin secer.
+		//
+		// scan[66] = o okumanin GERCEK dword indeksi + 1  (0 = hic olmadi)
+		// scan[67] = ayni anda beklenen indeks (40 + 12*lane) + 1
+		// Ikisi POS0'da karsilastirilip ekrana kodlanir.
+		if (state->stage == ShaderType::Mesh && MeshRingRadarEnabled() &&
+		    state->mesh_scan_variable != 0 && inst.dst.kind == IR::OperandKind::Register &&
+		    inst.dst.reg.file == IR::RegisterFile::Vector && inst.dst.reg.index == 8u) {
+			const auto lane   = EmitLocalInvocationIndex(state);
+			const auto l12    = state->builder.AllocateId();
+			const auto want   = state->builder.AllocateId();
+			const auto got1   = state->builder.AllocateId();
+			const auto want1  = state->builder.AllocateId();
+			const auto p_got  = state->builder.AllocateId();
+			const auto p_want = state->builder.AllocateId();
+			state->builder.AddFunction(
+			    {OpIMul, state->uint_type, l12, lane, ConstantU32(state, 12u)});
+			state->builder.AddFunction(
+			    {OpIAdd, state->uint_type, want, l12, ConstantU32(state, 40u)});
+			state->builder.AddFunction(
+			    {OpIAdd, state->uint_type, got1, index, ConstantU32(state, 1u)});
+			state->builder.AddFunction(
+			    {OpIAdd, state->uint_type, want1, want, ConstantU32(state, 1u)});
+			state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, p_got,
+			                            state->mesh_scan_variable, ConstantU32(state, 66u)});
+			state->builder.AddFunction({OpStore, p_got, got1});
+			state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, p_want,
+			                            state->mesh_scan_variable, ConstantU32(state, 67u)});
+			state->builder.AddFunction({OpStore, p_want, want1});
+			static std::atomic<uint32_t> s_rr {0};
+			if (s_rr.fetch_add(1) < 16) {
+				std::printf("[MS-RADAR] v8'e giden LDS okumasi yakalandi (indeks kaydedildi)\n");
+				std::fflush(stdout);
+			}
+		}
 		const auto lds_value = LoadFromPointer(EmitLdsElementPointer(state, index));
 		// RING BOOKKEEPING DUZELTMESI (`PSEMU_MESH_RING_FIX=1`).
 		//
