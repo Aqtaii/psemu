@@ -1469,6 +1469,35 @@ void EmitFunction(EmitterState* state, const IR::Program& program) {
 				std::snprintf(buf, sizeof(buf), "%s%u", dosya, o.reg.index);
 				return static_cast<const char*>(buf);
 			};
+			// EXEC YAZANLAR. Olculdu: disavurum bloklarini eleyen kosul
+			// baskin olarak ExecZero (s_cbranch_execz deseni). Yani lane'i
+			// eleyen sey exec registerinin DEGERI. Gercek NGG'de bu maske
+			// vertex sayisina gore kurulur; psemu'da eksikse yalnizca lane 0
+			// bit'i kalir ve digerleri disavuruma hic girmez.
+			// Burada exec'i YAZAN her komut dokumleniyor - kurulum var mi,
+			// varsa neyle besleniyor?
+			{
+				uint32_t yazan = 0;
+				for (const auto& b: program.blocks) {
+					for (const auto& i: b.instructions) {
+						const bool exec_yazar =
+						    (i.dst.kind == IR::OperandKind::Register &&
+						     i.dst.reg.file == IR::RegisterFile::Exec) ||
+						    (i.dst2.kind == IR::OperandKind::Register &&
+						     i.dst2.reg.file == IR::RegisterFile::Exec);
+						if (!exec_yazar) {
+							continue;
+						}
+						if (yazan < 24) {
+							std::printf("[MS-EXEC] blok=%u pc=0x%x op=%d kaynak=[%s, %s]\n", b.id,
+							            i.pc, static_cast<int>(i.op), kaynak_adi(i.src[0]),
+							            kaynak_adi(i.src[1]));
+						}
+						yazan++;
+					}
+				}
+				std::printf("[MS-EXEC] TOPLAM exec yazan komut = %u\n", yazan);
+			}
 			for (const auto& blok: program.blocks) {
 				bool disavurum_var = false;
 				for (const auto& i: blok.instructions) {
