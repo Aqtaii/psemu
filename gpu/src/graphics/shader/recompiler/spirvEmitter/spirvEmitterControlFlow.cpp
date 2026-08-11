@@ -1455,10 +1455,19 @@ void EmitFunction(EmitterState* state, const IR::Program& program) {
 					default: return "Unknown";
 				}
 			};
+			// KUSUR DUZELTMESI: bu lambda tek bir static tampon kullanip
+			// isaretcisini donduruyordu. Ayni printf icinde iki kez cagrilinca
+			// her iki %s de AYNI tampona bakiyor - "kaynak=[v28, v28]" aslinda
+			// "src[1]=v28, src[0] uzerine yazildi" demekti. Okudugum kaynak
+			// listesinin yarisi bu yuzden gecersizdi. Artik cagri basina ayri
+			// tampon (yuvarlanan dizi) kullaniliyor.
 			const auto kaynak_adi = [](const IR::Operand& o) {
-				static char buf[48];
+				static char bufs[4][48];
+				static int  sira = 0;
+				char*       buf  = bufs[sira];
+				sira             = (sira + 1) % 4;
 				if (o.kind != IR::OperandKind::Register) {
-					std::snprintf(buf, sizeof(buf), "sabit/diger");
+					std::snprintf(buf, 48, "sabit(%d)", static_cast<int>(o.kind));
 					return static_cast<const char*>(buf);
 				}
 				const char* dosya = o.reg.file == IR::RegisterFile::Scalar   ? "s"
@@ -1466,7 +1475,7 @@ void EmitFunction(EmitterState* state, const IR::Program& program) {
 				                    : o.reg.file == IR::RegisterFile::Exec   ? "exec"
 				                    : o.reg.file == IR::RegisterFile::Vcc    ? "vcc"
 				                                                             : "?";
-				std::snprintf(buf, sizeof(buf), "%s%u", dosya, o.reg.index);
+				std::snprintf(buf, 48, "%s%u", dosya, o.reg.index);
 				return static_cast<const char*>(buf);
 			};
 			// EXEC YAZANLAR. Olculdu: disavurum bloklarini eleyen kosul
