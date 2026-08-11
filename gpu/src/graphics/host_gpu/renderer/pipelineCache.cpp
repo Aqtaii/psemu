@@ -66,6 +66,38 @@ PipelineCache::GraphicsPipeline* PipelineCache::CreateGraphicsPipeline(
 		                           ctx->GetRenderTargetMask(), colors[i].target_slot))
 		                     : 0);
 	}
+	// YALNIZ MESH RENGI (`PSEMU_ONLY_MESH_COLOR=1`).
+	//
+	// Olculdu: PS_FIXCOLOR her cizimi kirmiziya boyadigi icin oyunun tam ekran
+	// gecisi de kirmizi oluyor ve mesh telemetri ucgeninin USTUNU ortuyor.
+	// Kare %100 tek renk cikiyor (172800 pikselin hepsi 255,0,0) - hem sunulan
+	// goruntude hem kompozisyon oncesi sahne dokumunde. Yani ekran kanali,
+	// FIXCOLOR acikken bu sahnede tamamen okunamaz hale geliyor.
+	//
+	// Renklendirmeyi secici yapmanin dogal yeri PS emitter DEGIL - orada
+	// cizimin mesh olup olmadigi bilinmiyor. Burada biliniyor (`mesh`).
+	// Mesh olmayan cizimlerin renk yazma maskesini sifirlayinca ekranda
+	// YALNIZCA mesh cizimleri kalir; derinlik/sablon ve diger yan etkiler
+	// aynen surer, yani oyunun akisi bozulmaz.
+	if (!mesh) {
+		static const bool s_only_mesh = [] {
+			const char* e = std::getenv("PSEMU_ONLY_MESH_COLOR");
+			return e != nullptr && e[0] == '1';
+		}();
+		if (s_only_mesh) {
+			for (uint32_t i = 0; i < color_count; i++) {
+				color_mask[i] = 0;
+			}
+			static std::atomic<uint32_t> s_q {0};
+			if (s_q.fetch_add(1) < 8) {
+				std::printf("[YALNIZ-MESH] mesh olmayan cizimin renk yazimi kapatildi "
+				            "(ek=%u)\n",
+				            color_count);
+				std::fflush(stdout);
+			}
+		}
+	}
+
 	// KESKIN NISANCI: indirilen hedef her pikselde RGB=0, A=1.0 iceriyor
 	// (dolu_bayt = piksel sayisi, ilk_dolu=7, en_parlak=0x3C). Bu desenin en
 	// dogal aciklamasi renk yazma maskesinin YALNIZCA alfayi gecirmesi
