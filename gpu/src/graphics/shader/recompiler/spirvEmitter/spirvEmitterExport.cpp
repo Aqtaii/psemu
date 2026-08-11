@@ -1060,8 +1060,29 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 				                            ConstantF32Value(state, -0.95f)});
 				return std::pair<uint32_t, uint32_t> {out, seen};
 			};
-			const auto [x_off, x_seen] = axis(72u);   // dword 40'a TAM ISABET sayisi
-			const auto [y_off, y_seen] = axis(73u);   // lane 0 TOPLAM LDS yazimi
+			// ARAC SINAMASI (`PSEMU_MESH_ANALOG_SABIT=1`): eksenlere yuva
+			// yerine BILINEN sabitler koy. Uc kosu ust uste bayt bayt ayni
+			// tabloyu verdi (429 piksel, ayni merkez) ve mantik zinciri
+			// tikandi: filtre "yazim var" derken eksen ayni yuvadan 0
+			// okuyor - tek invocation icinde imkansiz. O yuzden once
+			// ARACIN CANLI OLUP OLMADIGINI olcuyoruz.
+			//   ucgen 2000/500 konumuna giderse -> arac canli, sorun yuvalarda
+			//   yerinde kalirsa                 -> gordugumuz ucgen BIZIM DEGIL
+			static const bool s_sabit = [] {
+				const char* e2 = std::getenv("PSEMU_MESH_ANALOG_SABIT");
+				return e2 != nullptr && e2[0] == '1';
+			}();
+			const auto sabit = [&](float deger) {
+				const auto id = state->builder.AllocateId();
+				state->builder.AddFunction({OpBitwiseOr, state->uint_type, id,
+				                            ConstantU32(state, 0), ConstantU32(state, 0)});
+				(void)id;
+				return ConstantF32Value(state, -0.9f + deger / 4095.0f * 1.8f);
+			};
+			const auto [x_slot, x_seen] = axis(72u);   // dword 40'a TAM ISABET
+			const auto [y_slot, y_seen] = axis(73u);   // lane 0 TOPLAM LDS yazimi
+			const auto x_off = s_sabit ? sabit(2000.0f) : x_slot;
+			const auto y_off = s_sabit ? sabit(500.0f) : y_slot;
 			// HIC OLCUM YAPMAMIS shader ucgen CIZMESIN. 56 mesh shader var ve
 			// birden fazlasi bu okuma blogundan geciyor; olcumsuzler skalanin
 			// disina ucgen basarsa merkez ORTALAMAYA kayar ve sayi okunamaz.
