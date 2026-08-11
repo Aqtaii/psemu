@@ -827,21 +827,44 @@ void EmitMemoryStoreU32(EmitterState* state, const IR::Instruction& inst, IR::Re
 			state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, w_ptr,
 			                            state->mesh_scan_variable, ConstantU32(state, 68u)});
 			state->builder.AddFunction({OpStore, w_ptr, w_val});
-			// LANE 0 KANALI (analog okuma icin, scan[70]).
-			// Paketleme lane'i indeksin yanina koyuyor ama 24 bite sikistiriyor
-			// ve hangi lane'in kazandigi rastgele. Formulu SAYI olarak okumak
-			// icin tek bir lane yeter: lane 0'i ayri yuvaya, ham haliyle yaz.
+			// LANE 0 MIN/MAX KANALI (scan[70] = min, scan[71] = max).
+			//
+			// Onceki surum yalnizca SON yazimi tutuyordu; olculen 2831 bu
+			// yuzden "ES'in yazdigi yer" degil "lane 0'in en son yazdigi yer"
+			// idi ve blogun tabanini gizliyordu. Simdi ARALIGI izliyoruz:
+			// ES'in lane 0 icin dokundugu en kucuk ve en buyuk dword indeksi.
+			// GS'in okudugu 40 bu araligin ICINDE mi - el sikismanin kopup
+			// kopmadigi sorusunun dogrudan cevabi budur.
+			//
+			// Sentinel'ler giris blogunda yaziliyor (min=0xFFFFFFFF, max=0),
+			// bu yuzden burada "0 = yazilmadi" numarasina gerek yok; ham
+			// indeksle duz min/max yetiyor.
 			const auto w_is0 = state->builder.AllocateId();
 			state->builder.AddFunction(
 			    {OpIEqual, state->bool_type, w_is0, w_lane, ConstantU32(state, 0)});
 			EmitIfCondition(state, w_is0, [&]() {
-				const auto p  = state->builder.AllocateId();
-				const auto v1 = state->builder.AllocateId();
-				state->builder.AddFunction(
-				    {OpIAdd, state->uint_type, v1, index, ConstantU32(state, 1u)});
-				state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, p,
+				const auto p_min = state->builder.AllocateId();
+				const auto p_max = state->builder.AllocateId();
+				const auto c_min = state->builder.AllocateId();
+				const auto c_max = state->builder.AllocateId();
+				const auto lt    = state->builder.AllocateId();
+				const auto gt    = state->builder.AllocateId();
+				const auto n_min = state->builder.AllocateId();
+				const auto n_max = state->builder.AllocateId();
+				state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, p_min,
 				                            state->mesh_scan_variable, ConstantU32(state, 70u)});
-				state->builder.AddFunction({OpStore, p, v1});
+				state->builder.AddFunction({OpLoad, state->uint_type, c_min, p_min});
+				state->builder.AddFunction({OpULessThan, state->bool_type, lt, index, c_min});
+				state->builder.AddFunction(
+				    {OpSelect, state->uint_type, n_min, lt, index, c_min});
+				state->builder.AddFunction({OpStore, p_min, n_min});
+				state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, p_max,
+				                            state->mesh_scan_variable, ConstantU32(state, 71u)});
+				state->builder.AddFunction({OpLoad, state->uint_type, c_max, p_max});
+				state->builder.AddFunction({OpUGreaterThan, state->bool_type, gt, index, c_max});
+				state->builder.AddFunction(
+				    {OpSelect, state->uint_type, n_max, gt, index, c_max});
+				state->builder.AddFunction({OpStore, p_max, n_max});
 			});
 			static std::atomic<uint32_t> s_wr {0};
 			if (s_wr.fetch_add(1) < 16) {

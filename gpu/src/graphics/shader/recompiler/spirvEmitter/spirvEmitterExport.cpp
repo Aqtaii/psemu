@@ -1023,10 +1023,13 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 				state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, ptr,
 				                            state->mesh_scan_variable, ConstantU32(state, slot)});
 				state->builder.AddFunction({OpLoad, state->uint_type, raw, ptr});
+				// Sentinel'ler giris blogunda yazildigi icin "yazilmadi" hali
+				// artik 0 DEGIL: min yuvasi 0xFFFFFFFF kalmissa hic yazim
+				// olmamis demektir. Degerler HAM indeks, arti bir yok.
+				state->builder.AddFunction({OpULessThan, state->bool_type, seen, raw,
+				                            ConstantU32(state, 0xFFFFFFFFu)});
 				state->builder.AddFunction(
-				    {OpINotEqual, state->bool_type, seen, raw, ConstantU32(state, 0)});
-				state->builder.AddFunction(
-				    {OpISub, state->uint_type, val, raw, ConstantU32(state, 1u)});
+				    {OpBitwiseOr, state->uint_type, val, raw, ConstantU32(state, 0)});
 				state->builder.AddFunction(
 				    {OpULessThan, state->bool_type, capc, val, ConstantU32(state, 4095u)});
 				state->builder.AddFunction({OpSelect, state->uint_type, capv, capc, val,
@@ -1040,8 +1043,8 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 				                            ConstantF32Value(state, -0.95f)});
 				return std::pair<uint32_t, uint32_t> {out, seen};
 			};
-			const auto [x_off, x_seen] = axis(69u);
-			const auto [y_off, y_seen] = axis(70u);
+			const auto [x_off, x_seen] = axis(70u);   // ES yazma MIN
+			const auto [y_off, y_seen] = axis(71u);   // ES yazma MAX
 			// HIC OLCUM YAPMAMIS shader ucgen CIZMESIN. 56 mesh shader var ve
 			// birden fazlasi bu okuma blogundan geciyor; olcumsuzler skalanin
 			// disina ucgen basarsa merkez ORTALAMAYA kayar ve sayi okunamaz.

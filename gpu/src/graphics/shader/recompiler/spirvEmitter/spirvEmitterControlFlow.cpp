@@ -1363,6 +1363,36 @@ void EmitFunction(EmitterState* state, const IR::Program& program) {
 	EmitPixelInputRegisters(state);
 	EmitVertexInputRegisters(state);
 
+	// RADAR SENTINEL BASLANGICI (`PSEMU_MESH_RING_RADAR=1`).
+	//
+	// Tarama dizisi Workgroup bellegi ve HICBIR baslangic degeri yok; Vulkan'da
+	// bu bellek tanimsiz baslar. "0 = yazilmadi" varsayimi bu yuzden sansa
+	// dayaniyordu - min/max izlemede dogrudan YANLIS sonuc uretirdi (cop bir
+	// baslangic min'i ezer). Sentinel'leri acikca yaziyoruz:
+	//   scan[69] = 0           GS okuma indeksi (yazilinca dolar)
+	//   scan[70] = 0xFFFFFFFF  ES yazma MIN
+	//   scan[71] = 0           ES yazma MAX
+	// Yalnizca lane 0 dokunuyor - min/max guncellemelerini de lane 0 yaptigi
+	// icin ayni invocation icinde sirali, bariyer gerekmiyor.
+	if (state->stage == ShaderType::Mesh && MeshRingRadarEnabled() &&
+	    state->mesh_scan_variable != 0) {
+		const auto lane = EmitLocalInvocationIndex(state);
+		const auto is0  = state->builder.AllocateId();
+		state->builder.AddFunction(
+		    {OpIEqual, state->bool_type, is0, lane, ConstantU32(state, 0)});
+		EmitIfCondition(state, is0, [&]() {
+			const uint32_t slot[3] = {69u, 70u, 71u};
+			const uint32_t init[3] = {0u, 0xFFFFFFFFu, 0u};
+			for (uint32_t i = 0; i < 3; i++) {
+				const auto p = state->builder.AllocateId();
+				state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, p,
+				                            state->mesh_scan_variable,
+				                            ConstantU32(state, slot[i])});
+				state->builder.AddFunction({OpStore, p, ConstantU32(state, init[i])});
+			}
+		});
+	}
+
 	// DENEY (PSEMU_MESH_ALLOC=erken): mesh tahsisini GIRIS BLOGUNA, sabit
 	// donanim limitleriyle al.
 	//
