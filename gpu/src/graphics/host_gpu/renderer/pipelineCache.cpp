@@ -94,6 +94,28 @@ PipelineCache::GraphicsPipeline* PipelineCache::CreateGraphicsPipeline(
 		ps_id = ShaderGetIdPS(&ps_regs, ps_input_info, true);
 	}
 
+	// KESKIN NISANCI: mesh cizimi aninda USER DATA slotlarinin ICERIGI.
+	//
+	// Olculdu (ffb5598): `s3` bir sistem SGPR DEGIL - `rsrc2.user_sgpr=16`
+	// oldugu icin donanimin kendisi s0..s15'i user data ilan ediyor ve s3
+	// mesru user data. Uretilen SPIR-V'de s3 = `%vsharp[0][0][2]`, yani
+	// USER DATA SLOT 2. Ve o slotun 27:24 biti hem GS_ALLOC_REQ kapisini hem
+	// LDS adresini suruyor (6d3f2cb).
+	// Soru artik "sistem SGPR eksik mi" degil: SLOT 2'YE NE YAZILIYOR?
+	//   deger 0        -> guest'in PM4 yazimi kayip/atlanmis
+	//   host pointer   -> ust bitleri adres cevrimi sirasinda biz eziyoruz
+	if (PsemuGfxTrace() && mesh) {
+		static std::atomic<uint32_t> s_u {0};
+		if (s_u.fetch_add(1) < 32) {
+			const auto& u = vertex_info.gs_user_sgpr;
+			std::printf("[USER-DATA] mesh cizimi user_sgpr_count=%u | slot0=%08x slot1=%08x "
+			            "slot2=%08x slot3=%08x | slot2_tur=%d slot2_bit27_24=%x\n",
+			            u.count, u.value[0], u.value[1], u.value[2], u.value[3],
+			            static_cast<int>(u.type[2]), (u.value[2] >> 24) & 0xF);
+			std::fflush(stdout);
+		}
+	}
+
 	// KESKIN NISANCI: EKRAN TAMPONUNA yazan mesh shader'in KIMLIGI.
 	// Onceki turda 7 mesh programindan EN BUYUGUNUN dokumunu inceledim ve
 	// onun tahsis kapisina gore yama denedim - hedef yanlis olabilir.
