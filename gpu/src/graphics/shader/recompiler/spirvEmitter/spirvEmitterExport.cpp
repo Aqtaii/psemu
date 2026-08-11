@@ -441,6 +441,61 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 		// Amac: `COMPACT`in neden coktugunu ve `lane%3`un neden calistigini
 		// SAYIYLA aciklamak. Lane'ler 0,1,2 degil de 32,33,34 ise Wave64 ile
 		// SubgroupSize uyusmazligi kesinlesir.
+		// MUTLAK IZOLASYON A/B (`PSEMU_MESH_SLOT_TEST=1|2`).
+		//
+		// `fc57ef8`de telemetri "N<=1, ilk lane<=1" okudu; ama `6099300`de
+		// `yuva=lane` SIYAH, `yuva=lane%3` KIRMIZI cikmisti. Tek aktif lane
+		// 0/1 ise iki ifade AYNI yuvayi verir - ikisi ayni anda dogru olamaz.
+		// Sebep: o iki kip UC degiskende farkliydi (yuva, primitif indeksler,
+		// TAHSIS). Burada ucu de esitlenip YALNIZCA yuva degistiriliyor.
+		//
+		// Iki testte de ORTAK: tahsis oyunun KENDI m0'i (dokunulmaz),
+		// primitif indeksler ZORLA (0,1,2), koseler HELLO koordinatlari.
+		//   mod 1 -> outPerVertex[lane]
+		//   mod 2 -> outPerVertex[lane % 3]
+		//
+		// A siyah + B kirmizi  -> telemetri yaniltici; ulasan lane kimlikleri
+		//                         3'ten buyuk
+		// ikisi ayni           -> telemetri dogru; tek lane ulasiyor ve
+		//                         dejenere ilkel bundan
+		static const int slot_test = [] {
+			const char* env = std::getenv("PSEMU_MESH_SLOT_TEST");
+			return env != nullptr ? std::atoi(env) : 0;
+		}();
+		if (mesh && slot_test > 0) {
+			const auto lane_id = EmitLocalInvocationIndex(state);
+			uint32_t   slot    = lane_id;
+			if (slot_test >= 2) {
+				const auto folded = state->builder.AllocateId();
+				state->builder.AddFunction(
+				    {OpUMod, state->uint_type, folded, lane_id, ConstantU32(state, 3u)});
+				slot = folded;
+			}
+			const auto value    = EmitFixedTrianglePosition(state, lane_id);
+			const auto slot_ptr = state->builder.AllocateId();
+			state->builder.AddFunction({OpAccessChain, state->ptr_output_vec4_float, slot_ptr,
+			                            variable, slot, ConstantU32(state, 0)});
+			state->builder.AddFunction({OpStore, slot_ptr, value});
+			if (state->mesh_prim_indices_variable != 0) {
+				const auto tri     = state->builder.AllocateId();
+				const auto tri_ptr = state->builder.AllocateId();
+				state->builder.AddFunction({OpCompositeConstruct, state->vec3_uint_type, tri,
+				                            ConstantU32(state, 0), ConstantU32(state, 1),
+				                            ConstantU32(state, 2)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_output_vec3_uint, tri_ptr,
+				                            state->mesh_prim_indices_variable,
+				                            ConstantU32(state, 0)});
+				state->builder.AddFunction({OpStore, tri_ptr, tri});
+			}
+			static std::atomic<uint32_t> s_s {0};
+			if (s_s.fetch_add(1) < 32) {
+				std::printf("[MS-SLOT-TEST] mod=%d yuva=%s (tahsis=oyunun m0, indeks=0/1/2, "
+				            "kose=HELLO) pc=0x%08x\n",
+				            slot_test, slot_test >= 2 ? "lane%3" : "lane", inst.pc);
+				std::fflush(stdout);
+			}
+			return;
+		}
 		static const bool telemetry_xy = [] {
 			const char* env = std::getenv("PSEMU_MESH_TELEMETRY_XY");
 			return env != nullptr && env[0] == '1';
