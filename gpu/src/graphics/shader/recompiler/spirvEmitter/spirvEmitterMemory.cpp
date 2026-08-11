@@ -849,12 +849,28 @@ void EmitMemoryStoreU32(EmitterState* state, const IR::Instruction& inst, IR::Re
 			const auto carpim = state->builder.AllocateId();
 			const auto toplam = state->builder.AllocateId();
 			const auto secim  = state->builder.AllocateId();
+			// IKI BOLGE, IKI FARKLI DUZELTME - ikisi de olculen adimlardan:
+			//   bookkeeping (<64) : adim 0  -> eksik  s_stride     (12)
+			//   kume       (>=64) : adim 1  -> eksik  s_stride - 1 (11)
+			// Ilk denemede yalnizca bookkeeping hizalanmisti; kume 1 dword
+			// adimla birakildi ve ekran siyah kaldi. Kume vertex verisiyse
+			// GS onu 12 adimla okurken ES 1 adimla yaziyor demektir - o veri
+			// de yanlis yerde. Olcum bunu soyluyordu, yarisi uygulanmisti.
+			const auto ek_kume = state->builder.AllocateId();
+			const auto c_kume  = state->builder.AllocateId();
+			const auto t_kume  = state->builder.AllocateId();
 			state->builder.AddFunction(
 			    {OpULessThan, state->bool_type, kucuk, index, ConstantU32(state, 64u)});
 			state->builder.AddFunction(
 			    {OpIMul, state->uint_type, carpim, lane, ConstantU32(state, s_stride)});
 			state->builder.AddFunction({OpIAdd, state->uint_type, toplam, index, carpim});
-			state->builder.AddFunction({OpSelect, state->uint_type, secim, kucuk, toplam, index});
+			state->builder.AddFunction({OpIMul, state->uint_type, c_kume, lane,
+			                            ConstantU32(state, s_stride - 1u)});
+			state->builder.AddFunction({OpIAdd, state->uint_type, t_kume, index, c_kume});
+			state->builder.AddFunction(
+			    {OpSelect, state->uint_type, ek_kume, kucuk, toplam, t_kume});
+			state->builder.AddFunction(
+			    {OpBitwiseOr, state->uint_type, secim, ek_kume, ConstantU32(state, 0)});
 			yazma_index = secim;
 			static std::atomic<uint32_t> s_e {0};
 			if (s_e.fetch_add(1) < 8) {
