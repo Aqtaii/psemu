@@ -1057,16 +1057,45 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 			// okuyucuda (baglantili bilesen), boylece ortalama alinmaz.
 			(void)x_seen;
 			(void)y_seen;
+			// ILGILI IS GRUBU FILTRESI.
+			//
+			// Tarama dizisi IS GRUBU basina. Yazma radari LDS yazimi olan
+			// shader'larda atesliyor; okuma blogu ise konum disavurumuna gelen
+			// shader'da. Bunlar FARKLI programlar olabilir (57 mesh shader
+			// derleniyor) ve hangisinin ucgeni ekrana dustugu kosudan kosuya
+			// degisiyor - olculdu: bir kosu [24..2831] verdi, digeri toplam
+			// yazim 0. Sayilar gecerliydi ama SORU YANLIS YERE soruluyordu.
+			//
+			// Bundan sonra yalnizca KENDI is grubunda ES yazimi olmus shader
+			// cizer (scan[73] > 0); digerleri dejenere ucgen basip ekrandan
+			// silinir. Boylece gorunen ucgen tanimi geregi ilgili is grubundan
+			// gelir. (Bu koruma daha once denenmisti ve ise yaramamisti - ama
+			// o denemede PSEMU_MESH kapaliydi, yani hic mesh cizimi yoktu ve
+			// koruma test bile edilmemisti.)
+			const auto p_tot   = state->builder.AllocateId();
+			const auto tot     = state->builder.AllocateId();
+			const auto ilgili  = state->builder.AllocateId();
+			state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, p_tot,
+			                            state->mesh_scan_variable, ConstantU32(state, 73u)});
+			state->builder.AddFunction({OpLoad, state->uint_type, tot, p_tot});
+			state->builder.AddFunction(
+			    {OpUGreaterThan, state->bool_type, ilgili, tot, ConstantU32(state, 0)});
 			const float corners[3][2] = {{-0.04f, -0.04f}, {0.04f, -0.04f}, {0.0f, 0.04f}};
 			for (uint32_t i = 0; i < 3; i++) {
 				const auto cx  = state->builder.AllocateId();
 				const auto cy  = state->builder.AllocateId();
 				const auto vec = state->builder.AllocateId();
 				const auto vp  = state->builder.AllocateId();
-				state->builder.AddFunction({OpFAdd, state->float_type, cx, x_off,
+				const auto rx = state->builder.AllocateId();
+				const auto ry = state->builder.AllocateId();
+				state->builder.AddFunction({OpFAdd, state->float_type, rx, x_off,
 				                            ConstantF32Value(state, corners[i][0])});
-				state->builder.AddFunction({OpFAdd, state->float_type, cy, y_off,
+				state->builder.AddFunction({OpFAdd, state->float_type, ry, y_off,
 				                            ConstantF32Value(state, corners[i][1])});
+				state->builder.AddFunction({OpSelect, state->float_type, cx, ilgili, rx,
+				                            ConstantF32Value(state, 0.0f)});
+				state->builder.AddFunction({OpSelect, state->float_type, cy, ilgili, ry,
+				                            ConstantF32Value(state, 0.0f)});
 				state->builder.AddFunction({OpCompositeConstruct, state->vec4_float_type, vec, cx,
 				                            cy, ConstantF32Value(state, 0.0f),
 				                            ConstantF32Value(state, 1.0f)});
