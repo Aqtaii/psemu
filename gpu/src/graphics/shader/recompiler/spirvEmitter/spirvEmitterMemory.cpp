@@ -826,8 +826,46 @@ void EmitMemoryStoreU32(EmitterState* state, const IR::Instruction& inst, IR::Re
 	} else if (store_inst.memory.kind == IR::ResourceKind::Gds) {
 		in_bounds = EmitGdsElementInBounds(state, index);
 	}
+	// ES BOOKKEEPING YAZIMINA LANE ADIMI (`PSEMU_MESH_ES_STRIDE=<dword>`).
+	//
+	// OLCULDU (iki lane, +-0 cozunurluk):
+	//   GS okuma        : 41 + 12*lane   dogru, donanim adimi
+	//   ES kume yazimi  : 2834 + 1*lane  adim VAR ama 12 yerine 1
+	//   ES bookkeeping  : 24             adim HIC yok (iki lane de 24)
+	// Adres hesabi lane terimini tasiyor ama vertex adimiyla carpim
+	// kayboluyor. Burada bookkeeping yazimina eksik adim veriliyor.
+	//
+	// Bolge secimi OLCULEN ayrima dayaniyor: bookkeeping 24'te, kume 2600+'da.
+	// 64 esigi ikisini temiz ayirir; kume adresleri DOKUNULMADAN kalir.
+	uint32_t yazma_index = index;
+	if (state->stage == ShaderType::Mesh && store_inst.memory.kind == IR::ResourceKind::Lds) {
+		static const uint32_t s_stride = [] {
+			const char* e = std::getenv("PSEMU_MESH_ES_STRIDE");
+			return (e != nullptr) ? static_cast<uint32_t>(std::strtoul(e, nullptr, 10)) : 0u;
+		}();
+		if (s_stride != 0) {
+			const auto lane   = EmitLocalInvocationIndex(state);
+			const auto kucuk  = state->builder.AllocateId();
+			const auto carpim = state->builder.AllocateId();
+			const auto toplam = state->builder.AllocateId();
+			const auto secim  = state->builder.AllocateId();
+			state->builder.AddFunction(
+			    {OpULessThan, state->bool_type, kucuk, index, ConstantU32(state, 64u)});
+			state->builder.AddFunction(
+			    {OpIMul, state->uint_type, carpim, lane, ConstantU32(state, s_stride)});
+			state->builder.AddFunction({OpIAdd, state->uint_type, toplam, index, carpim});
+			state->builder.AddFunction({OpSelect, state->uint_type, secim, kucuk, toplam, index});
+			yazma_index = secim;
+			static std::atomic<uint32_t> s_e {0};
+			if (s_e.fetch_add(1) < 8) {
+				std::printf("[MS-ADIM] ES bookkeeping yazimina %u dword lane adimi eklendi\n",
+				            s_stride);
+				std::fflush(stdout);
+			}
+		}
+	}
 	EmitIfCondition(state, in_bounds, [&]() {
-		const auto pointer = EmitMemoryElementPointer(state, store_inst.memory, index, inst.pc);
+		const auto pointer = EmitMemoryElementPointer(state, store_inst.memory, yazma_index, inst.pc);
 		state->builder.AddFunction({OpStore, pointer, value});
 		// ES ISARETI: bu LDS yazimi GERCEKTEN kostuysa tarama dizisinin 64.
 		// yuvasina 1 birak. GS tarafinda okunup ekrana kodlanir.
