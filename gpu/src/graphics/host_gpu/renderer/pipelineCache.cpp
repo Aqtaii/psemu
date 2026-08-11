@@ -91,6 +91,27 @@ PipelineCache::GraphicsPipeline* PipelineCache::CreateGraphicsPipeline(
 	}();
 	// Mesh'in hedef tamponunu ilk mesh ciziminde ogreniyoruz.
 	static std::atomic<const void*> s_mesh_buffer {nullptr};
+	// HEDEF TELEMETRISI: mod 2 hic devreye girmedi (0 kayit) ve sebebini
+	// TAHMIN etmek yerine olcuyoruz - mesh cizimi hic hedef tamponu bildirdi
+	// mi, mesh-disi cizimler hangi tampona yaziyor, ikisi ortusuyor mu?
+	if (s_only_mesh != 0) {
+		static std::atomic<uint32_t> s_m {0};
+		static std::atomic<uint32_t> s_d {0};
+		auto& sayac = mesh ? s_m : s_d;
+		if (sayac.fetch_add(1) < 10) {
+			for (uint32_t i = 0; i < color_count; i++) {
+				std::printf("[HEDEF] mesh=%d ek=%u/%u tampon=%p slot=%u maske=0x%01x\n",
+				            static_cast<int>(mesh), i, color_count,
+				            static_cast<const void*>(colors[i].vulkan_buffer),
+				            colors[i].target_slot, color_mask[i]);
+			}
+			if (color_count == 0) {
+				std::printf("[HEDEF] mesh=%d RENK EKI YOK (color_count=0)\n",
+				            static_cast<int>(mesh));
+			}
+			std::fflush(stdout);
+		}
+	}
 	if (mesh && s_only_mesh == 2) {
 		for (uint32_t i = 0; i < color_count; i++) {
 			if (colors[i].vulkan_buffer != nullptr) {
