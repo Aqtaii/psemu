@@ -1041,9 +1041,19 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 			// ayni invocation icinde okuma-yazma sirasi garantili.
 			const auto oku_lane = EmitLocalInvocationIndex(state);
 			const auto oku_is0  = state->builder.AllocateId();
+			// OLCULDU: disavurum bloguna YALNIZCA lane 0 ulasiyor. Okuma
+			// kapisi secili lane'e baglandiginda (lane 1) ekran tamamen
+			// siyah kaldi - ucgen hic cizilmedi. Bu, oturumun NGG bulgusuyla
+			// ortusuyor: GS_ALLOC_REQ ve POS0 kosullu, tek lane yurutuyor.
+			//
+			// Bu yuzden okuma kapisi LANE 0'da sabit; yakalama ise secili
+			// lane'de kalir. Bedeli: deger baska lane tarafindan yazilip
+			// lane 0 tarafindan okunur, yani senkronsuz. Bariyer bu tekduze
+			// olmayan blokta UB olurdu; caresi yok, ama yazimlar shader'in
+			// erken kisminda, okuma en sonunda oldugu icin pratikte sira
+			// tutuyor. Bu bir VARSAYIM ve sonuc yorumlanirken belirtilmeli.
 			state->builder.AddFunction(
-			    {OpIEqual, state->bool_type, oku_is0, oku_lane,
-			     ConstantU32(state, MeshRadarLane())});
+			    {OpIEqual, state->bool_type, oku_is0, oku_lane, ConstantU32(state, 0)});
 			EmitIfCondition(state, oku_is0, [&]() {
 						// OLCEK PARAMETRESI. Onceki surum her seyi 0..4095 araligina
 			// yayiyordu ve cozunurluk +-5..8 birimdi. Sayaclar ise KUCUK
