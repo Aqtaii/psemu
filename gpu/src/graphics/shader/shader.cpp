@@ -181,6 +181,19 @@ static bool SpirvDisassemble(const uint32_t* src_binary, size_t src_binary_size,
 	return true;
 }
 
+// NGG sistem SGPR sozlesmesi (uc parcali deney):
+//  1) user data penceresini gercek `rsrc2.user_sgpr` ile sinirla
+//  2) s3'e GS dalga kimligini (27:24) yukle
+//  3) LDS ring bookkeeping'i baslat
+// Varsayilan KAPALI.
+bool NggSystemSgprEnabled() {
+	static const bool on = [] {
+		const char* env = std::getenv("PSEMU_NGG_SGPR");
+		return env != nullptr && env[0] == '1';
+	}();
+	return on;
+}
+
 static bool SpirvValidateBinary(const char* label, uint64_t shader_hash,
                                 const std::vector<uint32_t>& spirv) {
 	if (!Config::ShaderValidationEnabled()) {
@@ -1854,7 +1867,15 @@ bool ShaderCompileInfoMS(const HW::VertexShaderInfo* regs, const HW::ShaderRegis
 			std::fflush(stdout);
 		}
 	}
-	options.user_data_count      = std::max<uint32_t>(regs->gs_regs.rsrc2.user_sgpr, 16u);
+	// NGG DONANIM SOZLESMESI (`PSEMU_NGG_SGPR=1`): 16'lik ZORLA taban,
+	// donanimin SISTEM degerleri icin ayirdigi yazmaclari user data
+	// penceresine aliyor ve s3'e NGG dalga bilgisi yerine push constant
+	// copu dolduruyordu (bkz. d19f676). Bayrak acikken gercek `user_sgpr`
+	// kullanilir. Varsayilan KAPALI - taban kaldirilinca user data'yi
+	// s0..s15'te bekleyen SHADER'LAR etkilenebilir, olcumle dogrulanmali.
+	options.user_data_count      = NggSystemSgprEnabled()
+	                                   ? regs->gs_regs.rsrc2.user_sgpr
+	                                   : std::max<uint32_t>(regs->gs_regs.rsrc2.user_sgpr, 16u);
 	options.user_data            = regs->gs_user_sgpr.value;
 	options.descriptor_set       = 0;
 	options.push_constant_offset = 0;
@@ -1955,7 +1976,15 @@ bool ShaderCompileSpirvVS(const HW::VertexShaderInfo* regs, const HW::ShaderRegi
 	options.shader_hash          = vs_chksum;
 	options.shader_base          = shader_addr;
 	options.user_data_base       = 8;
-	options.user_data_count      = std::max<uint32_t>(regs->gs_regs.rsrc2.user_sgpr, 16u);
+	// NGG DONANIM SOZLESMESI (`PSEMU_NGG_SGPR=1`): 16'lik ZORLA taban,
+	// donanimin SISTEM degerleri icin ayirdigi yazmaclari user data
+	// penceresine aliyor ve s3'e NGG dalga bilgisi yerine push constant
+	// copu dolduruyordu (bkz. d19f676). Bayrak acikken gercek `user_sgpr`
+	// kullanilir. Varsayilan KAPALI - taban kaldirilinca user data'yi
+	// s0..s15'te bekleyen SHADER'LAR etkilenebilir, olcumle dogrulanmali.
+	options.user_data_count      = NggSystemSgprEnabled()
+	                                   ? regs->gs_regs.rsrc2.user_sgpr
+	                                   : std::max<uint32_t>(regs->gs_regs.rsrc2.user_sgpr, 16u);
 	options.user_data            = regs->gs_user_sgpr.value;
 	options.descriptor_set       = 0;
 	options.push_constant_offset = 0;

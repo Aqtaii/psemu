@@ -204,6 +204,37 @@ uint32_t EmitInitialRegisterValue(EmitterState* state, IR::Register reg) {
 	if (UserDataDwordIndex(*state, reg, dword_index)) {
 		return EmitVsharpDwordLoad(state, dword_index);
 	}
+	// NGG SISTEM SGPR PAYLOAD'U (`PSEMU_NGG_SGPR=1`).
+	//
+	// Donanimda SPI, `user_sgpr` sayisinin ARDINDAN gelen yazmaclari sistem
+	// degerleriyle doldurur. psemu'da bu HIC yapilmiyordu: user data
+	// penceresi disindaki her skaler 0 kaliyordu (bkz. d19f676).
+	//
+	// s3'un 27:24 biti = GS dalga kimligi. Olculdu (6d3f2cb): bu alan HEM
+	// `GS_ALLOC_REQ` kapisini (`s3 & 0x0f000000`) HEM de LDS adresini
+	// (`s2 = bfe(s3,24,4)` -> `v24 = (s2<<6)+mbcnt` -> `v8 = 48*v24`) suruyor.
+	//
+	// `s2`YE DOKUNULMUYOR: shader onu zaten `bfe(s3,24,4)` ile YENIDEN
+	// hesapliyor (dokum satir 527), yani baslangic degeri uzerine yaziliyor.
+	// s3 dogruysa s2 kendiliginden dogru olur.
+	if (NggSystemSgprEnabled() && state->stage == ShaderType::Mesh &&
+	    reg.file == IR::RegisterFile::Scalar && reg.index == 3) {
+		const auto wave = state->wave_size != 0 ? state->wave_size : 64u;
+		const auto lane = EmitLocalInvocationIndex(state);
+		const auto id   = state->builder.AllocateId();
+		const auto shifted = state->builder.AllocateId();
+		state->builder.AddFunction(
+		    {OpUDiv, state->uint_type, id, lane, ConstantU32(state, wave)});
+		state->builder.AddFunction(
+		    {OpShiftLeftLogical, state->uint_type, shifted, id, ConstantU32(state, 24u)});
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1) < 16) {
+			std::printf("[NGG-SGPR] s3 = (LocalInvocationIndex / %u) << 24  (GS dalga kimligi)\n",
+			            wave);
+			std::fflush(stdout);
+		}
+		return shifted;
+	}
 	return ConstantU32(state, InitialRegisterValue(*state, reg));
 }
 
@@ -309,6 +340,22 @@ void EmitRegisterVariables(EmitterState* state) {
 	for (const auto& binding: state->registers) {
 		state->builder.AddFunction(
 		    {OpStore, binding.pointer_id, EmitInitialRegisterValue(state, binding.reg)});
+	}
+
+	// NGG LDS RING BOOKKEEPING BASLANGICI (`PSEMU_NGG_SGPR=1`).
+	// ES kendi yazma tabanini `lds_dwords[(160 + v8) >> 2]`den OKUYOR
+	// (6d3f2cb). O alan hic kurulmuyorsa devir kopar. Burada giris blogunda
+	// sifirlaniyor.
+	// NOT: olculdu ki o bolge ZATEN sifir okunuyor (e19ab3c), dolayisiyla bu
+	// adimin ETKISIZ kalmasi bekleniyor; dogru duzeltme oraya GERCEK ring
+	// tabanini yazmaktir - degeri henuz bilinmiyor. Yine de sozlesmenin
+	// parcasi olarak kuruldu ve olcumle ayirt edilebilir.
+	if (NggSystemSgprEnabled() && state->stage == ShaderType::Mesh &&
+	    state->lds_variable != 0 && state->ptr_workgroup_uint != 0) {
+		const auto slot = state->builder.AllocateId();
+		state->builder.AddFunction({OpAccessChain, state->ptr_workgroup_uint, slot,
+		                            state->lds_variable, ConstantU32(state, 160u / 4u)});
+		state->builder.AddFunction({OpStore, slot, ConstantU32(state, 0)});
 	}
 
 	// NGG DALGA BILGISI ENJEKSIYONU (`PSEMU_NGG_WAVEINFO_SGPR=<n>`).

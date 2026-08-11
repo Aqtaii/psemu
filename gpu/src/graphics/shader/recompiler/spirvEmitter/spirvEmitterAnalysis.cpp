@@ -875,6 +875,17 @@ int MeshTelemetryMode() {
 
 bool MeshTelemetryEnabled() { return MeshTelemetryMode() > 0; }
 
+// NGG sistem SGPR sozlesmesi (uc parcali deney, varsayilan KAPALI).
+// shader.cpp'de ayni env icin AYRI bir tanim var - iki farkli ad alani
+// oldugu icin ortak bir baslik acmak yerine env okumasi tekrarlandi.
+bool NggSystemSgprEnabled() {
+	static const bool on = [] {
+		const char* env = std::getenv("PSEMU_NGG_SGPR");
+		return env != nullptr && env[0] == '1';
+	}();
+	return on;
+}
+
 // IKILI ARAMA: kosulsuz hello ucgeninin enjekte edilecegi BLOK SIRASI.
 // -1 = kapali. Giris blogu KIRMIZI, tahsis noktasi SIYAH veriyor; aradaki
 // ilk siyah blok yurutmeyi kesen kapidir.
