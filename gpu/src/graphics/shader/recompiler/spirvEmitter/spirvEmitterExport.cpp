@@ -687,7 +687,7 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 		const int slot_test = MeshSlotTestMode();
 		// mod 9 ASAGIDA ele aliniyor (pozisyon saglamlik okumasi); burada
 		// yakalanirsa erken return yuzunden OLU KOD olur - olculdu.
-		if (mesh && slot_test > 0 && slot_test != 9 && slot_test != 10) {
+		if (mesh && slot_test > 0 && slot_test != 9 && slot_test != 10 && slot_test != 11) {
 			const auto lane_id = EmitLocalInvocationIndex(state);
 			uint32_t   slot    = lane_id;
 			if (slot_test == 2) {
@@ -936,6 +936,76 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 		// Onceki konumsal telemetride (fc57ef8) her adim `result`u uzerine
 		// yazmis ve yalnizca SON kiyas hayatta kalmisti - o hata bir olcumu
 		// gecersiz kildi.
+		// MOD 11 - "LDS BOS MU, YOKSA YALNIZCA w MI SIFIR?"
+		// Pozisyon LDS'ten geliyor (ES->GS devri) ve w<=0 olculdu. Ofsetler ve
+		// siralama STATIK olarak dogru cikti (ES 128/132/136/140'a yaziyor, GS
+		// ayni ofsetlerden okuyor, yazimlar okumalardan once, 5 bariyer var).
+		// Geriye iki ihtimal kaldi ve bu kip onlari ayirir:
+		//   x=y=z=w=0     -> LDS bolgesine HIC yazilmamis (ES kapisi kapali)
+		//   w=0, digerleri-> yazma OLMUS ama w degeri sifir (deger/kaynak hatasi)
+		// Konumlar: -0.6=hepsi sifir | 0.0=yalnizca w sifir | 0.6=w dolu
+		if (mesh && MeshSlotTestMode() == 11) {
+			uint32_t comp[4] = {};
+			for (uint32_t i = 0; i < 4; i++) {
+				comp[i] = state->builder.AllocateId();
+				state->builder.AddFunction(
+				    {OpCompositeExtract, state->float_type, comp[i], value, i});
+			}
+			const auto zero = ConstantF32Value(state, 0.0f);
+			uint32_t   z[4] = {};
+			for (uint32_t i = 0; i < 4; i++) {
+				z[i] = state->builder.AllocateId();
+				state->builder.AddFunction({OpFOrdEqual, state->bool_type, z[i], comp[i], zero});
+			}
+			const auto z01 = state->builder.AllocateId();
+			const auto z012 = state->builder.AllocateId();
+			const auto all_zero = state->builder.AllocateId();
+			state->builder.AddFunction({OpLogicalAnd, state->bool_type, z01, z[0], z[1]});
+			state->builder.AddFunction({OpLogicalAnd, state->bool_type, z012, z01, z[2]});
+			state->builder.AddFunction({OpLogicalAnd, state->bool_type, all_zero, z012, z[3]});
+			// zincir: taban "w dolu", sirayla ozel durumlar bastirir
+			const auto s1 = state->builder.AllocateId();
+			const auto s2 = state->builder.AllocateId();
+			state->builder.AddFunction({OpSelect, state->float_type, s1, z[3],
+			                            ConstantF32Value(state, 0.0f),
+			                            ConstantF32Value(state, 0.6f)});
+			state->builder.AddFunction({OpSelect, state->float_type, s2, all_zero,
+			                            ConstantF32Value(state, -0.6f), s1});
+			const float corners[3][2] = {{-0.12f, -0.12f}, {0.12f, -0.12f}, {0.0f, 0.12f}};
+			for (uint32_t i = 0; i < 3; i++) {
+				const auto cx  = state->builder.AllocateId();
+				const auto vec = state->builder.AllocateId();
+				const auto ptr = state->builder.AllocateId();
+				state->builder.AddFunction({OpFAdd, state->float_type, cx, s2,
+				                            ConstantF32Value(state, corners[i][0])});
+				state->builder.AddFunction({OpCompositeConstruct, state->vec4_float_type, vec, cx,
+				                            ConstantF32Value(state, corners[i][1]),
+				                            ConstantF32Value(state, 0.0f),
+				                            ConstantF32Value(state, 1.0f)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_output_vec4_float, ptr,
+				                            variable, ConstantU32(state, i),
+				                            ConstantU32(state, 0)});
+				state->builder.AddFunction({OpStore, ptr, vec});
+			}
+			if (state->mesh_prim_indices_variable != 0) {
+				const auto tri     = state->builder.AllocateId();
+				const auto tri_ptr = state->builder.AllocateId();
+				state->builder.AddFunction({OpCompositeConstruct, state->vec3_uint_type, tri,
+				                            ConstantU32(state, 0), ConstantU32(state, 1),
+				                            ConstantU32(state, 2)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_output_vec3_uint, tri_ptr,
+				                            state->mesh_prim_indices_variable,
+				                            ConstantU32(state, 0)});
+				state->builder.AddFunction({OpStore, tri_ptr, tri});
+			}
+			static std::atomic<uint32_t> s_z {0};
+			if (s_z.fetch_add(1) < 32) {
+				std::printf("[MS-LDS-BOS] -0.6=hepsi sifir 0.0=yalnizca w sifir 0.6=w dolu\n");
+				std::fflush(stdout);
+			}
+			return;
+		}
+
 		if (mesh && MeshSlotTestMode() == 10) {
 			const auto px = state->builder.AllocateId();
 			const auto py = state->builder.AllocateId();
