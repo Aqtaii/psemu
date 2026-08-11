@@ -1026,7 +1026,14 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 			state->builder.AddFunction(
 			    {OpIEqual, state->bool_type, oku_is0, oku_lane, ConstantU32(state, 0)});
 			EmitIfCondition(state, oku_is0, [&]() {
-			const auto axis = [&](uint32_t slot) {
+						// OLCEK PARAMETRESI. Onceki surum her seyi 0..4095 araligina
+			// yayiyordu ve cozunurluk +-5..8 birimdi. Sayaclar ise KUCUK
+			// sayilar: toplam=3 ile toplam=0 ayni piksele dusuyordu. Bu
+			// yuzden filtre "toplam > 0" derken eksen "0" gosterdi ve ben
+			// bunu mantiksal imkansizlik sanip yaris/senkronizasyon aradim -
+			// hepsi yanlis izdi. Sayaclar icin olcek 64: cozunurluk ~0.08,
+			// yani TAM SAYI okunur.
+			const auto axis = [&](uint32_t slot, float olcek) {
 				const auto ptr   = state->builder.AllocateId();
 				const auto raw   = state->builder.AllocateId();
 				const auto seen  = state->builder.AllocateId();
@@ -1048,12 +1055,13 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 				state->builder.AddFunction(
 				    {OpBitwiseOr, state->uint_type, val, raw, ConstantU32(state, 0)});
 				state->builder.AddFunction(
-				    {OpULessThan, state->bool_type, capc, val, ConstantU32(state, 4095u)});
+				    {OpULessThan, state->bool_type, capc, val,
+				     ConstantU32(state, static_cast<uint32_t>(olcek))});
 				state->builder.AddFunction({OpSelect, state->uint_type, capv, capc, val,
-				                            ConstantU32(state, 4095u)});
+				                            ConstantU32(state, static_cast<uint32_t>(olcek))});
 				state->builder.AddFunction({OpConvertUToF, state->float_type, fval, capv});
 				state->builder.AddFunction({OpFMul, state->float_type, scale, fval,
-				                            ConstantF32Value(state, 1.8f / 4095.0f)});
+				                            ConstantF32Value(state, 1.8f / olcek)});
 				state->builder.AddFunction({OpFAdd, state->float_type, onsc, scale,
 				                            ConstantF32Value(state, -0.9f)});
 				state->builder.AddFunction({OpSelect, state->float_type, out, seen, onsc,
@@ -1077,12 +1085,12 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 				state->builder.AddFunction({OpBitwiseOr, state->uint_type, id,
 				                            ConstantU32(state, 0), ConstantU32(state, 0)});
 				(void)id;
-				return ConstantF32Value(state, -0.9f + deger / 4095.0f * 1.8f);
+				return ConstantF32Value(state, -0.9f + deger / 64.0f * 1.8f);
 			};
-			const auto [x_slot, x_seen] = axis(72u);   // dword 40'a TAM ISABET
-			const auto [y_slot, y_seen] = axis(73u);   // lane 0 TOPLAM LDS yazimi
-			const auto x_off = s_sabit ? sabit(2000.0f) : x_slot;
-			const auto y_off = s_sabit ? sabit(500.0f) : y_slot;
+			const auto [x_slot, x_seen] = axis(72u, 64.0f);   // 40'a TAM ISABET (olcek 64)
+			const auto [y_slot, y_seen] = axis(73u, 64.0f);   // TOPLAM yazim (olcek 64)
+			const auto x_off = s_sabit ? sabit(40.0f) : x_slot;
+			const auto y_off = s_sabit ? sabit(20.0f) : y_slot;
 			// HIC OLCUM YAPMAMIS shader ucgen CIZMESIN. 56 mesh shader var ve
 			// birden fazlasi bu okuma blogundan geciyor; olcumsuzler skalanin
 			// disina ucgen basarsa merkez ORTALAMAYA kayar ve sayi okunamaz.
