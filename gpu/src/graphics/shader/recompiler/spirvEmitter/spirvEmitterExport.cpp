@@ -424,6 +424,100 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 		//   KIRMIZI -> exec maskesi lane'leri FILTRELEYEMIYOR; gereginden
 		//              fazla cagri disavuruma akiyor (OOB'un kaynagi)
 		//   SIYAH   -> aktif sayi sinir icinde; OOB baska bir sebepten
+		// KONUMSAL TELEMETRI (`PSEMU_MESH_TELEMETRY_XY=1`).
+		//
+		// Tek bitlik (siyah/kirmizi) okumalar yerine ucgeni EKRANDA
+		// KONUMLANDIRARAK tek kosuda IKI sayiyi birden okur:
+		//   X ekseni -> N = disavurumda hayatta olan toplam cagri sayisi
+		//               (ballot(true) + BallotBitCount Reduce)
+		//   Y ekseni -> L = ilk aktif lane'in kimligi (BallotFindLSB)
+		// Ikisi de alt-grup genelinde TEKDUZE, dolayisiyla tum cagrilar ayni
+		// konumu secer; yuva katlamasi (lane%3) ucgeni olusturur.
+		//
+		// Kova esikleri (sol->sag / alt->ust):
+		//   <=1 , <=3 , <=8 , <=32 , >32
+		// Konumu okumak icin kareyi merkez/sinir kutusu ile analiz et.
+		//
+		// Amac: `COMPACT`in neden coktugunu ve `lane%3`un neden calistigini
+		// SAYIYLA aciklamak. Lane'ler 0,1,2 degil de 32,33,34 ise Wave64 ile
+		// SubgroupSize uyusmazligi kesinlesir.
+		static const bool telemetry_xy = [] {
+			const char* env = std::getenv("PSEMU_MESH_TELEMETRY_XY");
+			return env != nullptr && env[0] == '1';
+		}();
+		if (mesh && telemetry_xy) {
+			const auto true_id = state->builder.AllocateId();
+			const auto ballot  = state->builder.AllocateId();
+			const auto n_count = state->builder.AllocateId();
+			const auto first   = state->builder.AllocateId();
+			state->builder.AddFunction({OpINotEqual, state->bool_type, true_id,
+			                            ConstantU32(state, 1), ConstantU32(state, 0)});
+			state->builder.AddFunction({OpGroupNonUniformBallot, state->vec4_uint_type, ballot,
+			                            ConstantU32(state, ScopeSubgroup), true_id});
+			state->builder.AddFunction({OpGroupNonUniformBallotBitCount, state->uint_type, n_count,
+			                            ConstantU32(state, ScopeSubgroup), GroupOperationReduce,
+			                            ballot});
+			state->builder.AddFunction({OpGroupNonUniformBallotFindLSB, state->uint_type, first,
+			                            ConstantU32(state, ScopeSubgroup), ballot});
+
+			// Degeri bes kovaya ayirip [-0.7, +0.7] arasinda bir ofsete cevir.
+			const auto bucket = [&](uint32_t value) {
+				const float slots[5] = {-0.7f, -0.35f, 0.0f, 0.35f, 0.7f};
+				uint32_t    result   = ConstantF32Value(state, slots[4]);
+				const uint32_t limits[4] = {32u, 8u, 3u, 1u};
+				for (int i = 0; i < 4; i++) {
+					const auto cmp = state->builder.AllocateId();
+					const auto sel = state->builder.AllocateId();
+					state->builder.AddFunction({OpUGreaterThan, state->bool_type, cmp, value,
+					                            ConstantU32(state, limits[i])});
+					state->builder.AddFunction({OpSelect, state->float_type, sel, cmp,
+					                            ConstantF32Value(state, slots[4 - i]),
+					                            ConstantF32Value(state, slots[3 - i])});
+					result = sel;
+				}
+				return result;
+			};
+			const auto x_off = bucket(n_count);
+			const auto y_off = bucket(first);
+
+			const float corners[3][2] = {{-0.12f, -0.12f}, {0.12f, -0.12f}, {0.0f, 0.12f}};
+			for (uint32_t i = 0; i < 3; i++) {
+				const auto cx  = state->builder.AllocateId();
+				const auto cy  = state->builder.AllocateId();
+				const auto vec = state->builder.AllocateId();
+				const auto ptr = state->builder.AllocateId();
+				state->builder.AddFunction({OpFAdd, state->float_type, cx, x_off,
+				                            ConstantF32Value(state, corners[i][0])});
+				state->builder.AddFunction({OpFAdd, state->float_type, cy, y_off,
+				                            ConstantF32Value(state, corners[i][1])});
+				state->builder.AddFunction({OpCompositeConstruct, state->vec4_float_type, vec, cx,
+				                            cy, ConstantF32Value(state, 0.0f),
+				                            ConstantF32Value(state, 1.0f)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_output_vec4_float, ptr,
+				                            variable, ConstantU32(state, i),
+				                            ConstantU32(state, 0)});
+				state->builder.AddFunction({OpStore, ptr, vec});
+			}
+			if (state->mesh_prim_indices_variable != 0) {
+				const auto tri     = state->builder.AllocateId();
+				const auto tri_ptr = state->builder.AllocateId();
+				state->builder.AddFunction({OpCompositeConstruct, state->vec3_uint_type, tri,
+				                            ConstantU32(state, 0), ConstantU32(state, 1),
+				                            ConstantU32(state, 2)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_output_vec3_uint, tri_ptr,
+				                            state->mesh_prim_indices_variable,
+				                            ConstantU32(state, 0)});
+				state->builder.AddFunction({OpStore, tri_ptr, tri});
+			}
+			static std::atomic<uint32_t> s_x {0};
+			if (s_x.fetch_add(1) < 32) {
+				std::printf("[MS-TELEMETRI-XY] X=aktif_sayi Y=ilk_lane kovalari "
+				            "(-0.7,-0.35,0,0.35,0.7) esikler(1,3,8,32) pc=0x%08x\n",
+				            inst.pc);
+				std::fflush(stdout);
+			}
+			return;
+		}
 		static const bool count_probe = [] {
 			const char* env = std::getenv("PSEMU_MESH_COUNT_PROBE");
 			return env != nullptr && env[0] == '1';
