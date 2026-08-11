@@ -492,6 +492,43 @@ uint32_t EmitMemoryLoadDwordValueU32(EmitterState* state, const IR::Instruction&
 		return value;
 	};
 	if (mem.kind == IR::ResourceKind::Lds) {
+		// ZAMANLAMA OLCUMU (`PSEMU_MESH_ES_SENTINEL=1`): ILK LDS okumasinin
+		// yapildigi ANDA ES isaretinin durumunu yakala.
+		//
+		// `a575783`teki isaret "bir LDS yazimi kostu" diyordu ama SIRA
+		// hakkinda bir sey soylemiyordu; mod 12 onu POS0 DISAVURUMUNDA
+		// okuyordu - o nokta LDS okumasindan SONRA. Burasi tam okuma ani.
+		//
+		// scan[65]: 0 = hic LDS okumasi olmadi
+		//           1 = ILK okumada isaret YOKTU (ES yazimi henuz olmamis)
+		//           2 = ILK okumada isaret VARDI (sira dogru)
+		// Dallanmasiz: zaten yazilmissa ayni deger geri yazilir.
+		if (state->stage == ShaderType::Mesh && MeshEsSentinelEnabled() &&
+		    state->mesh_scan_variable != 0) {
+			const auto mark_ptr = state->builder.AllocateId();
+			const auto slot_ptr = state->builder.AllocateId();
+			const auto mark     = state->builder.AllocateId();
+			const auto old_val  = state->builder.AllocateId();
+			const auto seen     = state->builder.AllocateId();
+			const auto fresh    = state->builder.AllocateId();
+			const auto already  = state->builder.AllocateId();
+			const auto merged   = state->builder.AllocateId();
+			state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, mark_ptr,
+			                            state->mesh_scan_variable, ConstantU32(state, 64u)});
+			state->builder.AddFunction({OpLoad, state->uint_type, mark, mark_ptr});
+			state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, slot_ptr,
+			                            state->mesh_scan_variable, ConstantU32(state, 65u)});
+			state->builder.AddFunction({OpLoad, state->uint_type, old_val, slot_ptr});
+			state->builder.AddFunction(
+			    {OpINotEqual, state->bool_type, seen, mark, ConstantU32(state, 0)});
+			state->builder.AddFunction({OpSelect, state->uint_type, fresh, seen,
+			                            ConstantU32(state, 2), ConstantU32(state, 1)});
+			state->builder.AddFunction(
+			    {OpINotEqual, state->bool_type, already, old_val, ConstantU32(state, 0)});
+			state->builder.AddFunction(
+			    {OpSelect, state->uint_type, merged, already, old_val, fresh});
+			state->builder.AddFunction({OpStore, slot_ptr, merged});
+		}
 		return LoadFromPointer(EmitLdsElementPointer(state, index));
 	}
 	if (mem.kind == IR::ResourceKind::Gds) {
