@@ -45,6 +45,7 @@ struct EmitterState;
 [[nodiscard]] uint32_t EmitNggCompactedIndex(EmitterState* state);
 [[nodiscard]] bool     MeshCompactionEnabled();
 [[nodiscard]] bool     MeshLdsCompactionEnabled();
+[[nodiscard]] int      MeshSlotTestMode();
 [[nodiscard]] uint32_t EmitLdsCompactedIndex(EmitterState* state);
 [[nodiscard]] int      MeshProbeLo();
 [[nodiscard]] int      MeshProbeHi();

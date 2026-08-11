@@ -291,6 +291,16 @@ static uint32_t EmitFixedTrianglePosition(EmitterState* state, uint32_t lane) {
 // [18:10], [28:20]; ust bitler kenar bayraklari). 9 bit 0-511'i kapsiyor,
 // MESH_OUTPUT_MAX=256 icin fazlasiyla yeterli - ve 10 bit maskelemek bayrak
 // bitini iceri sizdirma riski tasirdi.
+// A/B/C/D/E iskeletinin modu; primitif disavurumundan da okunabilsin diye
+// dosya duzeyinde.
+int MeshSlotTestMode() {
+	static const int mode = [] {
+		const char* env = std::getenv("PSEMU_MESH_SLOT_TEST");
+		return env != nullptr ? std::atoi(env) : 0;
+	}();
+	return mode;
+}
+
 static void EmitPrimitiveIndicesExport(EmitterState* state, const IR::Instruction& inst,
                                        uint32_t index) {
 	constexpr uint32_t INDEX_MASK = 0x1ffu;
@@ -330,10 +340,129 @@ static void EmitPrimitiveIndicesExport(EmitterState* state, const IR::Instructio
 		components[i] = masked;
 	}
 
+	// MOD 6 - INDEKS ARALIGI OKUMASI (tek bitlik, ekrana kodlanmis):
+	// oyunun acilan UC indeksi de <= 2 ise BILINEN-KIRMIZI (0,1,2) yaz,
+	// aksi halde dejenere (2,2,2) yaz.
+	//   KIRMIZI -> indeksler tahsis araliginda (0..2); kusur BASKA yerde
+	//   SIYAH   -> en az biri 2'den BUYUK; indeksler sikistirilmis
+	//              yuvalarimizin disini gosteriyor
+	// Taban cizgi test D (yuva=compaction, kose=HELLO, indeks=0,1,2) KIRMIZI.
+	// MOD 7 - AYIRT EDICILIK OKUMASI: mod 6 "hepsi <=2" dedi (KIRMIZI), yani
+	// indeksler aralikta. Ama aralikta olmak YETMEZ - ucu de AYNIYSA (orn.
+	// (0,0,0)) ilkel dejenere olur ve hicbir fragment cikmaz. Bu kip ucunun
+	// FARKLI olup olmadigini sorar.
+	//   KIRMIZI -> indeksler farkli; kusur baska yerde
+	//   SIYAH   -> indeksler AYNI -> dejenere ilkel; paketli deger muhtemelen
+	//              sifir ya da acma tek bir alandan besleniyor
+	// MOD 8 - SARIM YONU: mod 6 "hepsi <=2", mod 7 "ucu de FARKLI" dedi -
+	// yani indeksler (0,1,2)'nin bir PERMUTASYONU. Buna ragmen mod 5 (gercek
+	// indeksler) SIYAH. Tek kalan aciklama: permutasyon TEK (odd) ve sarim
+	// yonu ters donuyor, ucgen eleniyor. Bu kip indeksleri TERS yazar.
+	//   KIRMIZI -> sorun sarim yonu; ya indeks sirasi ya cull durumu
+	//   SIYAH   -> sarim degil; permutasyon disinda bir sey var
+	if (MeshSlotTestMode() == 8) {
+		const auto vec = state->builder.AllocateId();
+		const auto ptr = state->builder.AllocateId();
+		state->builder.AddFunction({OpCompositeConstruct, state->vec3_uint_type, vec,
+		                            components[2], components[1], components[0]});
+		state->builder.AddFunction({OpAccessChain, state->ptr_output_vec3_uint, ptr,
+		                            state->mesh_prim_indices_variable, index});
+		state->builder.AddFunction({OpStore, ptr, vec});
+		static std::atomic<uint32_t> s_w {0};
+		if (s_w.fetch_add(1) < 32) {
+			std::printf("[MS-SARIM] oyunun indeksleri TERS yazildi (c2,c1,c0)\n");
+			std::fflush(stdout);
+		}
+		return;
+	}
+
+	if (MeshSlotTestMode() == 7) {
+		const auto ne01 = state->builder.AllocateId();
+		const auto ne12 = state->builder.AllocateId();
+		const auto ne02 = state->builder.AllocateId();
+		const auto and1 = state->builder.AllocateId();
+		const auto ok   = state->builder.AllocateId();
+		state->builder.AddFunction(
+		    {OpINotEqual, state->bool_type, ne01, components[0], components[1]});
+		state->builder.AddFunction(
+		    {OpINotEqual, state->bool_type, ne12, components[1], components[2]});
+		state->builder.AddFunction(
+		    {OpINotEqual, state->bool_type, ne02, components[0], components[2]});
+		state->builder.AddFunction({OpLogicalAnd, state->bool_type, and1, ne01, ne12});
+		state->builder.AddFunction({OpLogicalAnd, state->bool_type, ok, and1, ne02});
+		const auto i1  = state->builder.AllocateId();
+		const auto vec = state->builder.AllocateId();
+		const auto ptr = state->builder.AllocateId();
+		state->builder.AddFunction(
+		    {OpSelect, state->uint_type, i1, ok, ConstantU32(state, 1), ConstantU32(state, 2)});
+		state->builder.AddFunction({OpCompositeConstruct, state->vec3_uint_type, vec,
+		                            ConstantU32(state, 0), i1, ConstantU32(state, 2)});
+		state->builder.AddFunction({OpAccessChain, state->ptr_output_vec3_uint, ptr,
+		                            state->mesh_prim_indices_variable, index});
+		state->builder.AddFunction({OpStore, ptr, vec});
+		static std::atomic<uint32_t> s_d {0};
+		if (s_d.fetch_add(1) < 32) {
+			std::printf("[MS-INDEKS-AYIRT] uc indeks FARKLI ise ucgen\n");
+			std::fflush(stdout);
+		}
+		return;
+	}
+
+	if (MeshSlotTestMode() == 6) {
+		uint32_t in_range = 0;
+		for (uint32_t i = 0; i < 3; i++) {
+			const auto ok = state->builder.AllocateId();
+			state->builder.AddFunction({OpULessThan, state->bool_type, ok, components[i],
+			                            ConstantU32(state, 3u)});
+			if (i == 0) {
+				in_range = ok;
+			} else {
+				const auto both = state->builder.AllocateId();
+				state->builder.AddFunction(
+				    {OpLogicalAnd, state->bool_type, both, in_range, ok});
+				in_range = both;
+			}
+		}
+		const auto i1  = state->builder.AllocateId();
+		const auto i2  = state->builder.AllocateId();
+		const auto vec = state->builder.AllocateId();
+		const auto ptr = state->builder.AllocateId();
+		state->builder.AddFunction({OpSelect, state->uint_type, i1, in_range,
+		                            ConstantU32(state, 1), ConstantU32(state, 2)});
+		state->builder.AddFunction({OpSelect, state->uint_type, i2, in_range,
+		                            ConstantU32(state, 2), ConstantU32(state, 2)});
+		state->builder.AddFunction({OpCompositeConstruct, state->vec3_uint_type, vec,
+		                            ConstantU32(state, 0), i1, i2});
+		state->builder.AddFunction({OpAccessChain, state->ptr_output_vec3_uint, ptr,
+		                            state->mesh_prim_indices_variable, index});
+		state->builder.AddFunction({OpStore, ptr, vec});
+		static std::atomic<uint32_t> s_r {0};
+		if (s_r.fetch_add(1) < 32) {
+			std::printf("[MS-INDEKS-ARALIK] oyunun acilan indeksleri <=2 ise ucgen\n");
+			std::fflush(stdout);
+		}
+		return;
+	}
+
+	// SARIM YONU (`PSEMU_MESH_PRIM_TERS=1`).
+	//
+	// OLCULDU (tek degiskenli, yuva=LDS compaction + kose=HELLO):
+	//   indeks = oyunun kendi (c0,c1,c2)  -> SIYAH
+	//   indeks = TERS (c2,c1,c0)          -> KIRMIZI
+	// Ustteki yorumun kendisi de tutarsiz: paketlemeyi
+	// `v12 = (v1<<20)|(v0<<10)|v2` diye TURETIP sonra
+	// `i0 | (i1<<10) | (i2<<20)` diye OZETLIYOR - ikisi ayni sey degil.
+	// Turetime gore bit0=v2, bit10=v0, bit20=v1; kod ise bit0'i 0. bilesen
+	// sayiyor. Yani acilan uclunun SIRASI donanimdakiyle ortusmuyor.
+	const bool reverse = [] {
+		const char* env = std::getenv("PSEMU_MESH_PRIM_TERS");
+		return env != nullptr && env[0] == '1';
+	}();
 	const auto vector  = state->builder.AllocateId();
 	const auto pointer = state->builder.AllocateId();
-	state->builder.AddFunction({OpCompositeConstruct, state->vec3_uint_type, vector, components[0],
-	                            components[1], components[2]});
+	state->builder.AddFunction({OpCompositeConstruct, state->vec3_uint_type, vector,
+	                            reverse ? components[2] : components[0], components[1],
+	                            reverse ? components[0] : components[2]});
 	state->builder.AddFunction({OpAccessChain, state->ptr_output_vec3_uint, pointer,
 	                            state->mesh_prim_indices_variable, index});
 	state->builder.AddFunction({OpStore, pointer, vector});
@@ -353,7 +482,23 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 	if (inst.export_info.kind == IR::ExportTargetKind::Primitive) {
 		// Mesh disinda primitif disavurumu hala anlamsiz: yazacak dizi yok.
 		if (mesh) {
-			EmitPrimitiveIndicesExport(state, inst, EmitLocalInvocationIndex(state));
+			// ASIMETRIYI KAPAT: NGG'de `exp prim` de tipki `exp pos` gibi
+			// OTOMATIK SIKISTIRILIR. Vertex yuvasini LDS compaction'a
+			// baglamistik ama primitif yuvasi hala ham lane indeksini
+			// kullaniyordu - yani topoloji tahsis sinirinin DISINA
+			// yaziliyordu ve rasterizer primitif 0'da cop buluyordu.
+			//
+			// OLCULDU: yuva=compaction + kose=HELLO + indeks=ZORLA(0,1,2)
+			// KIRMIZI (test D), ayni sey indeks=OYUNUN KENDI ile SIYAH
+			// (test E). Aradaki tek fark, oyunun indekslerinin OOB bir
+			// primitif yuvasina yazilmasiydi.
+			//
+			// Vertex ve primitif ayni disavurum noktasinda ve ayni exec
+			// maskesi altinda oldugu icin AYNI sikistirilmis indeks gecerli.
+			EmitPrimitiveIndicesExport(state, inst,
+			                           MeshLdsCompactionEnabled()
+			                               ? EmitLdsCompactedIndex(state)
+			                               : EmitLocalInvocationIndex(state));
 		}
 		return;
 	}
@@ -539,10 +684,7 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 		//                         3'ten buyuk
 		// ikisi ayni           -> telemetri dogru; tek lane ulasiyor ve
 		//                         dejenere ilkel bundan
-		static const int slot_test = [] {
-			const char* env = std::getenv("PSEMU_MESH_SLOT_TEST");
-			return env != nullptr ? std::atoi(env) : 0;
-		}();
+		const int slot_test = MeshSlotTestMode();
 		if (mesh && slot_test > 0) {
 			const auto lane_id = EmitLocalInvocationIndex(state);
 			uint32_t   slot    = lane_id;
