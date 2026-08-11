@@ -556,7 +556,7 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 				// arasinda kacinci oldugumuz (ballot(true) + ExclusiveScan).
 				slot = EmitNggCompactedIndex(state);
 			} else if (slot_test >= 4) {
-				// TEST D: LDS prefix-toplami ile is grubu genelinde compaction.
+				// TEST D/E: LDS prefix-toplami ile is grubu genelinde compaction.
 				slot = EmitLdsCompactedIndex(state);
 			}
 			const auto value    = EmitFixedTrianglePosition(state, lane_id);
@@ -564,7 +564,13 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 			state->builder.AddFunction({OpAccessChain, state->ptr_output_vec4_float, slot_ptr,
 			                            variable, slot, ConstantU32(state, 0)});
 			state->builder.AddFunction({OpStore, slot_ptr, value});
-			if (state->mesh_prim_indices_variable != 0) {
+			// TEST E (mod 5): indeksleri ZORLAMA - oyunun KENDI 3x10-bit
+			// paketinden acilan indeksleri birak. Boylece "indeks acma dogru
+			// mu" sorusu pozisyon degerlerinden AYRISIR:
+			//   KIRMIZI -> indeks acma saglam, kusur pozisyon matematiginde
+			//   SIYAH   -> kusur indekslerde (acma yanlis ya da indeksler
+			//              sikistirma sirasiyla ortusmuyor)
+			if (slot_test != 5 && state->mesh_prim_indices_variable != 0) {
 				const auto tri     = state->builder.AllocateId();
 				const auto tri_ptr = state->builder.AllocateId();
 				state->builder.AddFunction({OpCompositeConstruct, state->vec3_uint_type, tri,
@@ -580,7 +586,8 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 				std::printf("[MS-SLOT-TEST] mod=%d yuva=%s (tahsis=oyunun m0, indeks=0/1/2, "
 				            "kose=HELLO) pc=0x%08x\n",
 				            slot_test,
-				            slot_test >= 4   ? "lds-compaction"
+				            slot_test == 5   ? "lds-compaction+OYUN-INDEKSI"
+				            : slot_test == 4 ? "lds-compaction"
 				            : slot_test == 3 ? "ballot-compaction"
 				            : slot_test == 2 ? "lane%3"
 				                             : "lane",
