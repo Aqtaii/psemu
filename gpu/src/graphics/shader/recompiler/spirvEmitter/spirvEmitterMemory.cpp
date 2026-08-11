@@ -596,7 +596,48 @@ uint32_t EmitMemoryLoadDwordValueU32(EmitterState* state, const IR::Instruction&
 				std::fflush(stdout);
 			}
 		}
-		const auto lds_value = LoadFromPointer(EmitLdsElementPointer(state, index));
+		// RING KAYMA YAMASI (`PSEMU_MESH_RING_SHIFT=<dword>`, tipik 16).
+		//
+		// OLCULDU (lane 0, mesh yolu acik, cozunurluk +-0):
+		//   GS'in bookkeeping okumasi   -> dword 40   ("40 + 12*lane" birebir)
+		//   ES'in TUM LDS yazimlari     -> 2837, 2621, 24, 2831
+		// Uc yazim 2621..2837 bandinda kumelenmis (vertex verisi); tek basina
+		// duran 24 ise 40'a en yakin olan. Fark tam 16 dword = 64 BAYT.
+		//
+		// Yani ES imzayi byte 96'ya birakiyor, GS byte 160'ta ariyor. Buradaki
+		// 64 bayt, NGG kurulumunda bir SGPR'a eksik yuklenen hizalama
+		// offset'inin izi olmali. Onu SGPR tarafinda kovalamak yerine okuma
+		// noktasini bukup HIPOTEZI SINIYORUZ.
+		//
+		// Yakalama noktasi tahmin DEGIL: hedef yazmac (VGPR 8) kosulu bu
+		// kosularda atesledigi OLCULMUS durumda - onceki kor yamalar
+		// (30d2962, f61caa1) sabit ofset tahminine dayandigi icin calisma
+		// aninda hic tutmamisti.
+		//
+		// Bu bir TEDAVI DENEMESI, kanit degil: dword 24'teki yazimin GS'in
+		// aradigi bookkeeping oldugu olculmedi, yalnizca en yakin aday.
+		// Kanit, geometrinin ekrana dusmesidir.
+		auto okuma_index = index;
+		if (state->stage == ShaderType::Mesh && inst.dst.kind == IR::OperandKind::Register &&
+		    inst.dst.reg.file == IR::RegisterFile::Vector && inst.dst.reg.index == 8u) {
+			static const uint32_t s_shift = [] {
+				const char* e = std::getenv("PSEMU_MESH_RING_SHIFT");
+				return (e != nullptr) ? static_cast<uint32_t>(std::strtoul(e, nullptr, 10)) : 0u;
+			}();
+			if (s_shift != 0) {
+				const auto kaydirilmis = state->builder.AllocateId();
+				state->builder.AddFunction({OpISub, state->uint_type, kaydirilmis, index,
+				                            ConstantU32(state, s_shift)});
+				okuma_index = kaydirilmis;
+				static std::atomic<uint32_t> s_k {0};
+				if (s_k.fetch_add(1) < 8) {
+					std::printf("[MS-KAYMA] GS bookkeeping okumasi %u dword geri kaydirildi\n",
+					            s_shift);
+					std::fflush(stdout);
+				}
+			}
+		}
+		const auto lds_value = LoadFromPointer(EmitLdsElementPointer(state, okuma_index));
 		// RING BOOKKEEPING DUZELTMESI (`PSEMU_MESH_RING_FIX=1`).
 		//
 		// Olculdu: ES yazma tabanini `lds_dwords[(160 + v8) >> 2]`den okuyor
