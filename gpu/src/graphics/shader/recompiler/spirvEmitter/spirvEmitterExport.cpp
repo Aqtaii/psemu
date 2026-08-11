@@ -1043,8 +1043,8 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 				                            ConstantF32Value(state, -0.95f)});
 				return std::pair<uint32_t, uint32_t> {out, seen};
 			};
-			const auto [x_off, x_seen] = axis(70u);   // ES yazma MIN
-			const auto [y_off, y_seen] = axis(71u);   // ES yazma MAX
+			const auto [x_off, x_seen] = axis(72u);   // dword 40'a TAM ISABET sayisi
+			const auto [y_off, y_seen] = axis(73u);   // lane 0 TOPLAM LDS yazimi
 			// HIC OLCUM YAPMAMIS shader ucgen CIZMESIN. 56 mesh shader var ve
 			// birden fazlasi bu okuma blogundan geciyor; olcumsuzler skalanin
 			// disina ucgen basarsa merkez ORTALAMAYA kayar ve sayi okunamaz.

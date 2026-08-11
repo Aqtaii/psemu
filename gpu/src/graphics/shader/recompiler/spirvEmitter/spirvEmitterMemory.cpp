@@ -865,6 +865,36 @@ void EmitMemoryStoreU32(EmitterState* state, const IR::Instruction& inst, IR::Re
 				state->builder.AddFunction(
 				    {OpSelect, state->uint_type, n_max, gt, index, c_max});
 				state->builder.AddFunction({OpStore, p_max, n_max});
+				// TAM ISABET SAYACI (scan[72]) ve TOPLAM YAZIM (scan[73]).
+				//
+				// Aralik [24 .. 2831] olculdu ve 40 bu araligin icinde - ama
+				// bu ADRESLERIN ORTUSTUGUNU KANITLAMAZ. 2808 dword'luk bir
+				// aralik, ES'in 24'e, sonra 2000'e, sonra 2831'e yazip 40'a
+				// hic dokunmamis olmasiyla da uyumludur. Min/max KAPSAM verir,
+				// ISABET vermez. Kesin soru: lane 0 dword TAM 40'a yazdi mi?
+				const auto p_hit = state->builder.AllocateId();
+				const auto p_tot = state->builder.AllocateId();
+				const auto c_hit = state->builder.AllocateId();
+				const auto c_tot = state->builder.AllocateId();
+				const auto is40  = state->builder.AllocateId();
+				const auto artis = state->builder.AllocateId();
+				const auto n_hit = state->builder.AllocateId();
+				const auto n_tot = state->builder.AllocateId();
+				state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, p_hit,
+				                            state->mesh_scan_variable, ConstantU32(state, 72u)});
+				state->builder.AddFunction({OpLoad, state->uint_type, c_hit, p_hit});
+				state->builder.AddFunction(
+				    {OpIEqual, state->bool_type, is40, index, ConstantU32(state, 40u)});
+				state->builder.AddFunction({OpSelect, state->uint_type, artis, is40,
+				                            ConstantU32(state, 1u), ConstantU32(state, 0)});
+				state->builder.AddFunction({OpIAdd, state->uint_type, n_hit, c_hit, artis});
+				state->builder.AddFunction({OpStore, p_hit, n_hit});
+				state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, p_tot,
+				                            state->mesh_scan_variable, ConstantU32(state, 73u)});
+				state->builder.AddFunction({OpLoad, state->uint_type, c_tot, p_tot});
+				state->builder.AddFunction(
+				    {OpIAdd, state->uint_type, n_tot, c_tot, ConstantU32(state, 1u)});
+				state->builder.AddFunction({OpStore, p_tot, n_tot});
 			});
 			static std::atomic<uint32_t> s_wr {0};
 			if (s_wr.fetch_add(1) < 16) {
