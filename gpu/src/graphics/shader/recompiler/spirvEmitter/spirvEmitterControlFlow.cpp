@@ -1143,6 +1143,33 @@ void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
 		case IR::Opcode::ImageSample: EmitImageSample(state, inst); break;
 		case IR::Opcode::ImageGather4: EmitImageGather4(state, inst); break;
 		case IR::Opcode::Export:
+			// UNIFORMITY SONDASI: mesh disavurumunun YAPISAL tekduzeligi.
+			//
+			// Disavurum zaten EmitGuardedByExec ile sarili, yani exec biti
+			// olmayan lane hic ihrac etmez. Ustune blok da kosulluysa,
+			// dalganin bir kismi o bloga hic girmez. Ikisi birden "yalnizca
+			// lane 0 ihrac ediyor" tablosunu uretir - ki disavuruma yalnizca
+			// lane 0'in ulastigi ab25dcd'de olculmustu.
+			//
+			// Burada ne olculuyor: disavurum blogu girisden YALNIZCA kosulsuz
+			// dallanmalarla erisiliyor mu (yani her dalga oraya girer mi).
+			// Runtime lane sayisi DEGIL - o GPU->CPU kanali ister. Bu, sorunun
+			// yapisal yarisini sifir riskle cevaplar.
+			if (state->stage == ShaderType::Mesh) {
+				static std::atomic<uint32_t> s_u {0};
+				if (s_u.fetch_add(1) < 32) {
+					const auto blok = state->current_block_id;
+					const bool kosulsuz =
+					    blok < state->unconditional_blocks.size() &&
+					    state->unconditional_blocks[blok];
+					std::printf("[MS-TEKDUZE] disavurum blok=%u hedef_tur=%d -> blok %s "
+					            "(exec kapisi HER ZAMAN var)\n",
+					            blok, static_cast<int>(inst.export_info.kind),
+					            kosulsuz ? "KOSULSUZ (her dalga girer)"
+					                     : "KOSULLU (dalganin bir kismi hic girmez)");
+					std::fflush(stdout);
+				}
+			}
 			if (ExportUsesPixelValidMask(*state, inst)) {
 				EmitUpdatePixelValidMask(state);
 			}
@@ -1329,6 +1356,7 @@ void EmitDispatcherBlocks(EmitterState* state, const IR::Program& program) {
 			continue;
 		}
 		state->builder.AddFunction({OpLabel, BlockLabel(*state, block.id)});
+		state->current_block_id = block.id;
 		for (const auto& inst: block.instructions) {
 			EmitInstruction(state, inst);
 		}
@@ -1359,6 +1387,48 @@ void EmitFunction(EmitterState* state, const IR::Program& program) {
 	state->builder.AddFunction({OpLabel, state->entry_label});
 
 	EmitRegisterVariables(state);
+	// UNIFORMITY OLCUMU (derleme zamani, sifir GPU riski).
+	//
+	// Soru: oyunun GS'inde POS0 disavurumuna kac lane ulasiyor? Runtime lane
+	// sayimi GPU->CPU kanali ister; elimizdeki tek kanal ekrandi ve debug
+	// printf derlemeye dahil degil. Ama sorunun YAPISAL yarisi derleme
+	// zamaninda bilinir: disavurum blogu girisden YALNIZCA kosulsuz
+	// dallanmalarla erisiliyor mu?
+	//
+	// Girisden baslayip SADECE kosulsuz terminator'lari izleyen bir BFS,
+	// "her dalga bu bloga girer" kumesini verir. Disavurum bu kumede degilse
+	// blok kosullu demektir - ve GCN'de kosul genellikle exec/lane bazlidir,
+	// yani lane'lerin bir kismi disavuruma hic varmaz.
+	if (state->stage == ShaderType::Mesh) {
+		uint32_t max_id = 0;
+		for (const auto& b: program.blocks) {
+			max_id = std::max(max_id, b.id);
+		}
+		state->unconditional_blocks.assign(max_id + 1u, false);
+		std::vector<const IR::BasicBlock*> by_id(max_id + 1u, nullptr);
+		for (const auto& b: program.blocks) {
+			by_id[b.id] = &b;
+		}
+		if (!program.blocks.empty()) {
+			std::vector<uint32_t> kuyruk {program.blocks.front().id};
+			state->unconditional_blocks[program.blocks.front().id] = true;
+			while (!kuyruk.empty()) {
+				const auto id = kuyruk.back();
+				kuyruk.pop_back();
+				const auto* b = (id < by_id.size()) ? by_id[id] : nullptr;
+				if (b == nullptr || b->terminator.kind != CFG::TerminatorKind::Branch) {
+					continue;
+				}
+				const auto hedef = b->terminator.true_block;
+				if (hedef < state->unconditional_blocks.size() &&
+				    !state->unconditional_blocks[hedef]) {
+					state->unconditional_blocks[hedef] = true;
+					kuyruk.push_back(hedef);
+				}
+			}
+		}
+	}
+
 	EmitComputeInputRegisters(state);
 	EmitPixelInputRegisters(state);
 	EmitVertexInputRegisters(state);
@@ -1565,6 +1635,7 @@ void EmitFunction(EmitterState* state, const IR::Program& program) {
 			EmitMeshProbeTriangle(state, block.id, emitted_block_index, false);
 		}
 		emitted_block_index++;
+		state->current_block_id = block.id;
 		for (const auto& inst: block.instructions) {
 			EmitInstruction(state, inst);
 		}

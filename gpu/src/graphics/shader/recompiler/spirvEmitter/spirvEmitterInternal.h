@@ -535,6 +535,10 @@ struct EmitterState {
 	std::vector<OutputBinding>             outputs;
 	std::vector<uint32_t>                  interface_variables;
 	std::vector<bool>                      reachable_blocks;
+	// UNIFORMITY SONDASI icin blok baglami: hangi bloktayiz ve o bloga
+	// girisden YALNIZCA kosulsuz dallanmalarla ulasiliyor mu.
+	uint32_t                               current_block_id = UINT32_MAX;
+	std::vector<bool>                      unconditional_blocks;
 	std::map<uint32_t, uint32_t>           block_labels;
 	std::map<uint32_t, uint32_t>           constants;
 	std::map<uint32_t, uint32_t>           signed_constants;
