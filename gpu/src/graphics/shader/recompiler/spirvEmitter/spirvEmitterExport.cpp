@@ -685,7 +685,9 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 		// ikisi ayni           -> telemetri dogru; tek lane ulasiyor ve
 		//                         dejenere ilkel bundan
 		const int slot_test = MeshSlotTestMode();
-		if (mesh && slot_test > 0) {
+		// mod 9 ASAGIDA ele aliniyor (pozisyon saglamlik okumasi); burada
+		// yakalanirsa erken return yuzunden OLU KOD olur - olculdu.
+		if (mesh && slot_test > 0 && slot_test != 9) {
 			const auto lane_id = EmitLocalInvocationIndex(state);
 			uint32_t   slot    = lane_id;
 			if (slot_test == 2) {
@@ -910,6 +912,87 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 			}
 			return;
 		}
+		// MOD 9 - POZISYON SAGLAMLIK OKUMASI (`PSEMU_MESH_SLOT_TEST=9`).
+		//
+		// Uc kusurdan ikisi kapandi (yuva indeksi -> LDS compaction; primitif
+		// indeks sirasi -> ters cevirme). Oyunun KENDI pozisyonlariyla ekran
+		// hala siyah. Rasterizer bir ucgeni yalnizca su hallerde atar:
+		//   w <= 0        -> homojen bolme patlar, frustum culling atar
+		//   NaN / Inf     -> hesap gecersiz
+		//   NDC disi      -> tamamen gorus alaninin disinda
+		//
+		// Sonucu RENKLE degil KONUMLA sinyalliyoruz: PS_FIXCOLOR zaten her
+		// seyi kirmizi yaptigi icin renk kanali guvenilmez.
+		//   ucgen SOLDA  -> pozisyon BOZUK
+		//   ucgen SAGDA  -> pozisyon SAGLAM
+		// NaN ortuk olarak yakalaniyor: NaN'da TUM sirali (Ord) kiyaslar
+		// false doner, yani "bozuk" tarafina duser.
+		if (mesh && MeshSlotTestMode() == 9) {
+			const auto px = state->builder.AllocateId();
+			const auto py = state->builder.AllocateId();
+			const auto pw = state->builder.AllocateId();
+			state->builder.AddFunction({OpCompositeExtract, state->float_type, px, value, 0});
+			state->builder.AddFunction({OpCompositeExtract, state->float_type, py, value, 1});
+			state->builder.AddFunction({OpCompositeExtract, state->float_type, pw, value, 3});
+			const auto zero  = ConstantF32Value(state, 0.0f);
+			const auto w_pos = state->builder.AllocateId();
+			state->builder.AddFunction({OpFOrdGreaterThan, state->bool_type, w_pos, pw, zero});
+			const auto ax    = state->builder.AllocateId();
+			const auto ay    = state->builder.AllocateId();
+			const auto bound = state->builder.AllocateId();
+			state->builder.AddFunction({OpExtInst, state->float_type, ax, state->glsl_std450,
+			                            GlslFAbs, px});
+			state->builder.AddFunction({OpExtInst, state->float_type, ay, state->glsl_std450,
+			                            GlslFAbs, py});
+			state->builder.AddFunction({OpFMul, state->float_type, bound, pw,
+			                            ConstantF32Value(state, 4.0f)});
+			const auto x_ok  = state->builder.AllocateId();
+			const auto y_ok  = state->builder.AllocateId();
+			const auto and1  = state->builder.AllocateId();
+			const auto valid = state->builder.AllocateId();
+			state->builder.AddFunction({OpFOrdLessThanEqual, state->bool_type, x_ok, ax, bound});
+			state->builder.AddFunction({OpFOrdLessThanEqual, state->bool_type, y_ok, ay, bound});
+			state->builder.AddFunction({OpLogicalAnd, state->bool_type, and1, w_pos, x_ok});
+			state->builder.AddFunction({OpLogicalAnd, state->bool_type, valid, and1, y_ok});
+			const auto x_off = state->builder.AllocateId();
+			state->builder.AddFunction({OpSelect, state->float_type, x_off, valid,
+			                            ConstantF32Value(state, 0.5f),
+			                            ConstantF32Value(state, -0.5f)});
+			const float corners[3][2] = {{-0.25f, -0.25f}, {0.25f, -0.25f}, {0.0f, 0.25f}};
+			for (uint32_t i = 0; i < 3; i++) {
+				const auto cx  = state->builder.AllocateId();
+				const auto vec = state->builder.AllocateId();
+				const auto ptr = state->builder.AllocateId();
+				state->builder.AddFunction({OpFAdd, state->float_type, cx, x_off,
+				                            ConstantF32Value(state, corners[i][0])});
+				state->builder.AddFunction({OpCompositeConstruct, state->vec4_float_type, vec, cx,
+				                            ConstantF32Value(state, corners[i][1]),
+				                            ConstantF32Value(state, 0.0f),
+				                            ConstantF32Value(state, 1.0f)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_output_vec4_float, ptr,
+				                            variable, ConstantU32(state, i),
+				                            ConstantU32(state, 0)});
+				state->builder.AddFunction({OpStore, ptr, vec});
+			}
+			if (state->mesh_prim_indices_variable != 0) {
+				const auto tri     = state->builder.AllocateId();
+				const auto tri_ptr = state->builder.AllocateId();
+				state->builder.AddFunction({OpCompositeConstruct, state->vec3_uint_type, tri,
+				                            ConstantU32(state, 0), ConstantU32(state, 1),
+				                            ConstantU32(state, 2)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_output_vec3_uint, tri_ptr,
+				                            state->mesh_prim_indices_variable,
+				                            ConstantU32(state, 0)});
+				state->builder.AddFunction({OpStore, tri_ptr, tri});
+			}
+			static std::atomic<uint32_t> s_p {0};
+			if (s_p.fetch_add(1) < 32) {
+				std::printf("[MS-POZ-SAGLAMLIK] SOL=bozuk SAG=saglam (w>0 && |x|<=4w && |y|<=4w)\n");
+				std::fflush(stdout);
+			}
+			return;
+		}
+
 		const auto pointer = state->builder.AllocateId();
 		if (mesh) {
 			// NGG vertex compaction: donanim `exp pos0`da hayatta kalan
