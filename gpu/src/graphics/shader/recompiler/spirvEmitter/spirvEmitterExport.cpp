@@ -232,6 +232,19 @@ uint32_t EmitLdsCompactedIndex(EmitterState* state) {
 	return sum;
 }
 
+// ES ISARET TELEMETRISI (`PSEMU_MESH_ES_SENTINEL=1`).
+// ES'in LDS yazim noktasina kosulsuz bir isaret birakir; GS tarafinda
+// okunur. Olculdu: pozisyonun geldigi LDS bolgesi TAMAMEN BOS (e19ab3c) ve
+// ofsetler/siralama STATIK olarak dogru - yani kusur adresleme degil
+// YURUTME. Bu sonda "ES blogu hic kosuyor mu" sorusunu dogrudan yanitlar.
+bool MeshEsSentinelEnabled() {
+	static const bool on = [] {
+		const char* env = std::getenv("PSEMU_MESH_ES_SENTINEL");
+		return env != nullptr && env[0] == '1';
+	}();
+	return on;
+}
+
 bool MeshLdsCompactionEnabled() {
 	static const bool on = [] {
 		const char* env = std::getenv("PSEMU_MESH_LDS_COMPACT");
@@ -687,7 +700,7 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 		const int slot_test = MeshSlotTestMode();
 		// mod 9 ASAGIDA ele aliniyor (pozisyon saglamlik okumasi); burada
 		// yakalanirsa erken return yuzunden OLU KOD olur - olculdu.
-		if (mesh && slot_test > 0 && slot_test != 9 && slot_test != 10 && slot_test != 11) {
+		if (mesh && slot_test > 0 && slot_test != 9 && slot_test != 10 && slot_test != 11 && slot_test != 12) {
 			const auto lane_id = EmitLocalInvocationIndex(state);
 			uint32_t   slot    = lane_id;
 			if (slot_test == 2) {
@@ -944,6 +957,60 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 		//   x=y=z=w=0     -> LDS bolgesine HIC yazilmamis (ES kapisi kapali)
 		//   w=0, digerleri-> yazma OLMUS ama w degeri sifir (deger/kaynak hatasi)
 		// Konumlar: -0.6=hepsi sifir | 0.0=yalnizca w sifir | 0.6=w dolu
+		// MOD 12 - ES ISARETI OKUMASI.
+		// ES'in LDS yazim noktasina birakilan isareti GS'te oku:
+		//   SAG  (+0.6) -> isaret ULASTI  => ES blogu KOSUYOR; pozisyonlarin
+		//                  sifir olmasi baska bir sebepten (deger/ofset kaymasi)
+		//   SOL  (-0.6) -> isaret YOK     => ES blogu hic yurutulmuyor
+		//                  (thread/lane kapisi yutuyor)
+		if (mesh && MeshSlotTestMode() == 12 && state->mesh_scan_variable != 0) {
+			const auto ptr_s = state->builder.AllocateId();
+			const auto mark  = state->builder.AllocateId();
+			const auto seen  = state->builder.AllocateId();
+			const auto x_off = state->builder.AllocateId();
+			state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, ptr_s,
+			                            state->mesh_scan_variable, ConstantU32(state, 64u)});
+			state->builder.AddFunction({OpLoad, state->uint_type, mark, ptr_s});
+			state->builder.AddFunction(
+			    {OpINotEqual, state->bool_type, seen, mark, ConstantU32(state, 0)});
+			state->builder.AddFunction({OpSelect, state->float_type, x_off, seen,
+			                            ConstantF32Value(state, 0.6f),
+			                            ConstantF32Value(state, -0.6f)});
+			const float corners[3][2] = {{-0.12f, -0.12f}, {0.12f, -0.12f}, {0.0f, 0.12f}};
+			for (uint32_t i = 0; i < 3; i++) {
+				const auto cx  = state->builder.AllocateId();
+				const auto vec = state->builder.AllocateId();
+				const auto ptr = state->builder.AllocateId();
+				state->builder.AddFunction({OpFAdd, state->float_type, cx, x_off,
+				                            ConstantF32Value(state, corners[i][0])});
+				state->builder.AddFunction({OpCompositeConstruct, state->vec4_float_type, vec, cx,
+				                            ConstantF32Value(state, corners[i][1]),
+				                            ConstantF32Value(state, 0.0f),
+				                            ConstantF32Value(state, 1.0f)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_output_vec4_float, ptr,
+				                            variable, ConstantU32(state, i),
+				                            ConstantU32(state, 0)});
+				state->builder.AddFunction({OpStore, ptr, vec});
+			}
+			if (state->mesh_prim_indices_variable != 0) {
+				const auto tri     = state->builder.AllocateId();
+				const auto tri_ptr = state->builder.AllocateId();
+				state->builder.AddFunction({OpCompositeConstruct, state->vec3_uint_type, tri,
+				                            ConstantU32(state, 0), ConstantU32(state, 1),
+				                            ConstantU32(state, 2)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_output_vec3_uint, tri_ptr,
+				                            state->mesh_prim_indices_variable,
+				                            ConstantU32(state, 0)});
+				state->builder.AddFunction({OpStore, tri_ptr, tri});
+			}
+			static std::atomic<uint32_t> s_e {0};
+			if (s_e.fetch_add(1) < 32) {
+				std::printf("[MS-ES-ISARET] SAG=isaret ulasti (ES kosuyor) SOL=ulasmadi\n");
+				std::fflush(stdout);
+			}
+			return;
+		}
+
 		if (mesh && MeshSlotTestMode() == 11) {
 			uint32_t comp[4] = {};
 			for (uint32_t i = 0; i < 4; i++) {

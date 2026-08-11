@@ -638,6 +638,15 @@ void EmitMemoryStoreU32(EmitterState* state, const IR::Instruction& inst, IR::Re
 	EmitIfCondition(state, in_bounds, [&]() {
 		const auto pointer = EmitMemoryElementPointer(state, store_inst.memory, index, inst.pc);
 		state->builder.AddFunction({OpStore, pointer, value});
+		// ES ISARETI: bu LDS yazimi GERCEKTEN kostuysa tarama dizisinin 64.
+		// yuvasina 1 birak. GS tarafinda okunup ekrana kodlanir.
+		if (state->stage == ShaderType::Mesh && store_inst.memory.kind == IR::ResourceKind::Lds &&
+		    MeshEsSentinelEnabled() && state->mesh_scan_variable != 0) {
+			const auto mark = state->builder.AllocateId();
+			state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, mark,
+			                            state->mesh_scan_variable, ConstantU32(state, 64u)});
+			state->builder.AddFunction({OpStore, mark, ConstantU32(state, 1u)});
+		}
 	});
 }
 

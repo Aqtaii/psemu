@@ -539,7 +539,8 @@ void EmitHeaderAndTypes(EmitterState* state) {
 		state->ptr_push_constant_uint         = state->builder.AllocateId();
 	}
 	state->lds_array_type      = state->builder.AllocateId();
-	if (state->stage == ShaderType::Mesh && MeshLdsCompactionEnabled()) {
+	if (state->stage == ShaderType::Mesh &&
+	    (MeshLdsCompactionEnabled() || MeshEsSentinelEnabled())) {
 		state->mesh_scan_array_type = state->builder.AllocateId();
 		state->ptr_mesh_scan_array  = state->builder.AllocateId();
 		state->ptr_mesh_scan_uint   = state->builder.AllocateId();
@@ -900,7 +901,7 @@ void EmitHeaderAndTypes(EmitterState* state) {
 	// OpEntryPoint arayuzunde ister - asagida ekleniyor.
 	if (state->mesh_scan_variable != 0) {
 		state->builder.AddType({OpTypeArray, state->mesh_scan_array_type, state->uint_type,
-		                        ConstantU32(state, 64u)});
+		                        ConstantU32(state, 128u)});
 		state->builder.AddType({OpTypePointer, state->ptr_mesh_scan_array, StorageClassWorkgroup,
 		                        state->mesh_scan_array_type});
 		state->builder.AddType(
