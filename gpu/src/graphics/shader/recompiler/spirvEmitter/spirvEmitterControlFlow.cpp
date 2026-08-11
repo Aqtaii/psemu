@@ -1377,6 +1377,22 @@ void EmitFunction(EmitterState* state, const IR::Program& program) {
 	if (state->stage == ShaderType::Mesh && MeshRingRadarEnabled() &&
 	    state->mesh_scan_variable != 0) {
 		const auto lane = EmitLocalInvocationIndex(state);
+		// 82/83 yuvalarini HER lane kendi yuvasi icin sifirlar - secili lane
+		// sifirlarsa digerinin yazimini silebilirdi.
+		{
+			const auto iki = state->builder.AllocateId();
+			state->builder.AddFunction(
+			    {OpULessThan, state->bool_type, iki, lane, ConstantU32(state, 2u)});
+			EmitIfCondition(state, iki, [&]() {
+				const auto yuva = state->builder.AllocateId();
+				const auto p82  = state->builder.AllocateId();
+				state->builder.AddFunction(
+				    {OpIAdd, state->uint_type, yuva, lane, ConstantU32(state, 82u)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, p82,
+				                            state->mesh_scan_variable, yuva});
+				state->builder.AddFunction({OpStore, p82, ConstantU32(state, 0)});
+			});
+		}
 		const auto is0  = state->builder.AllocateId();
 		state->builder.AddFunction(
 		    {OpIEqual, state->bool_type, is0, lane, ConstantU32(state, MeshRadarLane())});

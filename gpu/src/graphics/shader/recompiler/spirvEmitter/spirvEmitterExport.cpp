@@ -1062,7 +1062,9 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 			// bunu mantiksal imkansizlik sanip yaris/senkronizasyon aradim -
 			// hepsi yanlis izdi. Sayaclar icin olcek 64: cozunurluk ~0.08,
 			// yani TAM SAYI okunur.
-			const auto axis = [&](uint32_t slot, float olcek) {
+			// OFSET destegi: buyuk indeksleri (2800 civari) tam sayi olarak
+			// okuyabilmek icin once sabit cikarilir, sonra 64 olcegine yayilir.
+			const auto axis = [&](uint32_t slot, float olcek, uint32_t ofset = 0u) {
 				const auto ptr   = state->builder.AllocateId();
 				const auto raw   = state->builder.AllocateId();
 				const auto seen  = state->builder.AllocateId();
@@ -1082,7 +1084,7 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 				state->builder.AddFunction({OpULessThan, state->bool_type, seen, raw,
 				                            ConstantU32(state, 0xFFFFFFFFu)});
 				state->builder.AddFunction(
-				    {OpBitwiseOr, state->uint_type, val, raw, ConstantU32(state, 0)});
+				    {OpISub, state->uint_type, val, raw, ConstantU32(state, ofset)});
 				state->builder.AddFunction(
 				    {OpULessThan, state->bool_type, capc, val,
 				     ConstantU32(state, static_cast<uint32_t>(olcek))});
@@ -1126,8 +1128,10 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 			// hem 40 (lane'den bagimsiz) hem 52 (40 + 12*lane) var - karari
 			// belirsizlige birakmamak icin cozunurluk +-0'a cekiliyor.
 			// Beklenen degerler kucuk (24 / 36 / 40 / 52), 64 olcegine sigar.
-			const auto [x_slot, x_seen] = axis(70u, 64.0f);   // ES'in EN KUCUK yazimi
-			const auto [y_slot, y_seen] = axis(69u, 64.0f);   // GS'in okuma indeksi
+			// X = lane 0'in EN BUYUK yazimi, Y = lane 1'inki (ikisi de -2800).
+			// Fark 12 cikarsa kume lane adimi TASIYOR, 0 cikarsa tasimIYOR.
+			const auto [x_slot, x_seen] = axis(82u, 64.0f, 2800u);
+			const auto [y_slot, y_seen] = axis(83u, 64.0f, 2800u);
 			const auto x_off = s_sabit ? sabit(40.0f) : x_slot;
 			const auto y_off = s_sabit ? sabit(20.0f) : y_slot;
 			// HIC OLCUM YAPMAMIS shader ucgen CIZMESIN. 56 mesh shader var ve

@@ -868,6 +868,38 @@ void EmitMemoryStoreU32(EmitterState* state, const IR::Instruction& inst, IR::Re
 			state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, w_ptr,
 			                            state->mesh_scan_variable, ConstantU32(state, 68u)});
 			state->builder.AddFunction({OpStore, w_ptr, w_val});
+			// LANE BASINA MAX KANALI (scan[82] = lane 0, scan[83] = lane 1).
+			//
+			// Bosluk: ES'in HANGI yazimlarinin lane adimi tasidigi olculmedi.
+			// Lane 0'in dort yaziminin ucu 2621..2837 bandinda kumelenmisti;
+			// o kume lane adimi tasiyorsa (vertex verisi olarak beklenir) ama
+			// bookkeeping yazimi tasimiyorsa duzeltme yalnizca o tek yazimi
+			// hedeflemeli. Tersi de mumkun. Varsaymadan olcuyoruz.
+			//
+			// Her lane KENDI yuvasina yazar, yani lane'ler arasi yaris yok;
+			// tek kosuda iki lane'in en buyuk yazimi karsilastirilabilir.
+			{
+				const auto iki   = state->builder.AllocateId();
+				state->builder.AddFunction(
+				    {OpULessThan, state->bool_type, iki, w_lane, ConstantU32(state, 2u)});
+				EmitIfCondition(state, iki, [&]() {
+					const auto yuva = state->builder.AllocateId();
+					const auto p82  = state->builder.AllocateId();
+					const auto c82  = state->builder.AllocateId();
+					const auto gt82 = state->builder.AllocateId();
+					const auto n82  = state->builder.AllocateId();
+					state->builder.AddFunction(
+					    {OpIAdd, state->uint_type, yuva, w_lane, ConstantU32(state, 82u)});
+					state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, p82,
+					                            state->mesh_scan_variable, yuva});
+					state->builder.AddFunction({OpLoad, state->uint_type, c82, p82});
+					state->builder.AddFunction(
+					    {OpUGreaterThan, state->bool_type, gt82, index, c82});
+					state->builder.AddFunction(
+					    {OpSelect, state->uint_type, n82, gt82, index, c82});
+					state->builder.AddFunction({OpStore, p82, n82});
+				});
+			}
 			// LANE 0 MIN/MAX KANALI (scan[70] = min, scan[71] = max).
 			//
 			// Onceki surum yalnizca SON yazimi tutuyordu; olculen 2831 bu
