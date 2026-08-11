@@ -1009,6 +1009,23 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 		// EKSEN kullaniyoruz; boylece SetMeshOutputsEXT'e dokunmuyoruz.
 		// Yuva bosken (0) eksen -0.95'e, skalanin disina dusurulur.
 		if (mesh && MeshSlotTestMode() == 16 && state->mesh_scan_variable != 0) {
+			// OKUMA, YAZAN LANE'DE OLMAK ZORUNDA.
+			//
+			// Sayaclari lane 0 yaziyor, okuma blogunu ise BASKA bir lane
+			// calistiriyordu ve aralarinda hicbir senkronizasyon yok.
+			// Olculdu: filtre yuklemesi "toplam > 0" gorurken eksen
+			// yuklemesi ayni yuvadan 0 okudu - eksenler once calisiyor,
+			// arada lane 0 sayaci artiriyor. Klasik yaris.
+			//
+			// Cozum bariyer DEGIL: bu shader'da disavurum blogu tekduze
+			// degil (NGG'de kosullu), orada OpControlBarrier tanimsiz
+			// davranis olurdu. Bunun yerine okumayi YAZAN lane'e tasiyoruz -
+			// ayni invocation icinde okuma-yazma sirasi garantili.
+			const auto oku_lane = EmitLocalInvocationIndex(state);
+			const auto oku_is0  = state->builder.AllocateId();
+			state->builder.AddFunction(
+			    {OpIEqual, state->bool_type, oku_is0, oku_lane, ConstantU32(state, 0)});
+			EmitIfCondition(state, oku_is0, [&]() {
 			const auto axis = [&](uint32_t slot) {
 				const auto ptr   = state->builder.AllocateId();
 				const auto raw   = state->builder.AllocateId();
@@ -1115,6 +1132,7 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 				                            ConstantU32(state, 0)});
 				state->builder.AddFunction({OpStore, tp, tri});
 			}
+			});
 			static std::atomic<uint32_t> s_an {0};
 			if (s_an.fetch_add(1) < 32) {
 				std::printf("[MS-ANALOG] X = GS okuma indeksi, Y = ES yazma indeksi (lane 0)\n");
