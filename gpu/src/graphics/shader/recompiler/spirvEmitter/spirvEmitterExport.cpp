@@ -1038,10 +1038,22 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 				                            ConstantF32Value(state, -0.9f)});
 				state->builder.AddFunction({OpSelect, state->float_type, out, seen, onsc,
 				                            ConstantF32Value(state, -0.95f)});
-				return out;
+				return std::pair<uint32_t, uint32_t> {out, seen};
 			};
-			const auto x_off = axis(69u);
-			const auto y_off = axis(70u);
+			const auto [x_off, x_seen] = axis(69u);
+			const auto [y_off, y_seen] = axis(70u);
+			// HIC OLCUM YAPMAMIS shader ucgen CIZMESIN. 56 mesh shader var ve
+			// birden fazlasi bu okuma blogundan geciyor; olcumsuzler skalanin
+			// disina ucgen basarsa merkez ORTALAMAYA kayar ve sayi okunamaz.
+			// Cozum: iki yuva da bossa ucgeni dejenere et (uc kose ayni nokta),
+			// boylece hic piksel uretmez ve olcum yapanlar yalniz kalir.
+			// NOT: "olcum yoksa dejenere ucgen" denendi ve GERI ALINDI - ekrana
+			// ulasan shader'lari da sustururken geriye yalnizca ekrana hic
+			// varmayan bir ucgen kaldi, ustunu de oyunun tam ekran gecisi
+			// ortti. Olcumsuzler yine -0.95 kosesine cizer; ayirt etme isi
+			// okuyucuda (baglantili bilesen), boylece ortalama alinmaz.
+			(void)x_seen;
+			(void)y_seen;
 			const float corners[3][2] = {{-0.04f, -0.04f}, {0.04f, -0.04f}, {0.0f, 0.04f}};
 			for (uint32_t i = 0; i < 3; i++) {
 				const auto cx  = state->builder.AllocateId();
