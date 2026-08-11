@@ -548,8 +548,22 @@ uint32_t EmitMemoryLoadDwordValueU32(EmitterState* state, const IR::Instruction&
 			const auto lane    = EmitLocalInvocationIndex(state);
 			const auto base    = state->builder.AllocateId();
 			const auto fixed   = state->builder.AllocateId();
+			// YAKALAMA NOKTASI DUZELTILDI (zincir dokumden cikarildi):
+			//   7398: v8 = 48 * v24                        (taban)
+			//   7499: v8 = lds_dwords[(160 + 48*v24) / 4]  (bookkeeping OKUMASI)
+			//   8067: lds_dwords[(140 + v8)/4] = pozisyon  (o degerle YAZIYOR)
+			//   GS  : lds_dwords[(140 + 48*v24)/4] okuyor
+			// Eslesme icin `LDS[160 + 48*lane]` ICINDE `48*lane` olmali -
+			// yani PER-LANE bir bookkeeping tablosu.
+			// Onceki deneme indeks 40'i yakaliyordu = YALNIZCA lane 0'in
+			// slotu; dogrusu `(160 + 48*lane)/4 = 40 + 12*lane`.
+			const auto lane12 = state->builder.AllocateId();
+			const auto want   = state->builder.AllocateId();
 			state->builder.AddFunction(
-			    {OpIEqual, state->bool_type, is_base, index, ConstantU32(state, 160u / 4u)});
+			    {OpIMul, state->uint_type, lane12, lane, ConstantU32(state, 12u)});
+			state->builder.AddFunction(
+			    {OpIAdd, state->uint_type, want, lane12, ConstantU32(state, 40u)});
+			state->builder.AddFunction({OpIEqual, state->bool_type, is_base, index, want});
 			state->builder.AddFunction(
 			    {OpIMul, state->uint_type, base, lane, ConstantU32(state, 48u)});
 			state->builder.AddFunction(
