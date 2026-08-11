@@ -79,22 +79,45 @@ PipelineCache::GraphicsPipeline* PipelineCache::CreateGraphicsPipeline(
 	// Mesh olmayan cizimlerin renk yazma maskesini sifirlayinca ekranda
 	// YALNIZCA mesh cizimleri kalir; derinlik/sablon ve diger yan etkiler
 	// aynen surer, yani oyunun akisi bozulmaz.
-	if (!mesh) {
-		static const bool s_only_mesh = [] {
-			const char* e = std::getenv("PSEMU_ONLY_MESH_COLOR");
-			return e != nullptr && e[0] == '1';
-		}();
-		if (s_only_mesh) {
-			for (uint32_t i = 0; i < color_count; i++) {
+	// Mod 1: mesh olmayan TUM cizimlerin rengi kapanir. Genis ama kaba - son
+	//        kompozisyon/blit de mesh olmayan bir cizimdir, o da susarsa mesh
+	//        ciktisi ekrana TASINAMAZ ve ekran sahte sekilde siyah kalir.
+	// Mod 2: yalnizca mesh'in yazdigi HEDEF TAMPONA yazan mesh-disi cizimler
+	//        susar. Blit farkli hedefe (sunum zinciri) yazdigi icin dokunulmaz,
+	//        yani mesh ciktisi ekrana varmaya devam eder. Dogru olan bu.
+	static const int s_only_mesh = [] {
+		const char* e = std::getenv("PSEMU_ONLY_MESH_COLOR");
+		return (e != nullptr) ? std::atoi(e) : 0;
+	}();
+	// Mesh'in hedef tamponunu ilk mesh ciziminde ogreniyoruz.
+	static std::atomic<const void*> s_mesh_buffer {nullptr};
+	if (mesh && s_only_mesh == 2) {
+		for (uint32_t i = 0; i < color_count; i++) {
+			if (colors[i].vulkan_buffer != nullptr) {
+				const void* beklenen = nullptr;
+				s_mesh_buffer.compare_exchange_strong(
+				    beklenen, static_cast<const void*>(colors[i].vulkan_buffer));
+				break;
+			}
+		}
+	}
+	if (!mesh && s_only_mesh != 0) {
+		const void* hedef  = s_mesh_buffer.load();
+		uint32_t    kapali = 0;
+		for (uint32_t i = 0; i < color_count; i++) {
+			const bool ayni_hedef =
+			    hedef != nullptr && static_cast<const void*>(colors[i].vulkan_buffer) == hedef;
+			if (s_only_mesh == 1 || ayni_hedef) {
 				color_mask[i] = 0;
+				kapali++;
 			}
-			static std::atomic<uint32_t> s_q {0};
-			if (s_q.fetch_add(1) < 8) {
-				std::printf("[YALNIZ-MESH] mesh olmayan cizimin renk yazimi kapatildi "
-				            "(ek=%u)\n",
-				            color_count);
-				std::fflush(stdout);
-			}
+		}
+		static std::atomic<uint32_t> s_q {0};
+		if (kapali != 0 && s_q.fetch_add(1) < 8) {
+			std::printf("[YALNIZ-MESH] mod=%d mesh-disi cizimde %u/%u ekin rengi kapatildi "
+			            "(mesh_hedef=%p)\n",
+			            s_only_mesh, kapali, color_count, s_mesh_buffer.load());
+			std::fflush(stdout);
 		}
 	}
 
