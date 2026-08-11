@@ -539,6 +539,13 @@ void EmitHeaderAndTypes(EmitterState* state) {
 		state->ptr_push_constant_uint         = state->builder.AllocateId();
 	}
 	state->lds_array_type      = state->builder.AllocateId();
+	if (state->stage == ShaderType::Mesh && MeshLdsCompactionEnabled()) {
+		state->mesh_scan_array_type = state->builder.AllocateId();
+		state->ptr_mesh_scan_array  = state->builder.AllocateId();
+		state->ptr_mesh_scan_uint   = state->builder.AllocateId();
+		state->mesh_scan_variable   = state->builder.AllocateId();
+		state->interface_variables.push_back(state->mesh_scan_variable);
+	}
 	state->ptr_workgroup_array = state->builder.AllocateId();
 	state->ptr_workgroup_uint  = state->builder.AllocateId();
 	state->lds_variable        = state->builder.AllocateId();
@@ -886,6 +893,20 @@ void EmitHeaderAndTypes(EmitterState* state) {
 			state->builder.AddType({OpVariable, state->ptr_workgroup_array, state->lds_variable,
 			                        StorageClassWorkgroup});
 		}
+	}
+	// LDS PREFIX-SUM COMPACTION icin AYRI 64 dword'luk tarama dizisi.
+	// Donanimin NGG vertex compaction birimini yazilimda taklit eder; oyunun
+	// kendi LDS'ine DOKUNMAZ. SPIR-V 1.4 tum global degiskenleri
+	// OpEntryPoint arayuzunde ister - asagida ekleniyor.
+	if (state->mesh_scan_variable != 0) {
+		state->builder.AddType({OpTypeArray, state->mesh_scan_array_type, state->uint_type,
+		                        ConstantU32(state, 64u)});
+		state->builder.AddType({OpTypePointer, state->ptr_mesh_scan_array, StorageClassWorkgroup,
+		                        state->mesh_scan_array_type});
+		state->builder.AddType(
+		    {OpTypePointer, state->ptr_mesh_scan_uint, StorageClassWorkgroup, state->uint_type});
+		state->builder.AddType({OpVariable, state->ptr_mesh_scan_array, state->mesh_scan_variable,
+		                        StorageClassWorkgroup});
 	}
 	for (uint32_t i = 0; i < state->sampled_images.size(); i++) {
 		auto&      image     = state->sampled_images[i];

@@ -159,6 +159,87 @@ uint32_t EmitNggCompactedIndex(EmitterState* state) {
 	return index;
 }
 
+// LDS PREFIX-SUM COMPACTION (`PSEMU_MESH_LDS_COMPACT=1`).
+//
+// Ballot tabanli compaction BU MIMARIDE ILKESEL OLARAK GECERSIZ (b5e38d6):
+// 64-lane misafir dalga icin `SelectGraphicsLaneMaskMode` bilerek
+// PerInvocation seciyor, yani misafir lane'ler host subgroup lane'lerine
+// ESLENMIYOR. `OpGroupNonUniformBallot` host subgroup'u okur ve misafir
+// dalgayla karsiligi yoktur.
+//
+// Dogru karsilik: sikistirmayi EMULE EDILEN exec uzerinden, IS GRUBU
+// genelinde hesaplamak. LocalSize=64 ve misafir dalga 64 oldugundan
+// IS GRUBU = MISAFIR DALGA.
+//
+// Algoritma (donanimin NGG compaction biriminin yazilim karsiligi):
+//   1. her cagri aktiflik durumunu (0/1) LDS'teki kendi yuvasina yazar
+//   2. is grubu bariyeri
+//   3. kendi indeksinden KUCUK yuvalarin toplami = sikistirilmis indeks
+//
+// Adim 3 DONGU YERINE ACILMIS (64 yineleme, dallanmasiz OpSelect). Sebep:
+// bu fonksiyon zaten yapilandirilmis bir CFG'nin ICINE emit ediliyor; yeni
+// bir dongu sokmak bu oturumda defalarca bedeli odenen yapisal kontrol
+// akisi risklerini geri getirirdi. Acilmis hali ~256 komut, kabul edilebilir.
+//
+// TEHLIKE - BARIYER TEKDUZELIGI: `OpControlBarrier` TEKDUZE kontrol
+// akisinda olmak zorundadir. Disavurum noktasi lane kapisinin ardinda; tum
+// 64 cagri oraya varmiyorsa bariyer KILITLENIR ve GPU asilir (TDR ile
+// toparlanir). Bu yuzden VARSAYILAN KAPALI ve bir DENEYDIR.
+uint32_t EmitLdsCompactedIndex(EmitterState* state) {
+	const auto lane = EmitLocalInvocationIndex(state);
+	if (state->mesh_scan_variable == 0) {
+		return lane;
+	}
+	// 1) aktiflik bayragini kendi yuvana yaz
+	const auto active   = EmitExecActiveBool(state);
+	const auto flag     = state->builder.AllocateId();
+	const auto self_ptr = state->builder.AllocateId();
+	state->builder.AddFunction({OpSelect, state->uint_type, flag, active, ConstantU32(state, 1),
+	                            ConstantU32(state, 0)});
+	state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, self_ptr,
+	                            state->mesh_scan_variable, lane});
+	state->builder.AddFunction({OpStore, self_ptr, flag});
+
+	// 2) is grubu bariyeri
+	state->builder.AddFunction({OpControlBarrier, ConstantU32(state, ScopeWorkgroup),
+	                            ConstantU32(state, ScopeWorkgroup),
+	                            ConstantU32(state, MemorySemanticsAcquireRelease |
+	                                                   MemorySemanticsWorkgroupMemory)});
+
+	// 3) kendinden kucuk aktif cagrilari say (acilmis, dallanmasiz)
+	uint32_t sum = ConstantU32(state, 0);
+	for (uint32_t i = 0; i < 64u; i++) {
+		const auto slot_ptr = state->builder.AllocateId();
+		const auto value    = state->builder.AllocateId();
+		const auto before   = state->builder.AllocateId();
+		const auto add      = state->builder.AllocateId();
+		const auto next     = state->builder.AllocateId();
+		state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, slot_ptr,
+		                            state->mesh_scan_variable, ConstantU32(state, i)});
+		state->builder.AddFunction({OpLoad, state->uint_type, value, slot_ptr});
+		state->builder.AddFunction(
+		    {OpULessThan, state->bool_type, before, ConstantU32(state, i), lane});
+		state->builder.AddFunction(
+		    {OpSelect, state->uint_type, add, before, value, ConstantU32(state, 0)});
+		state->builder.AddFunction({OpIAdd, state->uint_type, next, sum, add});
+		sum = next;
+	}
+	static std::atomic<uint32_t> s_l {0};
+	if (s_l.fetch_add(1) < 32) {
+		std::printf("[MS-LDS-COMPACT] is grubu prefix-toplami kuruldu (64 acilmis yineleme)\n");
+		std::fflush(stdout);
+	}
+	return sum;
+}
+
+bool MeshLdsCompactionEnabled() {
+	static const bool on = [] {
+		const char* env = std::getenv("PSEMU_MESH_LDS_COMPACT");
+		return env != nullptr && env[0] == '1';
+	}();
+	return on;
+}
+
 bool MeshCompactionEnabled() {
 	static const bool on = [] {
 		const char* env = std::getenv("PSEMU_MESH_COMPACT");
@@ -470,10 +551,13 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 				state->builder.AddFunction(
 				    {OpUMod, state->uint_type, folded, lane_id, ConstantU32(state, 3u)});
 				slot = folded;
-			} else if (slot_test >= 3) {
+			} else if (slot_test == 3) {
 				// TEST C: donanimin NGG vertex compaction'i - aktif lane'ler
 				// arasinda kacinci oldugumuz (ballot(true) + ExclusiveScan).
 				slot = EmitNggCompactedIndex(state);
+			} else if (slot_test >= 4) {
+				// TEST D: LDS prefix-toplami ile is grubu genelinde compaction.
+				slot = EmitLdsCompactedIndex(state);
 			}
 			const auto value    = EmitFixedTrianglePosition(state, lane_id);
 			const auto slot_ptr = state->builder.AllocateId();
@@ -496,7 +580,8 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 				std::printf("[MS-SLOT-TEST] mod=%d yuva=%s (tahsis=oyunun m0, indeks=0/1/2, "
 				            "kose=HELLO) pc=0x%08x\n",
 				            slot_test,
-				            slot_test >= 3   ? "compaction"
+				            slot_test >= 4   ? "lds-compaction"
+				            : slot_test == 3 ? "ballot-compaction"
 				            : slot_test == 2 ? "lane%3"
 				                             : "lane",
 				            inst.pc);
@@ -678,8 +763,13 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 		}
 		const auto pointer = state->builder.AllocateId();
 		if (mesh) {
-			const auto lane = MeshCompactionEnabled() ? EmitNggCompactedIndex(state)
-			                                          : EmitLocalInvocationIndex(state);
+			// NGG vertex compaction: donanim `exp pos0`da hayatta kalan
+			// lane'leri otomatik sikistirir. Emulator 1:1 esleme yapiyordu.
+			// LDS yolu TEST D'de KIRMIZI verdi (is grubu prefix-toplami);
+			// ballot yolu bu mimaride gecersiz (bkz. b5e38d6).
+			const auto lane = MeshLdsCompactionEnabled() ? EmitLdsCompactedIndex(state)
+			                  : MeshCompactionEnabled()  ? EmitNggCompactedIndex(state)
+			                                             : EmitLocalInvocationIndex(state);
 			state->builder.AddFunction({OpAccessChain, state->ptr_output_vec4_float, pointer,
 			                            variable, lane, ConstantU32(state, 0)});
 			// KAPSAM KANITI: deneyin gercekten uygulandigini gostermeden

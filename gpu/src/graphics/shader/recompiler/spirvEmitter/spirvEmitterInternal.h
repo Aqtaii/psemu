@@ -44,6 +44,8 @@ struct EmitterState;
 [[nodiscard]] bool     MeshProbeCond();
 [[nodiscard]] uint32_t EmitNggCompactedIndex(EmitterState* state);
 [[nodiscard]] bool     MeshCompactionEnabled();
+[[nodiscard]] bool     MeshLdsCompactionEnabled();
+[[nodiscard]] uint32_t EmitLdsCompactedIndex(EmitterState* state);
 [[nodiscard]] int      MeshProbeLo();
 [[nodiscard]] int      MeshProbeHi();
 void                   EmitMeshProbeTriangle(EmitterState* state, uint32_t block_id, uint32_t ordinal, bool with_alloc);
@@ -455,6 +457,12 @@ struct EmitterState {
 	uint32_t                               ptr_workgroup_array            = 0;
 	uint32_t                               ptr_workgroup_uint             = 0;
 	uint32_t                               lds_variable                   = 0;
+	// LDS PREFIX-SUM COMPACTION (`PSEMU_MESH_LDS_COMPACT=1`) icin ayri dizi.
+	// Oyunun kendi LDS'i kirletilmez.
+	uint32_t                               mesh_scan_array_type           = 0;
+	uint32_t                               ptr_mesh_scan_array            = 0;
+	uint32_t                               ptr_mesh_scan_uint             = 0;
+	uint32_t                               mesh_scan_variable             = 0;
 	std::array<SampledImageDescriptors, 6> sampled_images;
 	uint32_t                               sampler_type                                  = 0;
 	uint32_t                               sampler_array_type                            = 0;
