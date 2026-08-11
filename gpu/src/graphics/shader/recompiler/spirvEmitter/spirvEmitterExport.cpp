@@ -687,7 +687,7 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 		const int slot_test = MeshSlotTestMode();
 		// mod 9 ASAGIDA ele aliniyor (pozisyon saglamlik okumasi); burada
 		// yakalanirsa erken return yuzunden OLU KOD olur - olculdu.
-		if (mesh && slot_test > 0 && slot_test != 9) {
+		if (mesh && slot_test > 0 && slot_test != 9 && slot_test != 10) {
 			const auto lane_id = EmitLocalInvocationIndex(state);
 			uint32_t   slot    = lane_id;
 			if (slot_test == 2) {
@@ -927,6 +927,100 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 		//   ucgen SAGDA  -> pozisyon SAGLAM
 		// NaN ortuk olarak yakalaniyor: NaN'da TUM sirali (Ord) kiyaslar
 		// false doner, yani "bozuk" tarafina duser.
+		// MOD 10 - BOZUKLUGUN KARAKTERI (dort kademeli konum).
+		// Mod 9 "bozuk" dedi; bu kip HANGI kosulun ihlal edildigini ayirir.
+		// Konumlar (soldan saga): NaN | w<=0 | |x|>4w | |y|>4w | saglam
+		// NaN, `x != x` (FUnordNotEqual) ile ACIKCA yakalaniyor.
+		//
+		// SELECT ZINCIRI DOGRU KURULDU: her adim BIR ONCEKI sonucu taban alir.
+		// Onceki konumsal telemetride (fc57ef8) her adim `result`u uzerine
+		// yazmis ve yalnizca SON kiyas hayatta kalmisti - o hata bir olcumu
+		// gecersiz kildi.
+		if (mesh && MeshSlotTestMode() == 10) {
+			const auto px = state->builder.AllocateId();
+			const auto py = state->builder.AllocateId();
+			const auto pw = state->builder.AllocateId();
+			state->builder.AddFunction({OpCompositeExtract, state->float_type, px, value, 0});
+			state->builder.AddFunction({OpCompositeExtract, state->float_type, py, value, 1});
+			state->builder.AddFunction({OpCompositeExtract, state->float_type, pw, value, 3});
+			const auto nx = state->builder.AllocateId();
+			const auto ny = state->builder.AllocateId();
+			const auto nw = state->builder.AllocateId();
+			const auto n1 = state->builder.AllocateId();
+			const auto is_nan = state->builder.AllocateId();
+			state->builder.AddFunction({OpFUnordNotEqual, state->bool_type, nx, px, px});
+			state->builder.AddFunction({OpFUnordNotEqual, state->bool_type, ny, py, py});
+			state->builder.AddFunction({OpFUnordNotEqual, state->bool_type, nw, pw, pw});
+			state->builder.AddFunction({OpLogicalOr, state->bool_type, n1, nx, ny});
+			state->builder.AddFunction({OpLogicalOr, state->bool_type, is_nan, n1, nw});
+			const auto w_bad = state->builder.AllocateId();
+			state->builder.AddFunction({OpFOrdLessThanEqual, state->bool_type, w_bad, pw,
+			                            ConstantF32Value(state, 0.0f)});
+			const auto ax    = state->builder.AllocateId();
+			const auto ay    = state->builder.AllocateId();
+			const auto bound = state->builder.AllocateId();
+			state->builder.AddFunction(
+			    {OpExtInst, state->float_type, ax, state->glsl_std450, GlslFAbs, px});
+			state->builder.AddFunction(
+			    {OpExtInst, state->float_type, ay, state->glsl_std450, GlslFAbs, py});
+			state->builder.AddFunction({OpFMul, state->float_type, bound, pw,
+			                            ConstantF32Value(state, 4.0f)});
+			const auto x_bad = state->builder.AllocateId();
+			const auto y_bad = state->builder.AllocateId();
+			state->builder.AddFunction({OpFOrdGreaterThan, state->bool_type, x_bad, ax, bound});
+			state->builder.AddFunction({OpFOrdGreaterThan, state->bool_type, y_bad, ay, bound});
+
+			uint32_t   x_off  = ConstantF32Value(state, 0.8f); // saglam
+			const auto s_y    = state->builder.AllocateId();
+			const auto s_x    = state->builder.AllocateId();
+			const auto s_w    = state->builder.AllocateId();
+			const auto s_n    = state->builder.AllocateId();
+			state->builder.AddFunction({OpSelect, state->float_type, s_y, y_bad,
+			                            ConstantF32Value(state, 0.4f), x_off});
+			state->builder.AddFunction({OpSelect, state->float_type, s_x, x_bad,
+			                            ConstantF32Value(state, 0.0f), s_y});
+			state->builder.AddFunction({OpSelect, state->float_type, s_w, w_bad,
+			                            ConstantF32Value(state, -0.4f), s_x});
+			state->builder.AddFunction({OpSelect, state->float_type, s_n, is_nan,
+			                            ConstantF32Value(state, -0.8f), s_w});
+			x_off = s_n;
+
+			const float corners[3][2] = {{-0.12f, -0.12f}, {0.12f, -0.12f}, {0.0f, 0.12f}};
+			for (uint32_t i = 0; i < 3; i++) {
+				const auto cx  = state->builder.AllocateId();
+				const auto vec = state->builder.AllocateId();
+				const auto ptr = state->builder.AllocateId();
+				state->builder.AddFunction({OpFAdd, state->float_type, cx, x_off,
+				                            ConstantF32Value(state, corners[i][0])});
+				state->builder.AddFunction({OpCompositeConstruct, state->vec4_float_type, vec, cx,
+				                            ConstantF32Value(state, corners[i][1]),
+				                            ConstantF32Value(state, 0.0f),
+				                            ConstantF32Value(state, 1.0f)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_output_vec4_float, ptr,
+				                            variable, ConstantU32(state, i),
+				                            ConstantU32(state, 0)});
+				state->builder.AddFunction({OpStore, ptr, vec});
+			}
+			if (state->mesh_prim_indices_variable != 0) {
+				const auto tri     = state->builder.AllocateId();
+				const auto tri_ptr = state->builder.AllocateId();
+				state->builder.AddFunction({OpCompositeConstruct, state->vec3_uint_type, tri,
+				                            ConstantU32(state, 0), ConstantU32(state, 1),
+				                            ConstantU32(state, 2)});
+				state->builder.AddFunction({OpAccessChain, state->ptr_output_vec3_uint, tri_ptr,
+				                            state->mesh_prim_indices_variable,
+				                            ConstantU32(state, 0)});
+				state->builder.AddFunction({OpStore, tri_ptr, tri});
+			}
+			static std::atomic<uint32_t> s_k {0};
+			if (s_k.fetch_add(1) < 32) {
+				std::printf("[MS-POZ-KARAKTER] -0.8=NaN -0.4=w<=0 0.0=|x|>4w 0.4=|y|>4w "
+				            "0.8=saglam\n");
+				std::fflush(stdout);
+			}
+			return;
+		}
+
 		if (mesh && MeshSlotTestMode() == 9) {
 			const auto px = state->builder.AllocateId();
 			const auto py = state->builder.AllocateId();
