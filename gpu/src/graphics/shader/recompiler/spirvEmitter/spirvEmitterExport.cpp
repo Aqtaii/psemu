@@ -237,6 +237,24 @@ uint32_t EmitLdsCompactedIndex(EmitterState* state) {
 // okunur. Olculdu: pozisyonun geldigi LDS bolgesi TAMAMEN BOS (e19ab3c) ve
 // ofsetler/siralama STATIK olarak dogru - yani kusur adresleme degil
 // YURUTME. Bu sonda "ES blogu hic kosuyor mu" sorusunu dogrudan yanitlar.
+// RADAR LANE SECICI (`PSEMU_MESH_RADAR_LANE`, varsayilan 0).
+//
+// Sapmanin lane'e gore nasil degistigini olcmek icin: yakalama da okuma da
+// AYNI lane'de calisir, boylece lane'ler arasi yaris yok. Lane 0 icin
+// olculdu: GS okuma 40, ES'in en kucuk yazimi 24 (fark -16). Sabit 16
+// dword'luk kaydirma tek basina zinciri kapatmadi, yani ya 24'teki yazim
+// aranan bookkeeping degil ya da sapma lane'e gore degisiyor. Bu secici
+// ikinci ihtimali dogrudan olcer: lane 1 icin GS 52 okumali; ES'in en
+// kucuk yazimi 36 cikarsa adim uyusuyor (fark sabit -16), baska bir sey
+// cikarsa adim uyusmuyor ve sabit kaydirma yapisal olarak calisamaz.
+uint32_t MeshRadarLane() {
+	static const uint32_t lane = [] {
+		const char* e = std::getenv("PSEMU_MESH_RADAR_LANE");
+		return (e != nullptr) ? static_cast<uint32_t>(std::strtoul(e, nullptr, 10)) : 0u;
+	}();
+	return lane;
+}
+
 bool MeshRingRadarEnabled() {
 	static const bool on = [] {
 		const char* env = std::getenv("PSEMU_MESH_RING_RADAR");
@@ -1024,7 +1042,8 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 			const auto oku_lane = EmitLocalInvocationIndex(state);
 			const auto oku_is0  = state->builder.AllocateId();
 			state->builder.AddFunction(
-			    {OpIEqual, state->bool_type, oku_is0, oku_lane, ConstantU32(state, 0)});
+			    {OpIEqual, state->bool_type, oku_is0, oku_lane,
+			     ConstantU32(state, MeshRadarLane())});
 			EmitIfCondition(state, oku_is0, [&]() {
 						// OLCEK PARAMETRESI. Onceki surum her seyi 0..4095 araligina
 			// yayiyordu ve cozunurluk +-5..8 birimdi. Sayaclar ise KUCUK
@@ -1093,8 +1112,8 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 				const char* e2 = std::getenv("PSEMU_MESH_ANALOG_CIFT");
 				return (e2 != nullptr) ? static_cast<uint32_t>(std::atoi(e2)) : 0u;
 			}();
-			const auto [x_slot, x_seen] = axis(74u + s_cift * 2u, 4095.0f);
-			const auto [y_slot, y_seen] = axis(75u + s_cift * 2u, 4095.0f);
+			const auto [x_slot, x_seen] = axis(70u, 4095.0f);   // ES'in EN KUCUK yazimi
+			const auto [y_slot, y_seen] = axis(69u, 4095.0f);   // GS'in okuma indeksi
 			const auto x_off = s_sabit ? sabit(40.0f) : x_slot;
 			const auto y_off = s_sabit ? sabit(20.0f) : y_slot;
 			// HIC OLCUM YAPMAMIS shader ucgen CIZMESIN. 56 mesh shader var ve

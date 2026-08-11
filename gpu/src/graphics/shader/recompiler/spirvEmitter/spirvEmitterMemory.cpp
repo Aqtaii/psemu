@@ -579,7 +579,7 @@ uint32_t EmitMemoryLoadDwordValueU32(EmitterState* state, const IR::Instruction&
 			// dogrudan sayi olarak karsilastirilabilir.
 			const auto is0 = state->builder.AllocateId();
 			state->builder.AddFunction(
-			    {OpIEqual, state->bool_type, is0, lane, ConstantU32(state, 0)});
+			    {OpIEqual, state->bool_type, is0, lane, ConstantU32(state, MeshRadarLane())});
 			EmitIfCondition(state, is0, [&]() {
 				const auto p  = state->builder.AllocateId();
 				const auto v1 = state->builder.AllocateId();
@@ -882,7 +882,7 @@ void EmitMemoryStoreU32(EmitterState* state, const IR::Instruction& inst, IR::Re
 			// indeksle duz min/max yetiyor.
 			const auto w_is0 = state->builder.AllocateId();
 			state->builder.AddFunction(
-			    {OpIEqual, state->bool_type, w_is0, w_lane, ConstantU32(state, 0)});
+			    {OpIEqual, state->bool_type, w_is0, w_lane, ConstantU32(state, MeshRadarLane())});
 			EmitIfCondition(state, w_is0, [&]() {
 				const auto p_min = state->builder.AllocateId();
 				const auto p_max = state->builder.AllocateId();

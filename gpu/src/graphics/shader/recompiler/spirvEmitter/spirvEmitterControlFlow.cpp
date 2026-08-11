@@ -1379,7 +1379,7 @@ void EmitFunction(EmitterState* state, const IR::Program& program) {
 		const auto lane = EmitLocalInvocationIndex(state);
 		const auto is0  = state->builder.AllocateId();
 		state->builder.AddFunction(
-		    {OpIEqual, state->bool_type, is0, lane, ConstantU32(state, 0)});
+		    {OpIEqual, state->bool_type, is0, lane, ConstantU32(state, MeshRadarLane())});
 		EmitIfCondition(state, is0, [&]() {
 			const uint32_t slot[9] = {69u, 70u, 71u, 72u, 73u, 74u, 75u, 76u, 77u};
 			const uint32_t init[9] = {0u, 0xFFFFFFFFu, 0u, 0u, 0u,
