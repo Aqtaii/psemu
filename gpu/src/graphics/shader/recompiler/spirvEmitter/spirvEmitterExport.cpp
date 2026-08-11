@@ -1109,10 +1109,16 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 				                            ConstantF32Value(state, corners[i][0])});
 				state->builder.AddFunction({OpFAdd, state->float_type, ry, y_off,
 				                            ConstantF32Value(state, corners[i][1])});
+				// BELIRSIZLIGI KALDIR: "bu is grubunda yazim yok" durumu artik
+				// DEJENERE degil, ayirt edilebilir bir KOSE (+0.95, +0.95).
+				// Dejenere ucgen hic piksel uretmedigi icin "filtre elendi"
+				// ile "ucgen ekrana hic ulasmadi" ayni goruntuyu veriyordu -
+				// ve olculen tablo bu ikisiyle de uyumsuzdu. Ayri konum, uc
+				// durumu (elendi / deger 0 / deger > 0) tek bakista ayirir.
 				state->builder.AddFunction({OpSelect, state->float_type, cx, ilgili, rx,
-				                            ConstantF32Value(state, 0.0f)});
+				                            ConstantF32Value(state, 0.95f)});
 				state->builder.AddFunction({OpSelect, state->float_type, cy, ilgili, ry,
-				                            ConstantF32Value(state, 0.0f)});
+				                            ConstantF32Value(state, 0.95f)});
 				state->builder.AddFunction({OpCompositeConstruct, state->vec4_float_type, vec, cx,
 				                            cy, ConstantF32Value(state, 0.0f),
 				                            ConstantF32Value(state, 1.0f)});
