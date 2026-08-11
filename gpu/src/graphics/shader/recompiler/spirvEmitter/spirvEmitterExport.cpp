@@ -583,7 +583,7 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 			}
 			static std::atomic<uint32_t> s_s {0};
 			if (s_s.fetch_add(1) < 32) {
-				std::printf("[MS-SLOT-TEST] mod=%d yuva=%s (tahsis=oyunun m0, indeks=0/1/2, "
+				std::printf("[MS-SLOT-TEST] mod=%d yuva=%s (tahsis=oyunun m0, indeks=%s, "
 				            "kose=HELLO) pc=0x%08x\n",
 				            slot_test,
 				            slot_test == 5   ? "lds-compaction+OYUN-INDEKSI"
@@ -591,7 +591,7 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 				            : slot_test == 3 ? "ballot-compaction"
 				            : slot_test == 2 ? "lane%3"
 				                             : "lane",
-				            inst.pc);
+				            slot_test == 5 ? "OYUNUN-KENDI" : "0/1/2", inst.pc);
 				std::fflush(stdout);
 			}
 			return;
