@@ -465,11 +465,15 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 		if (mesh && slot_test > 0) {
 			const auto lane_id = EmitLocalInvocationIndex(state);
 			uint32_t   slot    = lane_id;
-			if (slot_test >= 2) {
+			if (slot_test == 2) {
 				const auto folded = state->builder.AllocateId();
 				state->builder.AddFunction(
 				    {OpUMod, state->uint_type, folded, lane_id, ConstantU32(state, 3u)});
 				slot = folded;
+			} else if (slot_test >= 3) {
+				// TEST C: donanimin NGG vertex compaction'i - aktif lane'ler
+				// arasinda kacinci oldugumuz (ballot(true) + ExclusiveScan).
+				slot = EmitNggCompactedIndex(state);
 			}
 			const auto value    = EmitFixedTrianglePosition(state, lane_id);
 			const auto slot_ptr = state->builder.AllocateId();
@@ -491,7 +495,11 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 			if (s_s.fetch_add(1) < 32) {
 				std::printf("[MS-SLOT-TEST] mod=%d yuva=%s (tahsis=oyunun m0, indeks=0/1/2, "
 				            "kose=HELLO) pc=0x%08x\n",
-				            slot_test, slot_test >= 2 ? "lane%3" : "lane", inst.pc);
+				            slot_test,
+				            slot_test >= 3   ? "compaction"
+				            : slot_test == 2 ? "lane%3"
+				                             : "lane",
+				            inst.pc);
 				std::fflush(stdout);
 			}
 			return;
