@@ -237,6 +237,14 @@ uint32_t EmitLdsCompactedIndex(EmitterState* state) {
 // okunur. Olculdu: pozisyonun geldigi LDS bolgesi TAMAMEN BOS (e19ab3c) ve
 // ofsetler/siralama STATIK olarak dogru - yani kusur adresleme degil
 // YURUTME. Bu sonda "ES blogu hic kosuyor mu" sorusunu dogrudan yanitlar.
+bool MeshRingFixEnabled() {
+	static const bool on = [] {
+		const char* env = std::getenv("PSEMU_MESH_RING_FIX");
+		return env != nullptr && env[0] == '1';
+	}();
+	return on;
+}
+
 bool MeshEsSentinelEnabled() {
 	static const bool on = [] {
 		const char* env = std::getenv("PSEMU_MESH_ES_SENTINEL");

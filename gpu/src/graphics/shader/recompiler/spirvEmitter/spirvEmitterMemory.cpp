@@ -529,7 +529,39 @@ uint32_t EmitMemoryLoadDwordValueU32(EmitterState* state, const IR::Instruction&
 			    {OpSelect, state->uint_type, merged, already, old_val, fresh});
 			state->builder.AddFunction({OpStore, slot_ptr, merged});
 		}
-		return LoadFromPointer(EmitLdsElementPointer(state, index));
+		const auto lds_value = LoadFromPointer(EmitLdsElementPointer(state, index));
+		// RING BOOKKEEPING DUZELTMESI (`PSEMU_MESH_RING_FIX=1`).
+		//
+		// Olculdu: ES yazma tabanini `lds_dwords[(160 + v8) >> 2]`den okuyor
+		// (6d3f2cb). O alan hic kurulmadigi icin 0 donuyor -> 64 lane'in
+		// TAMAMI ayni adrese (128..140) yaziyor, son yazan kazaniyor. GS ise
+		// lane N icin `48*N + 128..140` okuyor -> yalnizca lane 0 eslesiyor,
+		// diger 63 lane 0 okuyor -> w=0 -> ucgen eleniyor (ea53ef9).
+		//
+		// Dogru taban GS'in okuma formuluyle AYNI olmali: `48 * lane`.
+		// O yuvaya YAZMAK yine yaris olurdu (64 lane tek slota yazar); bunun
+		// yerine O OKUMANIN SONUCU degistiriliyor.
+		// Yakalama: dword indeksi 40 (= bayt 160, v8_onceki=0 hali).
+		// Dallanmasiz OpSelect - diger LDS okumalari ETKILENMEZ.
+		if (state->stage == ShaderType::Mesh && MeshRingFixEnabled()) {
+			const auto is_base = state->builder.AllocateId();
+			const auto lane    = EmitLocalInvocationIndex(state);
+			const auto base    = state->builder.AllocateId();
+			const auto fixed   = state->builder.AllocateId();
+			state->builder.AddFunction(
+			    {OpIEqual, state->bool_type, is_base, index, ConstantU32(state, 160u / 4u)});
+			state->builder.AddFunction(
+			    {OpIMul, state->uint_type, base, lane, ConstantU32(state, 48u)});
+			state->builder.AddFunction(
+			    {OpSelect, state->uint_type, fixed, is_base, base, lds_value});
+			static std::atomic<uint32_t> s_r {0};
+			if (s_r.fetch_add(1) < 16) {
+				std::printf("[MS-RING] LDS[40] okumasi -> 48*lane ile degistirildi\n");
+				std::fflush(stdout);
+			}
+			return fixed;
+		}
+		return lds_value;
 	}
 	if (mem.kind == IR::ResourceKind::Gds) {
 		const auto in_bounds = EmitGdsElementInBounds(state, index);
