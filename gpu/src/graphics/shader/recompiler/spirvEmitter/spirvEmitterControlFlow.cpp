@@ -1656,10 +1656,19 @@ void EmitFunction(EmitterState* state, const IR::Program& program) {
 		state->builder.AddFunction(
 		    {OpIEqual, state->bool_type, is0, lane, ConstantU32(state, MeshRadarLane())});
 		EmitIfCondition(state, is0, [&]() {
-			const uint32_t slot[9] = {69u, 70u, 71u, 72u, 73u, 74u, 75u, 76u, 77u};
-			const uint32_t init[9] = {0u, 0xFFFFFFFFu, 0u, 0u, 0u,
-			                          0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
-			for (uint32_t i = 0; i < 9; i++) {
+			// 84..87 (kapi girdileri) LISTEDE YOKTU: hic yazilmadiklarinda
+			// Workgroup belleginin tanimsiz icerigini tasiyorlardi ve okunan
+			// "0" degeri, "deger sifir" ile "bu is grubunda hic yakalanmadi"
+			// arasinda ayrim yapamiyordu. 0xFFFFFFFF sentineli ile artik
+			// okuyucu "OLCUM YOK" diyebiliyor. (Ayni ders min/max yuvalarinda
+			// bir kez alinmisti; kapi yuvalarina tasinmamis.)
+			const uint32_t slot[13] = {69u, 70u, 71u, 72u, 73u, 74u, 75u,
+			                           76u, 77u, 84u, 85u, 86u, 87u};
+			const uint32_t init[13] = {0u,          0xFFFFFFFFu, 0u,          0u,
+			                           0u,          0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu,
+			                           0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu,
+			                           0xFFFFFFFFu};
+			for (uint32_t i = 0; i < 13; i++) {
 				const auto p = state->builder.AllocateId();
 				state->builder.AddFunction({OpAccessChain, state->ptr_mesh_scan_uint, p,
 				                            state->mesh_scan_variable,
