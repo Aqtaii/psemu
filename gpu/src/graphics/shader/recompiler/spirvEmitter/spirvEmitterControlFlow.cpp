@@ -722,11 +722,21 @@ void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
 		// Oturumun basindaki "exec bypass" fikrinden FARKLI: orada hedef
 		// EmitGuardedByExec sarmaliydi ve o sarmal bu modda gecirgen oldugu
 		// icin reddedilmisti. Burada hedef OLCULMUS tek bir komut.
-		static const bool s_zorla = [] {
+		// MOD 1: yalnizca s_kapi_pc'deki komut atlanir. OLCULDU: bu, ekrani
+		//        acmadi - ama [MS-ZORLA] yalnizca 1 kayit verdi, yani
+		//        pc=0xb7c TEK bir shader'a ait. Ekrana bagli shader baska ve
+		//        onun kapilari farkli pc'lerde. Tek pc'yi acmak, o shader
+		//        ekrana cizmiyorsa hicbir sey degistirmez. pc kilidi kesinlik
+		//        kazandirdi ama KAPSAM kaybettirdi.
+		// MOD 2: mesh shader'daki exec yazan TUM karsilastirmalar atlanir.
+		//        exec baslangic degerinde (per-invocation modda 1 = aktif)
+		//        kalir, yani her lane ihrac eder. Kaba ama KESIN: geometri
+		//        gelirse kapilar engelleyiciydi, siyah kalirsa degildi.
+		static const int s_zorla = [] {
 			const char* e = std::getenv("PSEMU_MESH_KAPI_ZORLA");
-			return e != nullptr && e[0] == '1';
+			return (e != nullptr) ? std::atoi(e) : 0;
 		}();
-		if (s_zorla && s_kapi_pc != 0u && inst.pc == s_kapi_pc) {
+		if (s_zorla == 2 || (s_zorla == 1 && s_kapi_pc != 0u && inst.pc == s_kapi_pc)) {
 			static std::atomic<uint32_t> s_z {0};
 			if (s_z.fetch_add(1) < 8) {
 				std::printf("[MS-ZORLA] kapi komutu ATLANDI (pc=0x%x) - exec korunuyor\n",
