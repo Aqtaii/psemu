@@ -703,8 +703,37 @@ void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
 		});
 		static std::atomic<uint32_t> s_g {0};
 		if (s_g.fetch_add(1) < 8) {
-			std::printf("[MS-KAPI] v_cmpx_lt girdileri yakalandi (pc=0x%x)\n", inst.pc);
+			std::printf("[MS-KAPI] kapi girdileri yakalandi (pc=0x%x)\n", inst.pc);
 			std::fflush(stdout);
+		}
+		// KAPIYI ZORLA (`PSEMU_MESH_KAPI_ZORLA=1`).
+		//
+		// Ekran kanalinin YAPISAL SINIRI: kapiyi iceren shader hic ihrac
+		// etmiyorsa telemetri ucgeni de cizilemez - telemetri de ayni
+		// ihractan geciyor. Sentinel'li okuma bunu gosterdi: kapi yuvalari
+		// ucgeni cizen is grubunda HIC yazilmamis ("OLCUM YOK"). Bu yoldan
+		// devam etmek sonsuza kadar bos yuva okumak demek.
+		//
+		// Kilidi kirmak icin exec yazimi ATLANIYOR: komut emit edilmez, exec
+		// onceki degerini korur, blok acik kalir.
+		//   geometri gelirse -> kapi gercekten engelleyiciydi (tedaviyle kanit)
+		//   siyah kalirsa    -> kapi masum, eleme baska yerde
+		//
+		// Oturumun basindaki "exec bypass" fikrinden FARKLI: orada hedef
+		// EmitGuardedByExec sarmaliydi ve o sarmal bu modda gecirgen oldugu
+		// icin reddedilmisti. Burada hedef OLCULMUS tek bir komut.
+		static const bool s_zorla = [] {
+			const char* e = std::getenv("PSEMU_MESH_KAPI_ZORLA");
+			return e != nullptr && e[0] == '1';
+		}();
+		if (s_zorla && s_kapi_pc != 0u && inst.pc == s_kapi_pc) {
+			static std::atomic<uint32_t> s_z {0};
+			if (s_z.fetch_add(1) < 8) {
+				std::printf("[MS-ZORLA] kapi komutu ATLANDI (pc=0x%x) - exec korunuyor\n",
+				            inst.pc);
+				std::fflush(stdout);
+			}
+			return;
 		}
 	}
 	if (MeshNoopSkips(*state, inst.op)) {
