@@ -1552,7 +1552,13 @@ void EmitFunction(EmitterState* state, const IR::Program& program) {
 						if (!exec_yazar) {
 							continue;
 						}
-						if (yazan < 24) {
+						// KAPAK 24'ten 64'e: toplam 56 yazim vardi ve ilk 24'u
+					// basiliyordu. Son BASILAN kayit blok 23'teydi ve bu
+					// "yazimlar blok 23'te bitiyor" diye yorumlandi - YANLIS,
+					// kapagin eseriydi. Kapak yuzunden disavurumdan onceki
+					// GERCEK son exec yazimi gorulmedi ve pc kilidi (0x5a8)
+					// yanlis komuta takildi.
+					if (yazan < 64) {
 							std::printf("[MS-EXEC] blok=%u pc=0x%x op=%d kaynak=[%s, %s]\n", b.id,
 							            i.pc, static_cast<int>(i.op), kaynak_adi(i.src[0]),
 							            kaynak_adi(i.src[1]));
