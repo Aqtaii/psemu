@@ -701,6 +701,33 @@ void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
 				state->builder.AddFunction({OpStore, ptr, deger[k]});
 			}
 		});
+		// DEBUG PRINTF (`PSEMU_SPIRV_PRINTF=1` + `PSEMU_VK_VALIDATE=1`).
+		//
+		// Ekran kanali bu olcum icin tukendi: shader'in basinda yazilan
+		// telemetri ucgeninin uzerine oyunun kendi pozisyonlari sonradan
+		// yaziliyor, yani kanal sahte "siyah ekran" raporluyordu. Burada
+		// kapinin iki operandi DOGRUDAN log'a basiliyor - ekran, renk maskesi,
+		// sentinel ve uzerine yazma sorunlarinin hicbiri devrede degil.
+		//
+		// Yalnizca lane 0 bassin: 64 invocation x her cizim = log seli.
+		if (state->debug_printf_set != 0) {
+			const auto p_lane = EmitLocalInvocationIndex(state);
+			const auto p_is0  = state->builder.AllocateId();
+			state->builder.AddFunction(
+			    {OpIEqual, state->bool_type, p_is0, p_lane, ConstantU32(state, 0)});
+			EmitIfCondition(state, p_is0, [&]() {
+				const auto sonuc = state->builder.AllocateId();
+				state->builder.AddFunction(
+				    {OpExtInst, state->void_type, sonuc, state->debug_printf_set, 1u,
+				     state->debug_printf_fmt, EmitValueLoad(state, inst.src[0]),
+				     EmitValueLoad(state, inst.src[1])});
+			});
+			static std::atomic<uint32_t> s_p {0};
+			if (s_p.fetch_add(1) < 8) {
+				std::printf("[MS-PRINTF] kapiya debugPrintfEXT kondu (pc=0x%x)\n", inst.pc);
+				std::fflush(stdout);
+			}
+		}
 		static std::atomic<uint32_t> s_g {0};
 		if (s_g.fetch_add(1) < 8) {
 			std::printf("[MS-KAPI] kapi girdileri yakalandi (pc=0x%x)\n", inst.pc);

@@ -519,6 +519,11 @@ struct EmitterState {
 	uint32_t                               dispatch_continue_label                       = 0;
 	uint32_t                               dispatch_merge_label                          = 0;
 	uint32_t                               glsl_std450                                   = 0;
+	// NonSemantic.DebugPrintf komut kumesi ve format metni. Yalnizca
+	// PSEMU_SPIRV_PRINTF=1 iken tahsis edilir; kapaliyken 0 kalir ve hicbir
+	// komut yayilmaz, yani normal shader'lar etkilenmez.
+	uint32_t                               debug_printf_set                              = 0;
+	uint32_t                               debug_printf_fmt                              = 0;
 	uint32_t                               subgroup_local_invocation_id_variable         = 0;
 	uint32_t                               per_vertex_variable                           = 0;
 	uint32_t                               depth_variable                                = 0;

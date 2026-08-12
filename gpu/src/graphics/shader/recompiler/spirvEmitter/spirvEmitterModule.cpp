@@ -1,3 +1,4 @@
+#include "common/emulatorConfig.h"
 #include "graphics/shader/recompiler/spirvEmitter/spirvEmitterInternal.h"
 
 namespace Libs::Graphics::ShaderRecompiler::Spirv::Emitter {
@@ -628,6 +629,19 @@ void EmitHeaderAndTypes(EmitterState* state) {
 		state->builder.AddExtension("SPV_EXT_mesh_shader");
 	}
 	state->builder.AddExtInstImport(state->glsl_std450, "GLSL.std.450");
+
+	// DEBUG PRINTF (`PSEMU_SPIRV_PRINTF=1`). Ekran kanali bu olcum icin
+	// tukendi; s4 (vertex sayisi) icin dogrudan bir GPU->CPU kanali gerekiyor.
+	// Uzanti + komut kumesi + format metni YALNIZCA bayrak acikken yayilir,
+	// yani kapaliyken uretilen modul bit bit ayni kalir.
+	if (Config::SpirvDebugPrintfEnabled()) {
+		state->debug_printf_set = state->builder.AllocateId();
+		state->debug_printf_fmt = state->builder.AllocateId();
+		state->builder.AddExtension("SPV_KHR_non_semantic_info");
+		state->builder.AddExtInstImport(state->debug_printf_set, "NonSemantic.DebugPrintf");
+		state->builder.AddDebugString(state->debug_printf_fmt,
+		                              "[GPU] KAPI: s4(vertex sayisi)=%u v13(vertex idx)=%u");
+	}
 	state->builder.AddMemoryModel({AddressingModelLogical, MemoryModelGLSL450});
 	state->builder.AddEntryPoint(ExecutionModelForStage(state->stage), state->main_func, "main",
 	                             state->interface_variables);
