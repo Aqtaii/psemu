@@ -1700,6 +1700,30 @@ void EmitFunction(EmitterState* state, const IR::Program& program) {
 	EmitPixelInputRegisters(state);
 	EmitVertexInputRegisters(state);
 
+	// PRINTF KANALI POZITIF KONTROLU.
+	//
+	// [MS-PRINTF] 8 emisyon var ama GPU tarafindan HIC cikti gelmedi. Iki
+	// ihtimal: (a) printf'i tasiyan shader'lar dispatch edilmiyor, (b) kanalin
+	// kendisi calismiyor. Ekran kanalinda ogrenilen ders: kanalin acik
+	// oldugunu VARSAYMA, pozitif kontrolle sabitle.
+	//
+	// Burasi mesh shader'in GIRIS BLOGU - kosulsuz ve her dispatch'te
+	// calisir. Buradan cikti gelirse kanal saglamdir ve onceki yerlesim olu
+	// kodda demektir; gelmezse kanal bozuktur ve sorun emisyonda degil
+	// altyapida aranmalidir.
+	if (state->stage == ShaderType::Mesh && state->debug_printf_set != 0) {
+		const auto giris = state->builder.AllocateId();
+		state->builder.AddFunction({OpExtInst, state->void_type, giris,
+		                            state->debug_printf_set, 1u, state->debug_printf_fmt,
+		                            ConstantU32(state, 0xAAAAu), ConstantU32(state, 0xBBBBu)});
+		static std::atomic<uint32_t> s_gp {0};
+		if (s_gp.fetch_add(1) < 4) {
+			std::printf("[MS-PRINTF-GIRIS] mesh girisine kontrol printf kondu "
+			            "(beklenen: 43690 / 48059)\n");
+			std::fflush(stdout);
+		}
+	}
+
 	// RADAR SENTINEL BASLANGICI (`PSEMU_MESH_RING_RADAR=1`).
 	//
 	// Tarama dizisi Workgroup bellegi ve HICBIR baslangic degeri yok; Vulkan'da
