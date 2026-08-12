@@ -711,16 +711,24 @@ void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
 		//
 		// Yalnizca lane 0 bassin: 64 invocation x her cizim = log seli.
 		if (state->debug_printf_set != 0) {
+			// YUKLEMELER SECIM YAPISININ DISINDA. Ilk surumde EmitValueLoad
+			// cagrilari lambdanin ICINDEYDI; onlar kendi kontrol akislarini
+			// uretince yapisal kural kirildi ve dogrulayici reddetti:
+			//   "block 220 branches to the selection construct, but not to
+			//    the selection header 219"
+			// Operandlari once yukleyip lambdaya yalnizca hazir SSA
+			// degerlerini tasiyoruz.
+			const auto p_s4   = EmitValueLoad(state, inst.src[0]);
+			const auto p_v13  = EmitValueLoad(state, inst.src[1]);
 			const auto p_lane = EmitLocalInvocationIndex(state);
 			const auto p_is0  = state->builder.AllocateId();
 			state->builder.AddFunction(
 			    {OpIEqual, state->bool_type, p_is0, p_lane, ConstantU32(state, 0)});
 			EmitIfCondition(state, p_is0, [&]() {
 				const auto sonuc = state->builder.AllocateId();
-				state->builder.AddFunction(
-				    {OpExtInst, state->void_type, sonuc, state->debug_printf_set, 1u,
-				     state->debug_printf_fmt, EmitValueLoad(state, inst.src[0]),
-				     EmitValueLoad(state, inst.src[1])});
+				state->builder.AddFunction({OpExtInst, state->void_type, sonuc,
+				                            state->debug_printf_set, 1u,
+				                            state->debug_printf_fmt, p_s4, p_v13});
 			});
 			static std::atomic<uint32_t> s_p {0};
 			if (s_p.fetch_add(1) < 8) {
