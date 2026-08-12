@@ -718,18 +718,22 @@ void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
 			//    the selection header 219"
 			// Operandlari once yukleyip lambdaya yalnizca hazir SSA
 			// degerlerini tasiyoruz.
-			const auto p_s4   = EmitValueLoad(state, inst.src[0]);
-			const auto p_v13  = EmitValueLoad(state, inst.src[1]);
-			const auto p_lane = EmitLocalInvocationIndex(state);
-			const auto p_is0  = state->builder.AllocateId();
-			state->builder.AddFunction(
-			    {OpIEqual, state->bool_type, p_is0, p_lane, ConstantU32(state, 0)});
-			EmitIfCondition(state, p_is0, [&]() {
-				const auto sonuc = state->builder.AllocateId();
-				state->builder.AddFunction({OpExtInst, state->void_type, sonuc,
-				                            state->debug_printf_set, 1u,
-				                            state->debug_printf_fmt, p_s4, p_v13});
-			});
+			// KONTROL AKISI EKLENMIYOR. Ilk iki surumde cagri lane 0'a
+			// EmitIfCondition ile kapatilmisti; ikisi de ayni yapisal ihlali
+			// verdi (blok 220 -> secim basligi 219). EmitInstruction'in en
+			// basina bir secim yapisi sokmak, komutun KENDI emisyonuyla ic
+			// ice gecip yapiyi bozuyor - yuklemeleri disari almak yetmedi.
+			//
+			// Cozum: hicbir dallanma uretme, OpExtInst ayni temel blokta
+			// kosulsuz dursun. Bedeli log seli (64 invocation x her cizim);
+			// ilk degerler gorulur gorulmez kosu durdurulacak. Dogru sayiyi
+			// gurultulu almak, yanlis sayiyi temiz almaktan iyidir.
+			const auto p_s4  = EmitValueLoad(state, inst.src[0]);
+			const auto p_v13 = EmitValueLoad(state, inst.src[1]);
+			const auto sonuc = state->builder.AllocateId();
+			state->builder.AddFunction({OpExtInst, state->void_type, sonuc,
+			                            state->debug_printf_set, 1u, state->debug_printf_fmt,
+			                            p_s4, p_v13});
 			static std::atomic<uint32_t> s_p {0};
 			if (s_p.fetch_add(1) < 8) {
 				std::printf("[MS-PRINTF] kapiya debugPrintfEXT kondu (pc=0x%x)\n", inst.pc);
