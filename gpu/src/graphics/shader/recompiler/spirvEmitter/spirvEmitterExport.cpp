@@ -1132,8 +1132,10 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
 			// Fark 12 cikarsa kume lane adimi TASIYOR, 0 cikarsa tasimIYOR.
 			// PSEMU_MESH_ANALOG_CIFT=0 -> lane 0'in (v28, v27) girdileri
 			//                        =1 -> lane 1'inkiler
-			const auto [x_slot, x_seen] = axis(84u + s_cift * 2u, 4095.0f);
-			const auto [y_slot, y_seen] = axis(85u + s_cift * 2u, 4095.0f);
+			// OLCEK 64: degerler kucuk cikti (4095 olceginde +-5..8 cozunurluk
+			// kucuk tam sayilari ayirt edemiyor). Ince olcekte cozunurluk +-0.
+			const auto [x_slot, x_seen] = axis(84u + s_cift * 2u, 64.0f);
+			const auto [y_slot, y_seen] = axis(85u + s_cift * 2u, 64.0f);
 			const auto x_off = s_sabit ? sabit(40.0f) : x_slot;
 			const auto y_off = s_sabit ? sabit(20.0f) : y_slot;
 			// HIC OLCUM YAPMAMIS shader ucgen CIZMESIN. 56 mesh shader var ve

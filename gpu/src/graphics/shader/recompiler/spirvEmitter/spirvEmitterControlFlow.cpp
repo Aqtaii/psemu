@@ -662,8 +662,21 @@ void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
 	// yuvalara aliyoruz. Her lane KENDI yuvasina yazar, aralarinda yaris yok:
 	//     lane 0 -> scan[84] = src0,  scan[85] = src1
 	//     lane 1 -> scan[86] = src0,  scan[87] = src1
+	// PC KILIDI (`PSEMU_MESH_KAPI_PC=0x5a8`). Ilk surum TUM CompareMaskLtU32
+	// komutlarinda atesliyordu (izde 11 tane var) ve hepsi ayni yuvaya
+	// yaziyordu - yani kaydedilen deger o lane icin EN SON calisan
+	// karsilastirmadan geliyordu, disavurumu kapatan pc=0x5a8'deki olmak
+	// zorunda degildi. Nitekim okunan degerler "0 < 0 = false, lane elenir"
+	// diyordu ama lane 0 ELENMIYOR (disavurum blogundan geciyor, telemetri
+	// ucgeni ciziliyor) - yani okunan karsilastirma kapiyi belirleyen degildi.
+	// Artik hangi komutun okundugu tahmine birakilmiyor.
+	static const uint32_t s_kapi_pc = [] {
+		const char* e = std::getenv("PSEMU_MESH_KAPI_PC");
+		return (e != nullptr) ? static_cast<uint32_t>(std::strtoul(e, nullptr, 0)) : 0u;
+	}();
 	if (state->stage == ShaderType::Mesh && MeshRingRadarEnabled() &&
 	    state->mesh_scan_variable != 0 && inst.op == IR::Opcode::CompareMaskLtU32 &&
+	    (s_kapi_pc == 0u || inst.pc == s_kapi_pc) &&
 	    inst.dst.kind == IR::OperandKind::Register &&
 	    inst.dst.reg.file == IR::RegisterFile::Exec) {
 		const auto lane = EmitLocalInvocationIndex(state);
