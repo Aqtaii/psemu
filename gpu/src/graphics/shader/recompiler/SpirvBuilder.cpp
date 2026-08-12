@@ -126,6 +126,16 @@ void Builder::AddExecutionMode(std::initializer_list<uint32_t> operands) {
 	AppendInstruction(&m_execution_modes, 16u, operands);
 }
 
+// OpString (opcode 7). SPIR-V mantiksal duzeninde debug bolumunun BASINDA
+// yer alir - OpName'den once. Ayri bir vektorde tutup Build() sirasinda
+// m_debug'dan once basiyoruz; m_debug'a eklemek OpName'lerin arasina
+// dusurebilirdi ve dogrulayici bunu reddeder.
+void Builder::AddDebugString(uint32_t id, const char* text) {
+	std::vector<uint32_t> operands = {id};
+	AppendString(&operands, text);
+	AppendInstruction(&m_strings, 7u, operands);
+}
+
 void Builder::AddName(uint32_t target, const char* name) {
 	std::vector<uint32_t> operands = {target};
 	AppendString(&operands, name);
@@ -194,6 +204,7 @@ std::vector<uint32_t> Builder::Build() const {
 	EmitEntryPoint(&entry_points);
 	module.insert(module.end(), entry_points.begin(), entry_points.end());
 	module.insert(module.end(), m_execution_modes.begin(), m_execution_modes.end());
+	module.insert(module.end(), m_strings.begin(), m_strings.end());
 	module.insert(module.end(), m_debug.begin(), m_debug.end());
 	module.insert(module.end(), m_annotations.begin(), m_annotations.end());
 	module.insert(module.end(), m_types.begin(), m_types.end());

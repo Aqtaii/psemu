@@ -1,4 +1,21 @@
-﻿// psemu: SDL -> Win32 (pencere + Vulkan surface). VK_USE_PLATFORM_WIN32_KHR
+﻿// SPIR-V DEBUG PRINTF KANALI.
+//
+// Neden: ekran (framebuffer) kanali bu olcum icin tukendi. Son tuzak sunu
+// gosterdi: shader'in BASINDA yazilan telemetri ucgeninin uzerine oyunun
+// kendi (bozuk) pozisyonlari sonradan yaziliyor, yani kanal her seferinde
+// sahte "siyah ekran" raporluyordu. Kalan tek soru (s4 = vertex sayisi)
+// icin dogrudan bir GPU->CPU kanali sart.
+//
+// Tanim CMake yerine burada: CMakeLists degisikligi yeniden yapilandirmayi
+// tetikliyor ve bu kabukta ninja PATH'te olmadigi icin yapilandirma
+// basarisiz oluyor. Etki ayni - eDebugPrintf ozelligi derlemeye dahil olur.
+// Calisma zamaninda ayrica PSEMU_VK_VALIDATE=1 ve PSEMU_SPIRV_PRINTF=1
+// gerekir.
+#ifndef KYTY_ENABLE_DEBUG_PRINTF
+#define KYTY_ENABLE_DEBUG_PRINTF 1
+#endif
+
+// psemu: SDL -> Win32 (pencere + Vulkan surface). VK_USE_PLATFORM_WIN32_KHR
 // gpu/CMakeLists'te global tanimli (vkCreateWin32SurfaceKHR tipleri icin).
 #include <windows.h>
 #include "common/assert.h"

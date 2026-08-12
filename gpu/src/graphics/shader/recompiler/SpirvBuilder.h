@@ -26,6 +26,7 @@ public:
 	// destekliyor, tavan sorun degil.
 	void SetVersion(uint32_t version) { m_version = version; }
 	void AddExtInstImport(uint32_t id, const char* name);
+	void AddDebugString(uint32_t id, const char* text);
 	void AddMemoryModel(std::initializer_list<uint32_t> operands);
 	void AddEntryPoint(uint32_t execution_model, uint32_t entry_point, const char* name,
 	                   const std::vector<uint32_t>& interfaces);
@@ -63,6 +64,7 @@ private:
 	std::vector<uint32_t> m_memory_model;
 	std::vector<uint32_t> m_entry_points;
 	std::vector<uint32_t> m_execution_modes;
+	std::vector<uint32_t> m_strings;
 	std::vector<uint32_t> m_debug;
 	std::vector<uint32_t> m_annotations;
 	std::vector<uint32_t> m_types;

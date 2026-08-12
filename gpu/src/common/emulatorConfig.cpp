@@ -101,7 +101,20 @@ ProfilerDirection GetProfilerDirection() {
 }
 
 bool SpirvDebugPrintfEnabled() {
-	return g_config->spirv_debug_printf_enabled;
+	// TANI ANAHTARI: PSEMU_SPIRV_PRINTF=1. VulkanValidationEnabled ile ayni
+	// desen - yapilandirma alani hicbir yerden set edilmiyor (Config::Load
+	// psemu'da hic cagrilmiyor), yani debug printf PRATIKTE HIC ACILAMIYORDU.
+	//
+	// Neden simdi gerekli: ekran (framebuffer) kanali bu olcum icin tukendi.
+	// Son tuzak, shader'in basinda yazilan telemetri ucgeninin uzerine oyunun
+	// kendi bozuk pozisyonlarinin sonradan yazildigini gosterdi - kanal her
+	// seferinde sahte "siyah ekran" raporluyordu. Kalan tek soru (s4 = vertex
+	// sayisi) icin dogrudan bir GPU->CPU kanali sart.
+	static const bool env_on = [] {
+		const char* env = std::getenv("PSEMU_SPIRV_PRINTF");
+		return env != nullptr && env[0] == '1';
+	}();
+	return g_config->spirv_debug_printf_enabled || env_on;
 }
 
 bool RenderDocEnabled() {
