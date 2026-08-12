@@ -675,7 +675,9 @@ void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
 		return (e != nullptr) ? static_cast<uint32_t>(std::strtoul(e, nullptr, 0)) : 0u;
 	}();
 	if (state->stage == ShaderType::Mesh && MeshRingRadarEnabled() &&
-	    state->mesh_scan_variable != 0 && inst.op == IR::Opcode::CompareMaskLtU32 &&
+	    state->mesh_scan_variable != 0 &&
+	    (inst.op == IR::Opcode::CompareMaskLtU32 || inst.op == IR::Opcode::CompareMaskGtU32 ||
+	     inst.op == IR::Opcode::CompareMaskEqU32 || inst.op == IR::Opcode::CompareMaskGeU32) &&
 	    (s_kapi_pc == 0u || inst.pc == s_kapi_pc) &&
 	    inst.dst.kind == IR::OperandKind::Register &&
 	    inst.dst.reg.file == IR::RegisterFile::Exec) {
