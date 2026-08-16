@@ -4,8 +4,11 @@
 #include <fmt/format.h>
 #include <iterator>
 #include <map>
+#include <mutex>
 #include <set>
 #include <stack>
+#include <string>
+#include <tuple>
 
 namespace Libs::Graphics::ShaderRecompiler::CFG {
 
@@ -1011,16 +1014,31 @@ bool SplitSharedMergeBlock(Graph* graph, uint32_t merge,
 	// bolunecek tek oncul zaten onceki bir bolmenin urettigi yonlendirici.
 	auto decline = [&](const char* reason) {
 		static std::atomic<uint32_t> s_n {0};
-		// Kapak bir ara 100000'e cikarilmisti: ilk olcumde 64 kaydin 64'u de
-		// ayni nedendi, gercek blokaj kesilmis logun arkasinda kalmisti.
-		// O soru cevaplandi ve kapak artik BEDEL: tek kosuda ~88 bin satir,
-		// her biri fflush'li, ve mesh asamasina varmadan koslar bitiyor.
-		// Varsayilan dusuk; gerektiginde PSEMU_CFG_BOLME_LOG ile acilir.
+		// DUZ KAPAK YANILTICIYDI. Kapak bir ara 100000'e cikarilmisti; sonra
+		// bedeli yuzunden 200'e indirildi. Ama 200 satirin 199'u ayni nedendi
+		// ve MESH asamasina hic varmadan doluyordu - yani asil sorulan soru
+		// ("mesh'in cakisan merge'i NEDEN bolunmedi") kesilmis logun arkasinda
+		// kaliyordu. Olculdu: tek kosuda 200/200 dolu, dagilim
+		// dis_oncul_yok=199 + tum_onculler_sentetik_yonlendirici=1, ve
+		// cakisan merge=48 icin TEK SATIR YOK.
+		//
+		// Cozum kapagi buyutmek degil: her BENZERSIZ IMZA (merge + neden +
+		// zorla) icin tek satir. Hacim kucuk kalir, kapsam tam olur.
+		static std::mutex                       s_mtx;
+		static std::set<std::tuple<uint32_t, std::string, bool>> s_gorulen;
 		static const uint32_t s_cap = [] {
 			const char* e = std::getenv("PSEMU_CFG_BOLME_LOG");
-			return (e != nullptr) ? static_cast<uint32_t>(std::strtoul(e, nullptr, 10)) : 200u;
+			return (e != nullptr) ? static_cast<uint32_t>(std::strtoul(e, nullptr, 10)) : 512u;
 		}();
-		if (s_n.fetch_add(1) < s_cap) {
+		bool yeni = false;
+		{
+			std::lock_guard<std::mutex> kilit(s_mtx);
+			if (s_gorulen.size() < s_cap) {
+				yeni = s_gorulen.emplace(merge, reason, force_split).second;
+			}
+		}
+		if (yeni) {
+			s_n.fetch_add(1);
 			std::printf("[CFG-BOLME-RED] merge=%u neden=%s | construct_onculleri=[%s] "
 			            "dis_onculler=[%s] zorla=%d\n",
 			            merge, reason, VectorToString(construct_predecessors).c_str(),
