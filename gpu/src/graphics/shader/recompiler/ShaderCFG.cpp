@@ -1218,6 +1218,13 @@ bool SplitOneLoopHeaderSelection(Graph* graph, std::vector<uint32_t>* already_sp
 			old_header->terminator.merge_block    = UINT32_MAX;
 			old_header->terminator.continue_block = UINT32_MAX;
 		}
+		// SIRALAMA: yeni baslik dizinin SONUNA ekleniyor ama eski basligi
+		// DOMINE ediyor. SPIR-V bir blogun dominatorunden SONRA gelmesini
+		// sart kosuyor; olculdu, tam bu hatayi verdi:
+		//   "Block '237' appears in the binary before its dominator '299'"
+		// (Once "Selection must be structured" vardi; bolme onu KALDIRDI ve
+		//  geriye yalnizca bu siralama kaldi.)
+		MoveBlockBefore(graph, new_header, header_id);
 		AddUnique(already_split, header_id);
 		static std::atomic<uint32_t> s_n {0};
 		if (s_n.fetch_add(1, std::memory_order_relaxed) < 8) {
