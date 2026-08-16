@@ -1145,7 +1145,22 @@ static bool IsHostExpandedRectListDrawSupported(const ShaderVertexInputInfo& vs_
 // oranlar Asama 4c'de NGG alt grup yapilandirmasindan baglanacak.
 static void EmitMeshDraw(vk::CommandBuffer vk_buffer, const DrawCallInfo& draw) {
 	const uint32_t work = draw.index_count * std::max<uint32_t>(draw.instance_count, 1u);
-	const uint32_t groups = std::clamp<uint32_t>(work, 1u, 65535u);
+	uint32_t       groups = std::clamp<uint32_t>(work, 1u, 65535u);
+	// GRUP SAYISI ZORLAMA (`PSEMU_MESH_GROUPS=<n>`) - DENEY.
+	//
+	// Yukaridaki hesap yer tutucu (yorum: "Asama 1"): her INDEKS icin bir is
+	// grubu aciyor, ama her grup 64 cagri kosuyor. Ustelik shader global
+	// vertex indeksini `(s2<<6)+mbcnt` ile kuruyor ve `s2 = bfe(s3,24,4)`
+	// yalnizca IS GRUBU ICI dalga kimligi - LocalSize 64 iken her zaman 0.
+	// Yani coklu grup ayni geometriyi TEKRARLIYOR, uzatmiyor.
+	// s3 sozlesmesini sinarken bunu tek gruba kilitleyebilmek gerekiyor.
+	static const uint32_t groups_zorla = [] {
+		const char* env = std::getenv("PSEMU_MESH_GROUPS");
+		return env != nullptr ? static_cast<uint32_t>(std::strtoul(env, nullptr, 0)) : 0u;
+	}();
+	if (groups_zorla != 0) {
+		groups = groups_zorla;
+	}
 
 	static std::atomic<uint64_t> s_n {0};
 	const auto                   n = s_n.fetch_add(1, std::memory_order_relaxed) + 1;

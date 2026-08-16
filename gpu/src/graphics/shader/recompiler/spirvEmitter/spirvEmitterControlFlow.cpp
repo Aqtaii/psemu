@@ -296,6 +296,43 @@ uint32_t EmitInitialRegisterValue(EmitterState* state, IR::Register reg) {
 	// `s2`YE DOKUNULMUYOR: shader onu zaten `bfe(s3,24,4)` ile YENIDEN
 	// hesapliyor (dokum satir 527), yani baslangic degeri uzerine yaziliyor.
 	// s3 dogruysa s2 kendiliginden dogru olur.
+	// SAYAC ALANLARI (`PSEMU_NGG_S3=<hex>`) - DENEY.
+	//
+	// Yukaridaki kural s3'un YALNIZCA dalga kimligi alanini yaziyor; sayac
+	// alanlari SIFIR kaliyor. Misafir ISA dokumu (_Shaders/original/*_vs_*.rdna2,
+	// ilk 8 komut) sozlesmeyi acikca gosteriyor:
+	//     s_bfe_u32 vcc_lo, s3, 0x00080008   ; s3[15:8] = GS ilkel sayisi
+	//     s_and_b32 vcc_hi, s3, 0x000000ff   ; s3[7:0]  = ES vertex sayisi
+	//     s_or_b32   m0, vcc_hi, vcc_lo      ; m0 = vertex | (ilkel << 12)
+	//     s_sendmsg  0x00000009              ; GS_ALLOC_REQ
+	//     s_lshr_b32 vcc_lo, s3, 8
+	//     s_sub_i32  vcc_lo, 0, vcc_lo
+	//     s_lshr_b64 exec_lo, -1, vcc_lo     ; exec = dusuk `sayi` lane
+	// Yani hem tahsis hem EXEC MASKESI dogrudan s3'ten turuyor. Sayaclar
+	// sifirken m0 = 0 olur, hicbir sey tahsis edilmez ve hicbir sey cikmaz.
+	//
+	// Dogru degerler cizim basina degisiyor ve psemu'da bunu shader'a
+	// tasiyacak bir kanal HENUZ YOK. Bu yuzden burasi bir DUZELTME DEGIL,
+	// AYIRT EDICI DENEY: sabit bir s3 enjekte edip geometri cikip cikmadigina
+	// bakiyoruz. Cikarsa sozlesme dogrulanmis olur ve gerisi tesisat.
+	// Ornek: uc vertexli tek ucgen icin PSEMU_NGG_S3=0x103.
+	if (state->stage == ShaderType::Mesh && reg.file == IR::RegisterFile::Scalar &&
+	    reg.index == 3) {
+		static const uint32_t s3_zorla = [] {
+			const char* env = std::getenv("PSEMU_NGG_S3");
+			return env != nullptr ? static_cast<uint32_t>(std::strtoul(env, nullptr, 0)) : 0u;
+		}();
+		if (s3_zorla != 0) {
+			static std::atomic<uint32_t> s_n {0};
+			if (s_n.fetch_add(1) < 4) {
+				std::printf("[NGG-S3] s3 = 0x%08x zorlandi (vertex=%u ilkel=%u dalga_kimligi=%u)\n",
+				            s3_zorla, s3_zorla & 0xffu, (s3_zorla >> 8) & 0xffu,
+				            (s3_zorla >> 24) & 0xfu);
+				std::fflush(stdout);
+			}
+			return ConstantU32(state, s3_zorla);
+		}
+	}
 	if (NggSystemSgprEnabled() && state->stage == ShaderType::Mesh &&
 	    reg.file == IR::RegisterFile::Scalar && reg.index == 3) {
 		const auto wave = state->wave_size != 0 ? state->wave_size : 64u;
