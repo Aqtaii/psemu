@@ -1,5 +1,9 @@
 #include "graphics/host_gpu/renderer/image.h"
 
+#include <atomic>
+#include <chrono>
+#include <cstdlib>
+
 #include "common/assert.h"
 #include "common/profiler.h"
 #include "graphics/guest_gpu/gpu_defs.h"
@@ -384,7 +388,27 @@ void UploadVideoOut(GraphicContext* ctx, VideoOutVulkanImage* image, const Video
 	//   konuk_dolu=0    -> kompozisyon bu tampona HIC yazmamis (yukari bak)
 	//   konuk_dolu>0 ve linear_dolu=0 -> DETILING yok ediyor
 	//   ikisi de >0     -> kayip daha asagida (yukleme/sunum)
-	{
+	// ICERIK SAYIMI ARTIK BAYRAK ARKASINDA (`PSEMU_VO_ICERIK_SAY=1`).
+	//
+	// OLCULDU: bu iki dongu her present'te info.size kadar BAYT BAYT tarama
+	// yapiyor. Gercek rakam loader_log.txt'den: boyut = 33.423.360 bayt
+	// (3840x2160, bpe=4), yani kare basina 2 x 33 MB = 67 MB tek-bayt okuma.
+	// Ustelik ilki KONUK BELLEGI uzerinde; orasi GPU-kirli aralik takibi icin
+	// izlendiginden bayt bayt yurumek sayfa hatasi firtinasi uretiyor.
+	//
+	// Log nedenselligi gosteriyor (loader_log.txt 1474-1477):
+	//   VO-YUKLE-ICERIK   konuk taramasi bitti
+	//   WATCHDOG #15      worker 300ms+ sessiz
+	//   VO-YUKLE-ICERIK   detiling + ikinci tarama bitti
+	// Watchdog tam bu pencerede atesliyor.
+	//
+	// Sayimlar gorevini tamamladi: konuk_dolu=0 ve linear_dolu=0, yani her
+	// karede ayni "hepsi sifir" cevabi uretiliyordu. Bayrakla geri acilir.
+	static const bool s_icerik_say = [] {
+		const char* e = std::getenv("PSEMU_VO_ICERIK_SAY");
+		return e != nullptr && e[0] == '1';
+	}();
+	if (s_icerik_say) {
 		const auto* guest_bytes = reinterpret_cast<const uint8_t*>(info.address);
 		uint64_t    guest_nonzero = 0;
 		for (uint64_t i = 0; i < info.size; i++) {
@@ -399,10 +423,27 @@ void UploadVideoOut(GraphicContext* ctx, VideoOutVulkanImage* image, const Video
 		       info.bytes_per_element, (int)info.bgra16);
 		fflush(stdout);
 	}
+	// DETILING SURESI OLCUMU. Icerik sayimlari (67 MB/kare) kaldirildiktan
+	// sonra geriye kalan gercek maliyet burasi. Watchdog esigi 300 ms; bu
+	// sayi o esigin altinda mi ustunde mi, tahminle degil olcumle bilinmeli.
+	// Ilk 8 present basilir, sonra susar.
+	const auto detile_t0 = std::chrono::steady_clock::now();
 	TileConvertTiledToLinearRenderTarget(
 	    scratch.Data(), reinterpret_cast<const void*>(info.address), info.width, info.height,
 	    info.pitch, info.bytes_per_element, info.size);
 	{
+		const auto ms = std::chrono::duration_cast<std::chrono::microseconds>(
+		                    std::chrono::steady_clock::now() - detile_t0)
+		                    .count() /
+		                1000.0;
+		static std::atomic<uint32_t> s_dt {0};
+		if (s_dt.fetch_add(1) < 8) {
+			printf("[VO-DETILE] %ux%u bpe=%u boyut=%llu -> %.1f ms\n", info.width, info.height,
+			       info.bytes_per_element, (unsigned long long)info.size, ms);
+			fflush(stdout);
+		}
+	}
+	if (s_icerik_say) {
 		const auto* linear_bytes   = static_cast<const uint8_t*>(scratch.Data());
 		uint64_t    linear_nonzero = 0;
 		for (uint64_t i = 0; i < info.size; i++) {
