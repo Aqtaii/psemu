@@ -568,10 +568,16 @@ void RebuildPredecessors(Graph* graph) {
 		block.predecessors.clear();
 		SortUnique(&block.successors);
 	}
+	// KIMLIK != INDEKS: `graph->blocks[succ]` yaziyordu, yani ardilin
+	// KIMLIGINI dizi INDEKSI sayiyordu. Bolme paslari MoveBlockBefore ile
+	// diziyi fiziksel olarak yeniden siraliyor (asagida, satir ~837) ve o
+	// andan itibaren ikisi ayrisiyor - oncul listesi YANLIS bloga yaziliyor.
+	// FindBlock zaten hizli yol + kimlikle arama yapiyor.
 	for (const auto& block: graph->blocks) {
 		for (auto succ: block.successors) {
-			if (succ < graph->blocks.size()) {
-				AddUnique(&graph->blocks[succ].predecessors, block.id);
+			auto* target = graph->FindBlock(succ);
+			if (target != nullptr) {
+				AddUnique(&target->predecessors, block.id);
 			}
 		}
 	}
@@ -600,9 +606,15 @@ void ComputeDominators(Graph* graph) {
 			if (block.predecessors.empty()) {
 				next = {block.id};
 			} else {
-				next = graph->blocks[block.predecessors.front()].dominators;
+				// KIMLIK != INDEKS (bkz. RebuildPredecessors'daki not). Burada
+				// yanlis blok okunursa DOMINANS bozulur; dominans NCPD'yi,
+				// NCPD de merge secimini suruyor - yani "duplicate merge"
+				// hatasinin ta kendisini uretebilir.
+				const auto* first = graph->FindBlock(block.predecessors.front());
+				next              = (first != nullptr) ? first->dominators : std::vector<uint32_t> {};
 				for (uint32_t i = 1; i < block.predecessors.size(); i++) {
-					next = IntersectSorted(next, graph->blocks[block.predecessors[i]].dominators);
+					const auto* p = graph->FindBlock(block.predecessors[i]);
+					next = IntersectSorted(next, p != nullptr ? p->dominators : std::vector<uint32_t> {});
 				}
 				AddUnique(&next, block.id);
 				SortUnique(&next);
@@ -631,10 +643,13 @@ void ComputePostDominators(Graph* graph) {
 			if (block.successors.empty()) {
 				next = {block.id};
 			} else {
-				next = graph->blocks[block.successors.front()].post_dominators;
+				// KIMLIK != INDEKS (bkz. RebuildPredecessors'daki not).
+				const auto* first = graph->FindBlock(block.successors.front());
+				next = (first != nullptr) ? first->post_dominators : std::vector<uint32_t> {};
 				for (uint32_t i = 1; i < block.successors.size(); i++) {
-					next =
-					    IntersectSorted(next, graph->blocks[block.successors[i]].post_dominators);
+					const auto* s = graph->FindBlock(block.successors[i]);
+					next          = IntersectSorted(
+					             next, s != nullptr ? s->post_dominators : std::vector<uint32_t> {});
 				}
 				AddUnique(&next, block.id);
 				SortUnique(&next);
@@ -2035,10 +2050,15 @@ bool BuildGraph(const Decoder::Program& program, Graph* graph, std::string* erro
 		}
 	}
 
+	// KIMLIK != INDEKS (bkz. RebuildPredecessors'daki not).
 	for (auto& block: graph->blocks) {
 		SortUnique(&block.successors);
+		const auto id = block.id;
 		for (auto succ: block.successors) {
-			AddUnique(&graph->blocks[succ].predecessors, block.id);
+			auto* target = graph->FindBlock(succ);
+			if (target != nullptr) {
+				AddUnique(&target->predecessors, id);
+			}
 		}
 	}
 	for (auto& block: graph->blocks) {

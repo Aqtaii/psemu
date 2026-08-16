@@ -5,23 +5,60 @@
 
 namespace Libs::Graphics::ShaderRecompiler::Spirv::Emitter {
 
+// KIMLIK != INDEKS.
+// ---------------------------------------------------------------------------
+// Bu fonksiyon ardillari `program.blocks[block_id]` diye okuyordu, yani blok
+// KIMLIGINI dizi INDEKSI sayiyordu. `IR::BasicBlock`'un ayri bir `id` alani
+// var ve CFG bolme paslari `MoveBlockBefore` ile diziyi FIZIKSEL OLARAK
+// yeniden siraliyor (ShaderCFG.cpp:837; sentetik merge blogu merge'un ONUNE
+// tasiniyor). Bir bolme gerceklestigi anda kimlik ile indeks ayrisiyor ve bu
+// yuruyus YANLIS blogun ardillarini geziyor.
+//
+// Sonucu tam olarak gozlenen belirti: bazi bloklar ULASILAMAZ isaretleniyor,
+// AllocateBlockLabels onlara etiket vermiyor, EmitStructuredPrefix'te
+// BlockLabel 0 donuyor, OpSelectionMerge HIC basilmiyor ve spirv-val
+// "Selection must be structured" diyor. Kod tabaninin kendi hipotezi de
+// buydu (bkz. SplitOneNestedSelectionMerge yorumu) - mekanizma bu.
+//
+// Kimlikler yogun (0..N-1) kaldigi icin `reachable_blocks`'u kimlikle
+// indekslemek dogru; duzeltilmesi gereken yalnizca ARDIL ARAMASI.
 void ComputeReachableBlocks(EmitterState* state, const IR::Program& program) {
 	state->reachable_blocks.assign(program.blocks.size(), false);
 	if (program.blocks.empty()) {
 		return;
 	}
 
+	// kimlik -> dizi konumu
+	std::vector<uint32_t> pos(program.blocks.size(), UINT32_MAX);
+	uint32_t              entry_id = program.blocks[0].id;
+	for (uint32_t i = 0; i < program.blocks.size(); i++) {
+		const auto id = program.blocks[i].id;
+		if (id < pos.size()) {
+			pos[id] = i;
+		}
+	}
+	// Giris blogu: eskiden kimlik 0 VARSAYILIYORDU. Yeniden siralama sonrasi
+	// dizinin ilk elemani giris olmayabilir; kimlik 0 varsa onu, yoksa dizinin
+	// ilk blogunu aliyoruz.
+	if (!pos.empty() && pos[0] != UINT32_MAX) {
+		entry_id = 0;
+	}
+
 	std::vector<uint32_t> stack;
-	stack.push_back(0);
+	stack.push_back(entry_id);
 	while (!stack.empty()) {
 		const auto block_id = stack.back();
 		stack.pop_back();
-		if (block_id >= program.blocks.size() || state->reachable_blocks[block_id]) {
+		if (block_id >= state->reachable_blocks.size() || state->reachable_blocks[block_id]) {
 			continue;
 		}
 		state->reachable_blocks[block_id] = true;
-		for (auto succ: program.blocks[block_id].successors) {
-			if (succ < program.blocks.size() && !state->reachable_blocks[succ]) {
+		const auto p = (block_id < pos.size()) ? pos[block_id] : UINT32_MAX;
+		if (p == UINT32_MAX) {
+			continue;
+		}
+		for (auto succ: program.blocks[p].successors) {
+			if (succ < state->reachable_blocks.size() && !state->reachable_blocks[succ]) {
 				stack.push_back(succ);
 			}
 		}
