@@ -1,4 +1,4 @@
-﻿#include "core.h"
+#include "core.h"
 #include "agc.h"
 #include "logger.h"
 #include "syscalls.h"
@@ -997,6 +997,22 @@ static uint64_t MspaceUsed(uint64_t handle) {
 // yanlisti, IsInMspaceRegion/free tutarliligini da duzeltiyor. Sonuc
 // olculecek; yetmezse aralik CALISMA ANINDA ogrenilip baglanacak.
 // Boyut PSEMU_DEFAULT_HEAP_MB ile ayarlanir (varsayilan 256 MB).
+// Havuz blogu basligi ve serbest listeler (geri kazanim icin).
+// ---------------------------------------------------------------------------
+// Her blogun ONUNDE 16 bayt: sihir + kova boyutu. Free basliktan kovayi
+// okur, blogu o kovanin listesine koyar; malloc once listeye bakar. Sihir
+// sart: oyun havuz araligina denk gelen ama BIZIM dagitmadigimiz bir
+// isaretci verirse (kendi alt-tahsisi) onu serbest listeye almamaliyiz -
+// almak ayni bellegi iki kez dagitmak olurdu.
+struct MspaceBlockHdr {
+    uint64_t magic;
+    uint64_t bucket;
+};
+static constexpr uint64_t kMspaceHdrMagic = 0x4d53504200000001ull; // "MSPB"
+static constexpr uint64_t kMspaceHdrBytes = sizeof(MspaceBlockHdr);
+// tutamac -> kova -> serbest bloklar. g_mspace_mtx ile korunur.
+static std::map<uint64_t, std::map<uint64_t, std::vector<uint64_t>>> g_mspace_free;
+
 static void* MspaceBumpAlloc(uint64_t handle, size_t n, size_t align);
 static uint8_t* DmemBase(); // asagida tanimli
 
@@ -1042,8 +1058,56 @@ static void* MspaceBumpAlloc(uint64_t handle, size_t n, size_t align) {
         return nullptr;
     }
     MspaceInfo& m = it->second;
-    uint64_t p = (m.base + m.used + align - 1) & ~(uint64_t)(align - 1);
-    uint64_t end = p + n;
+
+    // GERI KAZANIM (bu blok yeni).
+    //
+    // OLCULDU: havuz bump tabanliydi ve free HICBIR SEY yapmiyordu. Tek
+    // kosuda 505.000 mspace cagrisi var; 256 MB T+108'de doluyor
+    // ("HAVUZ DOLDU: kullanilan=0xfffada0 kap=0x10000000"), sonrasi host
+    // yigina dusuyor, adresler misafir havuzunun disina cikiyor ve oyunun
+    // kendi denetleyicisi "Pool possibly corrupt, block ... doesn't belong
+    // to pool 0" basmaya basliyor (46 kez), ~30 sn sonra worker bloklaniyor.
+    //
+    // Havuzu buyutmek yalnizca cokusu geciktirir - geri kazanim olmadan her
+    // boyut eninde sonunda dolar. Bu yuzden gercek serbest birakma:
+    // her blogun ONUNDE 16 baytlik baslik (sihir + kova boyutu), free'de
+    // blok kova listesine geri konur, malloc once o listeye bakar.
+    const uint64_t bucket =
+        (n <= 4096) ? ((n + 63u) & ~(uint64_t)63u) : ((n + 4095u) & ~(uint64_t)4095u);
+    {
+        auto hit = g_mspace_free.find(handle);
+        if (hit != g_mspace_free.end()) {
+            auto bit = hit->second.find(bucket);
+            if (bit != hit->second.end()) {
+                // Hizalama sartini SAGLAMAYAN blogu tekrar kullanamayiz:
+                // blok kendi hizalamasiyla yerlestirilmisti, istenen daha
+                // buyuk olabilir. Uymayanlari listede birakiyoruz.
+                for (size_t i = bit->second.size(); i-- > 0;) {
+                    const uint64_t cand = bit->second[i];
+                    if ((cand & (align - 1)) == 0) {
+                        bit->second[i] = bit->second.back();
+                        bit->second.pop_back();
+                        static std::atomic<uint64_t> s_reuse{0};
+                        const uint64_t r = s_reuse.fetch_add(1, std::memory_order_relaxed);
+                        if (r < 4 || (r % 50000) == 0) {
+                            printf("[MSPACE] geri kazanim #%llu: tutamac=0x%llx kova=%llu "
+                                   "p=0x%llx (havuz kullanilan=0x%llx)\n",
+                                   (unsigned long long)r, (unsigned long long)handle,
+                                   (unsigned long long)bucket, (unsigned long long)cand,
+                                   (unsigned long long)m.used);
+                            fflush(stdout);
+                        }
+                        return reinterpret_cast<void*>(cand);
+                    }
+                }
+            }
+        }
+    }
+
+    // Yeni blok: basligi p'nin ONUNE sigdirmak icin once baslik kadar
+    // ilerleyip sonra hizaliyoruz; boylece p - 16 her zaman havuzun icinde.
+    uint64_t p = (m.base + m.used + kMspaceHdrBytes + align - 1) & ~(uint64_t)(align - 1);
+    uint64_t end = p + bucket;
     if (end > m.base + m.cap) {
         // HAVUZ DOLDU -> cagiran host yigina duser. Bu SESSIZ bir donum
         // noktasi: o andan sonra dagitilan bloklar misafirin havuz
@@ -1098,7 +1162,40 @@ static void* MspaceBumpAlloc(uint64_t handle, size_t n, size_t align) {
         return nullptr;
     }
     m.used = end - m.base;
+    // Baslik: free bu blogun hangi kovaya donecegini buradan ogrenir.
+    auto* hdr = reinterpret_cast<MspaceBlockHdr*>(p - kMspaceHdrBytes);
+    hdr->magic  = kMspaceHdrMagic;
+    hdr->bucket = bucket;
     return reinterpret_cast<void*>(p);
+}
+
+// Havuz icindeki bir blogu serbest listeye geri koyar.
+// ---------------------------------------------------------------------------
+// Yalnizca BIZIM dagittigimiz (basligi gecerli) bloklari kabul eder. Oyun
+// havuz araligina denk gelen baska bir isaretci verirse - ornegin kendi
+// alt-tahsisi - baslik sihri tutmaz ve blogu yok sayariz; yanlis blogu
+// serbest listeye koymak, ayni bellegi iki kez dagitmak demek olurdu.
+static void MspaceReclaim(void* ptr) {
+    if (ptr == nullptr) return;
+    const uint64_t v = reinterpret_cast<uint64_t>(ptr);
+    std::lock_guard<std::mutex> lock(g_mspace_mtx);
+    for (const auto& kv : g_mspace) {
+        const MspaceInfo& m = kv.second;
+        if (m.base == 0 || m.cap == 0) continue;
+        if (v < m.base + kMspaceHdrBytes || v >= m.base + m.cap) continue;
+        const auto* hdr = reinterpret_cast<const MspaceBlockHdr*>(v - kMspaceHdrBytes);
+        if (hdr->magic != kMspaceHdrMagic || hdr->bucket == 0) return;
+        g_mspace_free[kv.first][hdr->bucket].push_back(v);
+        static std::atomic<uint64_t> s_rec{0};
+        const uint64_t r = s_rec.fetch_add(1, std::memory_order_relaxed);
+        if (r < 4 || (r % 50000) == 0) {
+            printf("[MSPACE] serbest birakma #%llu: tutamac=0x%llx kova=%llu p=0x%llx\n",
+                   (unsigned long long)r, (unsigned long long)kv.first,
+                   (unsigned long long)hdr->bucket, (unsigned long long)v);
+            fflush(stdout);
+        }
+        return;
+    }
 }
 
 // Bu isaretci misafirin mspace HAVUZUNDAN mi geldi (bump ile dagitildi mi)?
@@ -4705,7 +4802,15 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     // IsInMspaceRegion): bump ile dagitildilar, _aligned_free
                     // onlarin onunde bir baslik arar ve coker.
                     void* p = reinterpret_cast<void*>(ctx->Rsi);
-                    if (p != nullptr && !IsInMspaceRegion(p)) _aligned_free(p);
+                    if (p != nullptr && !IsInMspaceRegion(p)) {
+                        _aligned_free(p);
+                    } else {
+                        // ARTIK GERCEKTEN SERBEST BIRAKIYORUZ. Eskiden havuz
+                        // ici adresler icin free NO-OP'ti; olculdu ki 256 MB
+                        // T+108'de doluyor ve sonrasi host yigina dusuyor -
+                        // oyunun "Pool possibly corrupt" hatasinin kok nedeni.
+                        MspaceReclaim(p);
+                    }
                     rv = 0;
                 } else if (readable_name == "sceLibcMspaceMallocUsableSize") {
                     rv = LookupAllocSize(reinterpret_cast<void*>(ctx->Rsi));
