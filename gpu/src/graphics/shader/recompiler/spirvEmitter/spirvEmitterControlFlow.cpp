@@ -279,43 +279,14 @@ uint32_t InitialRegisterValue(const EmitterState& state, IR::Register reg) {
 }
 
 uint32_t EmitInitialRegisterValue(EmitterState* state, IR::Register reg) {
-	uint32_t dword_index = 0;
-	if (UserDataDwordIndex(*state, reg, dword_index)) {
-		return EmitVsharpDwordLoad(state, dword_index);
-	}
-	// NGG SISTEM SGPR PAYLOAD'U (`PSEMU_NGG_SGPR=1`).
+	// s3 ZORLAMA EN BASTA OLMAK ZORUNDA.
 	//
-	// Donanimda SPI, `user_sgpr` sayisinin ARDINDAN gelen yazmaclari sistem
-	// degerleriyle doldurur. psemu'da bu HIC yapilmiyordu: user data
-	// penceresi disindaki her skaler 0 kaliyordu (bkz. d19f676).
-	//
-	// s3'un 27:24 biti = GS dalga kimligi. Olculdu (6d3f2cb): bu alan HEM
-	// `GS_ALLOC_REQ` kapisini (`s3 & 0x0f000000`) HEM de LDS adresini
-	// (`s2 = bfe(s3,24,4)` -> `v24 = (s2<<6)+mbcnt` -> `v8 = 48*v24`) suruyor.
-	//
-	// `s2`YE DOKUNULMUYOR: shader onu zaten `bfe(s3,24,4)` ile YENIDEN
-	// hesapliyor (dokum satir 527), yani baslangic degeri uzerine yaziliyor.
-	// s3 dogruysa s2 kendiliginden dogru olur.
-	// SAYAC ALANLARI (`PSEMU_NGG_S3=<hex>`) - DENEY.
-	//
-	// Yukaridaki kural s3'un YALNIZCA dalga kimligi alanini yaziyor; sayac
-	// alanlari SIFIR kaliyor. Misafir ISA dokumu (_Shaders/original/*_vs_*.rdna2,
-	// ilk 8 komut) sozlesmeyi acikca gosteriyor:
-	//     s_bfe_u32 vcc_lo, s3, 0x00080008   ; s3[15:8] = GS ilkel sayisi
-	//     s_and_b32 vcc_hi, s3, 0x000000ff   ; s3[7:0]  = ES vertex sayisi
-	//     s_or_b32   m0, vcc_hi, vcc_lo      ; m0 = vertex | (ilkel << 12)
-	//     s_sendmsg  0x00000009              ; GS_ALLOC_REQ
-	//     s_lshr_b32 vcc_lo, s3, 8
-	//     s_sub_i32  vcc_lo, 0, vcc_lo
-	//     s_lshr_b64 exec_lo, -1, vcc_lo     ; exec = dusuk `sayi` lane
-	// Yani hem tahsis hem EXEC MASKESI dogrudan s3'ten turuyor. Sayaclar
-	// sifirken m0 = 0 olur, hicbir sey tahsis edilmez ve hicbir sey cikmaz.
-	//
-	// Dogru degerler cizim basina degisiyor ve psemu'da bunu shader'a
-	// tasiyacak bir kanal HENUZ YOK. Bu yuzden burasi bir DUZELTME DEGIL,
-	// AYIRT EDICI DENEY: sabit bir s3 enjekte edip geometri cikip cikmadigina
-	// bakiyoruz. Cikarsa sozlesme dogrulanmis olur ve gerisi tesisat.
-	// Ornek: uc vertexli tek ucgen icin PSEMU_NGG_S3=0x103.
+	// Ilk yerlesim asagidaydi ve HIC ATESLENMEDI (olculdu: [NGG-S3] = 0).
+	// Sebep hemen alttaki erken donus: `UserDataDwordIndex` s3 icin TRUE
+	// donuyor, cunku psemu bu yazmaci user data penceresine dusuruyor -
+	// zaten sorunun ta kendisi bu (kodun kendi notu: "uretilen modulde s3
+	// push constant'tan (user data) geliyor"; ustelik gercek user_sgpr
+	// 0/4/8 olabilirken psemu 16'lik bir taban zorluyor).
 	if (state->stage == ShaderType::Mesh && reg.file == IR::RegisterFile::Scalar &&
 	    reg.index == 3) {
 		static const uint32_t s3_zorla = [] {
@@ -333,6 +304,23 @@ uint32_t EmitInitialRegisterValue(EmitterState* state, IR::Register reg) {
 			return ConstantU32(state, s3_zorla);
 		}
 	}
+	uint32_t dword_index = 0;
+	if (UserDataDwordIndex(*state, reg, dword_index)) {
+		return EmitVsharpDwordLoad(state, dword_index);
+	}
+	// NGG SISTEM SGPR PAYLOAD'U (`PSEMU_NGG_SGPR=1`).
+	//
+	// Donanimda SPI, `user_sgpr` sayisinin ARDINDAN gelen yazmaclari sistem
+	// degerleriyle doldurur. psemu'da bu HIC yapilmiyordu: user data
+	// penceresi disindaki her skaler 0 kaliyordu (bkz. d19f676).
+	//
+	// s3'un 27:24 biti = GS dalga kimligi. Olculdu (6d3f2cb): bu alan HEM
+	// `GS_ALLOC_REQ` kapisini (`s3 & 0x0f000000`) HEM de LDS adresini
+	// (`s2 = bfe(s3,24,4)` -> `v24 = (s2<<6)+mbcnt` -> `v8 = 48*v24`) suruyor.
+	//
+	// `s2`YE DOKUNULMUYOR: shader onu zaten `bfe(s3,24,4)` ile YENIDEN
+	// hesapliyor (dokum satir 527), yani baslangic degeri uzerine yaziliyor.
+	// s3 dogruysa s2 kendiliginden dogru olur.
 	if (NggSystemSgprEnabled() && state->stage == ShaderType::Mesh &&
 	    reg.file == IR::RegisterFile::Scalar && reg.index == 3) {
 		const auto wave = state->wave_size != 0 ? state->wave_size : 64u;
