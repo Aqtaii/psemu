@@ -1,5 +1,6 @@
 #include "graphics/shader/recompiler/spirvEmitter/spirvEmitterInternal.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 
@@ -23,19 +24,34 @@ namespace Libs::Graphics::ShaderRecompiler::Spirv::Emitter {
 // Kimlikler yogun (0..N-1) kaldigi icin `reachable_blocks`'u kimlikle
 // indekslemek dogru; duzeltilmesi gereken yalnizca ARDIL ARAMASI.
 void ComputeReachableBlocks(EmitterState* state, const IR::Program& program) {
-	state->reachable_blocks.assign(program.blocks.size(), false);
 	if (program.blocks.empty()) {
+		state->reachable_blocks.clear();
 		return;
 	}
+	// KIMLIKLE indeksleniyor, o yuzden blok SAYISI degil EN BUYUK KIMLIK+1
+	// kadar. Sayiyla boyutlamak, kimlikler seyrekse buyuk kimlikli bloklari
+	// sessizce "ulasilamaz" yapardi.
+	{
+		uint32_t n = 0;
+		for (const auto& b: program.blocks) {
+			n = std::max(n, b.id + 1u);
+		}
+		state->reachable_blocks.assign(std::max<size_t>(n, program.blocks.size()), false);
+	}
 
-	// kimlik -> dizi konumu
-	std::vector<uint32_t> pos(program.blocks.size(), UINT32_MAX);
+	// kimlik -> dizi konumu.
+	// Haritayi blok SAYISIYLA degil EN BUYUK KIMLIK+1 ile boyutluyoruz:
+	// kimliklerin yogun (0..N-1) kaldigini VARSAYMAK, seyrek kaldigi bir
+	// durumda blogu "ardilsiz" gosterir ve elemek istedigimiz hatanin
+	// aynisini geri getirirdi.
+	uint32_t max_id = 0;
+	for (const auto& b: program.blocks) {
+		max_id = std::max(max_id, b.id);
+	}
+	std::vector<uint32_t> pos(static_cast<size_t>(max_id) + 1, UINT32_MAX);
 	uint32_t              entry_id = program.blocks[0].id;
 	for (uint32_t i = 0; i < program.blocks.size(); i++) {
-		const auto id = program.blocks[i].id;
-		if (id < pos.size()) {
-			pos[id] = i;
-		}
+		pos[program.blocks[i].id] = i;
 	}
 	// Giris blogu: eskiden kimlik 0 VARSAYILIYORDU. Yeniden siralama sonrasi
 	// dizinin ilk elemani giris olmayabilir; kimlik 0 varsa onu, yoksa dizinin
