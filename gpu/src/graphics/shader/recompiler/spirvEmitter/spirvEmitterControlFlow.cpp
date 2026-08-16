@@ -130,6 +130,32 @@ void EmitStructuredPrefix(EmitterState* state, const CFG::Terminator& term) {
 		const auto continue_label = BlockLabel(*state, term.continue_block);
 		if (merge_label != 0 && continue_label != 0) {
 			state->builder.AddFunction({OpLoopMerge, merge_label, continue_label, LoopControlNone});
+		} else {
+			// SESSIZ CIKIS - SONDALANDI.
+			//
+			// Etiketlerden biri 0 ise OpLoopMerge HIC basilmiyordu ve kimse
+			// haberdar olmuyordu. Sonucu dolayli ve yaniltici: dongu,
+			// dogrulayici icin dongu OLMAKTAN CIKAR; latch blogunun
+			// "if (kosul) continue; else break;" dallanmasi da artik mesru bir
+			// geri kenar sayilmaz ve spirv-val onu SECIM sanip
+			// "Selection must be structured" der - ki olculen hata tam olarak
+			// budur (6 mesh shader, hepsi ayni).
+			//
+			// psemu latch'lere BILEREK merge atamiyor (dogru karar). O yuzden
+			// hatanin kaynagi latch tarafinda degil, BURADA olabilir: dongu
+			// yapisi hic ilan edilmemistir.
+			static std::atomic<uint32_t> s_n {0};
+			if (s_n.fetch_add(1, std::memory_order_relaxed) < 32) {
+				const bool m_ulasilir = term.merge_block < state->reachable_blocks.size() &&
+				                        state->reachable_blocks[term.merge_block];
+				const bool c_ulasilir = term.continue_block < state->reachable_blocks.size() &&
+				                        state->reachable_blocks[term.continue_block];
+				printf("[LOOPMERGE-BASILMADI] merge=%u (etiket=%u ulasilir=%d) "
+				       "continue=%u (etiket=%u ulasilir=%d) dogru=%u yanlis=%u\n",
+				       term.merge_block, merge_label, m_ulasilir ? 1 : 0, term.continue_block,
+				       continue_label, c_ulasilir ? 1 : 0, term.true_block, term.false_block);
+				fflush(stdout);
+			}
 		}
 		return;
 	}
