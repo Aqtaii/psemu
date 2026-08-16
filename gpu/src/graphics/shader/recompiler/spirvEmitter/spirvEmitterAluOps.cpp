@@ -214,6 +214,71 @@ void EmitBinaryThenNotU32(EmitterState* state, const IR::Instruction& inst, uint
 }
 
 void EmitMaskedBitCountU32(EmitterState* state, const IR::Instruction& inst, uint32_t exec_index) {
+	if (state->per_invocation_masks &&
+	    inst.src[0].kind == IR::OperandKind::Register &&
+	    (inst.src[0].reg.file == IR::RegisterFile::Exec || inst.src[0].reg.file == IR::RegisterFile::Vcc)) {
+
+		const auto add = EmitValueLoad(state, inst.src[1]);
+		const auto ret = state->builder.AllocateId();
+
+		// MBCNT'in PerInvocation karsiligi.
+		// -------------------------------------------------------------------
+		// BALLOT YOLU BU MODDA ILKESEL OLARAK GECERSIZ. Depo bunu zaten bir
+		// kez saptamisti (b5e38d6, bkz. spirvEmitterExport.cpp
+		// EmitLdsCompactedIndex yorumu): 64-lane misafir dalga icin
+		// SelectGraphicsLaneMaskMode bilerek PerInvocation seciyor, yani
+		// misafir lane'ler host subgroup lane'lerine ESLENMIYOR.
+		// OpGroupNonUniformBallot host subgroup'unu okur; bu donanimda
+		// (Intel Arc B580) subgroup en fazla 32 lane, misafir dalga 64. Yani
+		// 32..63 arasi lane'ler icin ExclusiveScan subgroup sinirinda SIFIRDAN
+		// baslar ve ayni indeksi ikinci kez uretir - vertex indeksleri
+		// carpisir.
+		//
+		// DOGRU KARSILIK: bu komut ciftinin gorevi zaten lane indeksini
+		// materyalize etmek. RDNA derleyicisi lane id icin sabit deyimi
+		// kullaniyor:
+		//     v_mbcnt_lo_u32_b32 v0, exec_lo, 0
+		//     v_mbcnt_hi_u32_b32 v0, exec_hi, v0
+		// exec tam doluyken "benden kucuk aktif lane sayisi" = kendi lane
+		// indeksim. LocalSize == misafir dalga (64) oldugu icin bunun tam
+		// karsiligi LocalInvocationIndex'tir; host subgroup genisligiyle hic
+		// ilgisi yok, dolayisiyla 32-lane donanimda da dogru.
+		//
+		// Eski ballot yolu PSEMU_MBCNT_BALLOT=1 ile geri gelir (A/B icin).
+		static const bool s_ballot = [] {
+			const char* env = std::getenv("PSEMU_MBCNT_BALLOT");
+			return env != nullptr && env[0] == '1';
+		}();
+
+		if (exec_index == 0 && !s_ballot) {
+			const auto lane   = EmitLocalInvocationIndex(state);
+			const auto masked = state->builder.AllocateId();
+			const uint32_t w  = state->wave_size != 0 ? state->wave_size : 64u;
+			state->builder.AddFunction({OpBitwiseAnd, state->uint_type, masked, lane,
+			                            ConstantU32(state, w - 1u)});
+			state->builder.AddFunction({OpIAdd, state->uint_type, ret, masked, add});
+		} else if (exec_index == 0) {
+			const auto bits   = EmitValueLoad(state, inst.src[0]);
+			const auto cond   = state->builder.AllocateId();
+			const auto ballot = state->builder.AllocateId();
+			const auto count  = state->builder.AllocateId();
+
+			state->builder.AddFunction(
+			    {OpINotEqual, state->bool_type, cond, bits, ConstantU32(state, 0)});
+			state->builder.AddFunction({OpGroupNonUniformBallot, state->vec4_uint_type, ballot,
+			                            ConstantU32(state, ScopeSubgroup), cond});
+			state->builder.AddFunction({OpGroupNonUniformBallotBitCount, state->uint_type, count,
+			                            ConstantU32(state, ScopeSubgroup),
+			                            ConstantU32(state, GroupOperationExclusiveScan), ballot});
+
+			state->builder.AddFunction({OpIAdd, state->uint_type, ret, count, add});
+		} else {
+			state->builder.AddFunction({OpIAdd, state->uint_type, ret, ConstantU32(state, 0), add});
+		}
+		EmitStoreU32(state, inst.dst, ret);
+		return;
+	}
+
 	const auto bits        = EmitValueLoad(state, inst.src[0]);
 	const auto add         = EmitValueLoad(state, inst.src[1]);
 	const auto thread_mask = EmitThreadMaskBelowPartU32(state, exec_index);

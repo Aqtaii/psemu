@@ -4605,16 +4605,54 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                         else
                             printf("[HAVUZ-SONDA] donus = 0x%llx (oyun disi)\n",
                                    (unsigned long long)ret);
+                        // YIGIN YURUYUSU - SADECE GERCEK DONUS ADRESLERI.
+                        // Ilk surumde oyun araligina dusen her qword'u
+                        // basiyorduk ve cikan zincir YANILTICIYDI: ornegin
+                        // "oyun+0x5c9f98" gercek bir kare degil, bayat bir
+                        // deger cikti (oraya bakinca std::map kirmizi-siyah
+                        // agac dengelemesi vardi). Artik adayin HEMEN
+                        // ONCESINDE bir call komutu olmasini sart kosuyoruz:
+                        //   E8 rel32          -> v-5
+                        //   FF /2 (call r/m)  -> v-2 .. v-7 arasinda FF
                         const uint64_t* sp = reinterpret_cast<const uint64_t*>(ctx->Rsp);
                         int gosterilen = 0;
-                        for (int i = 0; i < 512 && gosterilen < 16; ++i) {
+                        for (int i = 0; i < 768 && gosterilen < 14; ++i) {
                             if (!SafeReadable(&sp[i], 8)) break;
                             const uint64_t v = sp[i];
-                            if (v >= g_base_addr && v < g_base_addr + g_module_size) {
-                                printf("    yigin[%3d] = oyun+0x%llx\n", i,
-                                       (unsigned long long)(v - g_base_addr));
-                                ++gosterilen;
+                            if (v < g_base_addr + 8 || v >= g_base_addr + g_module_size) continue;
+                            const uint8_t* q = reinterpret_cast<const uint8_t*>(v);
+                            if (!SafeReadable(q - 8, 8)) continue;
+                            // "onunde 0xFF var" TEK BASINA COK ZAYIF: bu
+                            // testle gelen "oyun+0x2947a" karesi ELENMEDI ama
+                            // o RVA dosyada SIFIR dolgu bolgesinde - kod bile
+                            // degil. Iki sart daha: donus adresindeki baytlar
+                            // sifir olmayacak, ve dolayli cagri icin modrm
+                            // gercekten /2 (call) olacak.
+                            bool kod_var = false;
+                            if (SafeReadable(q, 8)) {
+                                for (int k = 0; k < 8; ++k)
+                                    if (q[k] != 0) { kod_var = true; break; }
                             }
+                            if (!kod_var) continue;
+                            const char* bicim = nullptr;
+                            if (q[-5] == 0xE8) {
+                                // hedefi dogrula: modul icinde kalmali
+                                int32_t rel = 0;
+                                memcpy(&rel, q - 4, 4);
+                                const uint64_t hedef = v + static_cast<int64_t>(rel);
+                                if (hedef >= g_base_addr && hedef < g_base_addr + g_module_size)
+                                    bicim = "call rel32";
+                            } else if (q[-6] == 0xFF && q[-5] == 0x15) {
+                                bicim = "call [rip+d32]";
+                            } else if (q[-2] == 0xFF && (q[-1] & 0x38) == 0x10) {
+                                bicim = "call reg";
+                            } else if (q[-3] == 0xFF && (q[-2] & 0x38) == 0x10) {
+                                bicim = "call [reg]";
+                            }
+                            if (bicim == nullptr) continue;
+                            printf("    kare[%2d] yigin[%3d] = oyun+0x%llx   (%s)\n",
+                                   gosterilen, i, (unsigned long long)(v - g_base_addr), bicim);
+                            ++gosterilen;
                         }
                         fflush(stdout);
                     }
