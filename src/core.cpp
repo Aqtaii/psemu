@@ -1004,12 +1004,36 @@ static uint64_t MspaceUsed(uint64_t handle) {
 // sart: oyun havuz araligina denk gelen ama BIZIM dagitmadigimiz bir
 // isaretci verirse (kendi alt-tahsisi) onu serbest listeye almamaliyiz -
 // almak ayni bellegi iki kez dagitmak olurdu.
+// KURESEL FREE YONLENDIRME (global free routing).
+// ---------------------------------------------------------------------------
+// Baslikta blogun KAYNAK HAVUZ TUTAMACI da duruyor. Free artik cagriyla
+// gelen mspace argumanina DEGIL, baslikta yazana bakiyor. Bu sart, cunku
+// OLCULDU: oyunun yarattigi havuzlarin tabanlari psemu'nun varsayilan
+// havuzunun ICINDE (oyun alt havuzlarinin belegini once tutamac 0'dan
+// aliyor, sonra o adrese sceLibcMspaceCreate cagiriyor):
+//     havuz 0x..04 ofset  26.38 MB, 0x..05  59.36 MB, 0x..06 191.45 MB,
+//     havuz 0x..08 ofset 238.82 MB, 0x..09 272.96 MB  (tutamac 0 tabanindan)
+// Yani bir adres BIRDEN COK havuzun araligina birden dusuyor. Eski
+// MspaceReclaim aralik taramasiyla eslestiriyordu ve std::map sirasinda
+// ONCE hangisi gelirse ona yaziyordu - cakisan bolgelerde yanlis ev.
+// Baslik tek dogru kaynak.
+//
+// HIZALAMA: duzen tam 16 bayt (4+4+8). align her zaman >= 16 oldugu icin
+// p-16 de en az 8 bayt hizali kalir ve p'nin kendi hizalamasi degismez;
+// yerlestirme zaten "once baslik kadar ilerle, SONRA hizala" seklinde.
 struct MspaceBlockHdr {
-    uint64_t magic;
-    uint64_t bucket;
+    uint32_t magic;
+    uint32_t bucket;   // <= 4 GB; buyuk istekler zaten reddediliyor
+    uint64_t handle;   // kaynak havuz - free bunu okur
 };
-static constexpr uint64_t kMspaceHdrMagic = 0x4d53504200000001ull; // "MSPB"
+static constexpr uint32_t kMspaceHdrMagic = 0x4d535042u; // "MSPB" - dagitilmis
+// CIFT SERBEST BIRAKMA KALKANI: serbest listeye giren blogun sihri buna
+// cevrilir, tekrar dagitilirken geri yazilir. Ayni isaretci iki kez free
+// edilirse ikincisi burada takilir - yoksa ayni adres listeye iki kez girer
+// ve iki farkli cagirana dagitilir (gercek yigin bozulmasi).
+static constexpr uint32_t kMspaceFreeMagic = 0x4d535046u; // "MSPF" - serbest
 static constexpr uint64_t kMspaceHdrBytes = sizeof(MspaceBlockHdr);
+static_assert(sizeof(MspaceBlockHdr) == 16, "baslik 16 bayt kalmali - hizalama buna bagli");
 // tutamac -> kova -> serbest bloklar. g_mspace_mtx ile korunur.
 static std::map<uint64_t, std::map<uint64_t, std::vector<uint64_t>>> g_mspace_free;
 
@@ -1074,6 +1098,7 @@ static void* MspaceBumpAlloc(uint64_t handle, size_t n, size_t align) {
     // blok kova listesine geri konur, malloc once o listeye bakar.
     const uint64_t bucket =
         (n <= 4096) ? ((n + 63u) & ~(uint64_t)63u) : ((n + 4095u) & ~(uint64_t)4095u);
+    if (bucket > 0xFFFFFFFFull) return nullptr; // baslikta kova 32 bit
     {
         auto hit = g_mspace_free.find(handle);
         if (hit != g_mspace_free.end()) {
@@ -1087,6 +1112,11 @@ static void* MspaceBumpAlloc(uint64_t handle, size_t n, size_t align) {
                     if ((cand & (align - 1)) == 0) {
                         bit->second[i] = bit->second.back();
                         bit->second.pop_back();
+                        // Kalkani indir: blok yeniden dagitildi.
+                        auto* rh = reinterpret_cast<MspaceBlockHdr*>(cand - kMspaceHdrBytes);
+                        rh->magic  = kMspaceHdrMagic;
+                        rh->handle = handle;
+                        rh->bucket = static_cast<uint32_t>(bucket);
                         static std::atomic<uint64_t> s_reuse{0};
                         const uint64_t r = s_reuse.fetch_add(1, std::memory_order_relaxed);
                         if (r < 4 || (r % 50000) == 0) {
@@ -1165,7 +1195,8 @@ static void* MspaceBumpAlloc(uint64_t handle, size_t n, size_t align) {
     // Baslik: free bu blogun hangi kovaya donecegini buradan ogrenir.
     auto* hdr = reinterpret_cast<MspaceBlockHdr*>(p - kMspaceHdrBytes);
     hdr->magic  = kMspaceHdrMagic;
-    hdr->bucket = bucket;
+    hdr->bucket = static_cast<uint32_t>(bucket);
+    hdr->handle = handle;   // kuresel yonlendirme: free bunu okuyacak
     return reinterpret_cast<void*>(p);
 }
 
@@ -1179,22 +1210,82 @@ static void MspaceReclaim(void* ptr) {
     if (ptr == nullptr) return;
     const uint64_t v = reinterpret_cast<uint64_t>(ptr);
     std::lock_guard<std::mutex> lock(g_mspace_mtx);
+
+    // 1) SADECE OKUMA GUVENLIGI icin aralik taramasi: baslik okuyacagiz,
+    //    isaretcinin bilinen bir havuzun icinde ve onunde 16 bayt yeri
+    //    oldugundan emin olmaliyiz. Bu tarama artik EVI SECMIYOR - evi
+    //    baslik soyluyor.
+    bool okunabilir = false;
+    uint64_t denk_gelen = 0;   // adresin dustugu ilk bolge (yalniz olcum icin)
     for (const auto& kv : g_mspace) {
         const MspaceInfo& m = kv.second;
         if (m.base == 0 || m.cap == 0) continue;
         if (v < m.base + kMspaceHdrBytes || v >= m.base + m.cap) continue;
-        const auto* hdr = reinterpret_cast<const MspaceBlockHdr*>(v - kMspaceHdrBytes);
-        if (hdr->magic != kMspaceHdrMagic || hdr->bucket == 0) return;
-        g_mspace_free[kv.first][hdr->bucket].push_back(v);
-        static std::atomic<uint64_t> s_rec{0};
-        const uint64_t r = s_rec.fetch_add(1, std::memory_order_relaxed);
-        if (r < 4 || (r % 50000) == 0) {
-            printf("[MSPACE] serbest birakma #%llu: tutamac=0x%llx kova=%llu p=0x%llx\n",
-                   (unsigned long long)r, (unsigned long long)kv.first,
-                   (unsigned long long)hdr->bucket, (unsigned long long)v);
+        okunabilir = true;
+        denk_gelen = kv.first;
+        break;
+    }
+    if (!okunabilir) return;
+
+    auto* hdr = reinterpret_cast<MspaceBlockHdr*>(v - kMspaceHdrBytes);
+    if (hdr->magic == kMspaceFreeMagic) {
+        // ZATEN SERBEST. Ikinci kez listeye koymak ayni adresi iki cagirana
+        // dagitmak olurdu. Sessizce yut ama SAY - bu sayac sifir degilse
+        // oyunun (ya da bizim yolumuzun) gercek bir cift-free'si var.
+        static std::atomic<uint64_t> s_cift{0};
+        const uint64_t c = s_cift.fetch_add(1, std::memory_order_relaxed);
+        if (c < 8 || (c % 50000) == 0) {
+            printf("[MSPACE] CIFT FREE #%llu: p=0x%llx tutamac=0x%llx kova=%u "
+                   "-> yok sayildi\n",
+                   (unsigned long long)c, (unsigned long long)v,
+                   (unsigned long long)hdr->handle, hdr->bucket);
             fflush(stdout);
         }
         return;
+    }
+    if (hdr->magic != kMspaceHdrMagic || hdr->bucket == 0) {
+        // BIZIM dagitmadigimiz bir isaretci (oyunun kendi alt-tahsisi ya da
+        // havuz kurulmadan once verilmis blok). Serbest listeye ALMIYORUZ -
+        // almak ayni bellegi iki kez dagitmak olurdu. Sessizdi, gorunur yapildi.
+        static std::atomic<uint64_t> s_yabanci{0};
+        const uint64_t y = s_yabanci.fetch_add(1, std::memory_order_relaxed);
+        if (y < 4 || (y % 50000) == 0) {
+            printf("[MSPACE] YABANCI blok #%llu: p=0x%llx (denk gelen bolge=0x%llx) "
+                   "sihir=0x%08x -> yok sayildi\n",
+                   (unsigned long long)y, (unsigned long long)v,
+                   (unsigned long long)denk_gelen, hdr->magic);
+            fflush(stdout);
+        }
+        return;
+    }
+
+    // 2) EV = BASLIKTAKI TUTAMAC. Cagriyla gelen mspace argumani onemsiz
+    //    (olculdu: Malloc/Free her zaman mspace=0x0 ile geliyor).
+    const uint64_t ev = hdr->handle;
+    g_mspace_free[ev][hdr->bucket].push_back(v);
+    hdr->magic = kMspaceFreeMagic;   // kalkani kaldir
+
+    // Capraz havuz olayini SAY: adres bir bolgeye dusuyor ama blok baska
+    // bir havuzdan cikmis. Cakisan bolgelerde eski kod bunu yanlis yapiyordu.
+    if (ev != denk_gelen) {
+        static std::atomic<uint64_t> s_capraz{0};
+        const uint64_t c = s_capraz.fetch_add(1, std::memory_order_relaxed);
+        if (c < 8 || (c % 50000) == 0) {
+            printf("[MSPACE] CAPRAZ iade #%llu: p=0x%llx baslik tutamac=0x%llx "
+                   "ama aralik tutamac=0x%llx -> BASLIGA gonderildi\n",
+                   (unsigned long long)c, (unsigned long long)v,
+                   (unsigned long long)ev, (unsigned long long)denk_gelen);
+            fflush(stdout);
+        }
+    }
+
+    static std::atomic<uint64_t> s_rec{0};
+    const uint64_t r = s_rec.fetch_add(1, std::memory_order_relaxed);
+    if (r < 4 || (r % 50000) == 0) {
+        printf("[MSPACE] serbest birakma #%llu: tutamac=0x%llx kova=%u p=0x%llx\n",
+               (unsigned long long)r, (unsigned long long)ev, hdr->bucket,
+               (unsigned long long)v);
+        fflush(stdout);
     }
 }
 
@@ -4466,6 +4557,68 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
                 ctx->Rsp += 8;
                 return EXCEPTION_CONTINUE_EXECUTION;
+            }
+
+            // HAVUZ MESAJI SONDASI - dogrulayiciyi CALISMA ANINDA bul.
+            // ---------------------------------------------------------
+            // "Pool possibly corrupt, block 0x%016lx, doesn't belong to
+            // pool %d." metnini eboot'ta bulduk (RVA 0x839cd30) ama ona
+            // isaret eden TEK BIR lea bile yok (1.7 milyon lea adayi
+            // tarandi, komsulukta da sifir). Yani metin bir tablodan
+            // dolayli adresleniyor. Statik iz surmek yerine mesaj
+            // basildigi anda cagri zincirini dokuyoruz: dogrulayicinin
+            // RVA'si oradan cikar, havuz tanimlayicisi da onunla.
+            if (readable_name == "puts" || readable_name == "fputs" ||
+                readable_name == "vsnprintf" || readable_name == "snprintf" ||
+                readable_name == "vfprintf" || readable_name == "fprintf" ||
+                readable_name == "printf" || readable_name == "vprintf") {
+                static std::atomic<int> s_sonda{0};
+                if (s_sonda.load(std::memory_order_relaxed) < 3) {
+                    const char* cand =
+                        (readable_name == "puts" || readable_name == "fputs")
+                            ? reinterpret_cast<const char*>(ctx->Rdi)
+                            : nullptr;
+                    // vsnprintf/snprintf: RDX=fmt; fprintf/vfprintf: RSI=fmt;
+                    // printf/vprintf: RDI=fmt. Hepsine bakiyoruz.
+                    const char* alt[3] = {
+                        reinterpret_cast<const char*>(ctx->Rdi),
+                        reinterpret_cast<const char*>(ctx->Rsi),
+                        reinterpret_cast<const char*>(ctx->Rdx)};
+                    bool vur = false;
+                    if (cand != nullptr && SafeReadable(cand, 32) &&
+                        SafeReadCString(cand).find("belong to pool") != std::string::npos)
+                        vur = true;
+                    for (int k = 0; !vur && k < 3; ++k)
+                        if (alt[k] != nullptr && SafeReadable(alt[k], 32) &&
+                            SafeReadCString(alt[k]).find("belong to pool") != std::string::npos)
+                            vur = true;
+                    if (vur && s_sonda.fetch_add(1, std::memory_order_relaxed) < 3) {
+                        const uint64_t ret = SafeReadable(reinterpret_cast<void*>(ctx->Rsp), 8)
+                                                 ? *reinterpret_cast<uint64_t*>(ctx->Rsp)
+                                                 : 0;
+                        printf("[HAVUZ-SONDA] %s ile geldi. taban=0x%llx boyut=0x%llx\n",
+                               readable_name.c_str(), (unsigned long long)g_base_addr,
+                               (unsigned long long)g_module_size);
+                        if (ret >= g_base_addr && ret < g_base_addr + g_module_size)
+                            printf("[HAVUZ-SONDA] donus = oyun+0x%llx\n",
+                                   (unsigned long long)(ret - g_base_addr));
+                        else
+                            printf("[HAVUZ-SONDA] donus = 0x%llx (oyun disi)\n",
+                                   (unsigned long long)ret);
+                        const uint64_t* sp = reinterpret_cast<const uint64_t*>(ctx->Rsp);
+                        int gosterilen = 0;
+                        for (int i = 0; i < 512 && gosterilen < 16; ++i) {
+                            if (!SafeReadable(&sp[i], 8)) break;
+                            const uint64_t v = sp[i];
+                            if (v >= g_base_addr && v < g_base_addr + g_module_size) {
+                                printf("    yigin[%3d] = oyun+0x%llx\n", i,
+                                       (unsigned long long)(v - g_base_addr));
+                                ++gosterilen;
+                            }
+                        }
+                        fflush(stdout);
+                    }
+                }
             }
 
             // ========================================================
