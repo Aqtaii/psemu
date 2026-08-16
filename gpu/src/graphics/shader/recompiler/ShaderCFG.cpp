@@ -1139,19 +1139,49 @@ bool SplitOneLoopHeaderSelection(Graph* graph, std::vector<uint32_t>* already_sp
 		return false;
 	}
 
+	// ELEME SONDASI: pas ILK KOSUDA mesh programi icin HIC atesLENMEDI
+	// (yalnizca header=9'lu kucuk bir grafta calisti) ve nedenini bilmiyoruz.
+	// "Muhtemelen sudur" demek yerine her dongu icin eleme nedenini basiyoruz.
+	// Benzersiz imza basina tek satir - log patlamasin.
+	static std::mutex                                        s_iz_mtx;
+	static std::set<std::tuple<uint32_t, uint32_t, uint32_t>> s_iz;
+	const auto iz = [&](uint32_t header_id, uint32_t merge, const char* neden) {
+		bool yeni = false;
+		{
+			std::lock_guard<std::mutex> k(s_iz_mtx);
+			if (s_iz.size() < 256) {
+				yeni = s_iz.emplace(header_id, merge, static_cast<uint32_t>(neden[0])).second;
+			}
+		}
+		if (yeni) {
+			std::printf("[BASLIK-BOL-ELE] baslik=%u merge=%u neden=%s\n", header_id, merge, neden);
+			std::fflush(stdout);
+		}
+	};
+
+	if (graph->natural_loops.empty()) {
+		iz(UINT32_MAX, UINT32_MAX, "dogal_dongu_yok");
+	}
 	for (const auto& loop: graph->natural_loops) {
 		const auto header_id = loop.header;
 		if (header_id == UINT32_MAX || Contains(*already_split, header_id)) {
+			iz(header_id, loop.merge, "zaten_bolundu");
 			continue;
 		}
 		const auto* header = graph->FindBlock(header_id);
-		if (header == nullptr || header->terminator.kind != TerminatorKind::ConditionalBranch) {
+		if (header == nullptr) {
+			iz(header_id, loop.merge, "blok_yok");
+			continue;
+		}
+		if (header->terminator.kind != TerminatorKind::ConditionalBranch) {
+			iz(header_id, loop.merge, "kosullu_degil");
 			continue;
 		}
 		// Hedeflerden biri dongu merge'i ise baslik zaten dongunun kosulunu
 		// tasiyor - bu MESRU ve dokunulmaz.
 		if (header->terminator.true_block == loop.merge ||
 		    header->terminator.false_block == loop.merge) {
+			iz(header_id, loop.merge, "hedef_merge_ZATEN_MESRU");
 			continue;
 		}
 
@@ -1779,13 +1809,20 @@ bool SplitSharedMergeBlocks(Graph* graph, std::string* error) {
 	std::vector<uint32_t> header_split_headers;
 	std::vector<uint32_t> loop_header_selection_split;
 	for (uint32_t splits = 0; splits < split_budget; splits++) {
-		// Dongu basligi ayni anda secim basligi olamaz - EN ONCE bu, cunku
-		// basligi bolmek merge taleplerini de degistiriyor.
-		if (!SplitOneLoopHeaderSelection(graph, &loop_header_selection_split) &&
-		    !SplitOneLoopMerge(graph) && !SplitOneSelectionMerge(graph) &&
+		// Dongu basligi ayni anda secim basligi olamaz -> EN SONA.
+		//
+		// ILK DENEMEDE ZINCIRIN BASINDAYDI VE MESH ICIN HIC ATESLENMEDI.
+		// Eleme sondasi nedenini soyledi: 256 elemenin neredeyse tamami
+		// "hedef_merge_ZATEN_MESRU" - yani BOLME ANINDA basligin bir hedefi
+		// gercekten dongu merge'iydi. Sonraki bolme paslari o kenari sentetik
+		// bir yonlendiriciye cevirince emisyon aninda artik hicbir hedef
+		// merge olmuyor ve ihlal ORADA doguyor. Dolayisiyla kontrol, graf
+		// OTURDUKTAN sonra yapilmali.
+		if (!SplitOneLoopMerge(graph) && !SplitOneSelectionMerge(graph) &&
 		    !SplitOneLoopBreakSelection(graph, &break_split_headers) &&
 		    !SplitIndependentSelectionInLoopHeader(graph, &header_split_headers) &&
-		    !SplitOneNestedSelectionMerge(graph, &nested_split_headers)) {
+		    !SplitOneNestedSelectionMerge(graph, &nested_split_headers) &&
+		    !SplitOneLoopHeaderSelection(graph, &loop_header_selection_split)) {
 			// Mevcut bolme pasleri tukendi. Geriye cakisma kaldiysa haritayi
 			// dok - genellestirilmis cozum buradan yazilacak.
 			LogMergeClaimMap(*graph);
