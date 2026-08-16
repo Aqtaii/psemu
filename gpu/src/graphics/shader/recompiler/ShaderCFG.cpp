@@ -1108,6 +1108,89 @@ bool SplitSharedMergeBlock(Graph* graph, uint32_t merge,
 	return true;
 }
 
+// DONGU BASLIGI AYNI ANDA SECIM BASLIGI OLAMAZ.
+// ---------------------------------------------------------------------------
+// OLCULDU (mesh hash fc3d1580, 448 blok): modulun TEK yapisal ihlali buydu.
+// Dongu basligi %237'nin dallanmasi `%239` ve `%238` - ikisi de dongunun
+// ICINDE; dongu merge'i (%271) hicbirinde yok. Yani blok hem `OpLoopMerge`
+// tasiyor hem de gercek bir SECIM aciyor. SPIR-V'de bir blokta yalnizca TEK
+// merge komutu olabilir, dolayisiyla secim yapisiz kaliyor ve spirv-val
+// "Selection must be structured" diyor.
+//
+// KANIT (uretilen modul uzerinde dogrudan denendi, spirv-as + spirv-val):
+//   - continue blogundaki `if (k) baslik else merge` dallanmasini
+//     degistirmek: hata AYNEN durdu (yani suclu orasi degil)
+//   - basligin hedeflerinden birini merge yapmak: modul TEMIZ dogrulandi
+//   - asagidaki ANLAMSAL OLARAK DOGRU donusum: modul TEMIZ dogrulandi
+// Modulde baska hicbir ihlal yok: 448 blok, 219 OpSelectionMerge,
+// 1 OpLoopMerge, cakisan merge sahipligi 0, yapisal olmayan cikis 0.
+//
+// DONUSUM: basligi BOL. Yalnizca `OpLoopMerge`'u tasiyan BOS bir yeni
+// baslik yaratilir ve kosulsuz olarak eskisine dallanir; basliga giren TUM
+// kenarlar (geri kenar dahil) yenisine yonlendirilir. Eski blok siradan bir
+// govde blogu olur ve kendi `OpSelectionMerge`'unu NCPD'den alir.
+// Yeni blok BOS oldugu icin anlam birebir korunur.
+bool SplitOneLoopHeaderSelection(Graph* graph, std::vector<uint32_t>* already_split) {
+	static const bool enabled = [] {
+		const char* env = std::getenv("PSEMU_CFG_BASLIK_BOL");
+		return env == nullptr || env[0] != '0';
+	}();
+	if (!enabled || graph == nullptr) {
+		return false;
+	}
+
+	for (const auto& loop: graph->natural_loops) {
+		const auto header_id = loop.header;
+		if (header_id == UINT32_MAX || Contains(*already_split, header_id)) {
+			continue;
+		}
+		const auto* header = graph->FindBlock(header_id);
+		if (header == nullptr || header->terminator.kind != TerminatorKind::ConditionalBranch) {
+			continue;
+		}
+		// Hedeflerden biri dongu merge'i ise baslik zaten dongunun kosulunu
+		// tasiyor - bu MESRU ve dokunulmaz.
+		if (header->terminator.true_block == loop.merge ||
+		    header->terminator.false_block == loop.merge) {
+			continue;
+		}
+
+		const auto new_header = AppendSyntheticMergeBlock(graph, header_id);
+		// Basliga giren her kenari yeni basliga cevir (yeni basligin kendi
+		// kenari haric - o zaten kasitli).
+		for (auto pred: header->predecessors) {
+			if (pred == new_header) {
+				continue;
+			}
+			auto* block = graph->FindBlock(pred);
+			if (block == nullptr) {
+				continue;
+			}
+			ReplaceValue(&block->successors, header_id, new_header);
+			ReplaceTerminatorTarget(&block->terminator, header_id, new_header);
+		}
+		// Dongu bilgisi RecomputeAnalyses'te geri kenardan YENIDEN kuruluyor;
+		// geri kenar artik yeni basliga gittigi icin baslik da o olacak.
+		auto* old_header = graph->FindBlock(header_id);
+		if (old_header != nullptr) {
+			old_header->terminator.loop_header    = false;
+			old_header->terminator.merge_block    = UINT32_MAX;
+			old_header->terminator.continue_block = UINT32_MAX;
+		}
+		AddUnique(already_split, header_id);
+		static std::atomic<uint32_t> s_n {0};
+		if (s_n.fetch_add(1, std::memory_order_relaxed) < 8) {
+			std::printf("[BASLIK-BOL] dongu basligi=%u (dogru=%u yanlis=%u merge=%u) -> yeni bos "
+			            "baslik=%u; eski blok artik secim\n",
+			            header_id, header->terminator.true_block, header->terminator.false_block,
+			            loop.merge, new_header);
+			std::fflush(stdout);
+		}
+		return true;
+	}
+	return false;
+}
+
 bool SplitOneLoopMerge(Graph* graph) {
 	const auto& loops = graph->natural_loops;
 	for (const auto& loop: loops) {
@@ -1694,8 +1777,12 @@ bool SplitSharedMergeBlocks(Graph* graph, std::string* error) {
 	std::vector<uint32_t> break_split_headers;
 	std::vector<uint32_t> nested_split_headers;
 	std::vector<uint32_t> header_split_headers;
+	std::vector<uint32_t> loop_header_selection_split;
 	for (uint32_t splits = 0; splits < split_budget; splits++) {
-		if (!SplitOneLoopMerge(graph) && !SplitOneSelectionMerge(graph) &&
+		// Dongu basligi ayni anda secim basligi olamaz - EN ONCE bu, cunku
+		// basligi bolmek merge taleplerini de degistiriyor.
+		if (!SplitOneLoopHeaderSelection(graph, &loop_header_selection_split) &&
+		    !SplitOneLoopMerge(graph) && !SplitOneSelectionMerge(graph) &&
 		    !SplitOneLoopBreakSelection(graph, &break_split_headers) &&
 		    !SplitIndependentSelectionInLoopHeader(graph, &header_split_headers) &&
 		    !SplitOneNestedSelectionMerge(graph, &nested_split_headers)) {
