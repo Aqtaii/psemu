@@ -1185,10 +1185,21 @@ bool SplitOneLoopHeaderSelection(Graph* graph, std::vector<uint32_t>* already_sp
 			continue;
 		}
 
+		// DIKKAT - ISARETCI GECERSIZLESMESI: AppendSyntheticMergeBlock
+		// `graph->blocks`'a push_back yapiyor ve vektor YENIDEN TAHSIS
+		// EDILEBILIYOR. `header` bu cagridan ONCE alinmisti; sonrasinda
+		// kullanmak dangling okumaydi ve pas ateslendigi halde etkisi
+		// tutarsizdi (olculdu: [BASLIK-BOL] basiliyor ama uretilen modul
+		// hala gecersiz, hata AYNI komutta). Once kopyala, sonra ekle.
+		const auto true_before  = header->terminator.true_block;
+		const auto false_before = header->terminator.false_block;
+		const auto preds        = header->predecessors;
+		header                  = nullptr;
+
 		const auto new_header = AppendSyntheticMergeBlock(graph, header_id);
 		// Basliga giren her kenari yeni basliga cevir (yeni basligin kendi
 		// kenari haric - o zaten kasitli).
-		for (auto pred: header->predecessors) {
+		for (auto pred: preds) {
 			if (pred == new_header) {
 				continue;
 			}
@@ -1212,8 +1223,7 @@ bool SplitOneLoopHeaderSelection(Graph* graph, std::vector<uint32_t>* already_sp
 		if (s_n.fetch_add(1, std::memory_order_relaxed) < 8) {
 			std::printf("[BASLIK-BOL] dongu basligi=%u (dogru=%u yanlis=%u merge=%u) -> yeni bos "
 			            "baslik=%u; eski blok artik secim\n",
-			            header_id, header->terminator.true_block, header->terminator.false_block,
-			            loop.merge, new_header);
+			            header_id, true_before, false_before, loop.merge, new_header);
 			std::fflush(stdout);
 		}
 		return true;
