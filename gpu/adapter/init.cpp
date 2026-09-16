@@ -28,7 +28,13 @@
 #include "libs/controller.h"
 #include "loader/timer.h"
 
+extern "C" void PsemuPrecommitThreadStack(size_t commit_mb);
+
 void PsemuInitKytyGraphics() {
+	PsemuPrecommitThreadStack(32);
+	ULONG guarantee = 512 * 1024;
+	SetThreadStackGuarantee(&guarantee);
+
 	MARK("slist Instance");
 	auto* slist = Common::SubsystemsList::Instance();
 

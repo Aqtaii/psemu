@@ -1,4 +1,4 @@
-﻿# ============================================================================
+# ============================================================================
 # psemu â€” PS5 emulator (KytyPS5 GPU port entegrasyonu icin CMake build)
 # ----------------------------------------------------------------------------
 # Onceki build tek komuttu: cl /EHsc /std:c++17 src\*.cpp /I include.
@@ -33,6 +33,7 @@ target_include_directories(loader PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 if(MSVC)
     target_compile_options(loader PRIVATE /EHsc /utf-8 /bigobj)
+    target_link_options(loader PRIVATE "/STACK:33554432")
     # psemu cekirdegi build.bat'te MSVC /Od (optimizasyonsuz) ile derleniyordu
     # ve oyunu tam boot ediyordu. clang-cl Release -O2 ise dusuk-seviye kodu
     # (VEH exception-skip, runtime trampolinler, FS-segment TLS hotfix,

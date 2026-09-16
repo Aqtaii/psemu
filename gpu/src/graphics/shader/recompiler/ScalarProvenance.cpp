@@ -34,7 +34,8 @@ uint32_t ScalarValueArgCount(ScalarValueOp op) {
 		case ScalarValueOp::ShiftRightArithmetic:
 		case ScalarValueOp::BitFieldMaskU32:
 		case ScalarValueOp::BitFieldMaskU64Low:
-		case ScalarValueOp::BitFieldMaskU64High: return 2;
+		case ScalarValueOp::BitFieldMaskU64High:
+		case ScalarValueOp::BitSet: return 2;
 		case ScalarValueOp::AddCarry:
 		case ScalarValueOp::Carry:
 		case ScalarValueOp::SubBorrow:
@@ -45,6 +46,8 @@ uint32_t ScalarValueArgCount(ScalarValueOp op) {
 		case ScalarValueOp::AddShiftLeft:
 		case ScalarValueOp::XorAdd:
 		case ScalarValueOp::ShiftLeftOr:
+		case ScalarValueOp::ShiftLeftU64Low:
+		case ScalarValueOp::ShiftLeftU64High:
 		case ScalarValueOp::ReadConst: return 3;
 		case ScalarValueOp::ReadConstBuffer: return 5;
 		default: return 0;
@@ -746,6 +749,58 @@ private:
 					state->regs[dst + 1] = Define(inst, ScalarValueOp::BitFieldMaskU64High, before);
 				}
 				break;
+			case Opcode::ShiftLeftLogicalU64: {
+				const auto arg0 = inst.src_count > 0 ? OperandValue(inst.src[0], before) : ScalarProvenance::Unknown;
+				uint32_t src0_reg = 0;
+				uint32_t arg1 = Constant(0);
+				if (inst.src_count > 0 && ScalarRegister(inst.src[0], src0_reg) && src0_reg + 1 < ScalarRegisters) {
+					arg1 = before.regs[src0_reg + 1];
+				} else if (inst.src_count > 0 && inst.src[0].kind == OperandKind::ImmediateU32 && inst.src[0].sext_64) {
+					arg1 = Constant(UINT32_MAX);
+				}
+				const auto arg2 = inst.src_count > 1 ? OperandValue(inst.src[1], before) : Constant(0);
+
+				ScalarValue low_node;
+				low_node.op      = ScalarValueOp::ShiftLeftU64Low;
+				low_node.pc      = inst.pc;
+				low_node.args[0] = arg0;
+				low_node.args[1] = arg1;
+				low_node.args[2] = arg2;
+				value = InternValue(std::move(low_node));
+
+				if (dst + 1 < ScalarRegisters) {
+					ScalarValue high_node;
+					high_node.op      = ScalarValueOp::ShiftLeftU64High;
+					high_node.pc      = inst.pc;
+					high_node.args[0] = arg0;
+					high_node.args[1] = arg1;
+					high_node.args[2] = arg2;
+					state->regs[dst + 1] = InternValue(std::move(high_node));
+				}
+				break;
+			}
+			case Opcode::BitSetU32:
+				value = Define(inst, ScalarValueOp::BitSet, before);
+				break;
+			case Opcode::SelectU32: {
+				if (inst.src_count >= 2) {
+					const auto src0 = OperandValue(inst.src[0], before);
+					const auto src1 = OperandValue(inst.src[1], before);
+					if (src0 == src1) {
+						value = src0;
+					} else {
+						ScalarValue phi;
+						phi.op = ScalarValueOp::Phi;
+						phi.pc = inst.pc;
+						phi.phi_args.push_back(src0);
+						phi.phi_args.push_back(src1);
+						value = InternValue(std::move(phi));
+					}
+				} else if (inst.src_count == 1) {
+					value = OperandValue(inst.src[0], before);
+				}
+				break;
+			}
 			case Opcode::SLoadDword: value = ReadConst(inst, before, false); break;
 			case Opcode::SBufferLoadDword: value = ReadConst(inst, before, true); break;
 			case Opcode::ReadLaneU32: value = ReadVectorLane(inst, before); break;
@@ -1178,6 +1233,12 @@ std::string ScalarValueToString(const ScalarProvenance& provenance, uint32_t val
 		case ScalarValueOp::Phi: return fmt::format("phi{}", value);
 		case ScalarValueOp::BitFieldMaskU32:
 			return fmt::format("bfm_u32({}, {})", node.args[0], node.args[1]);
+		case ScalarValueOp::BitSet:
+			return fmt::format("bitset({}, {})", node.args[0], node.args[1]);
+		case ScalarValueOp::ShiftLeftU64Low:
+			return fmt::format("lshl64_lo({}, {}, {})", node.args[0], node.args[1], node.args[2]);
+		case ScalarValueOp::ShiftLeftU64High:
+			return fmt::format("lshl64_hi({}, {}, {})", node.args[0], node.args[1], node.args[2]);
 		default: return fmt::format("value{}", value);
 	}
 }

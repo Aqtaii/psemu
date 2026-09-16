@@ -34,6 +34,7 @@
 #include "kernel/eventQueue.h"
 #include "kernel/pthread.h"
 #include "kernel/memory.h"
+#include "loader/systemContent.h"
 #include "libs/errno.h"
 
 #include <algorithm>
@@ -493,7 +494,10 @@ bool PsemuMeshPathEnabled() {
 			return false;
 		}
 		const char* env = std::getenv("PSEMU_MESH");
-		return env != nullptr && env[0] == '1';
+		if (env != nullptr) {
+			return env[0] != '0';
+		}
+		return true;
 	}();
 	return enabled;
 }
@@ -907,8 +911,30 @@ static bool PrepareDrawRenderState(uint64_t submit_id, CommandBuffer* buffer, HW
 		}
 	}
 
-	const bool with_depth = (state->depth_info.format != vk::Format::eUndefined &&
-	                         state->depth_info.vulkan_buffer != nullptr);
+	bool with_depth = (state->depth_info.format != vk::Format::eUndefined &&
+	                   state->depth_info.vulkan_buffer != nullptr);
+
+	// A depth attachment whose extents do not match the colour target's cannot be bound to the
+	// same framebuffer: Vulkan requires all attachments in a render pass to match the render area,
+	// and a framebuffer cannot even be created with mismatched sizes. Prospero hardware clamps depth
+	// to its own bounds, but a Vulkan pass has a single render area, so pairing a 1024x1024
+	// colour target with a 1920x1080 depth attachment writes depth only in the 1024x1024 corner
+	// and leaves the rest of it stale. Astro Bot does exactly that -- two colour slots covering
+	// one 1024x1024 surface with complementary channel masks, over a full-size depth buffer.
+	if (with_depth && state->color_count > 0 &&
+	    (state->depth_info.width != state->color_info[0].extent.width ||
+	     state->depth_info.height != state->color_info[0].extent.height)) {
+		static std::atomic_bool logged = false;
+		if (!logged.exchange(true, std::memory_order_relaxed)) {
+			LOGF("RenderState: depth target %ux%u does not match colour %ux%u -- unbinding it "
+			     "for the draw\n",
+			     state->depth_info.width, state->depth_info.height,
+			     state->color_info[0].extent.width, state->color_info[0].extent.height);
+		}
+		state->depth_info = {};
+		with_depth        = false;
+	}
+
 	if (state->color_count == 0 && !with_depth) {
 		LogFramebufferSkip(draw.name, state->color_info[0], state->depth_info, ctx, ucfg,
 		                   draw.index_count, draw.flags);
@@ -992,6 +1018,19 @@ static bool RefreshShaders(HW::Context* ctx, HW::Shader* sh_ctx, const DrawCallI
 		return false;
 	}
 	return true;
+}
+
+// Soft ladder (PPSA21564 only). When Astro Bot's oversized GI pixel / mesh kernel fails or is
+// dropped, its draw has no usable program. Skip that draw for this title so the frame presents.
+static bool DrawHasDroppedProgram(const DrawRenderState& state) {
+	static const bool enabled = [] {
+		std::string id;
+		return Loader::SystemContentParamSfoGetString("TITLE_ID", &id) && id == "PPSA21564";
+	}();
+	if (!enabled) {
+		return false;
+	}
+	return state.vs_shader.empty() || (state.ps_active && state.ps_shader.empty());
 }
 
 static void BindDrawVertexBuffers(uint64_t submit_id, CommandBuffer* buffer,
@@ -1644,7 +1683,7 @@ void RenderDrawIndex(uint64_t submit_id, CommandBuffer* buffer, HW::Context* ctx
 		return;
 	}
 
-	if (!RefreshShaders(ctx, sh_ctx, draw, true, &state)) {
+	if (!RefreshShaders(ctx, sh_ctx, draw, true, &state) || DrawHasDroppedProgram(state)) {
 		return;
 	}
 
@@ -1757,7 +1796,7 @@ void RenderDrawIndexAuto(uint64_t submit_id, CommandBuffer* buffer, HW::Context*
 	     (ucfg->GetPrimType() == Prospero::GpuEnumValue(Prospero::PrimitiveType::kRectList) ||
 	      ucfg->GetPrimType() == Prospero::GpuEnumValue(Prospero::PrimitiveType::kRectListLegacy)));
 
-	if (!RefreshShaders(ctx, sh_ctx, draw, false, &state)) {
+	if (!RefreshShaders(ctx, sh_ctx, draw, false, &state) || DrawHasDroppedProgram(state)) {
 		return;
 	}
 

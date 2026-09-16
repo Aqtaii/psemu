@@ -23,6 +23,9 @@
 #include <utility>
 
 
+#include "kernel/memory.h"
+#include "loader/systemContent.h"
+
 // Tani: GPU anlik goruntu isaretleri (govdeleri graphicsRun.cpp).
 namespace Libs::Graphics {
 void PsemuGpuMark(const char* site, uint64_t a, uint64_t b, uint64_t c);
@@ -33,6 +36,23 @@ using Libs::Graphics::PsemuGpuMarkIdle;
 namespace Libs::Graphics::ShaderRecompiler {
 
 namespace {
+
+bool ReadShaderMappedMemory(void*, uint64_t address, uint32_t* value) {
+	return value != nullptr &&
+	       Libs::LibKernel::Memory::TryReadBacking(address, value, sizeof(*value));
+}
+
+bool IsAstroBotTitle() {
+	static const bool is_astro = [] {
+		std::string id;
+		return Loader::SystemContentParamSfoGetString("TITLE_ID", &id) && id == "PPSA21564";
+	}();
+	return is_astro;
+}
+
+IR::SrtMemoryReader ShaderMappedMemoryReaderForTitle() {
+	return IsAstroBotTitle() ? &ReadShaderMappedMemory : nullptr;
+}
 
 bool ReadZeroMemory(void*, uint64_t, uint32_t* value) {
 	if (value == nullptr) {
@@ -837,6 +857,7 @@ bool TryRecompile(std::span<const uint32_t> code, const CompileOptions& options,
 	ir.mesh_output_primitives = options.mesh_output_primitives;
 	ir.mesh_local_size_x      = options.mesh_local_size_x;
 	ir.mesh_lds_dwords        = options.mesh_lds_dwords;
+	ir.lower_wide_movrels     = options.lower_wide_movrels || IsAstroBotTitle();
 	LOGF("%s phase end: stage=%s hash=0x%016" PRIx64 " IR LowerProgram blocks=%" PRIu64
 	     " elapsed_ms=%" PRIu64 "\n",
 	     GetDumpLabel(options), StageName(options.stage), options.shader_hash,
@@ -911,7 +932,7 @@ bool TryRecompile(std::span<const uint32_t> code, const CompileOptions& options,
 		                                               : reinterpret_cast<uint64_t>(code.data());
 		runtime.read_memory = options.read_memory != nullptr ? options.read_memory
 		                      : options.user_data == nullptr ? ReadZeroMemory
-		                                                     : nullptr;
+		                                                     : ShaderMappedMemoryReaderForTitle();
 		runtime.userdata    = options.read_memory_data;
 		runtime.flat_memory_base = options.flat_memory_base;
 		if (!IR::MaterializeResources(ir, runtime, &resources, error)) {

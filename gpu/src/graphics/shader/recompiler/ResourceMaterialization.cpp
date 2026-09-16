@@ -213,13 +213,19 @@ bool MaterializeResources(const Program& program, const SrtRuntime& runtime,
 	requests.reserve(program.info.buffers.size() + program.info.images.size() +
 	                 program.info.samplers.size() + program.info.addresses.size());
 	for (const auto& buffer: program.info.buffers) {
-		requests.push_back({buffer.source, buffer.first_use_pc});
+		if (buffer.source != ScalarProvenance::Unknown) {
+			requests.push_back({buffer.source, buffer.first_use_pc});
+		}
 	}
 	for (const auto& image: program.info.images) {
-		requests.push_back({image.source, image.first_use_pc});
+		if (image.source != ScalarProvenance::Unknown) {
+			requests.push_back({image.source, image.first_use_pc});
+		}
 	}
 	for (const auto& sampler: program.info.samplers) {
-		requests.push_back({sampler.source, sampler.first_use_pc});
+		if (sampler.source != ScalarProvenance::Unknown) {
+			requests.push_back({sampler.source, sampler.first_use_pc});
+		}
 	}
 	for (const auto& address: program.info.addresses) {
 		if (address.source != ScalarProvenance::Unknown) {
@@ -235,17 +241,43 @@ bool MaterializeResources(const Program& program, const SrtRuntime& runtime,
 
 	ResourceSnapshot next;
 	auto             cursor = values.begin();
-	next.buffers.assign(cursor, cursor + program.info.buffers.size());
-	cursor += program.info.buffers.size();
-	next.images.assign(cursor, cursor + program.info.images.size());
-	cursor += program.info.images.size();
-	for (auto& descriptor: next.images) {
-		if (!ValidImageDescriptor(descriptor)) {
-			descriptor.dwords.fill(0);
+	next.buffers.reserve(program.info.buffers.size());
+	for (const auto& buffer: program.info.buffers) {
+		if (buffer.source != ScalarProvenance::Unknown) {
+			next.buffers.push_back(*cursor++);
+		} else {
+			DescriptorValue null_desc;
+			null_desc.dword_count = 4;
+			null_desc.dwords.fill(0);
+			next.buffers.push_back(null_desc);
 		}
 	}
-	next.samplers.assign(cursor, cursor + program.info.samplers.size());
-	cursor += program.info.samplers.size();
+	next.images.reserve(program.info.images.size());
+	for (const auto& image: program.info.images) {
+		if (image.source != ScalarProvenance::Unknown) {
+			auto descriptor = *cursor++;
+			if (!ValidImageDescriptor(descriptor)) {
+				descriptor.dwords.fill(0);
+			}
+			next.images.push_back(descriptor);
+		} else {
+			DescriptorValue null_desc;
+			null_desc.dword_count = 8;
+			null_desc.dwords.fill(0);
+			next.images.push_back(null_desc);
+		}
+	}
+	next.samplers.reserve(program.info.samplers.size());
+	for (const auto& sampler: program.info.samplers) {
+		if (sampler.source != ScalarProvenance::Unknown) {
+			next.samplers.push_back(*cursor++);
+		} else {
+			DescriptorValue null_desc;
+			null_desc.dword_count = 4;
+			null_desc.dwords.fill(0);
+			next.samplers.push_back(null_desc);
+		}
+	}
 	for (const auto& address: program.info.addresses) {
 		if (address.source != ScalarProvenance::Unknown) {
 			const auto value = *cursor++;
@@ -256,10 +288,13 @@ bool MaterializeResources(const Program& program, const SrtRuntime& runtime,
 				base &= ~uint64_t {3};
 			}
 			const auto before = static_cast<uint64_t>(-static_cast<int64_t>(address.min_offset));
-			const auto binding_base = address.kind == ResourceKind::Flat
+			auto binding_base = address.kind == ResourceKind::Flat
 			                              ? base & ~(FlatAddressWindowSize - 1u)
 			                          : base >= before ? base - before
 			                                           : 0;
+			if (address.kind != ResourceKind::Flat) {
+				binding_base &= ~255ull; // minStorageBufferOffsetAlignment
+			}
 			next.addresses.push_back({base, binding_base});
 		} else {
 			if (!runtime.flat_memory_base.has_value()) {

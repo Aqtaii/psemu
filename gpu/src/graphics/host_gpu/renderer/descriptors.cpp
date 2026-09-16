@@ -564,7 +564,9 @@ NativeAddressBuffer(uint64_t submit_id, CommandBuffer* command_buffer,
 	const auto  alignment = ctx->StorageMinAlignment();
 	if (alignment == 0 || size > ctx->GetPhysicalDeviceProperties().limits.maxStorageBufferRange ||
 	    BufferCache::GetBufferOffset(address.binding_base) % alignment != 0) {
-		EXIT("address resource range or alignment is unsupported\n");
+		EXIT("address resource range or alignment is unsupported: alignment=%llu, size=%llu, maxRange=%llu, binding_base=0x%llx, offset=%llu\n",
+		     (unsigned long long)alignment, (unsigned long long)size, (unsigned long long)ctx->GetPhysicalDeviceProperties().limits.maxStorageBufferRange,
+		     (unsigned long long)address.binding_base, (unsigned long long)BufferCache::GetBufferOffset(address.binding_base));
 	}
 	(void)submit_id;
 	auto binding  = g_render_ctx->GetBufferCache()->ObtainBuffer(command_buffer, ctx,

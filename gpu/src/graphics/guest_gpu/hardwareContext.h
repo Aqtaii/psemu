@@ -212,6 +212,8 @@ struct DepthRenderTarget {
 struct RenderControl {
 	bool    depth_clear_enable       = false;
 	bool    stencil_clear_enable     = false;
+	bool    copy_depth_to_color      = false;
+	bool    copy_stencil_to_color    = false;
 	bool    resummarize_enable       = false;
 	bool    stencil_compress_disable = false;
 	bool    depth_compress_disable   = false;

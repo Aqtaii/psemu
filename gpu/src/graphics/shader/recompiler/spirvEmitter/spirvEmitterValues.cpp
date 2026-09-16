@@ -650,8 +650,10 @@ uint32_t EmitLaneMaskOperandActiveBool(EmitterState* state, const IR::Operand& o
 uint32_t EmitLaneIndexActiveBool(EmitterState* state, uint32_t lane) {
 	if (state->per_invocation_masks) {
 		const auto ballot = state->builder.AllocateId();
+		const auto active_live =
+		    EmitMaskHelperInvocations(state, EmitExecActiveBool(state));
 		state->builder.AddFunction({OpGroupNonUniformBallot, state->vec4_uint_type, ballot,
-		                            ConstantU32(state, ScopeSubgroup), EmitExecActiveBool(state)});
+		                            ConstantU32(state, ScopeSubgroup), active_live});
 		return EmitBallotLaneActiveBool(state, ballot, lane);
 	}
 	const auto lane_low = state->builder.AllocateId();
@@ -681,8 +683,9 @@ uint32_t EmitLaneIndexActiveBool(EmitterState* state, uint32_t lane) {
 
 uint32_t EmitSubgroupLaneActiveBool(EmitterState* state, uint32_t lane) {
 	const auto active_ballot = state->builder.AllocateId();
+	const auto live = EmitMaskHelperInvocations(state, EmitTrueBool(state));
 	state->builder.AddFunction({OpGroupNonUniformBallot, state->vec4_uint_type, active_ballot,
-	                            ConstantU32(state, ScopeSubgroup), EmitTrueBool(state)});
+	                            ConstantU32(state, ScopeSubgroup), live});
 	return EmitBallotLaneActiveBool(state, active_ballot, lane);
 }
 uint32_t EmitBallotLaneActiveBool(EmitterState* state, uint32_t active_ballot, uint32_t lane) {

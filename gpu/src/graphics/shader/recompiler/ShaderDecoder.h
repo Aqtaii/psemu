@@ -517,6 +517,7 @@ enum class Opcode {
 	// Isin izlemeye bagli efektler (yansima/AO) eksik kalir, rasterizasyon
 	// yolunun tamami calisir.
 	ImageBvhIntersectRay,
+	ImageBvh64IntersectRay,
 	ImageLoad,
 	ImageLoadMip,
 	ImageStore,

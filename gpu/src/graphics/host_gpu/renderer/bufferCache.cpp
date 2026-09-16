@@ -795,11 +795,11 @@ std::pair<VulkanBuffer*, uint64_t> BufferCache::ObtainBuffer(CommandBuffer*  com
 		                           !texture_region.gpu_image_bytes;
 		if (!coherent_read) {
 			if (!is_written) {
-				EXIT("BufferCache: unsupported buffer/image alias, addr=0x%016" PRIx64
-				     " size=0x%016" PRIx64 " read=%d written=%d formatted=%d\n",
-				     vaddr, size, is_read, is_written, is_formatted);
+				printf("[BufferCache] UYARI: unsupported buffer/image alias BYPASSED (okuma modu), addr=0x%016llx size=0x%016llx read=%d written=%d formatted=%d\n",
+				       (unsigned long long)vaddr, (unsigned long long)size, is_read, is_written, is_formatted);
+			} else {
+				(void)m_texture_cache->InvalidateMemoryFromGPU(vaddr, size, is_formatted);
 			}
-			(void)m_texture_cache->InvalidateMemoryFromGPU(vaddr, size, is_formatted);
 		}
 	}
 	if (is_written) {
@@ -907,6 +907,13 @@ std::pair<VulkanBuffer*, uint64_t> BufferCache::ObtainBuffer(CommandBuffer*  com
 					     " size=0x%016" PRIx64 " owner_ctx=%p requested_ctx=%p buffer=%p\n",
 					     old.vaddr, old.size, static_cast<const void*>(old.ctx),
 					     static_cast<const void*>(ctx), static_cast<const void*>(old.buffer.get()));
+				}
+				// Eger eski tampon GPU tarafindan degistirilmis ise, verisi zaten
+				// GPU uzerindeki old.buffer'dadir (ve asagida copyBuffer ile kopyalanacaktir).
+				// Ana bellekten yeniden yuklemeye kalkmak hem GPU verisini bozar, hem de
+				// GPU tarafindan izlenen sayfalar icin sayfa hatasi olusturur.
+				if (m_memory_tracker.IsRegionGpuModified(old.vaddr, old.size)) {
+					continue;
 				}
 				std::vector<std::pair<uint64_t, uint64_t>> uploads;
 				m_memory_tracker.ForEachUploadRange(

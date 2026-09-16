@@ -1,5 +1,6 @@
 # CMake build output
 /build/
+/build_msvc/
 
 # MSVC / derleme artiklari
 *.obj
@@ -49,3 +50,9 @@ tools/nid_db/
 # Linker MAP (yerel tani; buyuk ve makineye ozgu)
 loader.map
 loader.pdb
+
+# Arsiv ve yerel calisma dosyalari
+/archive/
+/captures/
+/savedata/
+*.spv

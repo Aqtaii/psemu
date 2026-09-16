@@ -1,4 +1,4 @@
-﻿#include <iostream>
+#include <iostream>
 #include <fstream>
 #include <vector>
 #include <string>
@@ -1076,6 +1076,431 @@ bool LoadEboot(const std::string& filePath) {
                      "(0x216462, 0x2164cc)" << std::endl;
     }
 
+    if (Game::Current().quirk_astro_animation_args_null_safe) {
+        uint8_t* bp_astro = reinterpret_cast<uint8_t*>(base_address);
+        
+        // 1. RVA 0x37f2b9: pArgs assert failure -> return cleanly
+        uint8_t* patch_site1 = bp_astro + 0x37f2b9;
+        DWORD oldp;
+        if (VirtualProtect(patch_site1, 5, PAGE_EXECUTE_READWRITE, &oldp)) {
+            const uint8_t patch[5] = { 0x5B, 0x41, 0x5E, 0x5D, 0xC3 }; // pop rbx; pop r14; pop rbp; ret
+            memcpy(patch_site1, patch, 5);
+            VirtualProtect(patch_site1, 5, oldp, &oldp);
+            std::cout << "[+] [ASTRO-FIX] ExtensionAnimation::Update pArgs null-safe (RVA 0x37f2b9)" << std::endl;
+        }
+
+        // 2. RVA 0x37f34c: mov rax, [rax + 0x90] when rax == NULL -> return cleanly
+        uint8_t* patch_site2 = bp_astro + 0x37f34c;
+        void* hint = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(bp_astro) - 0x10000000);
+        uint8_t* tr = reinterpret_cast<uint8_t*>(
+            VirtualAlloc(hint, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+        if (!tr) {
+            tr = reinterpret_cast<uint8_t*>(
+                VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+        }
+        if (tr) {
+            int p = 0;
+            // test rax, rax (48 85 C0)
+            tr[p++] = 0x48; tr[p++] = 0x85; tr[p++] = 0xC0;
+            // je .return_cleanly (74 23)
+            tr[p++] = 0x74; tr[p++] = 0x23;
+            // mov rax, qword ptr [rax + 0x90] (48 8B 80 90 00 00 00)
+            tr[p++] = 0x48; tr[p++] = 0x8B; tr[p++] = 0x80;
+            tr[p++] = 0x90; tr[p++] = 0x00; tr[p++] = 0x00; tr[p++] = 0x00;
+            // movabs r11, 0x100000000 (49 BB 00 00 00 00 01 00 00 00)
+            tr[p++] = 0x49; tr[p++] = 0xBB;
+            uint64_t min_ptr = 0x100000000ULL;
+            memcpy(tr + p, &min_ptr, 8); p += 8;
+            // cmp rax, r11 (4C 39 D8)
+            tr[p++] = 0x4C; tr[p++] = 0x39; tr[p++] = 0xD8;
+            // jb .return_cleanly (72 0D)
+            tr[p++] = 0x72; tr[p++] = 0x0D;
+            // movabs r11, return_addr (49 BB ...)
+            uint64_t ret_addr = reinterpret_cast<uint64_t>(bp_astro) + 0x37f353;
+            tr[p++] = 0x49; tr[p++] = 0xBB;
+            memcpy(tr + p, &ret_addr, 8); p += 8;
+            // jmp r11 (41 FF E3)
+            tr[p++] = 0x41; tr[p++] = 0xFF; tr[p++] = 0xE3;
+            // .return_cleanly:
+            // pop rbx; pop r14; pop rbp; ret (5B 41 5E 5D C3)
+            tr[p++] = 0x5B; tr[p++] = 0x41; tr[p++] = 0x5E; tr[p++] = 0x5D; tr[p++] = 0xC3;
+
+            int64_t rel64 = reinterpret_cast<int64_t>(tr) - (reinterpret_cast<int64_t>(patch_site2) + 5);
+            if (rel64 >= INT32_MIN && rel64 <= INT32_MAX) {
+                if (VirtualProtect(patch_site2, 7, PAGE_EXECUTE_READWRITE, &oldp)) {
+                    int32_t rel = static_cast<int32_t>(rel64);
+                    patch_site2[0] = 0xE9;
+                    memcpy(patch_site2 + 1, &rel, 4);
+                    patch_site2[5] = 0x90;
+                    patch_site2[6] = 0x90;
+                    VirtualProtect(patch_site2, 7, oldp, &oldp);
+                    std::cout << "[+] [ASTRO-FIX] ExtensionAnimation::Update anim-resource null-safe (RVA 0x37f34c -> tramp @0x"
+                              << std::hex << reinterpret_cast<uint64_t>(tr) << std::dec << ")" << std::endl;
+                }
+            } else {
+                std::cerr << "[-] [ASTRO-FIX] HATA: Trampoline rel64 menzil disi!" << std::endl;
+            }
+        }
+
+        // 3. RVA 0x349c26: cmp byte ptr [r13 + 0x201], 0xFF when r13 == NULL -> skip to 0x349c86
+        uint8_t* patch_site3 = bp_astro + 0x349c26;
+        uint8_t* tr3 = reinterpret_cast<uint8_t*>(
+            VirtualAlloc(hint, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+        if (!tr3) {
+            tr3 = reinterpret_cast<uint8_t*>(
+                VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+        }
+        if (tr3) {
+            int p = 0;
+            // test r13, r13 (4D 85 ED)
+            tr3[p++] = 0x4D; tr3[p++] = 0x85; tr3[p++] = 0xED;
+            // je .skip (74 15)
+            tr3[p++] = 0x74; tr3[p++] = 0x15;
+            // cmp byte ptr [r13 + 0x201], 0xFF (41 80 BD 01 02 00 00 FF)
+            tr3[p++] = 0x41; tr3[p++] = 0x80; tr3[p++] = 0xBD;
+            tr3[p++] = 0x01; tr3[p++] = 0x02; tr3[p++] = 0x00; tr3[p++] = 0x00; tr3[p++] = 0xFF;
+            // movabs r11, ret_normal (49 BB ...)
+            uint64_t ret_normal = reinterpret_cast<uint64_t>(bp_astro) + 0x349c2e;
+            tr3[p++] = 0x49; tr3[p++] = 0xBB;
+            memcpy(tr3 + p, &ret_normal, 8); p += 8;
+            // jmp r11 (41 FF E3)
+            tr3[p++] = 0x41; tr3[p++] = 0xFF; tr3[p++] = 0xE3;
+            // .skip:
+            // movabs r11, ret_skip (49 BB ...)
+            uint64_t ret_skip = reinterpret_cast<uint64_t>(bp_astro) + 0x349c86;
+            tr3[p++] = 0x49; tr3[p++] = 0xBB;
+            memcpy(tr3 + p, &ret_skip, 8); p += 8;
+            // jmp r11 (41 FF E3)
+            tr3[p++] = 0x41; tr3[p++] = 0xFF; tr3[p++] = 0xE3;
+
+            int64_t rel64 = reinterpret_cast<int64_t>(tr3) - (reinterpret_cast<int64_t>(patch_site3) + 5);
+            if (rel64 >= INT32_MIN && rel64 <= INT32_MAX) {
+                if (VirtualProtect(patch_site3, 8, PAGE_EXECUTE_READWRITE, &oldp)) {
+                    int32_t rel = static_cast<int32_t>(rel64);
+                    patch_site3[0] = 0xE9;
+                    memcpy(patch_site3 + 1, &rel, 4);
+                    patch_site3[5] = 0x90;
+                    patch_site3[6] = 0x90;
+                    patch_site3[7] = 0x90;
+                    VirtualProtect(patch_site3, 8, oldp, &oldp);
+                    std::cout << "[+] [ASTRO-FIX] Input/TriggerEffect r13 null-safe (RVA 0x349c26 -> tramp @0x"
+                              << std::hex << reinterpret_cast<uint64_t>(tr3) << std::dec << ")" << std::endl;
+                }
+            } else {
+                std::cerr << "[-] [ASTRO-FIX] HATA: Trampoline 3 rel64 menzil disi!" << std::endl;
+            }
+        }
+
+        // 4. RVA 0x4e6c31: Animation notify rax/rcx null-safe -> skip to 0x4e6c53
+        uint8_t* patch_site4 = bp_astro + 0x4e6c31;
+        uint8_t* tr4 = reinterpret_cast<uint8_t*>(
+            VirtualAlloc(hint, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+        if (!tr4) {
+            tr4 = reinterpret_cast<uint8_t*>(
+                VirtualAlloc(nullptr, 0x1000, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+        }
+        if (tr4) {
+            int p = 0;
+            // test rax, rax (48 85 C0)
+            tr4[p++] = 0x48; tr4[p++] = 0x85; tr4[p++] = 0xC0;
+            // je .skip (74 2C)
+            tr4[p++] = 0x74; tr4[p++] = 0x2C;
+            // mov rsi, qword ptr [rax + 0x98] (48 8B B0 98 00 00 00)
+            tr4[p++] = 0x48; tr4[p++] = 0x8B; tr4[p++] = 0xB0;
+            tr4[p++] = 0x98; tr4[p++] = 0x00; tr4[p++] = 0x00; tr4[p++] = 0x00;
+            // mov rax, qword ptr [rax + 0xc0] (48 8B 80 C0 00 00 00)
+            tr4[p++] = 0x48; tr4[p++] = 0x8B; tr4[p++] = 0x80;
+            tr4[p++] = 0xC0; tr4[p++] = 0x00; tr4[p++] = 0x00; tr4[p++] = 0x00;
+            // test rax, rax (48 85 C0)
+            tr4[p++] = 0x48; tr4[p++] = 0x85; tr4[p++] = 0xC0;
+            // je .skip (74 19)
+            tr4[p++] = 0x74; tr4[p++] = 0x19;
+            // mov rcx, qword ptr [rax + 0x90] (48 8B 88 90 00 00 00)
+            tr4[p++] = 0x48; tr4[p++] = 0x8B; tr4[p++] = 0x88;
+            tr4[p++] = 0x90; tr4[p++] = 0x00; tr4[p++] = 0x00; tr4[p++] = 0x00;
+            // test rcx, rcx (48 85 C9)
+            tr4[p++] = 0x48; tr4[p++] = 0x85; tr4[p++] = 0xC9;
+            // je .skip (74 0D)
+            tr4[p++] = 0x74; tr4[p++] = 0x0D;
+            // movabs r11, ret_valid (49 BB ...)
+            uint64_t ret_valid = reinterpret_cast<uint64_t>(bp_astro) + 0x4e6c46;
+            tr4[p++] = 0x49; tr4[p++] = 0xBB;
+            memcpy(tr4 + p, &ret_valid, 8); p += 8;
+            // jmp r11 (41 FF E3)
+            tr4[p++] = 0x41; tr4[p++] = 0xFF; tr4[p++] = 0xE3;
+            // .skip:
+            // movabs r11, ret_skip (49 BB ...)
+            uint64_t ret_skip = reinterpret_cast<uint64_t>(bp_astro) + 0x4e6c53;
+            tr4[p++] = 0x49; tr4[p++] = 0xBB;
+            memcpy(tr4 + p, &ret_skip, 8); p += 8;
+            // jmp r11 (41 FF E3)
+            tr4[p++] = 0x41; tr4[p++] = 0xFF; tr4[p++] = 0xE3;
+
+            int64_t rel64 = reinterpret_cast<int64_t>(tr4) - (reinterpret_cast<int64_t>(patch_site4) + 5);
+            if (rel64 >= INT32_MIN && rel64 <= INT32_MAX) {
+                if (VirtualProtect(patch_site4, 21, PAGE_EXECUTE_READWRITE, &oldp)) {
+                    int32_t rel = static_cast<int32_t>(rel64);
+                    patch_site4[0] = 0xE9;
+                    memcpy(patch_site4 + 1, &rel, 4);
+                    for (int i = 5; i < 21; i++) patch_site4[i] = 0x90;
+                    VirtualProtect(patch_site4, 21, oldp, &oldp);
+                    std::cout << "[+] [ASTRO-FIX] Animation notify null-safe (RVA 0x4e6c31 -> tramp @0x"
+                              << std::hex << reinterpret_cast<uint64_t>(tr4) << std::dec << ")" << std::endl;
+                }
+            } else {
+                std::cerr << "[-] [ASTRO-FIX] HATA: Trampoline 4 rel64 menzil disi!" << std::endl;
+            }
+        }
+    }
+
+    if (Game::Current().quirk_stray_ue4_bypass_game_prefix) {
+        uint8_t* bp_stray = reinterpret_cast<uint8_t*>(base_address);
+        // RVA 0x5730: UE4 RequiresGamePrefix check -> xor eax, eax; ret (31 C0 C3)
+        // Causes caller at 0x62dc to test al==0 and je 0x64df (success),
+        // bypassing the bogus "UE4Editor does not append 'Game'" error dialog.
+        uint8_t* site = bp_stray + 0x5730;
+        DWORD oldp = 0;
+        if (VirtualProtect(site, 3, PAGE_EXECUTE_READWRITE, &oldp)) {
+            site[0] = 0x31; // xor eax, eax
+            site[1] = 0xC0;
+            site[2] = 0xC3; // ret
+            VirtualProtect(site, 3, oldp, &oldp);
+            std::cout << "[+] [STRAY-FIX] UE4 RequiresGamePrefix check bypassed (RVA 0x5730 -> xor eax, eax; ret)" << std::endl;
+        }
+
+        // RVA 0x129ac10: FGenericPlatformStackWalk::StackWalkAndDump
+        // The retail PS5 stack unwinder walks `rdx = *rdx` without null-checking `rdx`
+        // before `mov rcx, [rdx + 8]`. When reaching the thread base (rbp=0), it dereferences
+        // [0x8] causing 0xC0000005. Patching with `ret` (0xC3) cleanly skips unwinding;
+        // callers initialize the string buffer to "" before calling.
+        uint8_t* site_stackwalk = bp_stray + 0x129ac10;
+        if (VirtualProtect(site_stackwalk, 1, PAGE_EXECUTE_READWRITE, &oldp)) {
+            site_stackwalk[0] = 0xC3; // ret
+            VirtualProtect(site_stackwalk, 1, oldp, &oldp);
+            std::cout << "[+] [STRAY-FIX] UE4 StackWalkAndDump null-deref crash bypassed (RVA 0x129ac10 -> ret)" << std::endl;
+        }
+
+        // RVA 0x128f430: FGenericPlatformMemory::OnOutOfMemory
+        // Prevent OOM crashes by returning cleanly instead of calling LowLevelFatalError (Line 197).
+        uint8_t* site_oom = bp_stray + 0x128f430;
+        if (VirtualProtect(site_oom, 1, PAGE_EXECUTE_READWRITE, &oldp)) {
+            site_oom[0] = 0xC3; // ret
+            VirtualProtect(site_oom, 1, oldp, &oldp);
+            std::cout << "[+] [STRAY-FIX] UE4 OnOutOfMemory crash bypassed (RVA 0x128f430 -> ret)" << std::endl;
+        }
+
+        // FMallocBinned3 Corruption Canary assertion bypasses
+        // In UE4 FMallocBinned3, canary checks on blocks or pools can fail due to
+        // uninitialized pool entries or retail alloc mismatches, causing LowLevelFatalError.
+        // Force all canary branch checks to take the success path.
+        struct CanaryPatch {
+            uint32_t rva;
+            uint8_t len;
+            uint8_t bytes[6];
+            const char* desc;
+        };
+        static const CanaryPatch s_canary_patches[] = {
+            { 0x12c2ddb, 1, { 0xEB }, "0x12c2ddb (Alloc je->jmp)" },
+            { 0x12c2fb8, 1, { 0xEB }, "0x12c2fb8 (Alloc je->jmp)" },
+            { 0x12c2fe5, 1, { 0xEB }, "0x12c2fe5 (Alloc je->jmp)" },
+            { 0x12c40a1, 1, { 0xEB }, "0x12c40a1 (Pool je->jmp)" },
+            { 0x12c4278, 6, { 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 }, "0x12c4278 (Alloc jne->nop)" },
+            { 0x12c42fe, 1, { 0xEB }, "0x12c42fe (Alloc je->jmp)" },
+            { 0x12c46a6, 1, { 0xEB }, "0x12c46a6 (Pool je->jmp)" },
+            { 0x12c470e, 1, { 0xEB }, "0x12c470e (Pool je->jmp)" },
+            { 0x12c47a9, 6, { 0xE9, 0x2D, 0x01, 0x00, 0x00, 0x90 }, "0x12c47a9 (Pool je->jmp)" },
+            { 0x12c48a8, 1, { 0xEB }, "0x12c48a8 (Pool je->jmp)" },
+            { 0x12c4c66, 1, { 0xEB }, "0x12c4c66 (Pool je->jmp)" },
+            { 0x12c526c, 6, { 0xE9, 0x8D, 0x00, 0x00, 0x00, 0x90 }, "0x12c526c (Pool je->jmp)" },
+            { 0x12c52a3, 1, { 0xEB }, "0x12c52a3 (Pool je->jmp)" },
+            { 0x12c5594, 1, { 0xEB }, "0x12c5594 (Free je->jmp)" },
+            { 0x12c5656, 1, { 0xEB }, "0x12c5656 (Free je->jmp)" },
+        };
+        for (const auto& cp : s_canary_patches) {
+            uint8_t* site = bp_stray + cp.rva;
+            if (VirtualProtect(site, cp.len, PAGE_EXECUTE_READWRITE, &oldp)) {
+                memcpy(site, cp.bytes, cp.len);
+                VirtualProtect(site, cp.len, oldp, &oldp);
+                std::cout << "[+] [STRAY-FIX] UE4 FMallocBinned3 " << cp.desc << " bypassed" << std::endl;
+            }
+        }
+
+        // FPS5DirectMemory BitAlloc safe loop termination:
+        // When the physical bitmap runs out of bits (eax == -1), jump directly to the clean loop exit
+        // at 0x122486c, which flushes the BatchMap for all valid pages and cleanly finishes the commit.
+        // This prevents executing with r12d = -1 (phys = 0xffffffff0000) and completely eliminates the
+        // runaway phantom allocation loop.
+        // 0x1224710: je 0x122486c (0F 84 56 01 00 00); jmp 0x122473e (EB 26) [8 bytes]
+        uint8_t* site_bitalloc = bp_stray + 0x1224710;
+        if (VirtualProtect(site_bitalloc, 8, PAGE_EXECUTE_READWRITE, &oldp)) {
+            static const uint8_t patch_bitalloc[8] = {
+                0x0F, 0x84, 0x56, 0x01, 0x00, 0x00, // je 0x122486c (clean loop exit)
+                0xEB, 0x26                          // jmp 0x122473e (continue success)
+            };
+            memcpy(site_bitalloc, patch_bitalloc, 8);
+            VirtualProtect(site_bitalloc, 8, oldp, &oldp);
+            std::cout << "[+] [STRAY-FIX] FPS5DirectMemory BitAlloc OOM safe termination patched (RVA 0x1224710)" << std::endl;
+        }
+
+        // FPS5DirectMemory::Commit OOM clean return:
+        // When physical memory is exhausted, instead of jumping through an uninitialized canary check,
+        // jump directly to the epilogue at 0x12250e1 (add rsp, 0x98; pop...; ret).
+        uint8_t* site_commit_oom = bp_stray + 0x1225023;
+        if (VirtualProtect(site_commit_oom, 12, PAGE_EXECUTE_READWRITE, &oldp)) {
+            static const uint8_t patch_commit_oom[12] = {
+                0xE9, 0xB9, 0x00, 0x00, 0x00,             // jmp 0x12250e1
+                0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 // 7x nop
+            };
+            memcpy(site_commit_oom, patch_commit_oom, 12);
+            VirtualProtect(site_commit_oom, 12, oldp, &oldp);
+            std::cout << "[+] [STRAY-FIX] FPS5DirectMemory Commit OOM clean return patched (RVA 0x1225023)" << std::endl;
+        }
+
+        // Doku ve Geometri Akis Havuzu Optimizasyonu (Texture & Mesh Streaming Pool Optimization):
+        // Stray'in eboot.bin'inde r.Streaming.UseFixedPoolSize degeri 0 (dinamik/sinirsiz) oldugunda,
+        // UE4 doku havuzu limitini gormezden gelerek her talepte yeni 88 MB'lik parcalar tahsis eder.
+        // Onceki calismada 11 saniyede 100 parca (8.8 GB) tahsis edilip host commit tuketilerek 10 GB limitine carpmisti.
+        // Havuzu donanim standardina uygun olarak kesin ve kalici sabitliyoruz:
+        // 0. RVA 0x40b3101: r.Streaming.UseFixedPoolSize -> 1 (ReadOnly + SetByCommandline = 0x08000044)
+        // 1. RVA 0x40b316f: r.Streaming.PoolSize -> 2500 MB (ReadOnly + SetByCommandline = 0x08000044)
+        // 2. RVA 0x40b31d9: r.Streaming.PoolSizeForMeshes -> 1000 MB (ReadOnly + SetByCommandline = 0x08000044)
+        // 3. RVA 0x40b3647: r.Streaming.LimitPoolSizeToVRAM -> ECVF_ReadOnly | ECVF_SetByCommandline (0x08000044) ile 0'da kilitlenir
+        // 4. RVA 0x40b3243: r.Streaming.MaxTempMemoryAllowed -> 256 MB (0x00000100)
+        uint8_t* site_fixed_pool = bp_stray + 0x40b3101;
+        if (VirtualProtect(site_fixed_pool, 15, PAGE_EXECUTE_READWRITE, &oldp)) {
+            static const uint8_t patch_fixed_pool[15] = {
+                0x31, 0xC9,                                     // xor ecx, ecx (null help string)
+                0xBA, 0x01, 0x00, 0x00, 0x00,                   // mov edx, 1 (UseFixedPoolSize = 1)
+                0x41, 0xB8, 0x44, 0x00, 0x00, 0x08,             // mov r8d, 0x08000044 (ECVF_ReadOnly | ECVF_SetByCommandline)
+                0x66, 0x90                                      // 2-byte nop
+            };
+            memcpy(site_fixed_pool, patch_fixed_pool, 15);
+            VirtualProtect(site_fixed_pool, 15, oldp, &oldp);
+            std::cout << "[+] [STRAY-FIX] r.Streaming.UseFixedPoolSize locked to 1 (Fixed Pool) (RVA 0x40b3101)" << std::endl;
+        }
+
+        uint8_t* site_pool_tex = bp_stray + 0x40b316f;
+        if (VirtualProtect(site_pool_tex, 11, PAGE_EXECUTE_READWRITE, &oldp)) {
+            static const uint8_t patch_pool_tex[11] = {
+                0xBA, 0xC4, 0x09, 0x00, 0x00,                   // mov edx, 2500 (0x9C4 = 2500 MB)
+                0x41, 0xB8, 0x44, 0x00, 0x00, 0x08              // mov r8d, 0x08000044 (ECVF_ReadOnly | ECVF_SetByCommandline)
+            };
+            memcpy(site_pool_tex, patch_pool_tex, 11);
+            VirtualProtect(site_pool_tex, 11, oldp, &oldp);
+            std::cout << "[+] [STRAY-FIX] r.Streaming.PoolSize locked to 2500 MB (ReadOnly) (RVA 0x40b316f)" << std::endl;
+        }
+
+        uint8_t* site_pool_mesh = bp_stray + 0x40b31d9;
+        if (VirtualProtect(site_pool_mesh, 11, PAGE_EXECUTE_READWRITE, &oldp)) {
+            static const uint8_t patch_pool_mesh[11] = {
+                0xBA, 0xE8, 0x03, 0x00, 0x00,                   // mov edx, 1000 (0x3E8 = 1000 MB)
+                0x41, 0xB8, 0x44, 0x00, 0x00, 0x08              // mov r8d, 0x08000044 (ECVF_ReadOnly | ECVF_SetByCommandline)
+            };
+            memcpy(site_pool_mesh, patch_pool_mesh, 11);
+            VirtualProtect(site_pool_mesh, 11, oldp, &oldp);
+            std::cout << "[+] [STRAY-FIX] r.Streaming.PoolSizeForMeshes locked to 1000 MB (ReadOnly) (RVA 0x40b31d9)" << std::endl;
+        }
+
+        uint8_t* site_limit_vram = bp_stray + 0x40b3647;
+        if (VirtualProtect(site_limit_vram, 6, PAGE_EXECUTE_READWRITE, &oldp)) {
+            // mov r8d, 0x08000044 (ECVF_ReadOnly | ECVF_SetByCommandline | ECVF_Default)
+            static const uint8_t patch_limit_vram[6] = { 0x41, 0xB8, 0x44, 0x00, 0x00, 0x08 };
+            memcpy(site_limit_vram, patch_limit_vram, 6);
+            VirtualProtect(site_limit_vram, 6, oldp, &oldp);
+            std::cout << "[+] [STRAY-FIX] r.Streaming.LimitPoolSizeToVRAM locked to 0 (ReadOnly) (RVA 0x40b3647)" << std::endl;
+        }
+
+        uint8_t* site_max_temp = bp_stray + 0x40b3243;
+        if (VirtualProtect(site_max_temp, 5, PAGE_EXECUTE_READWRITE, &oldp)) {
+            static const uint8_t patch_max_temp[5] = { 0xBA, 0x00, 0x01, 0x00, 0x00 }; // mov edx, 256
+            memcpy(site_max_temp, patch_max_temp, 5);
+            VirtualProtect(site_max_temp, 5, oldp, &oldp);
+            std::cout << "[+] [STRAY-FIX] r.Streaming.MaxTempMemoryAllowed patched to 256 MB (RVA 0x40b3243)" << std::endl;
+        }
+
+        // 5. RVA 0x406b919 & 0x406ba6e: FTextureStreamingSettings::UpdatePoolSize jne bypass
+        // Stray eboot.bin'inde r.Streaming.UseFixedPoolSize != 0 oldugunda kod PoolSizeInBytes
+        // guncellemesini atlar (jne 0x406b945 / jne 0x406ba9a). Bu yuzden havuz 115 MB varsayilaninda
+        // kalip doku motorunun panik halinde surekli 88 MB yeni parcalar tahsis etmesine neden olur.
+        // Bu atlamalari NOP'layarak PoolSizeInBytes degiskeninin 2500 MB'a ayarlanmasini sagliyoruz.
+        uint8_t* site_update_pool1 = bp_stray + 0x406b919;
+        if (VirtualProtect(site_update_pool1, 2, PAGE_EXECUTE_READWRITE, &oldp)) {
+            site_update_pool1[0] = 0x90;
+            site_update_pool1[1] = 0x90;
+            VirtualProtect(site_update_pool1, 2, oldp, &oldp);
+            std::cout << "[+] [STRAY-FIX] FTextureStreamingSettings::UpdatePoolSize jne bypassed (RVA 0x406b919 -> nop nop)" << std::endl;
+        }
+
+        uint8_t* site_update_pool2 = bp_stray + 0x406ba6e;
+        if (VirtualProtect(site_update_pool2, 2, PAGE_EXECUTE_READWRITE, &oldp)) {
+            site_update_pool2[0] = 0x90;
+            site_update_pool2[1] = 0x90;
+            VirtualProtect(site_update_pool2, 2, oldp, &oldp);
+            std::cout << "[+] [STRAY-FIX] FTextureStreamingSettings::UpdatePoolSize second jne bypassed (RVA 0x406ba6e -> nop nop)" << std::endl;
+        }
+
+        // 6. RVA 0x7e46c68: PoolSizeInBytes
+        // Doku havuzunun bayt cinsinden buyuklugunu dogrudan 2500 MB (0x9C400000 = 2621440000 B) olarak baslatiyoruz.
+        uint8_t* site_pool_bytes = bp_stray + 0x7e46c68;
+        if (VirtualProtect(site_pool_bytes, 8, PAGE_EXECUTE_READWRITE, &oldp)) {
+            *reinterpret_cast<uint64_t*>(site_pool_bytes) = 2500ULL * 1024ULL * 1024ULL;
+            VirtualProtect(site_pool_bytes, 8, oldp, &oldp);
+            std::cout << "[+] [STRAY-FIX] PoolSizeInBytes initialized to 2500 MB (RVA 0x7e46c68)" << std::endl;
+        }
+
+        // 7. RVA 0x4073c70: FTextureStreamingSettings::GetPoolSize()
+        // Her zaman dogrudan 2500 MB dondurmesi icin patch'liyoruz:
+        // mov rax, 0x9C400000 (48 B8 00 00 40 9C 00 00 00 00); ret (C3); 5x nop (90 90 90 90 90)
+        uint8_t* site_get_pool_size = bp_stray + 0x4073c70;
+        if (VirtualProtect(site_get_pool_size, 16, PAGE_EXECUTE_READWRITE, &oldp)) {
+            static const uint8_t patch_get_pool[16] = {
+                0x48, 0xB8, 0x00, 0x00, 0x40, 0x9C, 0x00, 0x00, 0x00, 0x00, // mov rax, 0x9c400000 (2500 MB)
+                0xC3,                                                       // ret
+                0x90, 0x90, 0x90, 0x90, 0x90                                // 5x nop
+            };
+            memcpy(site_get_pool_size, patch_get_pool, 16);
+            VirtualProtect(site_get_pool_size, 16, oldp, &oldp);
+            std::cout << "[+] [STRAY-FIX] FTextureStreamingSettings::GetPoolSize locked to 2500 MB (RVA 0x4073c70)" << std::endl;
+        }
+    }
+
+    if (Game::Current().quirk_stray_ue4_file_version_fix) {
+        uint8_t* bp_stray = reinterpret_cast<uint8_t*>(base_address);
+        DWORD oldp = 0;
+
+        // RVA 0x150c51a: FProjectDescriptor::Read FileVersion check
+        // Original: mov edx, [rbp-0xdc]; lea eax, [rdx-1]; mov [r13], edx; cmp eax, 3; jb 0x150c751
+        // If FileVersion==0, it fails and pops up: "File appears to be in a newer version (0)..."
+        // Patch: mov edx, 3; mov [r13], edx; jmp 0x150c751; 8x nop (22 bytes total)
+        uint8_t* site_proj = bp_stray + 0x150c51a;
+        if (VirtualProtect(site_proj, 22, PAGE_EXECUTE_READWRITE, &oldp)) {
+            static const uint8_t patch_proj[22] = {
+                0xBA, 0x03, 0x00, 0x00, 0x00,             // mov edx, 3
+                0x41, 0x89, 0x55, 0x00,                   // mov dword ptr [r13], edx
+                0xE9, 0x29, 0x02, 0x00, 0x00,             // jmp 0x150c751
+                0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 // 8x nop
+            };
+            memcpy(site_proj, patch_proj, 22);
+            VirtualProtect(site_proj, 22, oldp, &oldp);
+            std::cout << "[+] [STRAY-FIX] FProjectDescriptor FileVersion check patched (RVA 0x150c51a -> force v3)" << std::endl;
+        }
+
+        // RVA 0x14f5ba7: FPluginDescriptor::Read FileVersion check
+        // Original: mov eax, [rbp-0xcc]; lea ecx, [rax-1]; cmp cl, 3; jb 0x14f5de1
+        // Patch: mov dword ptr [rbp-0xcc], 3; jmp 0x14f5de1; 3x nop (18 bytes total)
+        uint8_t* site_plugin = bp_stray + 0x14f5ba7;
+        if (VirtualProtect(site_plugin, 18, PAGE_EXECUTE_READWRITE, &oldp)) {
+            static const uint8_t patch_plugin[18] = {
+                0xC7, 0x85, 0x34, 0xFF, 0xFF, 0xFF, 0x03, 0x00, 0x00, 0x00, // mov dword ptr [rbp-0xcc], 3
+                0xE9, 0x2B, 0x02, 0x00, 0x00,                               // jmp 0x14f5de1
+                0x90, 0x90, 0x90                                             // 3x nop
+            };
+            memcpy(site_plugin, patch_plugin, 18);
+            VirtualProtect(site_plugin, 18, oldp, &oldp);
+            std::cout << "[+] [STRAY-FIX] FPluginDescriptor FileVersion check patched (RVA 0x14f5ba7 -> force v3)" << std::endl;
+        }
+    }
+
     // ==========================================
     // 7. Oyunu Calistir!
     // ==========================================
@@ -1089,6 +1514,12 @@ int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     Logger::Init();
+
+    // PS5 misafir sanal bellek alanini (0x1000000000..0x9000000000 = 512 GB)
+    // hicbir thread acilmadan ve ELF yuklenmeden ONCE rezerve et!
+    // Boylece Windows, ileride olusturulacak thread stack'lerini ASLA bu araligin
+    // icine koyamaz ve BatchMap ile yapilan DirectMemory haritalamalari thread stack'lerini ezemez.
+    Core::PreReserveVirtualAddressSpace();
 
     if (argc < 2) {
         std::cout << "Kullanim: " << argv[0] << " <eboot.bin_yolu>" << std::endl;

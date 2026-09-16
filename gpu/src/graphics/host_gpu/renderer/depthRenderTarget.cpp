@@ -106,6 +106,24 @@ void ResolveRenderDepthTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 	if (!depth_active && !stencil_active) {
 		return;
 	}
+	// Depth/stencil test is enabled but no depth, stencil or HTILE memory is bound at all --
+	// every DB address register is zero -- and this draw does not clear or copy the buffer.
+	// (Astro Bot's title screen leaves DB_DEPTH_CONTROL.z_enable set on a 4K composite pass
+	// with all DB addresses cleared.) There is nothing to test against; a stale DB_Z_INFO /
+	// DB_DEPTH_SIZE from an earlier, smaller pass must not manufacture a phantom depth
+	// attachment, which would then shrink the render area to that size and leave the rest of
+	// the frame uncleared. Drop the depth state for this draw.
+	if (!rc.depth_clear_enable && !rc.stencil_clear_enable && !rc.copy_depth_to_color &&
+	    !rc.copy_stencil_to_color && z.z_read_base_addr == 0 && z.z_write_base_addr == 0 &&
+	    z.stencil_read_base_addr == 0 && z.stencil_write_base_addr == 0 &&
+	    z.htile_data_base_addr == 0) {
+		static std::atomic_bool logged_null = false;
+		if (!logged_null.exchange(true, std::memory_order_relaxed)) {
+			LOGF("DepthTarget: depth/stencil test enabled with no bound DB memory -- dropping "
+			     "depth state for the draw\n");
+		}
+		return;
+	}
 	const bool attachment_unbound =
 	    z.z_info.format == Prospero::GpuEnumValue(Prospero::DepthFormat::kInvalid) &&
 	    z.stencil_info.format == Prospero::GpuEnumValue(Prospero::StencilFormat::kInvalid) &&

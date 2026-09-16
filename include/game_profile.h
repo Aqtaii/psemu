@@ -1,4 +1,4 @@
-﻿#ifndef PSEMU_GAME_PROFILE_H_
+#ifndef PSEMU_GAME_PROFILE_H_
 #define PSEMU_GAME_PROFILE_H_
 
 #include <string>
@@ -39,6 +39,20 @@ struct Profile {
 
 	// RVA'ya bagli tani ciktilari (yigin cercevesi dogrulamasi vs.)
 	bool quirk_rva_diagnostics = false;
+
+	// --- Astro Bot (PPSA21564) ---
+	// RVA 0x37f2b9'da ExtensionAnimation animasyon argumani bulunamadiginda
+	// (pArgs == NULL) basarisiz assert sonrasi NULL erisimiyle cokmeyi engeller.
+	bool quirk_astro_animation_args_null_safe = false;
+
+	// --- Stray (PPSA02100) ---
+	// UE4 PreInit sirasinda 0x5730'daki RequiresGamePrefix denetimi,
+	// "Hk_projectGame" modulunu gorup gereksiz yere editor hata kutusu aciyor
+	// ve PreInit'i 1 ile sonlandiriyor. Bu denetimin her zaman 0 (basarili) donmesini saglar.
+	bool quirk_stray_ue4_bypass_game_prefix = false;
+	// UE4 FProjectDescriptor / FPluginDescriptor JSON ayrismasinda FileVersion=0
+	// gelirse surum denetimini (1..3) gecirir ve FileVersion=3 olarak devam eder.
+	bool quirk_stray_ue4_file_version_fix = false;
 
 	// Kayit verisi kok klasoru. Oyunlar birbirinin kaydini EZMESIN diye
 	// titleId ile ayrilir: "savedata/PPSA02929".

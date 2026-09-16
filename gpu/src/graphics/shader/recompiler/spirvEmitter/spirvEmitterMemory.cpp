@@ -1846,8 +1846,10 @@ ExecMaskInfo EmitExecMaskInfo(EmitterState* state) {
 	uint32_t exec_hi = 0;
 	if (state->per_invocation_masks) {
 		const auto ballot = state->builder.AllocateId();
+		const auto active_live =
+		    EmitMaskHelperInvocations(state, EmitExecActiveBool(state));
 		state->builder.AddFunction({OpGroupNonUniformBallot, state->vec4_uint_type, ballot,
-		                            ConstantU32(state, ScopeSubgroup), EmitExecActiveBool(state)});
+		                            ConstantU32(state, ScopeSubgroup), active_live});
 		exec_lo = state->builder.AllocateId();
 		state->builder.AddFunction({OpCompositeExtract, state->uint_type, exec_lo, ballot, 0});
 		if (state->wave_size == 64u) {

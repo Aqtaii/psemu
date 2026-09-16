@@ -235,11 +235,14 @@ bool Dispatch(const std::string& nid, const std::string& name, CONTEXT* ctx) {
         for (const char* o : kOwnedLibc) {
             if (n == o) return true;
         }
-        // Aile bazinda: semafor, olay bayragi, olay kuyrugu, thread/pthread.
+        // Aile bazinda: semafor, olay bayragi, olay kuyrugu, thread/pthread, AMPR/APR.
         return n.find("Sema") != std::string::npos ||
                n.find("EventFlag") != std::string::npos ||
                n.find("Equeue") != std::string::npos ||
-               n.rfind("scePthread", 0) == 0;
+               n.rfind("scePthread", 0) == 0 ||
+               n.rfind("pthread", 0) == 0 ||
+               n.rfind("sceAmpr", 0) == 0 ||
+               n.find("Apr") != std::string::npos;
     };
 
     if (!is_render && !kyty_nid.empty() && !(!s_kernel_all && psemu_owns(name)) &&

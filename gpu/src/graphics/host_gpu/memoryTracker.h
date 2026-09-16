@@ -1,4 +1,4 @@
-﻿#ifndef EMULATOR_SRC_GRAPHICS_HOST_GPU_MEMORYTRACKER_H_
+#ifndef EMULATOR_SRC_GRAPHICS_HOST_GPU_MEMORYTRACKER_H_
 #define EMULATOR_SRC_GRAPHICS_HOST_GPU_MEMORYTRACKER_H_
 
 #include "graphics/host_gpu/psemuGfxTrace.h"
@@ -128,6 +128,10 @@ public:
 				manager->lock.unlock();
 			}
 		});
+		if (!is_written) {
+			access.unlock();
+			s_upload_owner = nullptr;
+		}
 		upload_func();
 		if (is_written) {
 			Iterate<false>(
@@ -137,8 +141,8 @@ public:
 				    manager->ApplyGpuProtection(changed, true, m_gpu_watch_mode);
 				    manager->lock.unlock();
 			    });
+			s_upload_owner = nullptr;
 		}
-		s_upload_owner = nullptr;
 	}
 
 private:

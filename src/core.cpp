@@ -11,7 +11,9 @@
 #include <map>
 #include <set>
 #include <vector>
+#include <algorithm> // std::sort, std::min, std::max
 #include <cctype>
+#include <cwctype>
 #include <cstdio>
 #include <cerrno>   // strtoull/strtod'un ERANGE bildirimi icin
 #include <cmath>    // isnan/isinf (fp_isfinite)
@@ -356,6 +358,38 @@ static std::string SafeReadCString(const char* p, size_t max_len = SIZE_MAX) {
     return std::string(p, p + n);
 }
 
+// 16-bit wide character (UTF-16) string uzunlugunu guvenle ve hizlica (bolge bolge) olcer.
+static size_t SafeWcslen(const uint16_t* p, size_t max_len = 0x1000000) {
+    if (p == nullptr) return 0;
+    const uint8_t* cur = reinterpret_cast<const uint8_t*>(p);
+    size_t len = 0;
+    while (len < max_len) {
+        MEMORY_BASIC_INFORMATION mbi;
+        if (VirtualQuery(cur, &mbi, sizeof(mbi)) == 0) break;
+        if (mbi.State != MEM_COMMIT) break;
+        if ((mbi.Protect & 0xFF) == PAGE_NOACCESS || (mbi.Protect & PAGE_GUARD)) break;
+
+        const uint8_t* region_end =
+            reinterpret_cast<const uint8_t*>(mbi.BaseAddress) + mbi.RegionSize;
+        if (region_end <= cur) break;
+
+        const uint16_t* wcur = reinterpret_cast<const uint16_t*>(cur);
+        const uint16_t* const wend = reinterpret_cast<const uint16_t*>(region_end);
+        for (; wcur < wend && len < max_len; ++wcur, ++len) {
+            if (*wcur == 0) return len;
+        }
+        cur = region_end;
+    }
+    return len;
+}
+
+static std::u16string SafeReadWString(const uint16_t* p, size_t max_len = 0x1000000) {
+    if (p == nullptr) return std::u16string();
+    size_t n = SafeWcslen(p, max_len);
+    if (n == 0) return std::u16string();
+    return std::u16string(reinterpret_cast<const char16_t*>(p), reinterpret_cast<const char16_t*>(p) + n);
+}
+
 static std::string FormatSysVPrintf(const char* fmt, uint8_t* va) {
     std::string out;
     if (!SafeReadable(fmt, 1)) return out;
@@ -422,10 +456,24 @@ static std::string FormatSysVPrintf(const char* fmt, uint8_t* va) {
                 snprintf(tmp, sizeof(tmp), spec.c_str(), nextFP());
                 break;
             }
-            case 's': {
-                const char* sp = reinterpret_cast<const char*>(nextGP());
-                if (SafeReadable(sp, 1)) { out += SafeReadCString(sp); }
-                else { out += "(null)"; }
+            case 's': case 'S': {
+                uint64_t arg = nextGP();
+                if (longness > 0 || conv == 'S') {
+                    const uint16_t* wsp = reinterpret_cast<const uint16_t*>(arg);
+                    if (wsp && SafeReadable(wsp, 2)) {
+                        std::u16string ws = SafeReadWString(wsp);
+                        for (char16_t c : ws) {
+                            if (c < 128) out.push_back(static_cast<char>(c));
+                            else out.push_back('?');
+                        }
+                    } else {
+                        out += "(null)";
+                    }
+                } else {
+                    const char* sp = reinterpret_cast<const char*>(arg);
+                    if (sp && SafeReadable(sp, 1)) { out += SafeReadCString(sp); }
+                    else { out += "(null)"; }
+                }
                 tmp[0] = 0;
                 break;
             }
@@ -433,6 +481,113 @@ static std::string FormatSysVPrintf(const char* fmt, uint8_t* va) {
         }
         out += tmp;
         if (out.size() > 8192) break; // guvenlik siniri
+    }
+    return out;
+}
+
+static std::u16string FormatSysVWPrintf(const uint16_t* fmt, uint8_t* va) {
+    std::u16string out;
+    if (fmt == nullptr || !SafeReadable(fmt, 2)) return out;
+    if (va == nullptr || !SafeReadable(va, 24)) {
+        return SafeReadWString(fmt);
+    }
+
+    uint32_t gp_offset = *reinterpret_cast<uint32_t*>(va + 0);
+    uint32_t fp_offset = *reinterpret_cast<uint32_t*>(va + 4);
+    uint8_t* overflow  = *reinterpret_cast<uint8_t**>(va + 8);
+    uint8_t* reg_save  = *reinterpret_cast<uint8_t**>(va + 16);
+
+    auto nextGP = [&]() -> uint64_t {
+        uint64_t v = 0;
+        if (gp_offset < 48 && SafeReadable(reg_save + gp_offset, 8)) {
+            v = *reinterpret_cast<uint64_t*>(reg_save + gp_offset); gp_offset += 8;
+        } else if (SafeReadable(overflow, 8)) {
+            v = *reinterpret_cast<uint64_t*>(overflow); overflow += 8;
+        }
+        return v;
+    };
+    auto nextFP = [&]() -> double {
+        double v = 0;
+        if (fp_offset < 176 && SafeReadable(reg_save + fp_offset, 8)) {
+            v = *reinterpret_cast<double*>(reg_save + fp_offset); fp_offset += 16;
+        } else if (SafeReadable(overflow, 8)) {
+            v = *reinterpret_cast<double*>(overflow); overflow += 8;
+        }
+        return v;
+    };
+
+    char tmp[1024];
+    for (const uint16_t* p = fmt; *p; ) {
+        if (*p != '%') { out += static_cast<char16_t>(*p++); continue; }
+        const uint16_t* start = p++;
+        if (*p == '%') { out += u'%'; p++; continue; }
+        while (*p && (*p == '-' || *p == '+' || *p == ' ' || *p == '#' || *p == '0')) p++;
+        while (*p && ((*p >= '0' && *p <= '9') || *p == '.' || *p == '*')) {
+            if (*p == '*') (void)nextGP();
+            p++;
+        }
+        int longness = 0;
+        while (*p == 'l' || *p == 'h' || *p == 'z' || *p == 'j' || *p == 't' || *p == 'L') {
+            if (*p == 'l' || *p == 'z' || *p == 'j' || *p == 't') longness++;
+            p++;
+        }
+        uint16_t conv = *p ? *p++ : 0;
+        std::string spec;
+        for (const uint16_t* sp = start; sp < p; ++sp) {
+            spec += static_cast<char>(*sp & 0x7F);
+        }
+        tmp[0] = 0;
+        switch (conv) {
+            case 'd': case 'i': case 'u': case 'o': case 'x': case 'X': {
+                uint64_t a = nextGP();
+                std::string s2 = spec.substr(0, spec.size() - 1);
+                std::string cleaned; for (char ch : s2) if (!strchr("lhzjtL", ch)) cleaned += ch;
+                cleaned += "ll"; cleaned += static_cast<char>(conv);
+                snprintf(tmp, sizeof(tmp), cleaned.c_str(), a);
+                for (char c : std::string(tmp)) out += static_cast<char16_t>(c);
+                break;
+            }
+            case 'p': {
+                snprintf(tmp, sizeof(tmp), "0x%llx", nextGP());
+                for (char c : std::string(tmp)) out += static_cast<char16_t>(c);
+                break;
+            }
+            case 'c': {
+                uint64_t c = nextGP();
+                out += static_cast<char16_t>(c);
+                break;
+            }
+            case 'f': case 'F': case 'e': case 'E': case 'g': case 'G': case 'a': case 'A': {
+                snprintf(tmp, sizeof(tmp), spec.c_str(), nextFP());
+                for (char c : std::string(tmp)) out += static_cast<char16_t>(c);
+                break;
+            }
+            case 's': case 'S': {
+                uint64_t arg = nextGP();
+                if (longness > 0 || conv == 'S') {
+                    const uint16_t* wsp = reinterpret_cast<const uint16_t*>(arg);
+                    if (wsp && SafeReadable(wsp, 2)) {
+                        out += SafeReadWString(wsp);
+                    } else {
+                        for (char c : std::string("(null)")) out += static_cast<char16_t>(c);
+                    }
+                } else {
+                    const char* sp = reinterpret_cast<const char*>(arg);
+                    if (sp && SafeReadable(sp, 1)) {
+                        std::string ns = SafeReadCString(sp);
+                        for (char c : ns) out += static_cast<char16_t>(c);
+                    } else {
+                        for (char c : std::string("(null)")) out += static_cast<char16_t>(c);
+                    }
+                }
+                break;
+            }
+            default: {
+                for (char c : spec) out += static_cast<char16_t>(c);
+                break;
+            }
+        }
+        if (out.size() > 16384) break;
     }
     return out;
 }
@@ -485,6 +640,14 @@ static std::map<FILE*, std::string> g_open_names;
 // hemen ardindan __stack_chk_fail).
 // Tek ve paylasilan tablo; erisim g_vfs_mutex ile korunuyor.
 static std::unordered_map<int, FILE*> g_fd_map;
+
+struct DirectoryState {
+    std::string host_path;
+    std::vector<std::string> entries;
+    std::vector<bool> is_dir;
+    size_t current_index = 0;
+};
+static std::unordered_map<int, DirectoryState> g_dir_map;
 // VFS thread-guvenligi: oyun kaynaklari ARKA PLANDA cok thread'le yukluyor
 // (fadein_white-sheet0/sheet1 esZAMANLI aciliyor). g_open_files/g_open_names
 // std::set/std::map'leri kilitsiz eszamanli erisimde BOZULUYOR: bir thread'in
@@ -520,22 +683,95 @@ static void EnsureParentDirs(const std::string& host_path) {
     }
 }
 
+// UNIX yolu kanoniklestirici: ".." bilesenlerinin kok dizin "/app0" disina
+// cikmasini engeller (ornek: "/app0/../../../hk_project/content/paks" -> "hk_project/content/paks")
+static std::string CanonicalizeGuestPath(const std::string& path) {
+    std::vector<std::string> parts;
+    size_t i = 0;
+    while (i < path.size()) {
+        while (i < path.size() && (path[i] == '/' || path[i] == '\\')) i++;
+        if (i >= path.size()) break;
+        size_t j = i;
+        while (j < path.size() && path[j] != '/' && path[j] != '\\') j++;
+        std::string comp = path.substr(i, j - i);
+        i = j;
+        if (comp == ".") continue;
+        if (comp == "..") {
+            if (!parts.empty()) parts.pop_back();
+        } else {
+            parts.push_back(comp);
+        }
+    }
+    std::string res;
+    for (size_t k = 0; k < parts.size(); ++k) {
+        if (k > 0) res += "/";
+        res += parts[k];
+    }
+    return res;
+}
+
 static std::string TranslateGuestPath(const std::string& guest) {
     if (guest.empty()) return guest;
-    if (guest.rfind("/app0/", 0) == 0)  return g_game_root + "/" + guest.substr(6);
-    if (guest == "/app0")               return g_game_root;
-    if (guest.rfind("/hostapp/", 0) == 0) return g_game_root + "/" + guest.substr(9);
+    if (guest.rfind("/app0/", 0) == 0) {
+        std::string rel = CanonicalizeGuestPath(guest.substr(6));
+        return g_game_root + (rel.empty() ? "" : ("/" + rel));
+    }
+    if (guest == "/app0") return g_game_root;
+    if (guest.rfind("/hostapp/", 0) == 0) {
+        std::string rel = CanonicalizeGuestPath(guest.substr(9));
+        return g_game_root + (rel.empty() ? "" : ("/" + rel));
+    }
     // Kayit verisi mount'lari (/savedata0, /saveData0, ...) -> savedata/...
     if (guest.size() > 9) {
         std::string low = guest.substr(0, 9);
         for (auto& ch : low) ch = static_cast<char>(tolower(static_cast<unsigned char>(ch)));
         if (low == "/savedata") {
-            return SaveDataRoot() + guest;
+            std::string rel = CanonicalizeGuestPath(guest.substr(9));
+            return SaveDataRoot() + (rel.empty() ? "" : ("/" + rel));
         }
     }
-    if (guest[0] == '/')                return g_game_root + guest;  // diger mutlak yollar
-    return guest;                                                     // goreli yol
+    if (guest[0] == '/') {
+        std::string rel = CanonicalizeGuestPath(guest);
+        return g_game_root + (rel.empty() ? "" : ("/" + rel));
+    }
+    return guest;
 }
+
+// ============================================================
+// APR / AMPR (Asynchronous Memory & Package Reader) - PS5 PAK & Asset Okuma
+// ============================================================
+struct AprFileInfo {
+    std::string host_path;
+    uint64_t file_size = 0;
+};
+
+struct AprReadRequest {
+    uint32_t file_id = 0;
+    uint64_t file_offset = 0;
+    uint64_t size = 0;
+    void* dest_buf = nullptr;
+};
+
+struct AprEventTriggerRequest {
+    uint64_t eq = 0;
+    int32_t id = 0;
+    uint64_t data = 0;
+};
+
+struct AprCommandBufferState {
+    uint64_t buffer_addr = 0;
+    uint64_t buffer_size = 0;
+    uint64_t current_offset = 0;
+    uint32_t num_commands = 0;
+    std::vector<AprReadRequest> pending_reads;
+    std::vector<AprEventTriggerRequest> pending_events;
+};
+
+static std::mutex g_apr_mutex;
+static std::map<uint32_t, AprFileInfo> g_apr_files;
+static uint32_t g_next_apr_file_id = 1;
+static std::map<uint64_t, AprCommandBufferState> g_apr_cb_map;
+static std::atomic<uint32_t> g_next_apr_cb_id{1};
 
 // ============================================================================
 // TANI DENEYI: kardes kategori dizinlerinde geri-dusus arama
@@ -892,16 +1128,50 @@ static volatile long g_n_strtod   = 0;
 // Boylece ayni phys her zaman ayni belleye dusuyor.
 static uint8_t*        g_dmem_base = nullptr;
 static std::mutex      g_dmem_mutex;
-// PS5'te 16 GB birlesik bellek var ve Astro Bot fiziksel adres alaninda
-// hizla yukari cikiyor: olculdu, T+48'de tahsis toplami 10349 MB'a ulasti
-// (phys=0x282d00000). Rezerv 4 GB iken bu esigi asan her esleme yedek yola
-// dusuyordu: "phys ile iliskisiz TAZE VirtualAlloc". Bu, dosyadaki
-// "ayni phys -> ayni sanal adres" degismezini kiriyor ve daha kotusu, AGC
-// modulu descriptor'lardaki FIZIKSEL adresi "CPU = g_dmem_base_addr + phys"
-// ile ceviriyor - yani GPU o tamponlari HIC goremiyordu.
-// Rezervasyon sadece adres alanidir (MEM_RESERVE), fiziksel bellek
-// tuketmez; ihtiyac halinde commit ediliyor.
-static const uint64_t  kDmemSize   = 0x400000000ULL; // 16 GB adres alani rezervi
+
+// Free-list havuzu: DmemAllocRange/DmemFreeRange tarafindan yonetilir
+struct DmemRange { uint64_t start; uint64_t len; };
+static std::vector<DmemRange> g_dmem_free_ranges;
+static std::map<uint64_t, uint64_t> g_dmem_allocated_ranges; // phys_start -> len
+static bool g_dmem_initialized = false;
+
+// Ana direct memory kullanim takibi
+static uint64_t g_main_dmem_allocated = 0;
+static std::map<uint64_t, uint64_t> g_main_dmem_allocated_map; // phys_offset -> len
+
+// Sanal adres -> fiziksel adres esleme listesi (interval map)
+struct VirtDirectMemRegion {
+    uint64_t vaddr;
+    uint64_t size;
+    uint64_t phys_offset;
+    int prot;
+};
+static std::mutex g_virt_dmem_mutex;
+static std::vector<VirtDirectMemRegion> g_virt_dmem_regions;
+// PS5 fiziksel direct memory havuzu boyutu (calisma aninda PSEMU_DIRECT_MEM_MB
+// ortam degiskeniyle ayarlanabilir; varsayilan 6.0 GB = 0x180000000).
+// Rezervasyon sadece adres alanidir (MEM_RESERVE), fiziksel bellek tuketmez.
+static uint64_t GetDirectMemSize() {
+    static uint64_t s_size = 0;
+    if (s_size == 0) {
+        const char* env = getenv("PSEMU_DIRECT_MEM_MB");
+        if (env && env[0] != '\0') {
+            uint64_t mb = strtoull(env, nullptr, 10);
+            if (mb >= 1024 && mb <= 32768) {
+                s_size = mb * 1024ULL * 1024ULL;
+            }
+        }
+        if (s_size == 0) {
+            s_size = 0x180000000ULL; // Varsayilan: 6.0 GB (net 5.5 GB / 5,632 MB)
+        }
+    }
+    return s_size;
+}
+#define kDirectMemSize (GetDirectMemSize())
+static const uint64_t  kDirectMemMargin = 0x20000000ULL; // 512 MB marj -> net alan
+static uint64_t        g_dmem_current_limit = 0; // DmemInitAllocator icinde kDirectMemSize'a ayarlanir
+// Geri donusumluluk: eski adlar hala var
+static const uint64_t  kDmemSize = 0x1000000000ULL; // 64 GB adres alani rezervi (VirtualAlloc icin)
 
 // AGC (GPU) modulunun descriptor'lardaki FIZIKSEL adresleri CPU'ya cevirebilmesi
 // icin havuz tabanini disari veriyoruz (CPU = g_dmem_base_addr + phys).
@@ -1305,6 +1575,219 @@ static bool IsInMspaceRegion(const void* p) {
         if (m.base != 0 && m.cap != 0 && v >= m.base && v < m.base + m.cap) return true;
     }
     return false;
+}
+
+// ================================================================
+// FIZIKSEL DIRECT MEMORY AYIRICI (Best-Fit Free-List)
+// ================================================================
+// g_dmem_free_ranges: serbest araliklar listesi. DmemInitAllocator ile
+// baslatilir, DmemAllocRange ile ayrilir, DmemFreeRange ile geri verilir.
+static void DmemInitAllocator() {
+    // g_dmem_mutex ZATEN kilitle girildikten sonra cagrilir
+    if (!g_dmem_initialized) {
+        g_dmem_initialized = true;
+        g_dmem_current_limit = kDirectMemSize;
+        g_dmem_free_ranges.push_back({ 0, g_dmem_current_limit });
+    }
+}
+
+// Best-Fit stratejisi: fragmantasyonu azaltmak icin en kucuk uygun araligi sec.
+// g_dmem_mutex kilidi ile cagrilmalidir.
+static uint64_t DmemAllocRange(uint64_t search_start, uint64_t search_end, uint64_t len, uint64_t align) {
+    std::lock_guard<std::mutex> lock(g_dmem_mutex);
+    DmemInitAllocator();
+    if (align == 0) align = 0x4000; // 16 KB minimum hizalama
+    uint64_t effective_end = search_end;
+    if (effective_end == 0 || effective_end > g_dmem_current_limit) {
+        effective_end = g_dmem_current_limit;
+    }
+
+    size_t best_idx = static_cast<size_t>(-1);
+    uint64_t best_aligned_start = 0;
+    uint64_t best_remaining = static_cast<uint64_t>(-1);
+
+    for (size_t i = 0; i < g_dmem_free_ranges.size(); i++) {
+        const DmemRange& r = g_dmem_free_ranges[i];
+        uint64_t r_start = r.start;
+        uint64_t r_end   = r.start + r.len;
+
+        if (r_start < search_start) r_start = search_start;
+        if (r_end   > effective_end) r_end   = effective_end;
+        if (r_start >= r_end) continue;
+
+        uint64_t aligned = (r_start + align - 1) & ~(align - 1);
+        if (aligned + len > r_end) continue;
+
+        uint64_t remaining = (r_end - aligned) - len;
+        if (remaining < best_remaining) {
+            best_remaining     = remaining;
+            best_idx           = i;
+            best_aligned_start = aligned;
+        }
+    }
+
+    if (best_idx == static_cast<size_t>(-1)) return static_cast<uint64_t>(-1);
+
+    DmemRange& chosen_range = g_dmem_free_ranges[best_idx];
+    uint64_t chosen = best_aligned_start;
+
+    // Prefix bolme (hizalama boslugu)
+    if (chosen > chosen_range.start) {
+        DmemRange prefix = { chosen_range.start, chosen - chosen_range.start };
+        chosen_range.start = chosen;
+        chosen_range.len  -= prefix.len;
+        g_dmem_free_ranges.insert(g_dmem_free_ranges.begin() + best_idx, prefix);
+        best_idx++;
+    }
+    // Suffix bolme (artik bolge)
+    if (chosen_range.len > len) {
+        DmemRange suffix = { chosen + len, chosen_range.len - len };
+        g_dmem_free_ranges[best_idx] = suffix;
+    } else {
+        g_dmem_free_ranges.erase(g_dmem_free_ranges.begin() + best_idx);
+    }
+
+    g_dmem_allocated_ranges[chosen] = len;
+    return chosen;
+}
+
+// Fiziksel araligi free-list'e geri ekler ve bitisik aralikları birlestirir.
+static void DmemFreeRange(uint64_t start, uint64_t len) {
+    std::lock_guard<std::mutex> lock(g_dmem_mutex);
+    DmemInitAllocator();
+
+    g_dmem_allocated_ranges.erase(start);
+
+    auto mit = g_main_dmem_allocated_map.find(start);
+    if (mit != g_main_dmem_allocated_map.end()) {
+        uint64_t mlen = mit->second;
+        g_main_dmem_allocated_map.erase(mit);
+        if (g_main_dmem_allocated >= mlen) {
+            g_main_dmem_allocated -= mlen;
+        } else {
+            g_main_dmem_allocated = 0;
+        }
+    } else if (g_main_dmem_allocated >= len) {
+        g_main_dmem_allocated -= len;
+    }
+
+    g_dmem_free_ranges.push_back({ start, len });
+
+    // Sirala ve bitisik aralikları birlestir
+    std::sort(g_dmem_free_ranges.begin(), g_dmem_free_ranges.end(),
+              [](const DmemRange& a, const DmemRange& b) { return a.start < b.start; });
+
+    std::vector<DmemRange> merged;
+    merged.reserve(g_dmem_free_ranges.size());
+    for (const auto& r : g_dmem_free_ranges) {
+        if (!merged.empty() && merged.back().start + merged.back().len >= r.start) {
+            uint64_t new_end = r.start + r.len;
+            uint64_t cur_end = merged.back().start + merged.back().len;
+            if (new_end > cur_end) merged.back().len = new_end - merged.back().start;
+        } else {
+            merged.push_back(r);
+        }
+    }
+    g_dmem_free_ranges = std::move(merged);
+}
+
+// ================================================================
+// HASSAS SANAL VE FIZIKSEL DIRECT MEMORY ARALIK YONETIMI
+// ================================================================
+// BatchMap ve MapDirectMemory ile haritalanan araliklarin tam kesisim,
+// bolme (split), kirpma (trim) ve fiziksel bellek geri donusumu islemlerini
+// Windows host decommit ile senkron yonetir.
+// g_virt_dmem_mutex kilidi ile cagrilmalidir.
+static void DmemUnmapVirtRangeLocked(uint64_t u_start, uint64_t u_len) {
+    if (u_len == 0) return;
+    uint64_t u_end = u_start + u_len;
+
+    std::vector<VirtDirectMemRegion> survivors;
+    survivors.reserve(g_virt_dmem_regions.size() + 2);
+
+    for (const auto& reg : g_virt_dmem_regions) {
+        uint64_t reg_start = reg.vaddr;
+        uint64_t reg_end   = reg.vaddr + reg.size;
+
+        if (u_end <= reg_start || u_start >= reg_end) {
+            survivors.push_back(reg);
+            continue;
+        }
+
+        uint64_t int_start = (std::max)(reg_start, u_start);
+        uint64_t int_end   = (std::min)(reg_end,   u_end);
+        uint64_t int_sz    = int_end - int_start;
+
+        // Yalnizca gercek PRT streaming doku/geometri parcalari decommit edilir:
+        // [0x2000000000, 0x8000000000), >= 8 MB. Motor heap ve VideoOut asla dokunulmaz.
+        const uint64_t kStreamingStart = 0x2000000000ULL;
+        const uint64_t kStreamingEnd   = 0x8000000000ULL;
+        if (int_sz >= 0x800000ULL && int_start >= kStreamingStart && int_end <= kStreamingEnd) {
+            VirtualFree(reinterpret_cast<void*>(int_start), static_cast<size_t>(int_sz), MEM_DECOMMIT);
+        }
+
+        if (reg_start < int_start) {
+            survivors.push_back({ reg_start, int_start - reg_start, reg.phys_offset, reg.prot });
+        }
+        if (int_end < reg_end) {
+            uint64_t right_sz   = reg_end - int_end;
+            uint64_t right_phys = (reg.phys_offset == 0xffffffff0000ULL) ?
+                                   0xffffffff0000ULL : (reg.phys_offset + (int_end - reg_start));
+            survivors.push_back({ int_end, right_sz, right_phys, reg.prot });
+        }
+    }
+    g_virt_dmem_regions = std::move(survivors);
+}
+
+// recycle_physical=true: BatchMap'tan gelince buyuk streaming parcalarinin
+// eski fiziksel aliasing'ini temizle.
+static void DmemMapVirtRangeLocked(uint64_t vaddr, uint64_t len, uint64_t phys, int prot, bool recycle_physical = false) {
+    if (len == 0) return;
+
+    // 1. Sanal uzerine yazma temizligi
+    DmemUnmapVirtRangeLocked(vaddr, len);
+
+    // 2. Fiziksel bellek geri donusumu (yalnizca BatchMap buyuk PRT parcalari icin)
+    const uint64_t kStreamingStart = 0x2000000000ULL;
+    const uint64_t kStreamingEnd   = 0x22560000000ULL;
+    if (recycle_physical &&
+        vaddr >= kStreamingStart && vaddr < kStreamingEnd &&
+        phys != 0xffffffff0000ULL && phys < kDmemSize) {
+        uint64_t p_req_start = phys;
+        uint64_t p_req_end   = phys + len;
+
+        std::vector<std::pair<uint64_t, uint64_t>> stale_vaddrs;
+        for (const auto& reg : g_virt_dmem_regions) {
+            if (reg.vaddr < kStreamingStart || reg.vaddr >= kStreamingEnd) continue;
+            if (reg.phys_offset == 0xffffffff0000ULL || reg.vaddr == vaddr) continue;
+
+            uint64_t r_pstart = reg.phys_offset;
+            uint64_t r_pend   = reg.phys_offset + reg.size;
+            if (p_req_end <= r_pstart || p_req_start >= r_pend) continue;
+
+            uint64_t overlap_pstart = (std::max)(r_pstart, p_req_start);
+            uint64_t overlap_pend   = (std::min)(r_pend,   p_req_end);
+            uint64_t overlap_psz    = overlap_pend - overlap_pstart;
+            if (overlap_psz > 0) {
+                uint64_t stale_v = reg.vaddr + (overlap_pstart - r_pstart);
+                stale_vaddrs.push_back({ stale_v, overlap_psz });
+            }
+        }
+        for (const auto& sv : stale_vaddrs) {
+            DmemUnmapVirtRangeLocked(sv.first, sv.second);
+        }
+    }
+
+    // 3. Yeni araligi ekle; ardisik / bitisik ise birlestir
+    if (!g_virt_dmem_regions.empty() &&
+        g_virt_dmem_regions.back().vaddr + g_virt_dmem_regions.back().size == vaddr &&
+        g_virt_dmem_regions.back().prot == prot &&
+        ((phys == 0xffffffff0000ULL && g_virt_dmem_regions.back().phys_offset == 0xffffffff0000ULL) ||
+         (g_virt_dmem_regions.back().phys_offset + g_virt_dmem_regions.back().size == phys))) {
+        g_virt_dmem_regions.back().size += len;
+    } else {
+        g_virt_dmem_regions.push_back({ vaddr, len, phys, prot });
+    }
 }
 
 // Dmem havuzunda bir araligi "pesin bir on-parca + gerisi talep uzerine"
@@ -2009,6 +2492,37 @@ static uint64_t GetThreadTlsBase() {
     return t_tp;
 }
 
+// PS5 Clang kodu __chkstk kullanmaz ve genis yerel stack tahsislerinde (orn. Stray RVA 0x17a91bd'de
+// sub rsp, 0x1c048 = 112 KB ve rbp-0x18dd8 = 101 KB yazimi) Windows'un 4KB PAGE_GUARD sayfasini
+// atlayarak dogrudan MEM_RESERVE alanina duser (0xC0000005). PrecommitThreadStack, her thread'in
+// stack rezervasyonunun istenen miktarini (varsayilan 32 MB) onceden commit eder.
+extern "C" void PsemuPrecommitThreadStack(size_t commit_mb) {
+    MEMORY_BASIC_INFORMATION mbi;
+    char dummy;
+    if (VirtualQuery(&dummy, &mbi, sizeof(mbi))) {
+        if (mbi.AllocationBase != nullptr) {
+            uintptr_t alloc_base = reinterpret_cast<uintptr_t>(mbi.AllocationBase);
+            uintptr_t cur_sp = reinterpret_cast<uintptr_t>(&dummy);
+            uintptr_t min_commit = alloc_base + 0x10000; // Altta 64KB guvenlik payi birak
+            uintptr_t desired_bottom = (cur_sp > commit_mb * 1024 * 1024)
+                ? (cur_sp - commit_mb * 1024 * 1024)
+                : min_commit;
+            if (desired_bottom < min_commit) desired_bottom = min_commit;
+            desired_bottom &= ~0xFFFULL;
+
+            if (cur_sp > desired_bottom) {
+                size_t bytes = (cur_sp - desired_bottom) & ~0xFFFULL;
+                VirtualAlloc(reinterpret_cast<void*>(desired_bottom), bytes, MEM_COMMIT, PAGE_READWRITE);
+                DWORD old_prot = 0;
+                VirtualProtect(reinterpret_cast<void*>(desired_bottom), 0x1000, PAGE_READWRITE | PAGE_GUARD, &old_prot);
+            }
+        }
+    }
+}
+static void PrecommitThreadStack(size_t commit_mb = 32) {
+    PsemuPrecommitThreadStack(commit_mb);
+}
+
 // HICBIR THREAD ATLANMASIN: Windows bu geri cagriyi surecte olusan HER thread
 // icin calistirir. Boylece guest koda girecek bir thread'in TEB slotu, o thread
 // daha ilk komutunu isletmeden dolmus olur. Elle ekledigimiz giris noktalari
@@ -2016,6 +2530,7 @@ static uint64_t GetThreadTlsBase() {
 // kendi thread'leri de guest geri cagrilarini isletebiliyor.
 static void NTAPI PsemuThreadAttachTls(PVOID, DWORD reason, PVOID) {
     if (reason == DLL_THREAD_ATTACH || reason == DLL_PROCESS_ATTACH) {
+        PrecommitThreadStack(32);
         if (g_teb_slot_off != 0) {
             GetThreadTlsBase();
         }
@@ -2457,6 +2972,7 @@ static void* BuildSysVTramp(uint64_t target, uint64_t rdi_val, uint64_t rsi_val,
 // SysV fonksiyonu RSI/RDI'yi bozsa bile Win64 caller (bu fonksiyon) kendi
 // stack slotlarindan geri yukledigi icin sorun olmaz.
 static DWORD WINAPI GamePthreadProc(LPVOID lpParam) {
+    PrecommitThreadStack(32);
     ULONG guarantee = 512 * 1024; // 512KB
     SetThreadStackGuarantee(&guarantee);
 
@@ -2712,6 +3228,30 @@ static DWORD WINAPI MemoryGuardProc(LPVOID) {
                   << ws_mb << " MB (sinir " << limit_mb << " MB), sistemde bos "
                   << free_mb << " MB";
             LOG_INFO(ms_ss.str());
+        }
+
+        // Periyodik Bellek Ozeti (Her 5 saniyede bir detayli durum):
+        static uint64_t s_last_periodic_ms = 0;
+        uint64_t now_ms = GetTickCount64();
+        if (now_ms - s_last_periodic_ms >= 5000) {
+            s_last_periodic_ms = now_ms;
+            uint64_t tracked_bytes = 0;
+            size_t reg_count = 0;
+            {
+                std::lock_guard<std::mutex> lock(g_virt_dmem_mutex);
+                reg_count = g_virt_dmem_regions.size();
+                for (const auto& r : g_virt_dmem_regions) {
+                    tracked_bytes += r.size;
+                }
+            }
+            const uint64_t ws_mb2 = static_cast<uint64_t>(pmc.WorkingSetSize) / (1024ull * 1024ull);
+            std::stringstream pss;
+            pss << "[BELLEK-OZET] psemu_commit=" << used_mb << " MB, calisan_kume=" << ws_mb2
+                << " MB, bos_ram=" << free_mb << " MB, kalan_commit=" << commit_mb
+                << " MB | dmem_bolgeleri=" << reg_count
+                << " (" << (tracked_bytes / (1024ull * 1024ull)) << " MB takip ediliyor)"
+                << " | main_dmem=" << (g_main_dmem_allocated / (1024ull * 1024ull)) << " MB";
+            LOG_INFO(pss.str());
         }
 
         // SISTEM COMMIT BUTCESI en onemli sinir: diger surecler fiziksel RAM
@@ -3679,14 +4219,15 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             } else if (g_watch_hits == kWatchHitLimit + 1) {
                 LOG_ERROR("[WATCHPOINT] Hit siniri asildi, daha fazla loglama yapilmayacak (izleme devam ediyor).");
             }
-        }
 
-        // Guard'i HEMEN geri takmiyoruz (sonsuz donguye yol acar). Bunun
-        // yerine TF (trap flag) ile bir sonraki komutta SINGLE_STEP
-        // istisnasi tetikleyip, guard'i orada guvenle yeniden kuruyoruz.
-        ctx->EFlags |= 0x100;
-        g_watch_rearm_pending = true;
-        return EXCEPTION_CONTINUE_EXECUTION;
+            // Guard'i HEMEN geri takmiyoruz (sonsuz donguye yol acar). Bunun
+            // yerine TF (trap flag) ile bir sonraki komutta SINGLE_STEP
+            // istisnasi tetikleyip, guard'i orada guvenle yeniden kuruyoruz.
+            ctx->EFlags |= 0x100;
+            g_watch_rearm_pending = true;
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+        // Hedef watchpoint degilse Windows'un kendi stack-guard buyumesine dokunma!
     }
 
     // ================================================================
@@ -3862,6 +4403,15 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         return EXCEPTION_CONTINUE_EXECUTION;
     }
 
+    // UE4 FOutputDevice::Logf null-deref guard (mov rax, [r14] where r14=this=NULL).
+    // Skipping call [rax+0x10] directly to free(rbx) at 0x144d20a.
+    if (code == EXCEPTION_ACCESS_VIOLATION &&
+        ctx->Rip == g_base_addr + 0x144d1fd && ctx->R14 == 0) {
+        LOG_INFO("[VEH-RECOVER] FOutputDevice::Logf NULL this (R14=0) at RVA 0x144d1fd -> skipping to 0x144d20a");
+        ctx->Rip = g_base_addr + 0x144d20a;
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
+
     // Eger Syscall disinda baska bir cokme yasandiysa detayli register dokumu yap.
     //
     // PERFORMANS: bu handler saniyede ~100.000 kez cagriliyor (PLT dispatch'in
@@ -3975,6 +4525,33 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         // READ/WRITE erisimi yaparken sayfa commit edilmemis ise (0xC0000005),
         // sayfayi aninda commit edip calismaya devam et.
         if (access_type == 0 || access_type == 1) { // 0=READ, 1=WRITE
+            // 0. STACK OTOMATIK BUYUTME (PS5 Clang unprobed yerel degiskenler / genis frame'ler)
+            // Clang __chkstk uretmedigi icin sub rsp, 0x1c048 gibi genis stack tahsislerinde
+            // Windows'un 4KB PAGE_GUARD sayfasini asip MEM_RESERVE alanina duser.
+            // Erisilen adres su anki thread'in stack tahsisi icindeyse hemen commit et.
+            {
+                MEMORY_BASIC_INFORMATION mbi_fault{};
+                MEMORY_BASIC_INFORMATION mbi_sp{};
+                if (VirtualQuery(reinterpret_cast<void*>(access_addr), &mbi_fault, sizeof(mbi_fault)) &&
+                    VirtualQuery(reinterpret_cast<void*>(ctx->Rsp), &mbi_sp, sizeof(mbi_sp))) {
+                    if (mbi_fault.AllocationBase != nullptr && mbi_fault.AllocationBase == mbi_sp.AllocationBase) {
+                        uintptr_t fault_page = access_addr & ~0xFFFULL;
+                        uintptr_t cur_sp_page = ctx->Rsp & ~0xFFFULL;
+                        uintptr_t low_page = (fault_page < cur_sp_page) ? fault_page : cur_sp_page;
+                        uintptr_t high_page = (fault_page > cur_sp_page) ? fault_page : cur_sp_page;
+                        size_t commit_len = (high_page - low_page) + 0x20000; // istenen aralik + 128KB guvenlik marji
+                        VirtualAlloc(reinterpret_cast<void*>(low_page), commit_len, MEM_COMMIT, PAGE_READWRITE);
+                        static volatile LONG s_stk_grow = 0;
+                        LONG sn = InterlockedIncrement(&s_stk_grow);
+                        if (sn <= 10) {
+                            LOG_INFO("[STACK-GROW] Thread stack commit genisletildi @ 0x" +
+                                     [](uint64_t v){ std::stringstream x; x<<std::hex<<v; return x.str(); }(access_addr));
+                        }
+                        return EXCEPTION_CONTINUE_EXECUTION;
+                    }
+                }
+            }
+
             if (access_addr >= 0x10000ULL && access_addr < 0x7FFFFFFFFFFFULL) {
                 bool handled = false;
                 // ONCE KYTY: bu sayfa GPU'nun yazma-izlemesinde olabilir.
@@ -4002,7 +4579,12 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     const bool writable =
                         (mbi.Protect & (PAGE_READWRITE | PAGE_EXECUTE_READWRITE |
                                         PAGE_WRITECOPY | PAGE_EXECUTE_WRITECOPY)) != 0;
-                    if (access_type == 1 && !writable) {
+                    if (mbi.Protect & PAGE_GUARD) {
+                        uint64_t pg = access_addr & ~0xFFFULL; // 4KB
+                        DWORD old_p = 0;
+                        VirtualProtect(reinterpret_cast<void*>(pg), 0x1000, PAGE_EXECUTE_READWRITE, &old_p);
+                        handled = true;
+                    } else if (access_type == 1 && !writable) {
                         uint64_t pg = access_addr & ~0xFFFULL; // 4KB
                         DWORD old_p = 0;
                         if (VirtualProtect(reinterpret_cast<void*>(pg), 0x1000,
@@ -4025,6 +4607,9 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 if (!handled) {
                     uint64_t page_base = access_addr & ~0xFFFFULL; // 64KB hizalama
                     void* p = VirtualAlloc(reinterpret_cast<void*>(page_base), 65536, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+                    if (p == nullptr) {
+                        p = VirtualAlloc(reinterpret_cast<void*>(page_base), 65536, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+                    }
                     if (p != nullptr) {
                         static volatile LONG s_auto_commits = 0;
                         LONG n = InterlockedIncrement(&s_auto_commits);
@@ -4325,7 +4910,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             // ============================================================
             enum : uint8_t { FOP_UNRESOLVED = 0, FOP_NONE, FOP_MEMSET, FOP_MEMCPY,
                              FOP_MTX_LOCK, FOP_MTX_UNLOCK, FOP_ERRNO, FOP_RET0,
-                             FOP_MEMCMP, FOP_MEMMOVE };
+                             FOP_MEMCMP, FOP_MEMMOVE, FOP_PTHREAD_SELF };
             static uint8_t s_fop[kPltCacheMax] = {};
             uint8_t fop = (plt_index < kPltCacheMax) ? s_fop[plt_index] : FOP_NONE;
             if (fop == FOP_UNRESOLVED && plt_index < kPltCacheMax) {
@@ -4339,12 +4924,23 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 else if (readable_name == "memcmp" || readable_name == "bcmp") f = FOP_MEMCMP;
                 else if (readable_name == "memmove")                f = FOP_MEMMOVE;
                 else if (readable_name == "__error")                f = FOP_ERRNO;
+                else if (readable_name == "scePthreadSelf" ||
+                         readable_name == "pthread_self" ||
+                         func_name.find("EotR8a3ASf4") != std::string::npos) f = FOP_PTHREAD_SELF;
                 // Sik cagrilan ve davranisi "hicbir sey yap, 0 don" olan isimli
                 // fonksiyonlar: nids.h'e isim eklendiginde hizli yolu kaybetmesinler.
                 // (_Locksyslock/_Unlocksyslock MSVC STL locale kodunda cok sik cagrilir.)
                 else if (readable_name == "_Locksyslock" ||
                          readable_name == "_Unlocksyslock" ||
-                         readable_name == "uncaught_exception") f = FOP_RET0;
+                         readable_name == "uncaught_exception" ||
+                         readable_name == "scePthreadMutexattrInit" ||
+                         readable_name == "pthread_mutexattr_init" ||
+                         readable_name == "scePthreadMutexattrSettype" ||
+                         readable_name == "pthread_mutexattr_settype" ||
+                         readable_name == "scePthreadMutexattrSetprotocol" ||
+                         readable_name == "pthread_mutexattr_setprotocol" ||
+                         readable_name == "scePthreadMutexattrDestroy" ||
+                         readable_name == "pthread_mutexattr_destroy") f = FOP_RET0;
                 // KALDIRILDI: sceKernelWaitSema icin FOP_RET0.
                 //
                 // Bu hizli yol, WaitSema HENUZ IMPLEMENTE DEGILKEN eklenmisti
@@ -4421,6 +5017,14 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     }
                     case FOP_ERRNO: ctx->Rax = reinterpret_cast<uint64_t>(&g_guest_errno); break;
                     case FOP_RET0:  ctx->Rax = 0; break;
+                    case FOP_PTHREAD_SELF: {
+                        uint64_t self_ptr = GetThreadTlsBase();
+                        if (self_ptr == 0) {
+                            self_ptr = static_cast<uint64_t>(GetCurrentThreadId());
+                        }
+                        ctx->Rax = self_ptr;
+                        break;
+                    }
                     default: break;
                 }
                 // RET simulasyonu (normal yoldakinin aynisi). Donus adresi
@@ -5593,57 +6197,219 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             } else if (readable_name == "sceKernelWaitEqueue") {
                 ctx->Rax = Libs::LibKernel::EventQueue::KernelWaitEqueue((Libs::LibKernel::EventQueue::KernelEqueue)ctx->Rdi, (Libs::LibKernel::EventQueue::KernelEvent*)ctx->Rsi, (int)ctx->Rdx, (int*)ctx->Rcx, (const Libs::LibKernel::KernelUseconds*)ctx->R8);
                 special_return_set = true;
+            } else if (readable_name == "sceKernelAddUserEvent" ||
+                       func_name.find("4R6-OvI2cEA") != std::string::npos) {
+                ctx->Rax = Libs::LibKernel::EventQueue::KernelAddUserEvent(reinterpret_cast<Libs::LibKernel::EventQueue::KernelEqueue>(ctx->Rdi), static_cast<int>(ctx->Rsi));
+                special_return_set = true;
+            } else if (readable_name == "sceKernelAddUserEventEdge" ||
+                       func_name.find("WDszmSbWuDk") != std::string::npos ||
+                       (Game::Current().title_id == "PPSA02100" && plt_index == 1313)) {
+                ctx->Rax = Libs::LibKernel::EventQueue::KernelAddUserEventEdge(reinterpret_cast<Libs::LibKernel::EventQueue::KernelEqueue>(ctx->Rdi), static_cast<int>(ctx->Rsi));
+                special_return_set = true;
+            } else if (readable_name == "sceKernelTriggerUserEvent" ||
+                       func_name.find("F6e0kwo4cnk") != std::string::npos) {
+                ctx->Rax = Libs::LibKernel::EventQueue::KernelTriggerUserEvent(reinterpret_cast<Libs::LibKernel::EventQueue::KernelEqueue>(ctx->Rdi), static_cast<int>(ctx->Rsi), reinterpret_cast<void*>(ctx->Rdx));
+                special_return_set = true;
+            } else if (readable_name == "sceKernelTriggerUserEventForAll") {
+                ctx->Rax = Libs::LibKernel::EventQueue::KernelTriggerUserEventForAll(static_cast<int>(ctx->Rdi), reinterpret_cast<void*>(ctx->Rsi));
+                special_return_set = true;
+            } else if (readable_name == "sceKernelDeleteUserEvent" ||
+                       func_name.find("LJDwdSNTnDg") != std::string::npos) {
+                ctx->Rax = Libs::LibKernel::EventQueue::KernelDeleteUserEvent(reinterpret_cast<Libs::LibKernel::EventQueue::KernelEqueue>(ctx->Rdi), static_cast<int>(ctx->Rsi));
+                special_return_set = true;
+            } else if (readable_name == "sceKernelAddAmprEvent" ||
+                       func_name.find("bBfz7kMF2Ho") != std::string::npos) {
+                ctx->Rax = Libs::LibKernel::EventQueue::KernelAddAmprEvent(reinterpret_cast<Libs::LibKernel::EventQueue::KernelEqueue>(ctx->Rdi), static_cast<int>(ctx->Rsi), reinterpret_cast<void*>(ctx->Rdx));
+                special_return_set = true;
+            } else if (readable_name == "sceKernelAddAmprSystemEvent" ||
+                       func_name.find("vuae5JPNt9A") != std::string::npos) {
+                ctx->Rax = Libs::LibKernel::EventQueue::KernelAddAmprSystemEvent(reinterpret_cast<Libs::LibKernel::EventQueue::KernelEqueue>(ctx->Rdi), static_cast<int>(ctx->Rsi), reinterpret_cast<void*>(ctx->Rdx));
+                special_return_set = true;
+            } else if (readable_name == "sceKernelDeleteAmprEvent" ||
+                       func_name.find("bMmid3pfyjo") != std::string::npos) {
+                ctx->Rax = Libs::LibKernel::EventQueue::KernelDeleteAmprEvent(reinterpret_cast<Libs::LibKernel::EventQueue::KernelEqueue>(ctx->Rdi), static_cast<int>(ctx->Rsi));
+                special_return_set = true;
+            } else if (readable_name == "sceKernelDeleteAmprSystemEvent" ||
+                       func_name.find("Ij+ryuEClXQ") != std::string::npos) {
+                ctx->Rax = Libs::LibKernel::EventQueue::KernelDeleteAmprSystemEvent(reinterpret_cast<Libs::LibKernel::EventQueue::KernelEqueue>(ctx->Rdi), static_cast<int>(ctx->Rsi));
+                special_return_set = true;
+            } else if (readable_name == "sceKernelAddHRTimerEvent" ||
+                       func_name.find("R74tt43xP6k") != std::string::npos) {
+                ctx->Rax = Libs::LibKernel::EventQueue::KernelAddHRTimerEvent(reinterpret_cast<Libs::LibKernel::EventQueue::KernelEqueue>(ctx->Rdi), static_cast<int>(ctx->Rsi), reinterpret_cast<const Libs::LibKernel::KernelTimespec*>(ctx->Rdx), reinterpret_cast<void*>(ctx->Rcx));
+                special_return_set = true;
+            } else if (readable_name == "sceKernelDeleteHRTimerEvent" ||
+                       func_name.find("J+LF6LwObXU") != std::string::npos) {
+                ctx->Rax = Libs::LibKernel::EventQueue::KernelDeleteHRTimerEvent(reinterpret_cast<Libs::LibKernel::EventQueue::KernelEqueue>(ctx->Rdi), static_cast<int>(ctx->Rsi));
+                special_return_set = true;
+            } else if (readable_name == "sceKernelGetEventUserData" ||
+                       func_name.find("vz+pg2zdopI") != std::string::npos) {
+                ctx->Rax = reinterpret_cast<uint64_t>(Libs::LibKernel::EventQueue::KernelGetEventUserData(reinterpret_cast<const Libs::LibKernel::EventQueue::KernelEvent*>(ctx->Rdi)));
+                special_return_set = true;
+            } else if (readable_name == "sceKernelGetEventId" ||
+                       func_name.find("mJ7aghmgvfc") != std::string::npos) {
+                ctx->Rax = static_cast<uint64_t>(Libs::LibKernel::EventQueue::KernelGetEventId(reinterpret_cast<const Libs::LibKernel::EventQueue::KernelEvent*>(ctx->Rdi)));
+                special_return_set = true;
+            } else if (readable_name == "sceKernelGetEventFilter" ||
+                       func_name.find("23CPPI1tyBY") != std::string::npos) {
+                ctx->Rax = static_cast<uint64_t>(Libs::LibKernel::EventQueue::KernelGetEventFilter(reinterpret_cast<const Libs::LibKernel::EventQueue::KernelEvent*>(ctx->Rdi)));
+                special_return_set = true;
+            } else if (readable_name == "sceKernelGetEventData" ||
+                       func_name.find("kwGyyjohI50") != std::string::npos) {
+                ctx->Rax = static_cast<uint64_t>(Libs::LibKernel::EventQueue::KernelGetEventData(reinterpret_cast<const Libs::LibKernel::EventQueue::KernelEvent*>(ctx->Rdi)));
+                special_return_set = true;
+            } else if (readable_name == "sceKernelGetEventFflags" ||
+                       func_name.find("Q0qr9AyqJSk") != std::string::npos) {
+                ctx->Rax = static_cast<uint64_t>(Libs::LibKernel::EventQueue::KernelGetEventFflags(reinterpret_cast<const Libs::LibKernel::EventQueue::KernelEvent*>(ctx->Rdi)));
+                special_return_set = true;
+            } else if (readable_name == "sceKernelGetEventError" ||
+                       func_name.find("Uu-iDFC9aUc") != std::string::npos) {
+                ctx->Rax = static_cast<uint64_t>(Libs::LibKernel::EventQueue::KernelGetEventError(reinterpret_cast<const Libs::LibKernel::EventQueue::KernelEvent*>(ctx->Rdi)));
+                special_return_set = true;
+            } else if (readable_name == "sceKernelReserveVirtualRange") {
+                // imza: int sceKernelReserveVirtualRange(void** addr, size_t len, int flags, size_t alignment)
+                // RDI=*addr (giris/cikis), RSI=len, RDX=flags, RCX=alignment
+                uint64_t want_addr = 0;
+                if (ctx->Rdi != 0 && SafeReadable(reinterpret_cast<void*>(ctx->Rdi), 8)) {
+                    want_addr = *reinterpret_cast<uint64_t*>(ctx->Rdi);
+                }
+                uint64_t len   = ctx->Rsi;
+                uint64_t align = ctx->Rcx ? ctx->Rcx : 0x4000;
+                size_t   rsz   = static_cast<size_t>((len + align - 1) & ~(align - 1));
+
+                void* reserved = nullptr;
+                if (want_addr != 0) {
+                    // Istenen adreste rezerve etmeyi dene
+                    reserved = VirtualAlloc(reinterpret_cast<void*>(want_addr), rsz,
+                                            MEM_RESERVE, PAGE_NOACCESS);
+                    if (reserved == nullptr) {
+                        // Zaten rezerve/commit edilmis olabilir (PreReserve yapti) - kontrol et
+                        MEMORY_BASIC_INFORMATION mbi = {};
+                        if (VirtualQuery(reinterpret_cast<void*>(want_addr), &mbi, sizeof(mbi)) &&
+                            (mbi.State == MEM_RESERVE || mbi.State == MEM_COMMIT) &&
+                            mbi.RegionSize >= rsz) {
+                            // Zaten var, istenen adresi biz "sahip olduk" sayiyoruz
+                            reserved = reinterpret_cast<void*>(want_addr);
+                        }
+                    }
+                }
+                if (reserved == nullptr) {
+                    reserved = VirtualAlloc(nullptr, rsz, MEM_RESERVE, PAGE_NOACCESS);
+                }
+
+                if (ctx->Rdi != 0 && SafeWritable(reinterpret_cast<void**>(ctx->Rdi), sizeof(void*))) {
+                    *reinterpret_cast<void**>(ctx->Rdi) = reserved;
+                }
+                ctx->Rax = reserved ? 0ULL : static_cast<uint64_t>(-1LL);
+                special_return_set = true;
+
+                LOG_INFO("[MEMORY-HLE] ReserveVirtualRange: want=0x" +
+                         [](uint64_t v){ std::stringstream x; x<<std::hex<<v; return x.str(); }(want_addr) +
+                         " len=0x" +
+                         [](uint64_t v){ std::stringstream x; x<<std::hex<<v; return x.str(); }(len) +
+                         " -> reserved=0x" +
+                         [](uint64_t v){ std::stringstream x; x<<std::hex<<v; return x.str(); }(reinterpret_cast<uint64_t>(reserved)));
             } else if (readable_name == "sceKernelGetDirectMemorySize") {
                 // imza: size_t KernelGetDirectMemorySize()
-                // Gercek bir "direct memory" havuzumuz yok; oyunun
-                // search_end olarak kullanacagi makul bir ust sinir veriyoruz.
-                ctx->Rax = 0x100000000ULL; // 4GB
+                // Net kullanilabilir alan = toplam - marj
+                ctx->Rax = (kDirectMemSize > kDirectMemMargin) ? (kDirectMemSize - kDirectMemMargin) : kDirectMemSize;
+                LOG_INFO("[MEMORY-HLE] sceKernelGetDirectMemorySize -> 0x" +
+                         [](uint64_t v){ std::stringstream x; x<<std::hex<<v; return x.str(); }(ctx->Rax) +
+                         " (" + std::to_string(ctx->Rax / (1024 * 1024)) + " MB / " +
+                         std::to_string(ctx->Rax / (1024 * 1024 * 1024)) + "." +
+                         std::to_string(((ctx->Rax % (1024 * 1024 * 1024)) * 10) / (1024 * 1024 * 1024)) + " GB)");
                 special_return_set = true;
             } else if (readable_name == "sceKernelAllocateDirectMemory") {
                 // imza: (search_start, search_end, len, alignment, memory_type, *phys_addr_out)
-                uint64_t len = ctx->Rdx;
+                // RDI=search_start, RSI=search_end, RDX=len, RCX=align, R8=memtype, R9=*phys_out
+                uint64_t search_start = ctx->Rdi;
+                uint64_t search_end   = ctx->Rsi;
+                uint64_t len   = ctx->Rdx;
                 uint64_t align = ctx->Rcx ? ctx->Rcx : 0x4000;
-                static int64_t s_fake_phys_cursor = 0x100000;
-                int64_t chosen = (s_fake_phys_cursor + static_cast<int64_t>(align) - 1)
-                                 & ~(static_cast<int64_t>(align) - 1);
-                s_fake_phys_cursor = chosen + static_cast<int64_t>(len);
 
-                // Fiziksel bellegi TAHSIS aninda commit et. Oyun direct
-                // memory'yi tek bitisik alan sayip tahsis ettigi araliga
-                // pointer aritmetigiyle dogrudan yaziyor (RVA 0x1132b4'te
-                // henuz Map edilmemis bir offset'e yazarken cokuyordu).
-                // Tahsis edilen fiziksel bellek "vardir"; Map yalnizca ona
-                // bir sanal pencere acar.
-                {
-                    uint8_t* dbase = DmemBase();
-                    uint64_t need  = static_cast<uint64_t>(chosen) + len;
-                    if (dbase != nullptr && need <= kDmemSize) {
-                        // Tamamini pesinen commit ETME (bkz. DmemCommitLazy).
-                        DmemCommitLazy(dbase, static_cast<uint64_t>(chosen),
-                                       static_cast<size_t>(len), "allocate");
+                const uint64_t kMaxMainDmem = (kDirectMemSize > kDirectMemMargin) ? (kDirectMemSize - kDirectMemMargin) : kDirectMemSize;
+
+                if (g_main_dmem_allocated + len > kMaxMainDmem) {
+                    ctx->Rax = 0x8002000CULL;
+                    special_return_set = true;
+                } else {
+                    uint64_t chosen = DmemAllocRange(search_start, search_end, len, align);
+                    if (chosen == static_cast<uint64_t>(-1)) {
+                        ctx->Rax = 0x8002000CULL;
+                        special_return_set = true;
+                    } else {
+                        {
+                            std::lock_guard<std::mutex> lock(g_dmem_mutex);
+                            g_main_dmem_allocated += len;
+                            g_main_dmem_allocated_map[chosen] = len;
+                        }
+                        uint8_t* dbase = DmemBase();
+                        if (dbase != nullptr && chosen + len <= kDmemSize)
+                            DmemCommitLazy(dbase, chosen, static_cast<size_t>(len), "allocate");
+                        int64_t* out_ptr = reinterpret_cast<int64_t*>(ctx->R9);
+                        if (ctx->R9 != 0 && SafeWritable(out_ptr, sizeof(int64_t)))
+                            *out_ptr = static_cast<int64_t>(chosen);
+                        ctx->Rax = 0;
+                        special_return_set = true;
+                        static volatile LONG s_count = 0;
+                        LONG n = InterlockedIncrement(&s_count);
+                        if (n <= 20 || (n % 100) == 0) {
+                            std::stringstream am_ss;
+                            am_ss << "[MEMORY-HLE] AllocateDirectMemory #" << n
+                                  << ": len=0x" << std::hex << len << " -> phys=0x" << chosen
+                                  << " (main=0x" << g_main_dmem_allocated << ")" << std::dec;
+                            LOG_INFO(am_ss.str());
+                        }
                     }
                 }
+            } else if (readable_name == "sceKernelAllocateMainDirectMemory") {
+                // imza: (len, alignment, memory_type, *phys_addr_out)
+                // RDI=len, RSI=align, RDX=memtype, RCX=*phys_out
+                uint64_t len   = ctx->Rdi;
+                uint64_t align = ctx->Rsi ? ctx->Rsi : 0x4000;
 
-                int64_t* out_ptr = reinterpret_cast<int64_t*>(ctx->R9);
-                if (ctx->R9 != 0 && SafeWritable(out_ptr, sizeof(int64_t))) {
-                    *out_ptr = chosen;
-                }
-                ctx->Rax = 0; // basari
-                special_return_set = true;
+                const uint64_t kMaxMainDmem = (kDirectMemSize > kDirectMemMargin) ? (kDirectMemSize - kDirectMemMargin) : kDirectMemSize;
 
-                // Gurultu filtresi + ILERLEME olcumu: 818 ayni satir yerine
-                // ilk 20'yi, sonra her 100'de bir toplami raporla. Boylece
-                // "yavas ama ilerliyor" ile "kacak tahsis" ayirt edilebiliyor.
-                {
-                    static volatile LONG s_count = 0;
-                    LONG n = InterlockedIncrement(&s_count);
-                    if (n <= 20 || (n % 100) == 0) {
-                        std::stringstream am_ss;
-                        am_ss << "[MEMORY-HLE] DirectMemory #" << n
-                              << ": len=0x" << std::hex << len
-                              << " -> phys=0x" << chosen << std::dec
-                              << "  (toplam " << (chosen + len) / (1024 * 1024) << " MB)";
-                        LOG_INFO(am_ss.str());
+                if (g_main_dmem_allocated + len > kMaxMainDmem) {
+                    ctx->Rax = 0x8002000CULL;
+                    special_return_set = true;
+                    std::stringstream am_err;
+                    am_err << "[MEMORY-HLE] AllocateMainDirectMemory: " << (kMaxMainDmem / (1024 * 1024))
+                           << " MB sinirina ulasildi (tahsis=0x"
+                           << std::hex << g_main_dmem_allocated << " + talep=0x" << len
+                           << " > max=0x" << kMaxMainDmem << "), ENOMEM donduruluyor" << std::dec;
+                    LOG_INFO(am_err.str());
+                } else {
+                    uint64_t chosen = DmemAllocRange(0, 0, len, align);
+                    if (chosen == static_cast<uint64_t>(-1)) {
+                        ctx->Rax = 0x8002000CULL;
+                        special_return_set = true;
+                        LOG_INFO("[MEMORY-HLE] AllocateMainDirectMemory: DmemAllocRange basarisiz (ENOMEM)");
+                    } else {
+                        {
+                            std::lock_guard<std::mutex> lock(g_dmem_mutex);
+                            g_main_dmem_allocated += len;
+                            g_main_dmem_allocated_map[chosen] = len;
+                        }
+                        uint8_t* dbase = DmemBase();
+                        if (dbase != nullptr && chosen + len <= kDmemSize)
+                            DmemCommitLazy(dbase, chosen, static_cast<size_t>(len), "allocate_main");
+
+                        int64_t* out_ptr = reinterpret_cast<int64_t*>(ctx->Rcx);
+                        if (ctx->Rcx != 0 && SafeWritable(out_ptr, sizeof(int64_t)))
+                            *out_ptr = static_cast<int64_t>(chosen);
+                        ctx->Rax = 0;
+                        special_return_set = true;
+
+                        static volatile LONG s_count = 0;
+                        LONG n = InterlockedIncrement(&s_count);
+                        if (n <= 20 || (n % 100) == 0) {
+                            std::stringstream am_ss;
+                            am_ss << "[MEMORY-HLE] AllocateMainDirectMemory #" << n
+                                  << ": len=0x" << std::hex << len << " -> phys=0x" << chosen
+                                  << " (toplam main=0x" << g_main_dmem_allocated
+                                  << " / " << std::dec << (kMaxMainDmem / (1024 * 1024)) << " MB)";
+                            LOG_INFO(am_ss.str());
+                        }
                     }
                 }
             // NOT: "Named" varyanti da BURAYA dusmeli. Astro Bot yalnizca
@@ -5658,39 +6424,39 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             } else if (readable_name == "sceKernelMapDirectMemory" ||
                        readable_name == "sceKernelMapNamedDirectMemory") {
                 // imza: (void** addr, len, prot, flags, direct_memory_start, alignment)
-                uint64_t len = ctx->Rsi;
+                uint64_t len   = ctx->Rsi;
                 uint64_t align = ctx->R9 ? ctx->R9 : 0x4000;
-                uint64_t phys = ctx->R8; // direct_memory_start - ONEMLI, yok sayilamaz
+                uint64_t phys  = ctx->R8; // direct_memory_start
                 uint64_t flags = ctx->Rcx;
-                // addr GIRIS/CIKIS: oyun istedigi sanal adresi verebilir
-                // (flags'te FIXED ise zorunlu). Simdilik yalnizca OLCUYORUZ:
-                // sifir disi geliyorsa onu onurlandirmamiz gerekiyor demektir.
+                // addr: giris/cikis isaretci. *addr = istenen sanal adres (0 = herhangi).
                 uint64_t want_addr = 0;
                 if (ctx->Rdi != 0 && SafeReadable(reinterpret_cast<void*>(ctx->Rdi), 8)) {
                     want_addr = *reinterpret_cast<uint64_t*>(ctx->Rdi);
                 }
-                {
-                    static volatile LONG s_wn = 0;
-                    if (want_addr != 0 && InterlockedIncrement(&s_wn) <= 10) {
-                        std::stringstream ws;
-                        ws << "[MEMORY-HLE] Map ISTENEN adres=0x" << std::hex << want_addr
-                           << " flags=0x" << flags << " phys=0x" << phys << std::dec
-                           << "  <-- onurlandirilmiyor!";
-                        LOG_ERROR(ws.str());
-                    }
-                }
-                size_t alloc_size = static_cast<size_t>((len + align - 1) & ~(align - 1));
 
-                // Ayni fiziksel adres -> ayni sanal adres. MEM_COMMIT zaten
-                // commit edilmis sayfalari tekrar SIFIRLAMAZ, dolayisiyla
-                // ikinci esleme oyunun yazdigi veriyi korur.
+                size_t alloc_size = static_cast<size_t>((len + align - 1) & ~(align - 1));
                 void* mem = nullptr;
                 uint8_t* dbase = DmemBase();
-                if (dbase != nullptr && phys + alloc_size <= kDmemSize) {
+
+                // 1. want_addr onurlandir (oyun belirli bir sanal adres istiyorsa)
+                if (want_addr != 0) {
+                    // Once MEM_COMMIT dene (adres zaten rezervde olabilir - PreReserve yapti)
+                    mem = VirtualAlloc(reinterpret_cast<void*>(want_addr), alloc_size,
+                                       MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+                    if (mem == nullptr) {
+                        // MEM_COMMIT basarisizsa MEM_COMMIT|MEM_RESERVE dene
+                        mem = VirtualAlloc(reinterpret_cast<void*>(want_addr), alloc_size,
+                                           MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+                    }
+                }
+
+                // 2. want_addr yoksa veya basarisizsa: dbase + phys (fiziksel-sanal esleme)
+                if (mem == nullptr && dbase != nullptr && phys + alloc_size <= kDmemSize) {
                     mem = DmemCommitLazy(dbase, phys, alloc_size, "map");
                 }
+
+                // 3. Son care: serbest herhangi bir adres
                 if (mem == nullptr) {
-                    // Havuz disi/basarisiz: eski davranisa dus (en azindan bellek ver)
                     mem = VirtualAlloc(nullptr, alloc_size,
                                        MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
                 }
@@ -5702,17 +6468,538 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 ctx->Rax = mem ? 0ULL : static_cast<uint64_t>(-1LL);
                 special_return_set = true;
 
-                std::stringstream mm_ss;
                 {
                     static volatile LONG s_mcount = 0;
                     LONG n = InterlockedIncrement(&s_mcount);
                     if (n <= 20 || (n % 100) == 0) {
-                        mm_ss << "[MEMORY-HLE] Map #" << n << ": phys=0x" << std::hex << phys
-                              << " len=0x" << len << " -> mapped=0x"
-                              << reinterpret_cast<uint64_t>(mem) << std::dec;
+                        std::stringstream mm_ss;
+                        mm_ss << "[MEMORY-HLE] MapDirectMemory: phys=0x" << std::hex << phys
+                              << " len=0x" << len
+                              << " want=0x" << want_addr
+                              << " -> mapped=0x" << reinterpret_cast<uint64_t>(mem) << std::dec;
                         LOG_INFO(mm_ss.str());
                     }
                 }
+
+                // Sanal aralik listesini guncelle
+                if (mem != nullptr) {
+                    uint64_t vaddr = reinterpret_cast<uint64_t>(mem);
+                    std::lock_guard<std::mutex> lock(g_virt_dmem_mutex);
+                    DmemMapVirtRangeLocked(vaddr, alloc_size, phys, static_cast<int>(ctx->Rdx));
+                }
+            } else if (readable_name == "sceKernelReleaseDirectMemory") {
+                // imza: sceKernelReleaseDirectMemory(off_t start, size_t len)
+                uint64_t start = ctx->Rdi;
+                uint64_t len   = ctx->Rsi;
+                if (len > 0) {
+                    DmemFreeRange(start, len);
+                    {
+                        std::lock_guard<std::mutex> lock(g_virt_dmem_mutex);
+                        // Ilgili sanal araliklari temizle
+                        for (auto it = g_virt_dmem_regions.begin(); it != g_virt_dmem_regions.end(); ) {
+                            if (it->phys_offset >= start && it->phys_offset < start + len) {
+                                it = g_virt_dmem_regions.erase(it);
+                            } else {
+                                ++it;
+                            }
+                        }
+                    }
+                    LOG_INFO("[MEMORY-HLE] ReleaseDirectMemory: start=0x" +
+                             [](uint64_t v){ std::stringstream x; x<<std::hex<<v; return x.str(); }(start) +
+                             " len=0x" +
+                             [](uint64_t v){ std::stringstream x; x<<std::hex<<v; return x.str(); }(len));
+                }
+                ctx->Rax = 0;
+                special_return_set = true;
+            } else if (readable_name == "sceKernelBatchMap" ||
+                       readable_name == "sceKernelBatchMap2") {
+                // imza: sceKernelBatchMap(SceKernelBatchMapEntry* entries, int num_entries, int* num_entries_out)
+                struct BatchMapEntry {
+                    void*    start;
+                    uint64_t offset;
+                    uint64_t length;
+                    uint32_t protection;
+                    uint32_t operation; // 0=MAP_DIRECT, 1=UNMAP, 2=PROTECT
+                };
+                auto* entries = reinterpret_cast<BatchMapEntry*>(ctx->Rdi);
+                int   num_entries = static_cast<int>(ctx->Rsi);
+                int*  num_entries_out = reinterpret_cast<int*>(ctx->Rdx);
+
+                if (entries == nullptr || num_entries <= 0 ||
+                    !SafeReadable(entries, static_cast<size_t>(num_entries) * sizeof(BatchMapEntry))) {
+                    ctx->Rax = 0;
+                    special_return_set = true;
+                } else {
+                    static volatile LONG bcall = 0;
+                    LONG bcall_n = InterlockedIncrement(&bcall);
+                    int processed = 0;
+                    int op0_cnt = 0, op1_cnt = 0, op2_cnt = 0, op_other = 0;
+                    uint64_t op0_bytes = 0, op1_bytes = 0;
+                    int outside_dbase_cnt = 0;
+                    uint64_t min_want = UINT64_MAX, max_want = 0;
+                    uint64_t min_phys = UINT64_MAX, max_phys = 0;
+
+                    uint8_t* dbase = DmemBase();
+                    uint64_t vbase = reinterpret_cast<uint64_t>(dbase);
+                    uint64_t vsize = kDmemSize;
+
+                    static const uint64_t kBatchEagerBytes = 4ULL * 1024 * 1024; // 4 MB
+
+                    std::vector<VirtDirectMemRegion> new_regions;
+                    std::vector<std::pair<uint64_t,uint64_t>> unmap_ranges;
+
+                    uint64_t cur_commit_start = 0;
+                    uint64_t cur_commit_len   = 0;
+                    auto flush_commit = [&]() {
+                        if (cur_commit_start != 0 && cur_commit_len > 0) {
+                            size_t eager = 0;
+                            if (cur_commit_len < 0x800000ULL || cur_commit_start < 0x2000000000ULL) {
+                                eager = static_cast<size_t>(cur_commit_len);
+                            } else {
+                                eager = static_cast<size_t>(cur_commit_len < kBatchEagerBytes ? cur_commit_len : kBatchEagerBytes);
+                            }
+                            if (eager > 0) {
+                                void* p = VirtualAlloc(reinterpret_cast<void*>(cur_commit_start), eager,
+                                                       MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+                                if (!p) {
+                                    p = VirtualAlloc(reinterpret_cast<void*>(cur_commit_start), eager,
+                                                 MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+                                }
+                                if (!p) {
+                                    const size_t kChunk = 0x10000;
+                                    for (size_t off = 0; off < eager; off += kChunk) {
+                                        size_t sz = (std::min)(kChunk, eager - off);
+                                        VirtualAlloc(reinterpret_cast<void*>(cur_commit_start + off), sz,
+                                                     MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+                                    }
+                                }
+                            }
+                            cur_commit_start = 0;
+                            cur_commit_len   = 0;
+                        }
+                    };
+
+                    uint64_t cur_phys_start = 0;
+                    uint64_t cur_phys_len   = 0;
+                    auto flush_phys = [&]() {
+                        if (dbase != nullptr && cur_phys_start < kDmemSize &&
+                            cur_phys_start + cur_phys_len <= kDmemSize && cur_phys_len > 0) {
+                            DmemCommitLazy(dbase, cur_phys_start, static_cast<size_t>(cur_phys_len), "batch_map_phys");
+                        }
+                        cur_phys_start = 0;
+                        cur_phys_len   = 0;
+                    };
+
+                    uint64_t cur_unmap_start = 0;
+                    uint64_t cur_unmap_len   = 0;
+                    auto flush_unmap = [&]() {
+                        if (cur_unmap_start != 0 && cur_unmap_len > 0) {
+                            uint64_t dstart = cur_unmap_start;
+                            uint64_t dlen   = cur_unmap_len;
+                            if (dlen >= 0x800000ULL && dstart >= 0x2000000000ULL && dstart + dlen <= 0x22560000000ULL) {
+                                VirtualFree(reinterpret_cast<void*>(dstart), static_cast<size_t>(dlen), MEM_DECOMMIT);
+                            }
+                            unmap_ranges.push_back({ cur_unmap_start, cur_unmap_len });
+                            cur_unmap_start = 0;
+                            cur_unmap_len   = 0;
+                        }
+                    };
+
+                    for (int i = 0; i < num_entries; i++) {
+                        BatchMapEntry& e = entries[i];
+                        uint64_t want_addr = reinterpret_cast<uint64_t>(e.start);
+                        uint64_t phys = e.offset;
+                        uint64_t len  = e.length;
+
+                        if (want_addr != 0) {
+                            if (want_addr < min_want) min_want = want_addr;
+                            if (want_addr > max_want) max_want = want_addr;
+                        }
+                        if (phys < min_phys) min_phys = phys;
+                        if (phys > max_phys) max_phys = phys;
+
+                        if (e.operation == 0) { // MAP_OP_MAP_DIRECT
+                            flush_unmap();
+                            op0_cnt++;
+                            op0_bytes += len;
+                            bool is_sentinel = (phys == 0xffffffff0000ULL) || (phys >= kDmemSize);
+                            if (!is_sentinel) {
+                                if (want_addr != 0) {
+                                    flush_phys();
+                                    if (vbase == 0 || want_addr < vbase || want_addr >= vbase + vsize) {
+                                        outside_dbase_cnt++;
+                                    }
+                                    if (cur_commit_start != 0 && cur_commit_start + cur_commit_len == want_addr) {
+                                        cur_commit_len += len;
+                                    } else {
+                                        flush_commit();
+                                        cur_commit_start = want_addr;
+                                        cur_commit_len   = len;
+                                    }
+                                    if (!new_regions.empty() &&
+                                        new_regions.back().vaddr + new_regions.back().size == want_addr &&
+                                        new_regions.back().prot == static_cast<int>(e.protection) &&
+                                        (new_regions.back().phys_offset + new_regions.back().size == phys)) {
+                                        new_regions.back().size += len;
+                                    } else {
+                                        new_regions.push_back({ want_addr, len, phys, static_cast<int>(e.protection) });
+                                    }
+                                } else if (dbase != nullptr && phys < kDmemSize && phys + len <= kDmemSize) {
+                                    flush_commit();
+                                    if (cur_phys_start != 0 && cur_phys_start + cur_phys_len == phys) {
+                                        cur_phys_len += len;
+                                    } else {
+                                        flush_phys();
+                                        cur_phys_start = phys;
+                                        cur_phys_len   = len;
+                                    }
+                                    uint64_t vaddr = reinterpret_cast<uint64_t>(dbase) + phys;
+                                    new_regions.push_back({ vaddr, len, phys, static_cast<int>(e.protection) });
+                                } else {
+                                    flush_commit();
+                                    flush_phys();
+                                }
+                            } else {
+                                // Sentinel / OOM
+                                static std::atomic<int> s_sentinel_log_cnt{0};
+                                if (s_sentinel_log_cnt.fetch_add(1) < 8) {
+                                    LOG_INFO("[MEMORY-HLE] BatchMap: OOM sentinel offset (0xffffffff0000) want=0x" +
+                                        [](uint64_t v){ std::stringstream x; x<<std::hex<<v; return x.str(); }(want_addr));
+                                }
+                                flush_commit();
+                                flush_phys();
+                                if (want_addr != 0) {
+                                    if (vbase == 0 || want_addr < vbase || want_addr >= vbase + vsize) outside_dbase_cnt++;
+                                    if (!new_regions.empty() &&
+                                        new_regions.back().vaddr + new_regions.back().size == want_addr &&
+                                        new_regions.back().prot == static_cast<int>(e.protection) &&
+                                        new_regions.back().phys_offset == 0xffffffff0000ULL) {
+                                        new_regions.back().size += len;
+                                    } else {
+                                        new_regions.push_back({ want_addr, len, phys, static_cast<int>(e.protection) });
+                                    }
+                                }
+                            }
+                        } else if (e.operation == 1) { // UNMAP
+                            flush_commit();
+                            flush_phys();
+                            op1_cnt++;
+                            op1_bytes += len;
+                            if (want_addr != 0 && len > 0) {
+                                if (cur_unmap_start != 0 && cur_unmap_start + cur_unmap_len == want_addr) {
+                                    cur_unmap_len += len;
+                                } else {
+                                    flush_unmap();
+                                    cur_unmap_start = want_addr;
+                                    cur_unmap_len   = len;
+                                }
+                            }
+                        } else if (e.operation == 2) { // PROTECT
+                            flush_commit(); flush_phys(); flush_unmap();
+                            op2_cnt++;
+                            if (want_addr != 0 && len > 0) {
+                                DWORD oldp = 0;
+                                VirtualProtect(reinterpret_cast<void*>(want_addr), len, PAGE_EXECUTE_READWRITE, &oldp);
+                            }
+                        } else {
+                            flush_commit(); flush_phys(); flush_unmap();
+                            op_other++;
+                        }
+                        processed++;
+                    }
+                    flush_commit();
+                    flush_phys();
+                    flush_unmap();
+
+                    if (!new_regions.empty() || !unmap_ranges.empty()) {
+                        std::lock_guard<std::mutex> lock(g_virt_dmem_mutex);
+                        for (const auto& u : unmap_ranges) {
+                            DmemUnmapVirtRangeLocked(u.first, u.second);
+                        }
+                        for (const auto& r : new_regions) {
+                            DmemMapVirtRangeLocked(r.vaddr, r.size, r.phys_offset, r.prot);
+                        }
+                    }
+
+                    if (num_entries_out != nullptr && SafeWritable(num_entries_out, sizeof(int))) {
+                        *num_entries_out = processed;
+                    }
+
+                    uint64_t caller_rip = (ctx->Rsp != 0 && SafeReadable(reinterpret_cast<void*>(ctx->Rsp), 8)) ?
+                                          *reinterpret_cast<uint64_t*>(ctx->Rsp) : 0;
+                    uint64_t caller_rva = (caller_rip >= g_base_addr && caller_rip < g_base_addr + g_module_size) ?
+                                          (caller_rip - g_base_addr) : 0;
+
+                    int64_t net_delta_mb = static_cast<int64_t>(op0_bytes / (1024 * 1024)) - static_cast<int64_t>(op1_bytes / (1024 * 1024));
+
+                    std::stringstream bs;
+                    bs << "[MEMORY-HLE] BatchMap #" << bcall_n << ": total=" << num_entries << " proc=" << processed
+                       << " (op0=" << op0_cnt << " [+" << (op0_bytes / (1024*1024)) << "MB, out=" << outside_dbase_cnt << "]"
+                       << " op1=" << op1_cnt << " [-" << (op1_bytes / (1024*1024)) << "MB]"
+                       << " op2=" << op2_cnt;
+                    if (op_other > 0) bs << " other=" << op_other;
+                    bs << ") | delta: +" << (op0_bytes / (1024*1024)) << "MB / -" << (op1_bytes / (1024*1024))
+                       << "MB | net: " << (net_delta_mb >= 0 ? "+" : "") << net_delta_mb << "MB"
+                       << " | caller RVA: 0x" << std::hex << caller_rva << std::dec;
+                    if (num_entries > 0 && entries != nullptr && SafeReadable(entries, sizeof(BatchMapEntry))) {
+                        bs << " e[0]: op=" << entries[0].operation
+                           << " want=0x" << std::hex << reinterpret_cast<uint64_t>(entries[0].start)
+                           << " phys=0x" << entries[0].offset
+                           << " len=0x" << entries[0].length << std::dec;
+                        if (num_entries > 1) {
+                            bs << " want_span=[0x" << std::hex << min_want << "..0x" << max_want
+                               << "] phys_span=[0x" << min_phys << "..0x" << max_phys << "]" << std::dec;
+                        }
+                    }
+                    LOG_INFO(bs.str());
+
+                    ctx->Rax = 0; // OK
+                    special_return_set = true;
+                }
+            } else if (readable_name == "wcslen" || readable_name == "std::wcslen") {
+                const uint16_t* s = reinterpret_cast<const uint16_t*>(ctx->Rdi);
+                ctx->Rax = SafeWcslen(s);
+                special_return_set = true;
+            } else if (readable_name == "wcscmp") {
+                const uint16_t* s1 = reinterpret_cast<const uint16_t*>(ctx->Rdi);
+                const uint16_t* s2 = reinterpret_cast<const uint16_t*>(ctx->Rsi);
+                int res = 0;
+                if (s1 && s2) {
+                    size_t l1 = SafeWcslen(s1);
+                    size_t l2 = SafeWcslen(s2);
+                    size_t min_l = (l1 < l2 ? l1 : l2);
+                    size_t i = 0;
+                    while (i < min_l && s1[i] == s2[i]) i++;
+                    res = static_cast<int>(s1[i]) - static_cast<int>(s2[i]);
+                }
+                ctx->Rax = static_cast<uint64_t>(res);
+                special_return_set = true;
+            } else if (readable_name == "wcscpy") {
+                uint16_t* dest = reinterpret_cast<uint16_t*>(ctx->Rdi);
+                const uint16_t* src = reinterpret_cast<const uint16_t*>(ctx->Rsi);
+                if (dest && src) {
+                    size_t slen = SafeWcslen(src);
+                    if (SafeWritable(dest, (slen + 1) * sizeof(uint16_t))) {
+                        std::memcpy(dest, src, (slen + 1) * sizeof(uint16_t));
+                    }
+                }
+                ctx->Rax = ctx->Rdi;
+                special_return_set = true;
+            } else if (readable_name == "wcsncmp") {
+                const uint16_t* s1 = reinterpret_cast<const uint16_t*>(ctx->Rdi);
+                const uint16_t* s2 = reinterpret_cast<const uint16_t*>(ctx->Rsi);
+                size_t n = ctx->Rdx;
+                int res = 0;
+                if (s1 && s2 && n > 0) {
+                    size_t l1 = SafeWcslen(s1, n);
+                    size_t l2 = SafeWcslen(s2, n);
+                    size_t max_check = n;
+                    if (l1 + 1 < max_check) max_check = l1 + 1;
+                    if (l2 + 1 < max_check) max_check = l2 + 1;
+                    for (size_t i = 0; i < max_check; i++) {
+                        if (s1[i] != s2[i] || s1[i] == 0) {
+                            res = static_cast<int>(s1[i]) - static_cast<int>(s2[i]);
+                            break;
+                        }
+                    }
+                }
+                ctx->Rax = static_cast<uint64_t>(res);
+                special_return_set = true;
+            } else if (readable_name == "wcsncpy") {
+                uint16_t* dest = reinterpret_cast<uint16_t*>(ctx->Rdi);
+                const uint16_t* src = reinterpret_cast<const uint16_t*>(ctx->Rsi);
+                size_t n = ctx->Rdx;
+                if (dest && src && n > 0 && SafeWritable(dest, n * sizeof(uint16_t))) {
+                    size_t slen = SafeWcslen(src, n);
+                    size_t copy_len = (slen < n ? slen : n);
+                    std::memcpy(dest, src, copy_len * sizeof(uint16_t));
+                    if (copy_len < n) {
+                        std::memset(dest + copy_len, 0, (n - copy_len) * sizeof(uint16_t));
+                    }
+                }
+                ctx->Rax = ctx->Rdi;
+                special_return_set = true;
+            } else if (readable_name == "wmemcpy") {
+                uint16_t* dest = reinterpret_cast<uint16_t*>(ctx->Rdi);
+                const uint16_t* src = reinterpret_cast<const uint16_t*>(ctx->Rsi);
+                size_t n = ctx->Rdx;
+                if (dest && src && n > 0 && SafeReadable(src, n * 2) && SafeWritable(dest, n * 2)) {
+                    std::memcpy(dest, src, n * 2);
+                }
+                ctx->Rax = ctx->Rdi;
+                special_return_set = true;
+            } else if (readable_name == "wmemset") {
+                uint16_t* dest = reinterpret_cast<uint16_t*>(ctx->Rdi);
+                uint16_t val = static_cast<uint16_t>(ctx->Rsi);
+                size_t n = ctx->Rdx;
+                if (dest && n > 0 && SafeWritable(dest, n * 2)) {
+                    for (size_t i = 0; i < n; i++) dest[i] = val;
+                }
+                ctx->Rax = ctx->Rdi;
+                special_return_set = true;
+            } else if (readable_name == "iswctype" || func_name.rfind("CyXs2l-1kNA", 0) == 0) {
+                // int iswctype(wint_t wc, wctype_t desc)
+                wint_t wc = static_cast<wint_t>(ctx->Rdi & 0xFFFF);
+                int desc = static_cast<int>(ctx->Rsi);
+                int res = 0;
+                switch (desc) {
+                    case 1: res = iswalnum(wc); break;
+                    case 2: res = iswalpha(wc); break;
+                    case 3: res = iswblank(wc); break;
+                    case 4: res = iswcntrl(wc); break;
+                    case 5: res = iswdigit(wc); break;
+                    case 6: res = iswgraph(wc); break;
+                    case 7: res = iswlower(wc); break;
+                    case 8: res = iswprint(wc); break;
+                    case 9: res = iswpunct(wc); break;
+                    case 10: res = iswspace(wc); break;
+                    case 11: res = iswupper(wc); break;
+                    case 12: res = iswxdigit(wc); break;
+                    default:
+                        res = iswalnum(wc) ? 1 : 0;
+                        break;
+                }
+                ctx->Rax = res ? 1 : 0;
+                special_return_set = true;
+            } else if (readable_name == "vswprintf" || readable_name == "swprintf") {
+                uint16_t* ws = reinterpret_cast<uint16_t*>(ctx->Rdi);
+                size_t n = static_cast<size_t>(ctx->Rsi);
+                const uint16_t* format = reinterpret_cast<const uint16_t*>(ctx->Rdx);
+                uint8_t* va = reinterpret_cast<uint8_t*>(ctx->Rcx);
+
+                std::u16string s = FormatSysVWPrintf(format, va);
+                size_t written = 0;
+                if (ws != nullptr && n > 0 && SafeWritable(ws, n * sizeof(uint16_t))) {
+                    written = s.size() < (n - 1) ? s.size() : (n - 1);
+                    for (size_t i = 0; i < written; i++) {
+                        ws[i] = static_cast<uint16_t>(s[i]);
+                    }
+                    ws[written] = 0;
+                }
+                ctx->Rax = static_cast<uint64_t>(written);
+                special_return_set = true;
+            } else if (readable_name == "__stack_chk_fail" || func_name.rfind("__stack_chk_fail", 0) == 0) {
+                LOG_ERROR("[STACK-GUARD] __stack_chk_fail called! Stack canary smashed! RIP=0x"
+                          + std::to_string(ctx->Rip));
+                ExitProcess(1);
+            } else if (readable_name == "sceRtcGetCurrentClockLocalTime") {
+                // imza: int sceRtcGetCurrentClockLocalTime(SceRtcDateTime *time)
+                struct SceRtcDateTime {
+                    unsigned short year;
+                    unsigned short month;
+                    unsigned short day;
+                    unsigned short hour;
+                    unsigned short minute;
+                    unsigned short second;
+                    unsigned int   microsecond;
+                };
+                SceRtcDateTime* dt = reinterpret_cast<SceRtcDateTime*>(ctx->Rdi);
+                if (dt != nullptr && SafeWritable(dt, sizeof(SceRtcDateTime))) {
+                    SYSTEMTIME st;
+                    GetLocalTime(&st);
+                    dt->year = st.wYear;
+                    dt->month = st.wMonth;
+                    dt->day = st.wDay;
+                    dt->hour = st.wHour;
+                    dt->minute = st.wMinute;
+                    dt->second = st.wSecond;
+                    dt->microsecond = st.wMilliseconds * 1000;
+                }
+                ctx->Rax = 0; // SCE_OK
+                special_return_set = true;
+            } else if (readable_name == "sceRtcGetCurrentClock") {
+                // imza: int sceRtcGetCurrentClock(SceRtcDateTime *time, int time_zone)
+                struct SceRtcDateTime {
+                    unsigned short year;
+                    unsigned short month;
+                    unsigned short day;
+                    unsigned short hour;
+                    unsigned short minute;
+                    unsigned short second;
+                    unsigned int   microsecond;
+                };
+                SceRtcDateTime* dt = reinterpret_cast<SceRtcDateTime*>(ctx->Rdi);
+                if (dt != nullptr && SafeWritable(dt, sizeof(SceRtcDateTime))) {
+                    SYSTEMTIME st;
+                    GetSystemTime(&st);
+                    dt->year = st.wYear;
+                    dt->month = st.wMonth;
+                    dt->day = st.wDay;
+                    dt->hour = st.wHour;
+                    dt->minute = st.wMinute;
+                    dt->second = st.wSecond;
+                    dt->microsecond = st.wMilliseconds * 1000;
+                }
+                ctx->Rax = 0; // SCE_OK
+                special_return_set = true;
+            } else if (readable_name == "sceRtcGetTick") {
+                // imza: int sceRtcGetTick(const SceRtcDateTime *time, SceRtcTick *tick)
+                struct SceRtcDateTime {
+                    unsigned short year;
+                    unsigned short month;
+                    unsigned short day;
+                    unsigned short hour;
+                    unsigned short minute;
+                    unsigned short second;
+                    unsigned int   microsecond;
+                };
+                const SceRtcDateTime* dt = reinterpret_cast<const SceRtcDateTime*>(ctx->Rdi);
+                uint64_t* tick = reinterpret_cast<uint64_t*>(ctx->Rsi);
+                if (dt != nullptr && tick != nullptr && SafeReadable(dt, sizeof(SceRtcDateTime)) && SafeWritable(tick, sizeof(uint64_t))) {
+                    int y = dt->year - 1;
+                    if (y < 0) y = 0;
+                    uint64_t days = static_cast<uint64_t>(y) * 365 + (y / 4) - (y / 100) + (y / 400);
+                    static const int kDaysBeforeMonth[13] = { 0, 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 };
+                    int m = dt->month;
+                    if (m < 1) m = 1;
+                    if (m > 12) m = 12;
+                    days += kDaysBeforeMonth[m];
+                    bool is_leap = (dt->year % 4 == 0 && (dt->year % 100 != 0 || dt->year % 400 == 0));
+                    if (m > 2 && is_leap) days += 1;
+                    int d = dt->day;
+                    if (d > 0) days += (d - 1);
+                    uint64_t total_sec = days * 86400ULL
+                                       + static_cast<uint64_t>(dt->hour) * 3600ULL
+                                       + static_cast<uint64_t>(dt->minute) * 60ULL
+                                       + static_cast<uint64_t>(dt->second);
+                    *tick = total_sec * 1000000ULL + dt->microsecond;
+                    ctx->Rax = 0; // SCE_OK
+                } else {
+                    ctx->Rax = 0x80250001; // SCE_RTC_ERROR_INVALID_VALUE
+                }
+                special_return_set = true;
+            } else if (readable_name == "sceRtcGetCurrentTick") {
+                // imza: int sceRtcGetCurrentTick(SceRtcTick *tick)
+                uint64_t* tick = reinterpret_cast<uint64_t*>(ctx->Rdi);
+                if (tick != nullptr && SafeWritable(tick, sizeof(uint64_t))) {
+                    SYSTEMTIME st;
+                    GetSystemTime(&st);
+                    int y = st.wYear - 1;
+                    if (y < 0) y = 0;
+                    uint64_t days = static_cast<uint64_t>(y) * 365 + (y / 4) - (y / 100) + (y / 400);
+                    static const int kDaysBeforeMonth[13] = { 0, 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 };
+                    int m = st.wMonth;
+                    if (m < 1) m = 1;
+                    if (m > 12) m = 12;
+                    days += kDaysBeforeMonth[m];
+                    bool is_leap = (st.wYear % 4 == 0 && (st.wYear % 100 != 0 || st.wYear % 400 == 0));
+                    if (m > 2 && is_leap) days += 1;
+                    int d = st.wDay;
+                    if (d > 0) days += (d - 1);
+                    uint64_t total_sec = days * 86400ULL
+                                       + static_cast<uint64_t>(st.wHour) * 3600ULL
+                                       + static_cast<uint64_t>(st.wMinute) * 60ULL
+                                       + static_cast<uint64_t>(st.wSecond);
+                    *tick = total_sec * 1000000ULL + st.wMilliseconds * 1000ULL;
+                    ctx->Rax = 0; // SCE_OK
+                } else {
+                    ctx->Rax = 0x80250001;
+                }
+                special_return_set = true;
+            } else if (readable_name == "sceRtcGetTickResolution") {
+                // uint32_t sceRtcGetTickResolution(void)
+                ctx->Rax = 1000000; // 1 MHz (1 us)
+                special_return_set = true;
             } else if (readable_name == "__cxa_guard_acquire") {
                 // Itanium C++ ABI: guard'in ilk byte'i "tamamlandi" bayragidir.
                 // 0 ise caller HENUZ initialize ETMEMIS demektir - biz simdiye
@@ -7065,7 +8352,39 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     ctx->Rax = reinterpret_cast<uint64_t>(&s_ctype[1]); // indeks 0
                 }
                 special_return_set = true;
-            } else if (func_name.find("kALvdgEv5ME") != std::string::npos || func_name.find("9nf8joUTSaQ") != std::string::npos || func_name.find("rcQCUr0EaRU") != std::string::npos || func_name.find("p6LrHjIQMdk") != std::string::npos || func_name.find("hqi8yMOCmG0") != std::string::npos || func_name.find("QW2jL1J5rwY") != std::string::npos || func_name.find("P8F2oavZXtY") != std::string::npos || func_name.find("Q1BL70XVV0o") != std::string::npos) {
+            } else if (readable_name == "_Getptoupper" || func_name.find("rcQCUr0EaRU") != std::string::npos) {
+                // _Getptoupper(): Dinkumware CRT toupper tablosu [-1..255]
+                // tolower/toupper bu tabloyu kullanir: movsx reg, word ptr [rax + rcx*2]
+                // Dizi [-1..255], isaretci indeks 0'i (dizinin 1. elemanini) gosterir.
+                {
+                    static short s_toupper[257];
+                    static bool  s_init = false;
+                    if (!s_init) {
+                        s_init = true;
+                        s_toupper[0] = -1; // EOF (-1)
+                        for (int ch = 0; ch < 256; ch++) {
+                            s_toupper[ch + 1] = static_cast<short>(std::toupper(static_cast<unsigned char>(ch)));
+                        }
+                    }
+                    ctx->Rax = reinterpret_cast<uint64_t>(&s_toupper[1]);
+                }
+                special_return_set = true;
+            } else if (readable_name == "_Getptolower" || readable_name == "libc_char_table" || func_name.find("1uJgoVq3bQU") != std::string::npos) {
+                // _Getptolower(): Dinkumware CRT tolower tablosu [-1..255]
+                {
+                    static short s_tolower[257];
+                    static bool  s_init = false;
+                    if (!s_init) {
+                        s_init = true;
+                        s_tolower[0] = -1; // EOF (-1)
+                        for (int ch = 0; ch < 256; ch++) {
+                            s_tolower[ch + 1] = static_cast<short>(std::tolower(static_cast<unsigned char>(ch)));
+                        }
+                    }
+                    ctx->Rax = reinterpret_cast<uint64_t>(&s_tolower[1]);
+                }
+                special_return_set = true;
+            } else if (func_name.find("kALvdgEv5ME") != std::string::npos || func_name.find("9nf8joUTSaQ") != std::string::npos || func_name.find("p6LrHjIQMdk") != std::string::npos || func_name.find("hqi8yMOCmG0") != std::string::npos || func_name.find("QW2jL1J5rwY") != std::string::npos || func_name.find("P8F2oavZXtY") != std::string::npos || func_name.find("Q1BL70XVV0o") != std::string::npos) {
                 // _Locksyslock / _Unlocksyslock / locales / exceptions
                 ctx->Rax = 0;
                 special_return_set = true;
@@ -7248,6 +8567,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 // Gercek dosyayi VFS ile bulmaya calis
                 std::string host = TranslateGuestPath(guest);
                 FILE* f = nullptr;
+                bool is_dir = false;
                 // ONCEDEN: bayraklar YOK SAYILIP her zaman "rb" ile aciliyordu.
                 // Oyun kayit dosyasini (O_CREAT|O_WRONLY) OLUSTURAMIYOR, surekli
                 // -1 aliyor ve "/saveData0/-saveindex" asamasinda takiliyordu.
@@ -7263,18 +8583,23 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     if (acc == 1u)      m = append ? "ab"  : (trunc || creat ? "wb"  : "r+b");
                     else if (acc == 2u) m = append ? "a+b" : (trunc         ? "w+b" : "r+b");
                     if (!host.empty()) {
-                        if (creat || acc != 0u) {
-                            EnsureParentDirs(host); // kayit klasoru yoksa olustur
+                        DWORD dwAttrib = GetFileAttributesA(host.c_str());
+                        if (dwAttrib != INVALID_FILE_ATTRIBUTES && (dwAttrib & FILE_ATTRIBUTE_DIRECTORY)) {
+                            is_dir = true;
                         } else {
-                            // SALT OKUMA: kategori onekinin yanlis uretildigi
-                            // olculdu (bkz. VfsResolve). Deney kapaliyken bu
-                            // cagri host'u AYNEN dondurur.
-                            host = VfsResolve(host);
-                        }
-                        f = fopen(host.c_str(), m);
-                        // r+b istendi ama dosya yoksa ve O_CREAT verilmisse olustur
-                        if (f == nullptr && creat && acc != 0u) {
-                            f = fopen(host.c_str(), acc == 2u ? "w+b" : "wb");
+                            if (creat || acc != 0u) {
+                                EnsureParentDirs(host); // kayit klasoru yoksa olustur
+                            } else {
+                                // SALT OKUMA: kategori onekinin yanlis uretildigi
+                                // olculdu (bkz. VfsResolve). Deney kapaliyken bu
+                                // cagri host'u AYNEN dondurur.
+                                host = VfsResolve(host);
+                            }
+                            f = fopen(host.c_str(), m);
+                            // r+b istendi ama dosya yoksa ve O_CREAT verilmisse olustur
+                            if (f == nullptr && creat && acc != 0u) {
+                                f = fopen(host.c_str(), acc == 2u ? "w+b" : "wb");
+                            }
                         }
                     }
                 }
@@ -7286,15 +8611,38 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 {
                     static std::atomic<int> s_ko{0};
                     const bool interesting = (guest.find("lang") != std::string::npos) ||
-                                             (guest.find("json") != std::string::npos);
+                                             (guest.find("json") != std::string::npos) ||
+                                             (guest.find("pak") != std::string::npos);
                     if (interesting || s_ko.fetch_add(1, std::memory_order_relaxed) < 40) {
                         printf("[VFS] sceKernelOpen(\"%s\") -> \"%s\" : %s%s\n",
-                               guest.c_str(), host.c_str(), f ? "ACILDI" : "BASARISIZ",
+                               guest.c_str(), host.c_str(), (f || is_dir) ? (is_dir ? "ACILDI (DIZIN)" : "ACILDI") : "BASARISIZ",
                                interesting ? "   <== METIN/VERI DOSYASI" : "");
                         fflush(stdout);
                     }
                 }
-                if (f) {
+                if (is_dir) {
+                    static int s_fd_counter = 100;
+                    int fd = s_fd_counter++;
+                    DirectoryState ds;
+                    ds.host_path = host;
+                    WIN32_FIND_DATAA ffd;
+                    HANDLE hFind = FindFirstFileA((host + "/*").c_str(), &ffd);
+                    if (hFind != INVALID_HANDLE_VALUE) {
+                        do {
+                            ds.entries.push_back(ffd.cFileName);
+                            ds.is_dir.push_back((ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0);
+                        } while (FindNextFileA(hFind, &ffd));
+                        FindClose(hFind);
+                    }
+                    ds.current_index = 0;
+                    {
+                        std::lock_guard<std::mutex> vlk(g_vfs_mutex);
+                        g_dir_map[fd] = std::move(ds);
+                    }
+                    ctx->Rax = static_cast<uint64_t>(fd);
+                    special_return_set = true;
+                    LOG_INFO("[KernelIO] sceKernelOpen(\"" + guest + "\") -> fd=" + std::to_string(fd) + " (DIZIN)");
+                } else if (f) {
                     // Gercek dosya var: fd olarak FILE* saklayip dondur
                     static int s_fd_counter = 100;
                     int fd = s_fd_counter++;
@@ -7414,6 +8762,10 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                         fclose(it->second);
                         g_fd_map.erase(it);
                     }
+                    auto dit = g_dir_map.find(fd);
+                    if (dit != g_dir_map.end()) {
+                        g_dir_map.erase(dit);
+                    }
                 }
                 ctx->Rax = 0;
                 special_return_set = true;
@@ -7441,33 +8793,84 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 st << "[VFS] stat(\"" << guest << "\") -> "
                    << (found ? "VAR boyut=" + std::to_string(hs.st_size) : "YOK");
                 LOG_INFO(st.str());
-            } else if (readable_name == "sceKernelFstat" || readable_name == "libc_fstat") {
+            } else if (readable_name == "sceKernelFstat" || readable_name == "libc_fstat" ||
+                       func_name.find("kBwCPsYX-m4") != std::string::npos) {
                 // sceKernelFstat(fd, buf): RDI=fd, RSI=buf
-                // [HLE-EKSIK] ile yakalandi: govdesi YOKTU, RAX=0 (basarili)
-                // donuyordu ve tamponu HIC DOLDURMUYORDU - yani cagiran
-                // yigindaki COPU dosya boyutu saniyordu.
                 const int fd = static_cast<int>(ctx->Rdi);
                 void* sb = reinterpret_cast<void*>(ctx->Rsi);
                 FILE* f = nullptr;
+                bool is_dir = false;
                 {
                     std::lock_guard<std::mutex> vlk(g_vfs_mutex);
                     auto it = g_fd_map.find(fd);
-                    if (it != g_fd_map.end()) f = it->second;
+                    if (it != g_fd_map.end()) {
+                        f = it->second;
+                    } else if (g_dir_map.find(fd) != g_dir_map.end()) {
+                        is_dir = true;
+                    }
                 }
                 bool ok = false;
-                if (f != nullptr && sb != nullptr && SafeWritable(sb, kFreeBsdStatSize)) {
-                    const long cur = ftell(f);
-                    if (cur >= 0 && fseek(f, 0, SEEK_END) == 0) {
-                        const long end = ftell(f);
-                        fseek(f, cur, SEEK_SET); // konumu BOZMA
-                        if (end >= 0) {
-                            FillFreeBsdStat(sb, static_cast<uint64_t>(end), false, 0);
-                            ok = true;
+                if (sb != nullptr && SafeWritable(sb, kFreeBsdStatSize)) {
+                    if (is_dir) {
+                        FillFreeBsdStat(sb, 0, true, 0);
+                        ok = true;
+                    } else if (f != nullptr) {
+                        const long cur = ftell(f);
+                        if (cur >= 0 && fseek(f, 0, SEEK_END) == 0) {
+                            const long end = ftell(f);
+                            fseek(f, cur, SEEK_SET); // konumu BOZMA
+                            if (end >= 0) {
+                                FillFreeBsdStat(sb, static_cast<uint64_t>(end), false, 0);
+                                ok = true;
+                            }
                         }
                     }
                 }
                 ctx->Rax = ok ? 0 : static_cast<uint64_t>(static_cast<int64_t>(
                                         static_cast<int>(0x80020009))); // EBADF
+                special_return_set = true;
+            } else if (readable_name == "sceKernelGetdents" ||
+                       func_name.find("j2AIqSqJP0w") != std::string::npos) {
+                // int sceKernelGetdents(int fd, char* buf, size_t nbytes)
+                // RDI=fd, RSI=buf, RDX=nbytes
+                const int fd = static_cast<int>(ctx->Rdi);
+                uint8_t* buf = reinterpret_cast<uint8_t*>(ctx->Rsi);
+                size_t nbytes = static_cast<size_t>(ctx->Rdx);
+
+                int bytes_written = -1;
+                if (buf != nullptr && nbytes >= 16 && SafeWritable(buf, nbytes)) {
+                    std::lock_guard<std::mutex> vlk(g_vfs_mutex);
+                    auto dit = g_dir_map.find(fd);
+                    if (dit != g_dir_map.end()) {
+                        DirectoryState& ds = dit->second;
+                        bytes_written = 0;
+                        while (ds.current_index < ds.entries.size()) {
+                            const std::string& name = ds.entries[ds.current_index];
+                            bool is_sub_dir = ds.is_dir[ds.current_index];
+                            size_t namlen = name.size();
+                            if (namlen > 255) namlen = 255;
+                            uint16_t reclen = static_cast<uint16_t>((8 + namlen + 1 + 7) & ~7);
+                            if (bytes_written + reclen > nbytes) {
+                                break; // Bu cagriya sigmaz, sonraki getdents cagrisina birak
+                            }
+                            uint8_t* entry = buf + bytes_written;
+                            memset(entry, 0, reclen);
+                            uint32_t d_fileno = static_cast<uint32_t>(ds.current_index + 1);
+                            uint8_t d_type = is_sub_dir ? 4 : 8; // DT_DIR=4, DT_REG=8
+                            uint8_t d_namlen = static_cast<uint8_t>(namlen);
+                            memcpy(entry + 0, &d_fileno, 4);
+                            memcpy(entry + 4, &reclen, 2);
+                            entry[6] = d_type;
+                            entry[7] = d_namlen;
+                            memcpy(entry + 8, name.c_str(), namlen);
+                            entry[8 + namlen] = '\0';
+                            bytes_written += reclen;
+                            ds.current_index++;
+                        }
+                    }
+                }
+                ctx->Rax = (bytes_written >= 0) ? static_cast<uint64_t>(bytes_written)
+                                                : static_cast<uint64_t>(static_cast<int64_t>(-1));
                 special_return_set = true;
             } else if (readable_name == "fopen") {
                 std::lock_guard<std::mutex> vlk(g_vfs_mutex);
@@ -7635,6 +9038,405 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 if (g_open_files.count(f)) fflush(f);
                 ctx->Rax = 0;
                 special_return_set = true;
+            } else if (readable_name == "sceKernelAprResolveFilepathsToIdsAndFileSizes" ||
+                       func_name.find("gEpBkcwxUjw") != std::string::npos) {
+                // int sceKernelAprResolveFilepathsToIdsAndFileSizes(
+                //     const char* const* filepaths, // RDI
+                //     uint32_t count,              // RSI
+                //     uint32_t* out_ids,           // RDX
+                //     uint64_t* out_sizes,         // RCX
+                //     int32_t* out_results         // R8
+                // );
+                const char* const* filepaths = reinterpret_cast<const char* const*>(ctx->Rdi);
+                uint32_t count = static_cast<uint32_t>(ctx->Rsi);
+                uint32_t* out_ids = reinterpret_cast<uint32_t*>(ctx->Rdx);
+                uint64_t* out_sizes = reinterpret_cast<uint64_t*>(ctx->Rcx);
+                int32_t* out_results = reinterpret_cast<int32_t*>(ctx->R8);
+
+                bool all_found = true;
+                std::lock_guard<std::mutex> lk(g_apr_mutex);
+                for (uint32_t i = 0; i < count; ++i) {
+                    std::string guest_path;
+                    if (filepaths && SafeReadable(&filepaths[i], sizeof(const char*))) {
+                        guest_path = SafeReadCString(filepaths[i]);
+                    }
+                    std::string host_path = TranslateGuestPath(guest_path);
+                    WIN32_FILE_ATTRIBUTE_DATA fad;
+                    bool exists = false;
+                    uint64_t fsz = 0;
+                    if (!host_path.empty() && GetFileAttributesExA(host_path.c_str(), GetFileExInfoStandard, &fad)) {
+                        if ((fad.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+                            exists = true;
+                            fsz = (static_cast<uint64_t>(fad.nFileSizeHigh) << 32) | fad.nFileSizeLow;
+                        }
+                    }
+                    if (exists) {
+                        uint32_t id = 0;
+                        for (const auto& kv : g_apr_files) {
+                            if (kv.second.host_path == host_path) {
+                                id = kv.first;
+                                break;
+                            }
+                        }
+                        if (id == 0) {
+                            id = g_next_apr_file_id++;
+                            g_apr_files[id] = { host_path, fsz };
+                        }
+                        if (out_ids && SafeWritable(&out_ids[i], sizeof(uint32_t))) {
+                            out_ids[i] = id;
+                        }
+                        if (out_sizes && SafeWritable(&out_sizes[i], sizeof(uint64_t))) {
+                            out_sizes[i] = fsz;
+                        }
+                        if (out_results && SafeWritable(&out_results[i], sizeof(int32_t))) {
+                            out_results[i] = 0;
+                        }
+                        LOG_INFO("[APR] Resolve: \"" + guest_path + "\" -> id=" + std::to_string(id) + " (boyut=" + std::to_string(fsz) + ")");
+                    } else {
+                        all_found = false;
+                        if (out_ids && SafeWritable(&out_ids[i], sizeof(uint32_t))) {
+                            out_ids[i] = 0xFFFFFFFF;
+                        }
+                        if (out_sizes && SafeWritable(&out_sizes[i], sizeof(uint64_t))) {
+                            out_sizes[i] = 0xFFFFFFFFFFFFFFFFULL;
+                        }
+                        if (out_results && SafeWritable(&out_results[i], sizeof(int32_t))) {
+                            out_results[i] = static_cast<int32_t>(0x80020002); // SCE_KERNEL_ERROR_ENOENT
+                        }
+                        LOG_INFO("[APR] Resolve: \"" + guest_path + "\" -> YOK (ENOENT)");
+                    }
+                }
+                ctx->Rax = all_found ? 0 : static_cast<uint64_t>(static_cast<int64_t>(static_cast<int>(0x80020002)));
+                special_return_set = true;
+            } else if (readable_name == "sceKernelAprResolveFilepathsToIds" ||
+                       func_name.find("WT-5NKy42fw") != std::string::npos) {
+                const char* const* filepaths = reinterpret_cast<const char* const*>(ctx->Rdi);
+                uint32_t count = static_cast<uint32_t>(ctx->Rsi);
+                uint32_t* out_ids = reinterpret_cast<uint32_t*>(ctx->Rdx);
+                int32_t* out_results = reinterpret_cast<int32_t*>(ctx->Rcx);
+                bool all_found = true;
+                std::lock_guard<std::mutex> lk(g_apr_mutex);
+                for (uint32_t i = 0; i < count; ++i) {
+                    std::string guest_path;
+                    if (filepaths && SafeReadable(&filepaths[i], sizeof(const char*))) {
+                        guest_path = SafeReadCString(filepaths[i]);
+                    }
+                    std::string host_path = TranslateGuestPath(guest_path);
+                    WIN32_FILE_ATTRIBUTE_DATA fad;
+                    bool exists = false;
+                    uint64_t fsz = 0;
+                    if (!host_path.empty() && GetFileAttributesExA(host_path.c_str(), GetFileExInfoStandard, &fad)) {
+                        if ((fad.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+                            exists = true;
+                            fsz = (static_cast<uint64_t>(fad.nFileSizeHigh) << 32) | fad.nFileSizeLow;
+                        }
+                    }
+                    if (exists) {
+                        uint32_t id = 0;
+                        for (const auto& kv : g_apr_files) {
+                            if (kv.second.host_path == host_path) {
+                                id = kv.first;
+                                break;
+                            }
+                        }
+                        if (id == 0) {
+                            id = g_next_apr_file_id++;
+                            g_apr_files[id] = { host_path, fsz };
+                        }
+                        if (out_ids && SafeWritable(&out_ids[i], sizeof(uint32_t))) out_ids[i] = id;
+                        if (out_results && SafeWritable(&out_results[i], sizeof(int32_t))) out_results[i] = 0;
+                    } else {
+                        all_found = false;
+                        if (out_ids && SafeWritable(&out_ids[i], sizeof(uint32_t))) out_ids[i] = 0xFFFFFFFF;
+                        if (out_results && SafeWritable(&out_results[i], sizeof(int32_t))) out_results[i] = static_cast<int32_t>(0x80020002);
+                    }
+                }
+                ctx->Rax = all_found ? 0 : static_cast<uint64_t>(static_cast<int64_t>(static_cast<int>(0x80020002)));
+                special_return_set = true;
+            } else if (readable_name == "sceKernelAprGetFileSize" ||
+                       func_name.find("WvEu7yl3Ivg") != std::string::npos) {
+                uint32_t file_id = static_cast<uint32_t>(ctx->Rdi);
+                uint64_t* out_sz = reinterpret_cast<uint64_t*>(ctx->Rsi);
+                std::lock_guard<std::mutex> lk(g_apr_mutex);
+                auto fit = g_apr_files.find(file_id);
+                if (fit != g_apr_files.end()) {
+                    if (out_sz && SafeWritable(out_sz, sizeof(uint64_t))) {
+                        *out_sz = fit->second.file_size;
+                    }
+                    ctx->Rax = 0;
+                } else {
+                    ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(static_cast<int>(0x80020002)));
+                }
+                special_return_set = true;
+            } else if (readable_name == "sceKernelAprGetFileStat" ||
+                       func_name.find("ApkYaHb8Sek") != std::string::npos) {
+                uint32_t file_id = static_cast<uint32_t>(ctx->Rdi);
+                void* stat_buf = reinterpret_cast<void*>(ctx->Rsi);
+                std::lock_guard<std::mutex> lk(g_apr_mutex);
+                auto fit = g_apr_files.find(file_id);
+                if (fit != g_apr_files.end()) {
+                    if (stat_buf && SafeWritable(stat_buf, 16)) {
+                        *reinterpret_cast<uint64_t*>(stat_buf) = fit->second.file_size;
+                    }
+                    ctx->Rax = 0;
+                } else {
+                    ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(static_cast<int>(0x80020002)));
+                }
+                special_return_set = true;
+            } else if (readable_name == "sceAmprCommandBufferConstructor" ||
+                       func_name.find("8aI7R7WaOlc") != std::string::npos ||
+                       (Game::Current().title_id == "PPSA02100" && plt_index == 1854)) {
+                uint64_t cb = ctx->Rdi;
+                std::lock_guard<std::mutex> lk(g_apr_mutex);
+                g_apr_cb_map[cb] = AprCommandBufferState{};
+                ctx->Rax = 0;
+                special_return_set = true;
+            } else if (readable_name == "sceAmprAprCommandBufferConstructor" ||
+                       func_name.find("a8uLzYY--tM") != std::string::npos ||
+                       (Game::Current().title_id == "PPSA02100" && plt_index == 1881)) {
+                if (ctx->Rsi && SafeWritable(reinterpret_cast<void*>(ctx->Rsi), 8)) {
+                    *reinterpret_cast<uint64_t*>(ctx->Rsi) = 0;
+                }
+                if (ctx->Rdx && SafeWritable(reinterpret_cast<void*>(ctx->Rdx), 8)) {
+                    *reinterpret_cast<uint64_t*>(ctx->Rdx) = 0;
+                }
+                ctx->Rax = 0;
+                special_return_set = true;
+            } else if (readable_name == "sceAmprCommandBufferSetBuffer" ||
+                       func_name.find("N-FSPA4S3nI") != std::string::npos ||
+                       (Game::Current().title_id == "PPSA02100" && plt_index == 1857)) {
+                uint64_t cb = ctx->Rdi;
+                uint64_t buf = ctx->Rsi;
+                uint64_t sz = ctx->Rdx;
+                std::lock_guard<std::mutex> lk(g_apr_mutex);
+                auto& st = g_apr_cb_map[cb];
+                st.buffer_addr = buf;
+                st.buffer_size = sz;
+                st.current_offset = 0;
+                st.num_commands = 0;
+                st.pending_reads.clear();
+                st.pending_events.clear();
+                ctx->Rax = 0;
+                special_return_set = true;
+            } else if (readable_name == "sceAmprCommandBufferGetBuffer" ||
+                       readable_name == "sceAmprCommandBufferGetBufferBaseAddress" ||
+                       func_name.find("n+bXMw") != std::string::npos ||
+                       (Game::Current().title_id == "PPSA02100" && plt_index == 1858)) {
+                uint64_t cb = ctx->Rdi;
+                std::lock_guard<std::mutex> lk(g_apr_mutex);
+                auto it = g_apr_cb_map.find(cb);
+                ctx->Rax = (it != g_apr_cb_map.end()) ? it->second.buffer_addr : 0;
+                special_return_set = true;
+            } else if (readable_name == "sceAmprCommandBufferGetSize" ||
+                       func_name.find("tZDDEo2tE5k") != std::string::npos) {
+                uint64_t cb = ctx->Rdi;
+                std::lock_guard<std::mutex> lk(g_apr_mutex);
+                auto it = g_apr_cb_map.find(cb);
+                ctx->Rax = (it != g_apr_cb_map.end()) ? it->second.buffer_size : 0;
+                special_return_set = true;
+            } else if (readable_name == "sceAmprCommandBufferGetCurrentOffset" ||
+                       func_name.find("GnxKOHEawhk") != std::string::npos) {
+                uint64_t cb = ctx->Rdi;
+                std::lock_guard<std::mutex> lk(g_apr_mutex);
+                auto it = g_apr_cb_map.find(cb);
+                ctx->Rax = (it != g_apr_cb_map.end()) ? it->second.current_offset : 0;
+                special_return_set = true;
+            } else if (readable_name == "sceAmprCommandBufferGetNumCommands" ||
+                       func_name.find("gzndltBEzWc") != std::string::npos) {
+                uint64_t cb = ctx->Rdi;
+                std::lock_guard<std::mutex> lk(g_apr_mutex);
+                auto it = g_apr_cb_map.find(cb);
+                ctx->Rax = (it != g_apr_cb_map.end()) ? it->second.num_commands : 0;
+                special_return_set = true;
+            } else if (readable_name == "sceAmprCommandBufferReset" ||
+                       readable_name == "sceAmprCommandBufferClearBuffer" ||
+                       func_name.find("baQO9ez2gL4") != std::string::npos ||
+                       func_name.find("ULvXMDz56po") != std::string::npos ||
+                       (Game::Current().title_id == "PPSA02100" && plt_index == 1856)) {
+                uint64_t cb = ctx->Rdi;
+                std::lock_guard<std::mutex> lk(g_apr_mutex);
+                auto it = g_apr_cb_map.find(cb);
+                if (it != g_apr_cb_map.end()) {
+                    it->second.current_offset = 0;
+                    it->second.num_commands = 0;
+                    it->second.pending_reads.clear();
+                    it->second.pending_events.clear();
+                }
+                ctx->Rax = 0;
+                special_return_set = true;
+            } else if (readable_name == "sceAmprCommandBufferDestructor" ||
+                       readable_name == "sceAmprAprCommandBufferDestructor" ||
+                       func_name.find("GuchCTefuZw") != std::string::npos ||
+                       func_name.find("Qs1xtplKo0U") != std::string::npos ||
+                       (Game::Current().title_id == "PPSA02100" && (plt_index == 1855 || plt_index == 1882))) {
+                uint64_t cb = ctx->Rdi;
+                std::lock_guard<std::mutex> lk(g_apr_mutex);
+                g_apr_cb_map.erase(cb);
+                ctx->Rax = 0;
+                special_return_set = true;
+            } else if (readable_name == "sceAmprAprCommandBufferReadFile" ||
+                       func_name.find("mQ16-QdKv7k") != std::string::npos ||
+                       (Game::Current().title_id == "PPSA02100" && plt_index == 1883)) {
+                uint64_t cb = ctx->Rdi;
+                uint32_t file_id = static_cast<uint32_t>(ctx->Rcx);
+                void* dest_buf = reinterpret_cast<void*>(ctx->R8);
+                uint64_t size = static_cast<uint64_t>(ctx->R9);
+                uint64_t* rsp_ptr = reinterpret_cast<uint64_t*>(ctx->Rsp);
+                uint64_t file_offset = SafeReadable(rsp_ptr + 1, sizeof(uint64_t)) ? rsp_ptr[1] : 0;
+
+                if (ctx->Rsi && SafeWritable(reinterpret_cast<void*>(ctx->Rsi), 4)) {
+                    *reinterpret_cast<uint32_t*>(ctx->Rsi) = 0;
+                }
+                if (ctx->Rdx && SafeWritable(reinterpret_cast<void*>(ctx->Rdx), 4)) {
+                    *reinterpret_cast<uint32_t*>(ctx->Rdx) = 0;
+                }
+
+                std::lock_guard<std::mutex> lk(g_apr_mutex);
+                auto& st = g_apr_cb_map[cb];
+                st.pending_reads.push_back({ file_id, file_offset, size, dest_buf });
+                st.num_commands++;
+                st.current_offset += 0x20;
+
+                std::stringstream ss;
+                ss << "[APR] CommandBufferReadFile: cb=0x" << std::hex << cb
+                   << " id=" << std::dec << file_id
+                   << " offset=" << file_offset << " size=" << size
+                   << " dest=0x" << std::hex << reinterpret_cast<uint64_t>(dest_buf) << std::dec;
+                LOG_INFO(ss.str());
+
+                ctx->Rax = 0;
+                special_return_set = true;
+            } else if (readable_name == "sceAmprCommandBufferWriteKernelEventQueue_04_00" ||
+                       readable_name == "sceAmprCommandBufferWriteKernelEventQueueOnCompletion" ||
+                       func_name.find("H896Pt-yB4I") != std::string::npos ||
+                       func_name.find("o67gODLFpls") != std::string::npos ||
+                       (Game::Current().title_id == "PPSA02100" && plt_index == 1871)) {
+                uint64_t cb = ctx->Rdi;
+                uint64_t eq = ctx->Rsi;
+                int32_t ev_id = static_cast<int32_t>(ctx->Rdx);
+                uint64_t data = ctx->Rcx;
+                std::lock_guard<std::mutex> lk(g_apr_mutex);
+                auto& st = g_apr_cb_map[cb];
+                st.pending_events.push_back({ eq, ev_id, data });
+                st.num_commands++;
+                st.current_offset += 0x20;
+                std::stringstream wss;
+                wss << "[APR] WriteKernelEventQueue: cb=0x" << std::hex << cb
+                    << " eq=0x" << eq << " id=" << std::dec << ev_id << " data=0x" << std::hex << data << std::dec;
+                LOG_INFO(wss.str());
+                ctx->Rax = 0;
+                special_return_set = true;
+            } else if (readable_name == "sceKernelAprSubmitCommandBufferAndGetResult" ||
+                       readable_name == "sceKernelAprSubmitCommandBufferAndGetId" ||
+                       readable_name == "sceKernelAprSubmitCommandBuffer" ||
+                       func_name.find("ASoW5WE-UPo") != std::string::npos ||
+                       func_name.find("qvMUCyyaCSI") != std::string::npos ||
+                       func_name.find("eE4Szl8sil8") != std::string::npos ||
+                       (Game::Current().title_id == "PPSA02100" && plt_index == 1903)) {
+                uint64_t cb = ctx->Rdi;
+                const bool is_get_result = (readable_name.find("GetResult") != std::string::npos) ||
+                                           (func_name.find("ASoW5WE-UPo") != std::string::npos) ||
+                                           (Game::Current().title_id == "PPSA02100" && plt_index == 1903);
+                const bool is_get_id = (readable_name.find("GetId") != std::string::npos) ||
+                                       (func_name.find("qvMUCyyaCSI") != std::string::npos);
+
+                int32_t* result_ptr = is_get_result ? reinterpret_cast<int32_t*>(ctx->Rdx) : nullptr;
+                uint32_t* out_id_ptr = is_get_result ? reinterpret_cast<uint32_t*>(ctx->Rcx) :
+                                       (is_get_id ? reinterpret_cast<uint32_t*>(ctx->Rdx) : nullptr);
+
+                std::lock_guard<std::mutex> lk(g_apr_mutex);
+                auto& st = g_apr_cb_map[cb];
+                bool all_ok = true;
+                int32_t err_code = 0;
+                uint32_t err_cb_offset = 0;
+
+                for (size_t ri = 0; ri < st.pending_reads.size(); ++ri) {
+                    const auto& req = st.pending_reads[ri];
+                    auto fit = g_apr_files.find(req.file_id);
+                    if (fit == g_apr_files.end()) {
+                        LOG_ERROR("[APR] Submit: file_id " + std::to_string(req.file_id) + " NOT FOUND in g_apr_files!");
+                        all_ok = false;
+                        err_code = static_cast<int32_t>(0x80020002); // ENOENT
+                        err_cb_offset = static_cast<uint32_t>(ri * 0x20);
+                        break;
+                    }
+
+                    const std::string& host_path = fit->second.host_path;
+                    FILE* fp = fopen(host_path.c_str(), "rb");
+                    if (!fp) {
+                        LOG_ERROR("[APR] Submit: failed to open host file \"" + host_path + "\"");
+                        all_ok = false;
+                        err_code = static_cast<int32_t>(0x80020002);
+                        err_cb_offset = static_cast<uint32_t>(ri * 0x20);
+                        break;
+                    }
+
+                    if (_fseeki64(fp, static_cast<int64_t>(req.file_offset), SEEK_SET) != 0) {
+                        LOG_ERROR("[APR] Submit: _fseeki64 failed for offset " + std::to_string(req.file_offset));
+                        fclose(fp);
+                        all_ok = false;
+                        err_code = static_cast<int32_t>(0x80020016); // EINVAL
+                        err_cb_offset = static_cast<uint32_t>(ri * 0x20);
+                        break;
+                    }
+
+                    if (req.dest_buf) {
+                        size_t nread = fread(req.dest_buf, 1, req.size, fp);
+                        fclose(fp);
+                        std::stringstream ss;
+                        ss << "[APR] Submit: READ OK from \"" << host_path << "\" offset="
+                           << req.file_offset << " size=" << req.size << " read=" << nread
+                           << " dest=0x" << std::hex << reinterpret_cast<uint64_t>(req.dest_buf) << std::dec;
+                        LOG_INFO(ss.str());
+                    } else {
+                        fclose(fp);
+                        LOG_ERROR("[APR] Submit: dest buffer NULL for size " + std::to_string(req.size));
+                        all_ok = false;
+                        err_code = static_cast<int32_t>(0x8002000e); // EFAULT
+                        err_cb_offset = static_cast<uint32_t>(ri * 0x20);
+                        break;
+                    }
+                }
+
+                st.pending_reads.clear();
+
+                for (const auto& ev : st.pending_events) {
+                    if (ev.eq) {
+                        Libs::LibKernel::EventQueue::KernelTriggerUserEvent(
+                            reinterpret_cast<Libs::LibKernel::EventQueue::KernelEqueue>(ev.eq),
+                            ev.id, reinterpret_cast<void*>(ev.data));
+                    } else {
+                        Libs::LibKernel::EventQueue::KernelTriggerUserEventForAll(
+                            ev.id, reinterpret_cast<void*>(ev.data));
+                    }
+                    std::stringstream ess;
+                    ess << "[APR] Submit: Triggered event id=" << ev.id << " eq=0x" << std::hex << ev.eq << std::dec;
+                    LOG_INFO(ess.str());
+                }
+                st.pending_events.clear();
+
+                uint32_t cb_id = g_next_apr_cb_id.fetch_add(1, std::memory_order_relaxed);
+                if (out_id_ptr && SafeWritable(out_id_ptr, sizeof(uint32_t))) {
+                    *out_id_ptr = cb_id;
+                }
+                if (result_ptr && SafeWritable(result_ptr, sizeof(int32_t) * 2)) {
+                    result_ptr[0] = all_ok ? 0 : err_code;
+                    result_ptr[1] = all_ok ? 0 : err_cb_offset;
+                }
+
+                ctx->Rax = all_ok ? 0 : static_cast<uint64_t>(static_cast<int64_t>(err_code));
+                special_return_set = true;
+            } else if (readable_name == "sceKernelAprWaitCommandBuffer" ||
+                       func_name.find("rqwFKI4PAiM") != std::string::npos ||
+                       (Game::Current().title_id == "PPSA02100" && plt_index == 1904)) {
+                ctx->Rax = 0;
+                special_return_set = true;
+            } else if (readable_name.rfind("sceAmprMeasureCommandSize", 0) == 0) {
+                ctx->Rax = 0x20;
+                special_return_set = true;
+            } else if (readable_name == "abort") {
+                LOG_ERROR("[ABORT-HLE] abort() cagrildi! RIP=0x" + std::to_string(ctx->Rip));
+                ExitProcess(1);
             }
             // ========================================================
             // GERCEK THREAD YONETIMI (scePthreadCreate / scePthreadJoin)
@@ -8014,8 +9816,34 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 // sonucu beklemesin diye bittigini soyluyoruz.
                 ctx->Rax = 2;
                 special_return_set = true;
-            }
-            else if (readable_name == "scePthreadMutexInit" ||
+            } else if (readable_name == "scePthreadSelf" ||
+                       readable_name == "pthread_self" ||
+                       func_name.find("EotR8a3ASf4") != std::string::npos) {
+                uint64_t self_ptr = GetThreadTlsBase();
+                if (self_ptr == 0) {
+                    self_ptr = static_cast<uint64_t>(GetCurrentThreadId());
+                }
+                ctx->Rax = self_ptr;
+                special_return_set = true;
+            } else if (readable_name == "scePthreadMutexattrInit" ||
+                       readable_name == "pthread_mutexattr_init" ||
+                       readable_name == "scePthreadMutexattrSettype" ||
+                       readable_name == "pthread_mutexattr_settype" ||
+                       readable_name == "scePthreadMutexattrSetprotocol" ||
+                       readable_name == "pthread_mutexattr_setprotocol" ||
+                       readable_name == "scePthreadMutexattrDestroy" ||
+                       readable_name == "pthread_mutexattr_destroy" ||
+                       readable_name == "pthread_attr_init" ||
+                       readable_name == "scePthreadAttrInit" ||
+                       readable_name == "pthread_attr_setstacksize" ||
+                       readable_name == "scePthreadAttrSetstacksize" ||
+                       readable_name == "pthread_attr_setdetachstate" ||
+                       readable_name == "scePthreadAttrSetdetachstate" ||
+                       readable_name == "pthread_attr_destroy" ||
+                       readable_name == "scePthreadAttrDestroy") {
+                ctx->Rax = 0;
+                special_return_set = true;
+            } else if (readable_name == "scePthreadMutexInit" ||
                      readable_name == "pthread_mutex_init") {
                 GetOrCreateMutex(reinterpret_cast<uint64_t*>(ctx->Rdi));
                 ctx->Rax = 0;
@@ -8115,12 +9943,21 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 ctx->Rax = 0;
                 special_return_set = true;
             }
-            else if (readable_name == "scePthreadCreate") {
+            else if (readable_name == "scePthreadCreate" ||
+                     readable_name == "pthread_create" ||
+                     readable_name == "pthread_create_name_np" ||
+                     func_name.find("OxhIB8LB-PQ") != std::string::npos ||
+                     func_name.find("Jmi+9w9u0E4") != std::string::npos) {
                 // scePthreadCreate(ScePthread* thread, attr, entry, arg, name)
+                // pthread_create_name_np(pthread_t* thread, attr, entry, arg, name)
+                // pthread_create(pthread_t* thread, attr, entry, arg)
                 //   RDI=thread_out, RSI=attr, RDX=entry, RCX=arg, R8=name
                 uint64_t entry = ctx->Rdx;
                 uint64_t arg   = ctx->Rcx;
                 void** thread_out = reinterpret_cast<void**>(ctx->Rdi);
+                const char* th_name = (readable_name == "pthread_create" ? "unnamed" :
+                    (ctx->R8 && SafeReadable(reinterpret_cast<void*>(ctx->R8), 1) ?
+                        reinterpret_cast<const char*>(ctx->R8) : "unnamed"));
 
                 void* stub = BuildSysVTramp(entry, arg, 0, 0); // RDI=arg
                 HANDLE h = nullptr;
@@ -8145,27 +9982,67 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     g_last_activity = GetTickCount64();
                 }
                 if (thread_out != nullptr && SafeWritable(thread_out, sizeof(void*))) {
-                    *thread_out = reinterpret_cast<void*>(h); // ScePthread = Windows HANDLE
+                    *thread_out = reinterpret_cast<void*>(h); // ScePthread / pthread_t = Windows HANDLE
                 }
                 ctx->Rax = h ? 0 : static_cast<uint64_t>(-1LL);
                 special_return_set = true;
 
+                DWORD tid = h ? GetThreadId(h) : 0;
+                if (h && th_name && th_name[0]) {
+                    int wlen = MultiByteToWideChar(CP_UTF8, 0, th_name, -1, nullptr, 0);
+                    if (wlen > 0) {
+                        std::vector<wchar_t> wbuf(wlen);
+                        MultiByteToWideChar(CP_UTF8, 0, th_name, -1, wbuf.data(), wlen);
+                        SetThreadDescription(h, wbuf.data());
+                    }
+                }
+
                 std::stringstream pc_ss;
-                pc_ss << "[THREAD-HLE] scePthreadCreate: entry=0x" << std::hex << entry
+                pc_ss << "[THREAD-HLE] " << readable_name << ": entry=0x" << std::hex << entry
                       << " (RVA 0x" << (IsInModuleRange(entry) ? entry - g_base_addr : 0) << ")"
-                      << " arg=0x" << arg << " -> HANDLE=0x" << reinterpret_cast<uint64_t>(h) << std::dec;
+                      << " arg=0x" << arg << " name=\"" << th_name << "\" -> HANDLE=0x" << reinterpret_cast<uint64_t>(h)
+                      << " (TID=" << std::dec << tid << ")" << std::dec;
                 LOG_INFO(pc_ss.str());
-            } else if (readable_name == "scePthreadJoin") {
+            } else if (readable_name == "scePthreadJoin" ||
+                       readable_name == "pthread_join" ||
+                       func_name.find("h9CcP3J0oVM") != std::string::npos) {
                 // scePthreadJoin(ScePthread thread, void** value): RDI=thread(HANDLE)
                 HANDLE h = reinterpret_cast<HANDLE>(ctx->Rdi);
-                if (h != nullptr) {
-                    LOG_INFO("[THREAD-HLE] scePthreadJoin: worker thread bekleniyor (INFINITE)...");
-                    WaitForSingleObject(h, INFINITE);
-                    CloseHandle(h);
-                    LOG_INFO("[THREAD-HLE] scePthreadJoin: worker thread bitti.");
+                if (h != nullptr && h != INVALID_HANDLE_VALUE && h != reinterpret_cast<HANDLE>(-2LL)) {
+                    DWORD hflags = 0;
+                    if (GetHandleInformation(h, &hflags)) {
+                        LOG_INFO("[THREAD-HLE] pthread_join: worker thread bekleniyor (INFINITE)...");
+                        WaitForSingleObject(h, INFINITE);
+                        CloseHandle(h);
+                        LOG_INFO("[THREAD-HLE] pthread_join: worker thread bitti.");
+                    }
                 }
                 ctx->Rax = 0;
                 special_return_set = true;
+            } else if (readable_name == "pthread_detach" ||
+                       readable_name == "scePthreadDetach" ||
+                       func_name.find("+U1R4WtXvoc") != std::string::npos) {
+                HANDLE h = reinterpret_cast<HANDLE>(ctx->Rdi);
+                if (h != nullptr && h != INVALID_HANDLE_VALUE && h != reinterpret_cast<HANDLE>(-2LL)) {
+                    DWORD hflags = 0;
+                    if (GetHandleInformation(h, &hflags)) {
+                        CloseHandle(h);
+                    }
+                }
+                ctx->Rax = 0;
+                special_return_set = true;
+            } else if (readable_name == "pthread_equal" ||
+                       readable_name == "scePthreadEqual" ||
+                       func_name.find("7Xl257M4VNI") != std::string::npos) {
+                ctx->Rax = (ctx->Rdi == ctx->Rsi) ? 1 : 0;
+                special_return_set = true;
+            } else if (readable_name == "pthread_exit" ||
+                       readable_name == "scePthreadExit" ||
+                       (Game::Current().title_id == "PPSA02100" && plt_index == 1469) ||
+                       func_name.find("pthread_exit") != std::string::npos ||
+                       func_name.find("scePthreadExit") != std::string::npos) {
+                LOG_INFO("[THREAD-HLE] pthread_exit cagrisi: worker thread temiz sonlandiriliyor.");
+                ExitThread(0);
             }
             // ========================================================
             // TEMIZ CIKIS (exit / _Exit) - ud2 tuzagina dusmeyi onler
@@ -9453,6 +11330,9 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
 }
 
 DWORD WINAPI Core::ExecutionThread(LPVOID lpParam) {
+    PrecommitThreadStack(32);
+    ULONG guarantee = 512 * 1024; // 512KB
+    SetThreadStackGuarantee(&guarantee);
     g_game_tid = GetCurrentThreadId(); // PLT-TOP duvar saati olcumu icin
     // TLS blogunu/TEB slotunu misafir koda girmeden hazirla: fs:[0] komutlari
     // yamalandiktan sonra artik fault etmiyor, yani tembel kurulum yetmez.
@@ -9679,6 +11559,34 @@ DWORD WINAPI Core::ExecutionThread(LPVOID lpParam) {
     }
 
     // ================================================================
+    // ADIM 0.95: UE4 Bellek Yoneticisinin (FMallocBinned2) Erken Ilklenmesi
+    // ================================================================
+    // C++ global static constructor'lari (DT_INIT_ARRAY icindeki ornegin RVA
+    // 0x49c8605) henuz main() cagrilmadan once FMemory::Malloc cagirir.
+    // Oysa GMalloc (0x7d56ca8) normalde main() icindeki 0x7ca3 tarafindan
+    // 0x1223020 (FMallocBinned2::Init) cagrisi ile ilklendirilir.
+    // GMalloc baslatilmadiginda [0x7dd54d8] NULL kalir ve constructor 
+    // icindeki ilk tahsis RVA 0x12d512c'de null pointer dereference ile coker.
+    // 0x1223020 fonksiyonunun basinda idempotency (tek sefer calisma) korumasi
+    // (0x7d55060 bayragi) bulundugu icin onu burada bir kez calistirmak
+    // hem static initializer'larin calismasini saglar hem de sonradan main()
+    // icinden cagrildiginda hicbir yan etki uretmeden aninda doner.
+    if (Game::Current().title_id == "PPSA02100") {
+        uint64_t malloc_init_addr = g_base_addr + 0x1223020;
+        void* malloc_init_tramp = BuildSysVTrampoline(malloc_init_addr, 0, 0, 0);
+        std::stringstream ms;
+        ms << "[ADIM 0.95] FMallocBinned2::Init() cagriliyor: 0x" << std::hex << malloc_init_addr << std::dec;
+        LOG_INFO(ms.str());
+        TrampolineFunc malloc_fn = reinterpret_cast<TrampolineFunc>(malloc_init_tramp);
+        malloc_fn();
+        uint64_t* p_gmalloc = reinterpret_cast<uint64_t*>(g_base_addr + 0x7d56ca8);
+        std::stringstream ms2;
+        ms2 << "[ADIM 0.95] FMallocBinned2::Init() tamamlandi! GMalloc (0x7d56ca8) = 0x"
+            << std::hex << (p_gmalloc ? *p_gmalloc : 0) << std::dec;
+        LOG_INFO(ms2.str());
+    }
+
+    // ================================================================
     // ADIM 1: Oyunun (module_start) System V ABI ile Baslatilmasi
     // ================================================================
     // ================================================================
@@ -9791,6 +11699,57 @@ DWORD WINAPI Core::ExecutionThread(LPVOID lpParam) {
 
     LOG_INFO("Execution Thread sonlandi.");
     return 0;
+}
+
+// PS5 misafir sanal bellek alanini (0x1000000000..0x9000000000 = 512 GB)
+// hicbir thread acilmadan ve ELF yuklenmeden ONCE rezerve eder.
+// Boylece Windows, thread stack'lerini bu araliga koyamaz; BatchMap ile
+// yapilan DirectMemory haritalamalari stack'leri ezemez.
+static uint64_t g_guest_virtual_reserved_base = 0;
+static uint64_t g_guest_virtual_reserved_size = 0;
+
+void Core::PreReserveVirtualAddressSpace() {
+    const uint64_t kDesiredBase = 0x1000000000ULL; // 64 GB
+    const uint64_t kDesiredSize = 0x8000000000ULL; // 512 GB
+
+    // Once tam 512 GB'lik rezervasyonu dene
+    void* p = VirtualAlloc(reinterpret_cast<void*>(kDesiredBase), kDesiredSize, MEM_RESERVE, PAGE_NOACCESS);
+    if (p != nullptr) {
+        g_guest_virtual_reserved_base = reinterpret_cast<uint64_t>(p);
+        g_guest_virtual_reserved_size = kDesiredSize;
+    } else {
+        // Eger 512 GB tek parca sigmadiysa, 0x1000000000'dan baslayan en buyuk bitisik serbest blogu bul ve rezerve et
+        MEMORY_BASIC_INFORMATION mbi;
+        uint64_t cur = kDesiredBase;
+        while (cur < kDesiredBase + kDesiredSize) {
+            if (VirtualQuery(reinterpret_cast<void*>(cur), &mbi, sizeof(mbi))) {
+                if (mbi.State != MEM_FREE) {
+                    break;
+                }
+                cur = reinterpret_cast<uint64_t>(mbi.BaseAddress) + mbi.RegionSize;
+            } else {
+                break;
+            }
+        }
+        uint64_t free_sz = cur - kDesiredBase;
+        if (free_sz >= (32ULL * 1024 * 1024 * 1024)) { // en az 32 GB olmali
+            p = VirtualAlloc(reinterpret_cast<void*>(kDesiredBase), free_sz, MEM_RESERVE, PAGE_NOACCESS);
+            if (p != nullptr) {
+                g_guest_virtual_reserved_base = reinterpret_cast<uint64_t>(p);
+                g_guest_virtual_reserved_size = free_sz;
+            }
+        }
+    }
+
+    if (g_guest_virtual_reserved_base != 0) {
+        std::stringstream ss;
+        ss << "[MEMORY] Misafir sanal adres alani rezerve edildi: 0x" << std::hex
+           << g_guest_virtual_reserved_base << " (boyut: " << std::dec
+           << (g_guest_virtual_reserved_size / (1024 * 1024 * 1024)) << " GB)";
+        LOG_INFO(ss.str());
+    } else {
+        LOG_ERROR("[MEMORY] Misafir sanal adres alani 0x1000000000 rezerve EDILEMEDI!");
+    }
 }
 
 void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t text_size, uint64_t original_entry, uint64_t procparam_vaddr,
@@ -10302,12 +12261,12 @@ void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t tex
     LOG_INFO("[TANI] StartExecution (main/loader) thread TID=" + std::to_string(GetCurrentThreadId()));
     DWORD gameThreadId = 0;
     HANDLE hThread = CreateThread(
-        NULL,                   // default security attributes
-        0,                      // use default stack size
-        ExecutionThread,        // thread function name
+        NULL,                                  // default security attributes
+        64ull * 1024 * 1024,                   // 64 MB stack reserve (PS5 / UE4 deep call stack)
+        ExecutionThread,                       // thread function name
         reinterpret_cast<LPVOID>(entry_point), // argument to thread function
-        0,                      // use default creation flags
-        &gameThreadId);         // returns the thread identifier
+        STACK_SIZE_PARAM_IS_A_RESERVATION,     // use stack size as reservation
+        &gameThreadId);                        // returns the thread identifier
 
     if (hThread == NULL) {
         LOG_ERROR("Oyun Thread'i baslatilamadi!");

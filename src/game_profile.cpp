@@ -1,4 +1,4 @@
-﻿#include "game_profile.h"
+#include "game_profile.h"
 
 #include "logger.h"
 
@@ -85,8 +85,11 @@ void InitProfile(const std::string& eboot_path) {
 		g_current.quirk_rva_diagnostics               = true;
 	} else if (id == "PPSA21564") {
 		g_current.name = "Astro Bot";
-		// Henuz oyuna ozel duzeltme yok - hepsi kapali. Dreaming Sarah'in
-		// adres bagimli yamalari BURAYA UYGULANMAZ.
+		g_current.quirk_astro_animation_args_null_safe = true;
+	} else if (id == "PPSA02100") {
+		g_current.name = "Stray";
+		g_current.quirk_stray_ue4_bypass_game_prefix = true;
+		g_current.quirk_stray_ue4_file_version_fix = true;
 	} else {
 		g_current.name = id.empty() ? "bilinmeyen oyun" : ("taninmayan: " + id);
 	}
@@ -97,8 +100,12 @@ void InitProfile(const std::string& eboot_path) {
 	  << (g_current.quirk_c2_type_registration_overflow ? "tip-kayit " : "")
 	  << (g_current.quirk_texture_meta_recover ? "texture-meta " : "")
 	  << (g_current.quirk_rva_diagnostics ? "rva-tani " : "")
+	  << (g_current.quirk_astro_animation_args_null_safe ? "astro-anim-args " : "")
+	  << (g_current.quirk_stray_ue4_bypass_game_prefix ? "stray-ue4-gameprefix " : "")
+	  << (g_current.quirk_stray_ue4_file_version_fix ? "stray-ue4-fileversion " : "")
 	  << (g_current.quirk_c2_type_registration_overflow || g_current.quirk_texture_meta_recover ||
-	              g_current.quirk_rva_diagnostics
+	              g_current.quirk_rva_diagnostics || g_current.quirk_astro_animation_args_null_safe ||
+	              g_current.quirk_stray_ue4_bypass_game_prefix || g_current.quirk_stray_ue4_file_version_fix
 	          ? ""
 	          : "YOK (guvenli varsayilan)")
 	  << " | kayit klasoru: " << g_current.savedata_root;

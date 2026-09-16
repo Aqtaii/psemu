@@ -243,6 +243,13 @@ struct VideoOutInfo {
 	bool                bgra16            = false;
 };
 
+[[nodiscard]] inline ColorImageTransferInfo
+MakeColorImageTransferInfo(const VideoOutInfo& info) noexcept {
+	return {
+	    info.address,           info.size,      info.format, info.width, info.height, info.pitch,
+	    info.bytes_per_element, info.tile_mode, 1};
+}
+
 [[nodiscard]] inline VideoOutCompression
 ClassifyVideoOutCompression(bool compressed, uint64_t metadata_address, uint32_t dcc_control,
                             uint64_t dcc_clear_color) noexcept {
@@ -1025,7 +1032,7 @@ ClassifyStorageImageOverlap(uint64_t requested_address, uint64_t requested_size,
 	//
 	// VideoOut BILEREK disarida: RetireImages onu emekliye ayirmayi kabul
 	// etmiyor, izin vermek sessizce degil gurultuyle patlardi.
-	if (same_context && !gpu_modified && !buffer_modified && !tracker_gpu_modified) {
+	if (same_context && !gpu_modified && !tracker_gpu_modified) {
 		if (sampled) {
 			return StorageImageOverlap::RetireSampled;
 		}

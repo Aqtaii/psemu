@@ -1,6 +1,7 @@
 #include "graphics/shader/recompiler/SrtWalker.h"
 
 #include "graphics/shader/recompiler/ScalarProvenance.h"
+#include "graphics/host_gpu/hostMemory.h"
 
 #include <algorithm>
 #include <cstring>
@@ -10,6 +11,14 @@ namespace Libs::Graphics::ShaderRecompiler::IR {
 namespace {
 
 constexpr uint64_t AddressMask = 0x0000ffffffffffffull;
+
+static bool DescriptorToleranceEnabled() {
+	static const bool enabled = [] {
+		const char* env = std::getenv("PSEMU_DESC_TOLERE");
+		return env != nullptr && env[0] == '1';
+	}();
+	return enabled;
+}
 
 const char* StageName(ShaderType stage) {
 	switch (stage) {
@@ -88,6 +97,19 @@ bool ApplyOperation(ScalarValueOp op, const uint32_t args[3], uint32_t* result) 
 			const auto value = ((uint64_t {1} << count) - 1u) << (args[1] & 63u);
 			*result = op == ScalarValueOp::BitFieldMaskU64Low ? static_cast<uint32_t>(value)
 			                                                  : static_cast<uint32_t>(value >> 32u);
+			break;
+		}
+		case ScalarValueOp::ShiftLeftU64Low:
+		case ScalarValueOp::ShiftLeftU64High: {
+			const uint64_t val     = (static_cast<uint64_t>(args[1]) << 32u) | args[0];
+			const auto     shift64 = args[2] & 63u;
+			const auto     value   = shift64 < 64u ? (val << shift64) : 0u;
+			*result = op == ScalarValueOp::ShiftLeftU64Low ? static_cast<uint32_t>(value)
+			                                               : static_cast<uint32_t>(value >> 32u);
+			break;
+		}
+		case ScalarValueOp::BitSet: {
+			*result = args[0] | (1u << (args[1] & 31u));
 			break;
 		}
 		case ScalarValueOp::Add3: *result = args[0] + args[1] + args[2]; break;
@@ -297,6 +319,9 @@ private:
 			return true;
 		}
 		if (m_state[id] == 1) {
+			if (DescriptorToleranceEnabled()) {
+				return true;
+			}
 			return Fail(use_pc, error, fmt::format("cyclic scalar value {}", id));
 		}
 		m_state[id]       = 1;
@@ -350,6 +375,10 @@ public:
 			return true;
 		}
 		if (m_state[id] == 1) {
+			if (DescriptorToleranceEnabled()) {
+				result = 0;
+				return true;
+			}
 			return Fail(error, fmt::format("cyclic scalar value {}", id));
 		}
 		m_state[id]       = 1;
@@ -486,12 +515,30 @@ private:
 				                        value.pc, base_aligned, relative));
 			}
 		}
-		if (m_runtime.read_memory != nullptr &&
-		    !m_runtime.read_memory(m_runtime.userdata, address, result)) {
-			return Fail(
-			    error, fmt::format("ReadConst pc=0x{:08x} failed at 0x{:016x}", value.pc, address));
-		}
-		if (m_runtime.read_memory == nullptr) {
+		if (m_runtime.read_memory != nullptr) {
+			if (!m_runtime.read_memory(m_runtime.userdata, address, result)) {
+				if (DescriptorToleranceEnabled()) {
+					*result = 0;
+					return true;
+				}
+				return Fail(
+				    error, fmt::format("ReadConst pc=0x{:08x} failed at 0x{:016x}", value.pc, address));
+			}
+		} else {
+			if (!Libs::Graphics::HostMemoryRangeIsReadable(address, sizeof(*result))) {
+				if (DescriptorToleranceEnabled()) {
+					static std::atomic<uint32_t> s_n_unmapped {0};
+					if (s_n_unmapped.fetch_add(1) < 16) {
+						std::printf("[READCONST-TOLERE] pc=0x%08x adresi eslenmemis (0x%016llx), 0 donuluyor\n",
+						            value.pc, static_cast<unsigned long long>(address));
+						std::fflush(stdout);
+					}
+					*result = 0;
+					return true;
+				}
+				return Fail(
+				    error, fmt::format("ReadConst pc=0x{:08x} unmapped address 0x{:016x}", value.pc, address));
+			}
 			std::memcpy(result, reinterpret_cast<const void*>(address), sizeof(*result));
 		}
 		// TANI (Mesh): SRT yurutucusu descriptor bekledigi yerde viewport
@@ -603,6 +650,23 @@ static bool EvaluateRuntimeSourcesImpl(const Program&                           
 		              request.source) != program.srt.dynamic_sources.end();
 		if (descriptor == nullptr || dynamic ||
 		    !DescriptorSourceResolved(program, request.source)) {
+			static const bool tol = [] {
+				const char* e = std::getenv("PSEMU_DESC_TOLERE");
+				return e != nullptr && e[0] == '1';
+			}();
+			if (tol && descriptor != nullptr) {
+				DescriptorValue fallback = *descriptor;
+				evaluator.SetUsePc(request.use_pc);
+				for (uint32_t i = 0; i < descriptor->dword_count; i++) {
+					uint32_t val = 0;
+					if (!evaluator.Evaluate(descriptor->dwords[i], val, nullptr)) {
+						val = 0;
+					}
+					fallback.dwords[i] = val;
+				}
+				evaluated.push_back(fallback);
+				continue;
+			}
 			if (error != nullptr) {
 				*error = Diagnostic(program, request.use_pc,
 				                    fmt::format("descriptor source {} is {}", request.source,

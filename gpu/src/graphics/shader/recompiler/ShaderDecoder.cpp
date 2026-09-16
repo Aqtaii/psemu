@@ -914,6 +914,7 @@ std::string OpcodeToString(Opcode opcode) {
 		case Opcode::ImageGetResinfo: return "image_get_resinfo";
 		case Opcode::ImageGetLod: return "image_get_lod";
 		case Opcode::ImageBvhIntersectRay: return "image_bvh_intersect_ray";
+		case Opcode::ImageBvh64IntersectRay: return "image_bvh64_intersect_ray";
 		case Opcode::ImageLoad: return "image_load";
 		case Opcode::ImageLoadMip: return "image_load_mip";
 		case Opcode::ImageStore: return "image_store";
@@ -1093,7 +1094,8 @@ std::string InstructionToString(const Instruction& inst) {
 		case Opcode::ImageGather4CO:
 		case Opcode::ImageGather4CLzO:
 		case Opcode::ImageGather4H:
-		case Opcode::ImageBvhIntersectRay: return WithUnsupportedReason(inst, FormatMimg(inst));
+		case Opcode::ImageBvhIntersectRay:
+		case Opcode::ImageBvh64IntersectRay: return WithUnsupportedReason(inst, FormatMimg(inst));
 		case Opcode::SLoadDword:
 		case Opcode::SLoadDwordx2:
 		case Opcode::SLoadDwordx4:

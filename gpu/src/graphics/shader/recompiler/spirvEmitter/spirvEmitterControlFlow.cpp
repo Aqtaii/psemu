@@ -438,6 +438,12 @@ void EmitRegisterVariables(EmitterState* state) {
 	if (state->pixel_valid_mask_variable != 0) {
 		state->builder.AddFunction({OpVariable, state->ptr_func_uint,
 		                            state->pixel_valid_mask_variable, StorageClassFunction});
+	}
+	for (const auto& [inst, entry]: state->indexed_vector_arrays) {
+		state->builder.AddFunction(
+		    {OpVariable, entry.ptr_type, entry.variable_id, StorageClassFunction});
+	}
+	if (state->pixel_valid_mask_variable != 0) {
 		state->builder.AddFunction(
 		    {OpStore, state->pixel_valid_mask_variable, ConstantU32(state, 1)});
 	}

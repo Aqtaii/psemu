@@ -48,6 +48,7 @@ struct CompileOptions {
 	// kullaniyor, emitter'in varsayilan 1024 dword'u (4096 bayt) YETMIYOR -
 	// her erisim sinir disi, sonuc ErrorDeviceLost.
 	uint32_t mesh_lds_dwords        = 0;
+	bool     lower_wide_movrels     = false;
 };
 
 struct CompileResult {

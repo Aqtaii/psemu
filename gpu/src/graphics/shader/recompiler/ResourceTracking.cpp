@@ -1,6 +1,7 @@
 #include "graphics/shader/recompiler/ResourceTracking.h"
 
 #include "graphics/shader/recompiler/ScalarProvenance.h"
+#include "loader/systemContent.h"
 
 #include <algorithm>
 #include <fmt/format.h>
@@ -228,7 +229,131 @@ private:
 		return on;
 	}
 
-	bool ValidateSource(uint32_t source, uint32_t dwords, uint32_t pc, std::string* error) const {
+	static bool IsAstroBot() {
+		static const bool is_astro = [] {
+			std::string id;
+			return Loader::SystemContentParamSfoGetString("TITLE_ID", &id) && id == "PPSA21564";
+		}();
+		return is_astro;
+	}
+
+	uint32_t ResolveInvariantPhi(uint32_t id) const {
+		if (id <= ScalarProvenance::Unknown || id >= m_program.provenance.values.size()) {
+			return id;
+		}
+		const auto& val = m_program.provenance.values[id];
+		if (val.op != ScalarValueOp::Phi) {
+			return id;
+		}
+		uint32_t invariant = ScalarProvenance::Undefined;
+		std::vector<uint32_t> pending {id};
+		std::vector<uint8_t> visited(m_program.provenance.values.size(), 0);
+		while (!pending.empty()) {
+			const uint32_t cur = pending.back();
+			pending.pop_back();
+			if (cur <= ScalarProvenance::Unknown || cur >= m_program.provenance.values.size()) {
+				return cur;
+			}
+			const auto& cur_val = m_program.provenance.values[cur];
+			if (cur_val.op == ScalarValueOp::Phi) {
+				if (visited[cur]) continue;
+				visited[cur] = 1;
+				for (const auto arg : cur_val.phi_args) {
+					pending.push_back(arg);
+				}
+				continue;
+			}
+			if (invariant == ScalarProvenance::Undefined) {
+				invariant = cur;
+			} else if (invariant != cur) {
+				const auto& inv_val = m_program.provenance.values[invariant];
+				if (inv_val.op == ScalarValueOp::Constant && cur_val.op == ScalarValueOp::Constant &&
+				    inv_val.imm == cur_val.imm) {
+					continue;
+				}
+				return ScalarProvenance::Unknown;
+			}
+		}
+		return invariant;
+	}
+
+	bool CollapseNullPhi(uint32_t id, uint32_t& loaded) const {
+		if (id <= ScalarProvenance::Unknown || id >= m_program.provenance.values.size()) {
+			return false;
+		}
+		const auto& val = m_program.provenance.values[id];
+		if (val.op != ScalarValueOp::Phi || val.phi_args.empty()) {
+			return false;
+		}
+		uint32_t merged = ScalarProvenance::Undefined;
+		bool has_null = false;
+		for (const auto arg : val.phi_args) {
+			const uint32_t resolved = ResolveInvariantPhi(arg);
+			bool is_null = (resolved == ScalarProvenance::Undefined);
+			if (!is_null && resolved < m_program.provenance.values.size() &&
+			    m_program.provenance.values[resolved].op == ScalarValueOp::Constant &&
+			    m_program.provenance.values[resolved].imm == 0) {
+				is_null = true;
+			}
+			if (is_null) {
+				has_null = true;
+				continue;
+			}
+			if (resolved <= ScalarProvenance::Unknown) {
+				return false;
+			}
+			if (merged == ScalarProvenance::Undefined) {
+				merged = resolved;
+			} else if (merged != resolved) {
+				const auto& m_val = m_program.provenance.values[merged];
+				const auto& r_val = m_program.provenance.values[resolved];
+				if (m_val.op == ScalarValueOp::Constant && r_val.op == ScalarValueOp::Constant &&
+				    m_val.imm == r_val.imm) {
+					continue;
+				}
+				return false;
+			}
+		}
+		if (!has_null || merged == ScalarProvenance::Undefined) {
+			return false;
+		}
+		loaded = merged;
+		return true;
+	}
+
+	void CollapseNullDescriptorPaths(uint32_t source, uint32_t width) const {
+		if (source < 2 || source - 2 >= m_program.provenance.descriptors.size()) {
+			return;
+		}
+		auto& desc = m_program.provenance.descriptors[source - 2];
+		std::array<uint32_t, 8> collapsed {};
+		bool rewritten = false;
+		for (uint32_t i = 0; i < width && i < desc.dword_count; i++) {
+			collapsed[i] = desc.dwords[i];
+			const uint32_t inv = ResolveInvariantPhi(desc.dwords[i]);
+			if (inv > ScalarProvenance::Unknown) {
+				continue;
+			}
+			uint32_t loaded = 0;
+			if (CollapseNullPhi(desc.dwords[i], loaded)) {
+				collapsed[i] = loaded;
+				rewritten = true;
+			}
+		}
+		if (rewritten) {
+			for (uint32_t i = 0; i < width && i < desc.dword_count; i++) {
+				desc.dwords[i] = collapsed[i];
+			}
+			std::printf("[DESC-COLLAPSE] source=%u null-phi dword'lar cozumlendi ve guncellendi\n", source);
+			std::fflush(stdout);
+		}
+	}
+
+	bool ValidateSource(uint32_t source, uint32_t dwords, uint32_t pc, std::string* error,
+	                    bool is_sampler = false) const {
+		if (IsAstroBot()) {
+			CollapseNullDescriptorPaths(source, dwords);
+		}
 		const auto* descriptor = GetDescriptorSource(m_program, source);
 		if (descriptor == nullptr || descriptor->dword_count != dwords) {
 			return Fail(pc, error,
@@ -238,6 +363,12 @@ private:
 		for (uint32_t i = 0; i < descriptor->dword_count; i++) {
 			std::vector<uint32_t> path;
 			if (ContainsUnknown(m_program.provenance, descriptor->dwords[i], &visited, &path)) {
+				if (is_sampler && dwords == 4 && i >= 2 && IsAstroBot()) {
+					if (source >= 2 && source - 2 < m_program.provenance.descriptors.size()) {
+						m_program.provenance.descriptors[source - 2].dwords[i] = 0;
+					}
+					continue;
+				}
 				const auto  value = descriptor->dwords[i];
 				std::string chain;
 				for (const auto id: path) {
@@ -264,29 +395,39 @@ private:
 		    std::find(m_program.srt.dynamic_sources.begin(), m_program.srt.dynamic_sources.end(),
 		              source) != m_program.srt.dynamic_sources.end();
 		if (dynamic && !IsLoopInvariantDescriptor(m_program.provenance, *descriptor)) {
-			std::string detail;
-			for (uint32_t i = 0; i < descriptor->dword_count; i++) {
-				const auto id = descriptor->dwords[i];
-				detail +=
-				    fmt::format(" d{}={}({})", i, id,
-				                id < m_program.provenance.values.size()
-				                    ? static_cast<uint32_t>(m_program.provenance.values[id].op)
-				                    : UINT32_MAX);
-				if (id < m_program.provenance.values.size()) {
-					for (const auto arg: m_program.provenance.values[id].phi_args) {
-						detail += fmt::format(
-						    "/{}({})", arg,
-						    arg < m_program.provenance.values.size()
-						        ? static_cast<uint32_t>(m_program.provenance.values[arg].op)
-						        : UINT32_MAX);
+			if (is_sampler && dwords == 4 && IsAstroBot()) {
+				// Astro Bot sampler selection can be handled via first arm
+			} else if (DescriptorToleranceEnabled()) {
+				std::printf("[DESC-TOLERE] KAPI-3 asildi: source=%u dongu-degismez degil\n", source);
+				std::fflush(stdout);
+			} else {
+				std::string detail;
+				for (uint32_t i = 0; i < descriptor->dword_count; i++) {
+					const auto id = descriptor->dwords[i];
+					detail +=
+					    fmt::format(" d{}={}({})", i, id,
+					                id < m_program.provenance.values.size()
+					                    ? static_cast<uint32_t>(m_program.provenance.values[id].op)
+					                    : UINT32_MAX);
+					if (id < m_program.provenance.values.size()) {
+						for (const auto arg: m_program.provenance.values[id].phi_args) {
+							detail += fmt::format(
+							    "/{}({})", arg,
+							    arg < m_program.provenance.values.size()
+							        ? static_cast<uint32_t>(m_program.provenance.values[arg].op)
+							        : UINT32_MAX);
+						}
 					}
 				}
+				return Fail(pc, error,
+				            fmt::format("descriptor source {} requires unsupported GPU selection{}",
+				                        source, detail));
 			}
-			return Fail(pc, error,
-			            fmt::format("descriptor source {} requires unsupported GPU selection{}",
-			                        source, detail));
 		}
 		if (!DescriptorSourceResolved(m_program, source) && !dynamic) {
+			if (is_sampler && dwords == 4 && IsAstroBot()) {
+				return true;
+			}
 			if (DescriptorToleranceEnabled()) {
 				std::printf("[DESC-TOLERE] KAPI-2 asildi: source=%u cozulemedi\n", source);
 				std::fflush(stdout);
@@ -496,8 +637,28 @@ private:
 		if (!IsBuffer(*inst) && !IsImage(*inst)) {
 			return true;
 		}
-		if (!ValidateSource(inst->memory.resource_source, IsBuffer(*inst) ? 4u : 8u, inst->pc,
-		                    error)) {
+		if (IsBuffer(*inst)) {
+			std::string buffer_error;
+			if (!ValidateSource(inst->memory.resource_source, 4u, inst->pc, &buffer_error)) {
+				static const bool strict = [] {
+					const char* e = std::getenv("PSEMU_SRT_STRICT");
+					return e != nullptr && e[0] == '1';
+				}();
+				if (strict) {
+					if (error != nullptr) {
+						*error = std::move(buffer_error);
+					}
+					return false;
+				}
+				static std::atomic<uint32_t> s_n {0};
+				if (s_n.fetch_add(1) < 16) {
+					std::printf("[SRT-TAMPON-TOLERE] tampon kaynagi cozulemedi, temelsiz sayilip devam ediliyor (pc=0x%08x) %s\n",
+					            inst->pc, buffer_error.c_str());
+					std::fflush(stdout);
+				}
+				inst->memory.resource_source = ScalarProvenance::Unknown;
+			}
+		} else if (!ValidateSource(inst->memory.resource_source, 8u, inst->pc, error)) {
 			return false;
 		}
 		Patch patch;
@@ -509,7 +670,7 @@ private:
 			                            : "image resource limit exceeded");
 		}
 		if (NeedsSampler(inst->op)) {
-			if (!ValidateSource(inst->memory.sampler_source, 4, inst->pc, error)) {
+			if (!ValidateSource(inst->memory.sampler_source, 4, inst->pc, error, true)) {
 				return false;
 			}
 			patch.sampler = AddSampler(*inst);

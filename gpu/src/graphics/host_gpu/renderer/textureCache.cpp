@@ -1,4 +1,4 @@
-﻿#include "graphics/host_gpu/renderer/textureCache.h"
+#include "graphics/host_gpu/renderer/textureCache.h"
 
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -493,14 +493,17 @@ struct TextureCache::ReadbackWorker {
 	}
 
 	[[nodiscard]] ReadbackRange DownloadColorImage(CachedImage& cached) {
-		const bool storage = cached.kind == CachedImage::Kind::StorageTexture;
-		const bool target  = cached.kind == CachedImage::Kind::RenderTarget;
+		const bool storage    = cached.kind == CachedImage::Kind::StorageTexture;
+		const bool target     = cached.kind == CachedImage::Kind::RenderTarget;
+		const bool video_out  = cached.kind == CachedImage::Kind::VideoOut;
 		const auto info =
 		    storage ? MakeColorImageTransferInfo(cached.info, VulkanFormat(cached.info.format),
 		                                         Prospero::NumBytesPerElement(cached.info.format))
-		            : MakeColorImageTransferInfo(cached.target);
+		            : (video_out ? MakeColorImageTransferInfo(cached.video_out)
+		                         : MakeColorImageTransferInfo(cached.target));
 		const bool linear = info.tile_mode == Prospero::GpuEnumValue(Prospero::TileMode::kLinear);
-		const bool tiled_target = target && IsTiledRenderTarget(cached.target);
+		const bool tiled_target = (target && IsTiledRenderTarget(cached.target)) ||
+		                          (video_out && info.tile_mode == Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget));
 		const bool tiled_storage =
 		    storage && info.tile_mode == Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget);
 		// DERINLIK doseli depolama dokusu: oyun ceyrek cozunurluklu compute
@@ -621,7 +624,9 @@ struct TextureCache::ReadbackWorker {
 			    selected != nullptr && selected->kind == CachedImage::Kind::StorageTexture;
 			const bool depth_target =
 			    selected != nullptr && selected->kind == CachedImage::Kind::DepthTarget;
-			if ((!render_target && !storage_texture && !depth_target) || !selected->gpu_modified ||
+			const bool video_out =
+			    selected != nullptr && selected->kind == CachedImage::Kind::VideoOut;
+			if ((!render_target && !storage_texture && !depth_target && !video_out) || !selected->gpu_modified ||
 			    selected->buffer_modified || selected->ctx == nullptr ||
 			    selected->image == nullptr) {
 				EXIT("TextureCache: unsupported GPU image readback owner, addr=0x%016" PRIx64
@@ -2712,14 +2717,13 @@ TextureCache::RegisterVideoOutSurfaces(GraphicContext*                  ctx,
 		if (info.compression == VideoOutCompression::Uncompressed) {
 			m_memory_tracker.ForEachUploadRange(
 			    info.address, info.size, false, [](uint64_t, uint64_t) noexcept {},
-			    [&]() noexcept {
-				    printf("[TC-MARK] UploadVideoOut ICINE girildi\n");
-				    fflush(stdout);
-				    ImageOps::UploadVideoOut(ctx, static_cast<VideoOutVulkanImage*>(cached->image),
-				                             info, false);
-				    printf("[TC-MARK] UploadVideoOut DONDU\n");
-				    fflush(stdout);
-			    });
+			    []() noexcept {});
+			printf("[TC-MARK] UploadVideoOut ICINE girildi\n");
+			fflush(stdout);
+			ImageOps::UploadVideoOut(ctx, static_cast<VideoOutVulkanImage*>(cached->image),
+			                         info, false);
+			printf("[TC-MARK] UploadVideoOut DONDU\n");
+			fflush(stdout);
 		} else {
 			// A compressed guest surface cannot be decoded without its DCC metadata. Establish the
 			// normal tracked range, but leave the shared native image to be initialized by a GPU
@@ -2844,6 +2848,11 @@ void TextureCache::RefreshVideoOut(VideoOutVulkanImage* image, bool render_targe
 		     " image_dirty=%d buffer_dirty=%d render_target=%d\n",
 		     info.address, info.size, image_dirty, buffer_dirty, render_target);
 	}
+	if (image_dirty || buffer_dirty) {
+		FaultSafeTextureLock lock(this, m_lock);
+		m_memory_tracker.ForEachDownloadRange<true>(info.address, info.size, [](uint64_t, uint64_t) noexcept {});
+		cached.gpu_modified = false;
+	}
 	if (buffer_dirty) {
 		PsemuLogImageSourceRequest("RefreshVideoOut", info);
 		const auto source = m_buffer_cache.ObtainBufferForImage(info.address, info.size);
@@ -2858,7 +2867,8 @@ void TextureCache::RefreshVideoOut(VideoOutVulkanImage* image, bool render_targe
 	}
 	m_memory_tracker.ForEachUploadRange(
 	    info.address, info.size, false, [](uint64_t, uint64_t) noexcept {},
-	    [&]() noexcept { ImageOps::UploadVideoOut(cached.ctx, image, info, true); });
+	    []() noexcept {});
+	ImageOps::UploadVideoOut(cached.ctx, image, info, true);
 }
 
 void TextureCache::UnregisterVideoOutSurfaces(const std::vector<VideoOutVulkanImage*>& images) {

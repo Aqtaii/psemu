@@ -265,8 +265,9 @@ void EmitMaskedBitCountU32(EmitterState* state, const IR::Instruction& inst, uin
 
 			state->builder.AddFunction(
 			    {OpINotEqual, state->bool_type, cond, bits, ConstantU32(state, 0)});
+			const auto active_cond = EmitMaskHelperInvocations(state, cond);
 			state->builder.AddFunction({OpGroupNonUniformBallot, state->vec4_uint_type, ballot,
-			                            ConstantU32(state, ScopeSubgroup), cond});
+			                            ConstantU32(state, ScopeSubgroup), active_cond});
 			state->builder.AddFunction({OpGroupNonUniformBallotBitCount, state->uint_type, count,
 			                            ConstantU32(state, ScopeSubgroup),
 			                            ConstantU32(state, GroupOperationExclusiveScan), ballot});
@@ -649,8 +650,9 @@ void EmitLaneMaskPairFromBool(EmitterState* state, const IR::Operand& dst, uint3
 		return;
 	}
 	const auto ballot = state->builder.AllocateId();
+	const auto live_mask = EmitMaskHelperInvocations(state, write_mask);
 	state->builder.AddFunction({OpGroupNonUniformBallot, state->vec4_uint_type, ballot,
-	                            ConstantU32(state, ScopeSubgroup), write_mask});
+	                            ConstantU32(state, ScopeSubgroup), live_mask});
 	for (uint32_t part = 0; part < 2u; part++) {
 		uint32_t result = ConstantU32(state, 0);
 		if (state->wave_size != 32u || part == 0u) {

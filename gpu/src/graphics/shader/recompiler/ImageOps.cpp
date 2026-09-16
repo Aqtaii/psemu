@@ -272,6 +272,7 @@ bool DecodeMimg(uint32_t pc, std::span<const uint32_t> code, uint32_t word_index
 	                            : opcode == 0x0eu   ? Opcode::ImageGetResinfo
 	                            : opcode == 0x60u   ? Opcode::ImageGetLod
 	                            : opcode == 0xe6u   ? Opcode::ImageBvhIntersectRay
+	                            : opcode == 0xe7u   ? Opcode::ImageBvh64IntersectRay
 	                                                : Opcode::Unsupported);
 	inst->dmask              = (word0 >> 8u) & 0xfu;
 	inst->data_dwords        = gather != nullptr ? 4u : CountDmaskComponents(inst->dmask);
@@ -287,10 +288,10 @@ bool DecodeMimg(uint32_t pc, std::span<const uint32_t> code, uint32_t word_index
 		inst->image_nsa_addr[i] = (code[word_index + 2u + i / 4u] >> ((i % 4u) * 8u)) & 0xffu;
 	}
 	inst->image_address_components =
-	    // BVH isin kesisimi: dugum_isaretcisi(1) + t_max(1) + origin(3) +
-	    // dir(3) + inv_dir(3) = 11. Olculen kodlamada vaddr'daki 1 yazmac +
-	    // NSA'daki 10 yazmac bunu birebir veriyor.
+	    // BVH isin kesisimi: dugum_isaretcisi(1/2) + t_max(1) + origin(3) +
+	    // dir(3) + inv_dir(3) = 11 (0xe6) veya 12 (0xe7).
 	    opcode == 0xe6u     ? 11u
+	    : opcode == 0xe7u   ? 12u
 	    : sample != nullptr ? ImageSampleAddressComponents(sample->flags, dimension)
 	    : gather != nullptr ? ImageSampleAddressComponents(gather->flags, dimension)
 	    : atomic != nullptr ? 3u
@@ -301,6 +302,13 @@ bool DecodeMimg(uint32_t pc, std::span<const uint32_t> code, uint32_t word_index
 	                           : opcode == 0x08u ? ImageCoordComponents(dimension)
 	                                             : 0u);
 	SetRawWords(inst, code, word_index, word_count);
+
+	if ((inst->opcode == Opcode::ImageBvhIntersectRay ||
+	     inst->opcode == Opcode::ImageBvh64IntersectRay) &&
+	    a16) {
+		SetUnsupported(inst, Family::MIMG, opcode,
+		               "MIMG BVH ray intersection with A16 packing is not implemented");
+	}
 
 	if (inst->opcode == Opcode::Unsupported) {
 		// TANI: bu opcode kod tabanindaki hicbir tabloda YOK ve public GFX10

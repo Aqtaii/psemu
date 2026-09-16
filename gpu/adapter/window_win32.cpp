@@ -1,4 +1,4 @@
-﻿// ============================================================================
+// ============================================================================
 // psemu: Kyty graphics/presentation/window/window.cpp'nin SDL'siz Win32
 // karsiligi. Orijinal window.cpp'de 175 SDL referansi vardi ve cogu INPUT +
 // SDL game-loop icindi (render icin gereksiz). Burada yalnizca renderer/videoOut
@@ -170,8 +170,14 @@ static void WindowCreate(WindowContext* ctx) {
 	WMARK("WindowCreate: BITTI");
 }
 
+extern "C" void PsemuPrecommitThreadStack(size_t commit_mb);
+
 void WindowRun() {
 	EXIT_IF(g_window_ctx == nullptr);
+
+	PsemuPrecommitThreadStack(32);
+	ULONG guarantee = 512 * 1024;
+	SetThreadStackGuarantee(&guarantee);
 
 	std::fprintf(stderr, "[WIN-MARK] WindowRun: THREAD BASLADI (mutex oncesi)\n");
 	std::fflush(stderr);

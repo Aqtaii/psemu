@@ -521,6 +521,9 @@ enum class ScalarValueOp {
 	BitFieldMaskU32,
 	BitFieldMaskU64Low,
 	BitFieldMaskU64High,
+	BitSet,
+	ShiftLeftU64Low,
+	ShiftLeftU64High,
 	Add3,
 	ShiftLeftAdd,
 	ShiftLeftAddCarry,
@@ -759,6 +762,7 @@ struct Program {
 	uint32_t                mesh_output_primitives = 0;
 	uint32_t                mesh_local_size_x      = 0;
 	uint32_t                mesh_lds_dwords        = 0;
+	bool                    lower_wide_movrels     = false;
 };
 
 bool LowerProgram(const Decoder::Program& decoded, const CFG::Graph& cfg, ShaderType stage,

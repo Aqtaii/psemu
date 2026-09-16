@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <string>
 #include <unordered_map>
 
@@ -1392,10 +1392,10 @@ inline std::unordered_map<std::string, std::string> g_nid_to_name = {
     {"YQ0navp+YIc#T#T", "puts"},
     {"fJnpuVVBbKk#s#s", "_Znwm"},
     {"fJnpuVVBbKk#T#T", "_Znwm"},
-    {"1uJgoVq3bQU#T#T", "libc_char_table"},
-    {"1uJgoVq3bQU#S#N", "libc_char_table"},
-    {"1uJgoVq3bQU#T#N", "libc_char_table"},
-    {"1uJgoVq3bQU#S#T", "libc_char_table"},
+    {"1uJgoVq3bQU#T#T", "_Getptolower"},
+    {"1uJgoVq3bQU#S#N", "_Getptolower"},
+    {"1uJgoVq3bQU#T#N", "_Getptolower"},
+    {"1uJgoVq3bQU#S#T", "_Getptolower"},
     {"3GPpjQdAMTw#T#T", "__cxa_guard_acquire"},
     {"3GPpjQdAMTw#S#N", "__cxa_guard_acquire"},
     {"3GPpjQdAMTw#T#N", "__cxa_guard_acquire"},
@@ -5029,6 +5029,12 @@ inline std::unordered_map<std::string, std::string> g_nid_to_name = {
     {"not_a_nid#S#N", "sceKernelWaitSema"},
     {"not_a_nid#T#N", "sceKernelWaitSema"},
     {"not_a_nid#S#T", "sceKernelWaitSema"},
+    {"CyXs2l-1kNA#1#z", "iswctype"},
+    {"CyXs2l-1kNA#T#T", "iswctype"},
+    {"CyXs2l-1kNA#S#N", "iswctype"},
+    {"CyXs2l-1kNA#T#N", "iswctype"},
+    {"CyXs2l-1kNA#S#T", "iswctype"},
+    {"CyXs2l-1kNA", "iswctype"},
 };
 
 

@@ -1,4 +1,4 @@
-﻿// SPIR-V DEBUG PRINTF KANALI.
+// SPIR-V DEBUG PRINTF KANALI.
 //
 // Neden: ekran (framebuffer) kanali bu olcum icin tukendi. Son tuzak sunu
 // gosterdi: shader'in BASINDA yazilan telemetri ucgeninin uzerine oyunun
@@ -698,6 +698,10 @@ static vk::Device VulkanCreateDevice(vk::PhysicalDevice physical_device, vk::Sur
 	features13.sType             = vk::StructureType::ePhysicalDeviceVulkan13Features;
 	features13.pNext             = chain_after_robustness2;
 	features13.robustImageAccess = supported_features13.robustImageAccess;
+	if (ctx->subgroup_size_control_enabled && supported_features13.subgroupSizeControl == VK_TRUE) {
+		features13.subgroupSizeControl  = VK_TRUE;
+		features13.computeFullSubgroups = supported_features13.computeFullSubgroups;
+	}
 
 	// printf: LOGF bu projede stdout'a gitmiyor, olculemez olurdu.
 	std::printf("[MESH-UZANTI] uzanti=%s cihaz_ozelligi=%s gorev_shader=%s -> %s\n",
@@ -1082,13 +1086,21 @@ void VulkanCreate(WindowContext* ctx) {
 	inst_info.ppEnabledLayerNames =
 	    (r.enable_validation_layers ? r.required_layers.data() : nullptr);
 
+	std::printf("[VK-MARK] calling vk::createInstance (extCount=%u, pNext=%p)...\n",
+	            inst_info.enabledExtensionCount, inst_info.pNext);
+	std::fflush(stdout);
 	const vk::Result result = vk::createInstance(&inst_info, nullptr, &ctx->graphic_ctx.instance);
+	std::printf("[VK-MARK] vk::createInstance returned %d, instance=%p\n",
+	            static_cast<int>(result), static_cast<void*>(static_cast<VkInstance>(ctx->graphic_ctx.instance)));
+	std::fflush(stdout);
 	switch (result) {
 		case vk::Result::eSuccess: break;
 		case vk::Result::eErrorIncompatibleDriver:
 			EXIT("Unable to find a compatible Vulkan Driver");
 		default: EXIT("Could not create a Vulkan instance (for unknown reasons)");
 	}
+	std::printf("[VK-MARK] calling dispatcher.init(instance)...\n");
+	std::fflush(stdout);
 	VULKAN_HPP_DEFAULT_DISPATCHER.init(ctx->graphic_ctx.instance);
 	std::printf("[VK-MARK] createInstance + init(instance) OK; surface...\n"); std::fflush(stdout);
 

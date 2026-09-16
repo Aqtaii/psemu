@@ -184,6 +184,10 @@ void AllocateInputVariables(EmitterState* state) {
 		state->subgroup_local_invocation_id_variable = state->builder.AllocateId();
 		state->interface_variables.push_back(state->subgroup_local_invocation_id_variable);
 	}
+	if (state->stage == ShaderType::Pixel) {
+		state->helper_invocation_variable = state->builder.AllocateId();
+		state->interface_variables.push_back(state->helper_invocation_variable);
+	}
 }
 
 static uint32_t AllocateInterfaceVariable(EmitterState* state) {
@@ -324,6 +328,11 @@ void AddInputAnnotationsAndNames(EmitterState* state) {
 			state->builder.AddAnnotation(
 			    {OpDecorate, state->subgroup_local_invocation_id_variable, DecorationFlat});
 		}
+	}
+	if (state->helper_invocation_variable != 0) {
+		state->builder.AddName(state->helper_invocation_variable, "gl_HelperInvocation");
+		state->builder.AddAnnotation({OpDecorate, state->helper_invocation_variable,
+		                              DecorationBuiltIn, BuiltInHelperInvocation});
 	}
 	for (const auto& input: state->inputs) {
 		state->builder.AddName(input.variable_id, input.debug_name.c_str());
@@ -750,6 +759,10 @@ void EmitHeaderAndTypes(EmitterState* state) {
 		state->builder.AddType({OpVariable, state->ptr_input_uint,
 		                        state->subgroup_local_invocation_id_variable, StorageClassInput});
 	}
+	if (state->helper_invocation_variable != 0) {
+		state->builder.AddType({OpVariable, state->ptr_input_bool,
+		                        state->helper_invocation_variable, StorageClassInput});
+	}
 	for (const auto& input: state->inputs) {
 		uint32_t ptr_type = state->ptr_input_uint;
 		switch (input.kind) {
@@ -1051,6 +1064,23 @@ void EmitHeaderAndTypes(EmitterState* state) {
 		                        state->storage_image_uint_3d_variable,
 		                        StorageClassUniformConstant});
 	}
+	std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> array_types_by_count;
+	for (auto& [inst, entry]: state->indexed_vector_arrays) {
+		auto it = array_types_by_count.find(entry.count);
+		if (it == array_types_by_count.end()) {
+			const auto count_id   = ConstantU32(state, entry.count);
+			const auto array_type = state->builder.AllocateId();
+			const auto ptr_type   = state->builder.AllocateId();
+			state->builder.AddType({OpTypeArray, array_type, state->uint_type, count_id});
+			state->builder.AddType({OpTypePointer, ptr_type, StorageClassFunction, array_type});
+			array_types_by_count.emplace(entry.count, std::make_pair(array_type, ptr_type));
+			entry.array_type = array_type;
+			entry.ptr_type   = ptr_type;
+		} else {
+			entry.array_type = it->second.first;
+			entry.ptr_type   = it->second.second;
+		}
+	}
 	state->builder.AddType(
 	    {OpTypePointer, state->ptr_image_uint, StorageClassImage, state->uint_type});
 	state->builder.AddType({OpTypeFunction, state->func_type, state->void_type});
@@ -1114,6 +1144,22 @@ void AllocateDescriptorVariables(EmitterState* state) {
 	if (DescriptorBinding(*state, IR::DescriptorBindingKind::Gds) != nullptr) {
 		state->gds_variable = state->builder.AllocateId();
 	}
+}
+
+// A helper invocation is not a live guest lane: it never clears its EXEC bit, so leaving it
+// in a wave-level ballot makes an s_cbranch_execnz loop test true forever and hangs the GPU
+// (Astro Bot's looping composite pixel shaders). Mask helpers out of every ballot.
+uint32_t EmitMaskHelperInvocations(EmitterState* state, uint32_t predicate) {
+	if (state == nullptr || state->helper_invocation_variable == 0) {
+		return predicate;
+	}
+	const auto helper = state->builder.AllocateId();
+	state->builder.AddFunction({OpLoad, state->bool_type, helper, state->helper_invocation_variable});
+	const auto not_helper = state->builder.AllocateId();
+	state->builder.AddFunction({OpLogicalNot, state->bool_type, not_helper, helper});
+	const auto masked = state->builder.AllocateId();
+	state->builder.AddFunction({OpLogicalAnd, state->bool_type, masked, predicate, not_helper});
+	return masked;
 }
 
 } // namespace Libs::Graphics::ShaderRecompiler::Spirv::Emitter

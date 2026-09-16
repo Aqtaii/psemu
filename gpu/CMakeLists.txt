@@ -65,6 +65,8 @@ set(GPU_LIBS_SRC
     # "FontSystem.cpp:140 *pFontHandle != 0" ile yakalanmisti ve psemu'da
     # elle sahte tutamac uretiyorduk; Kyty'nin gercek uygulamasi burada.
     ${GPU_SRC}/libs/libFont.cpp
+    # libJson2: Astro Bot ve diger basliklar icin yorum-toleransli ve genisletilmis JSON ayristirici
+    ${GPU_SRC}/libs/libJson2.cpp
 )
 
 # loader/'den yalnizca graphics/libs'in ihtiyac duydugu yardimcilar (timer,

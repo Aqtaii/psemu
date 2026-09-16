@@ -17,6 +17,7 @@
 #include <cstring>
 #include <iterator>
 #include <map>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -132,6 +133,7 @@ enum : uint32_t {
 	BuiltInFrontFacing               = 17,
 	BuiltInSampleMask                = 20,
 	BuiltInFragDepth                 = 22,
+	BuiltInHelperInvocation          = 23,
 	BuiltInWorkgroupId               = 26,
 	BuiltInLocalInvocationId         = 27,
 	BuiltInGlobalInvocationId        = 28,
@@ -374,8 +376,16 @@ struct SampledImageDescriptors {
 	uint32_t variable           = 0;
 };
 
+struct WideMoveRelEntry {
+	uint32_t variable_id = 0;
+	uint32_t count       = 0;
+	uint32_t array_type  = 0;
+	uint32_t ptr_type    = 0;
+};
+
 struct EmitterState {
 	Builder                                builder;
+	std::unordered_map<const IR::Instruction*, WideMoveRelEntry> indexed_vector_arrays;
 	const IR::Program*                     program                        = nullptr;
 	const IR::ResourceSnapshot*            resources                      = nullptr;
 	const ShaderVertexInputInfo*           vertex_input_info              = nullptr;
@@ -528,6 +538,7 @@ struct EmitterState {
 	uint32_t                               per_vertex_variable                           = 0;
 	uint32_t                               depth_variable                                = 0;
 	uint32_t                               sample_mask_variable                          = 0;
+	uint32_t                               helper_invocation_variable                    = 0;
 	bool                                   needs_subgroup_ballot                         = false;
 	bool                                   needs_subgroup_shuffle                        = false;
 	bool                                   needs_subgroup_local_invocation_id            = false;
@@ -832,6 +843,7 @@ uint32_t EmitMaskZeroBool(EmitterState* state, IR::RegisterFile file, bool zero)
 uint32_t EmitMaskSummaryZeroBool(EmitterState* state, IR::RegisterFile file, bool zero);
 
 uint32_t EmitExecActiveBool(EmitterState* state);
+uint32_t EmitMaskHelperInvocations(EmitterState* state, uint32_t predicate);
 
 uint32_t EmitConditionBool(EmitterState* state, const IR::Operand& operand);
 

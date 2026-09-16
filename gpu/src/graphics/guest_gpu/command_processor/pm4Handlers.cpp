@@ -1003,6 +1003,9 @@ KYTY_HW_CTX_PARSER(HwCtxSetRenderControl) {
 
 	r.depth_clear_enable   = KYTY_PM4_GET(buffer[0], DB_RENDER_CONTROL, DEPTH_CLEAR_ENABLE) != 0;
 	r.stencil_clear_enable = KYTY_PM4_GET(buffer[0], DB_RENDER_CONTROL, STENCIL_CLEAR_ENABLE) != 0;
+	r.copy_depth_to_color  = KYTY_PM4_GET(buffer[0], DB_RENDER_CONTROL, COPY_DEPTH_TO_COLOR) != 0;
+	r.copy_stencil_to_color =
+	    KYTY_PM4_GET(buffer[0], DB_RENDER_CONTROL, COPY_STENCIL_TO_COLOR) != 0;
 	r.resummarize_enable   = KYTY_PM4_GET(buffer[0], DB_RENDER_CONTROL, RESUMMARIZE_ENABLE) != 0;
 	r.stencil_compress_disable =
 	    KYTY_PM4_GET(buffer[0], DB_RENDER_CONTROL, STENCIL_COMPRESS_DISABLE) != 0;
@@ -4280,6 +4283,9 @@ void GraphicsInitJmpTablesCxIndirect() {
 		HW::RenderControl r;
 		r.depth_clear_enable   = KYTY_PM4_GET(value, DB_RENDER_CONTROL, DEPTH_CLEAR_ENABLE) != 0;
 		r.stencil_clear_enable = KYTY_PM4_GET(value, DB_RENDER_CONTROL, STENCIL_CLEAR_ENABLE) != 0;
+		r.copy_depth_to_color  = KYTY_PM4_GET(value, DB_RENDER_CONTROL, COPY_DEPTH_TO_COLOR) != 0;
+		r.copy_stencil_to_color =
+		    KYTY_PM4_GET(value, DB_RENDER_CONTROL, COPY_STENCIL_TO_COLOR) != 0;
 		r.resummarize_enable   = KYTY_PM4_GET(value, DB_RENDER_CONTROL, RESUMMARIZE_ENABLE) != 0;
 		r.stencil_compress_disable =
 		    KYTY_PM4_GET(value, DB_RENDER_CONTROL, STENCIL_COMPRESS_DISABLE) != 0;

@@ -536,6 +536,27 @@ bool EmitProgram(const IR::Program& program, const IR::ResourceSnapshot& resourc
 	state.interface_variables.reserve(InitialEmitterVectorReserve);
 	state.reachable_blocks.reserve(InitialEmitterVectorReserve);
 	CollectRegisters(program, &state.registers);
+	if (program.lower_wide_movrels) {
+		for (const auto& block: program.blocks) {
+			for (const auto& inst: block.instructions) {
+				if (inst.op != IR::Opcode::MoveRelSourceU32 ||
+				    inst.src[0].kind != IR::OperandKind::Register ||
+				    inst.src[0].reg.file != IR::RegisterFile::Vector) {
+					continue;
+				}
+				const auto base_reg = inst.src[0].reg;
+				const auto limit    = MoveRelRegisterLimit(state, base_reg);
+				const auto count    = limit > base_reg.index ? limit - base_reg.index : 1u;
+				if (count >= 16u) {
+					state.indexed_vector_arrays.emplace(
+					    &inst, WideMoveRelEntry {
+					               .variable_id = state.builder.AllocateId(),
+					               .count       = count,
+					           });
+				}
+			}
+		}
+	}
 	CopyProgramInputsAndOutputs(&state, program);
 	state.needs_subgroup_ballot              = ProgramNeedsSubgroupBallot(program);
 	state.needs_subgroup_shuffle             = ProgramNeedsSubgroupShuffle(program);

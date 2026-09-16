@@ -30,6 +30,9 @@ void InitPad_1(Loader::SymbolDatabase* s);
 // Asagidakiler EKLENDI - gerekce icin EnsureDb()'deki nota bakiniz.
 void InitFont_1(Loader::SymbolDatabase* s);
 void InitAmpr_1(Loader::SymbolDatabase* s);
+namespace LibJson2 {
+void InitNet_1_Json2(Loader::SymbolDatabase* s);
+} // namespace LibJson2
 } // namespace Libs
 
 // ----------------------------------------------------------------------------
@@ -81,6 +84,7 @@ void EnsureDb() {
 	if (no_extra == nullptr || no_extra[0] != '1') {
 		Libs::InitFont_1(db); // sceFont*
 		Libs::InitAmpr_1(db); // sceAmpr*
+		Libs::LibJson2::InitNet_1_Json2(db); // sceJson*
 
 	}
 

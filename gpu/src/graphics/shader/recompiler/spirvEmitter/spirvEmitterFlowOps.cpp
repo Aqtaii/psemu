@@ -31,6 +31,34 @@ void EmitMoveRelSourceU32(EmitterState* state, const IR::Instruction& inst) {
 		return;
 	}
 
+	const auto it = state->indexed_vector_arrays.find(&inst);
+	if (it != state->indexed_vector_arrays.end()) {
+		const auto var        = it->second.variable_id;
+		const auto count      = it->second.count;
+		const auto array_type = it->second.array_type;
+		const auto base_reg   = inst.src[0].reg;
+		const auto m0 = inst.src_count > 1u ? EmitValueLoad(state, inst.src[1]) : ConstantU32(state, 0);
+
+		std::vector<uint32_t> compose {OpCompositeConstruct, array_type, state->builder.AllocateId()};
+		compose.reserve(3u + count);
+		for (uint32_t i = 0; i < count; i++) {
+			compose.push_back(EmitRegisterLoad(state, {IR::RegisterFile::Vector, base_reg.index + i}));
+		}
+		state->builder.AddFunction(compose);
+		state->builder.AddFunction({OpStore, var, compose[2]});
+
+		const auto in_range = state->builder.AllocateId();
+		state->builder.AddFunction({OpULessThan, state->bool_type, in_range, m0, ConstantU32(state, count)});
+		const auto index = state->builder.AllocateId();
+		state->builder.AddFunction({OpSelect, state->uint_type, index, in_range, m0, ConstantU32(state, 0)});
+		const auto ptr = state->builder.AllocateId();
+		state->builder.AddFunction({OpAccessChain, state->ptr_func_uint, ptr, var, index});
+		const auto result = state->builder.AllocateId();
+		state->builder.AddFunction({OpLoad, state->uint_type, result, ptr});
+		EmitStoreU32(state, inst.dst, result);
+		return;
+	}
+
 	const auto base_reg = inst.src[0].reg;
 	const auto m0 = inst.src_count > 1u ? EmitValueLoad(state, inst.src[1]) : ConstantU32(state, 0);
 	auto       selected = EmitRegisterLoad(state, base_reg);
@@ -121,9 +149,10 @@ void EmitWqmB64(EmitterState* state, const IR::Instruction& inst) {
 		return;
 	}
 	const auto ballot = state->builder.AllocateId();
+	const auto lane_active =
+	    EmitMaskHelperInvocations(state, EmitLaneMaskOperandActiveBool(state, inst.src[0]));
 	state->builder.AddFunction({OpGroupNonUniformBallot, state->vec4_uint_type, ballot,
-	                            ConstantU32(state, ScopeSubgroup),
-	                            EmitLaneMaskOperandActiveBool(state, inst.src[0])});
+	                            ConstantU32(state, ScopeSubgroup), lane_active});
 	const auto low  = state->builder.AllocateId();
 	const auto high = state->builder.AllocateId();
 	state->builder.AddFunction({OpCompositeExtract, state->uint_type, low, ballot, 0});
@@ -264,7 +293,7 @@ void EmitSaveexecB64(EmitterState* state, const IR::Instruction& inst) {
 
 void EmitReadFirstLaneU32(EmitterState* state, const IR::Instruction& inst) {
 	const auto src         = EmitValueLoad(state, inst.src[0]);
-	const auto active      = EmitExecActiveBool(state);
+	const auto active      = EmitMaskHelperInvocations(state, EmitExecActiveBool(state));
 	const auto ballot      = state->builder.AllocateId();
 	const auto first_lane  = state->builder.AllocateId();
 	const auto first_value = state->builder.AllocateId();

@@ -666,6 +666,7 @@ bool LowerMemoryInstruction(const Decoder::Instruction& decoded, BasicBlock* blo
 		case Decoder::Opcode::DsWriteB96:
 		case Decoder::Opcode::DsWriteB128: return LowerDsWrite(decoded, block, error);
 		case Decoder::Opcode::ImageBvhIntersectRay:
+		case Decoder::Opcode::ImageBvh64IntersectRay:
 			return LowerImageBvhIntersectRayStub(decoded, block, error);
 		case Decoder::Opcode::ImageGetResinfo:
 		case Decoder::Opcode::ImageGetLod:
@@ -827,6 +828,7 @@ bool IsMemoryOpcode(Decoder::Opcode opcode) {
 		// Yalnizca MoveU32 uretiyor, memory bilgisi kurmuyor - dolayisiyla
 		// kaynak takibi/descriptor yolu HIC tetiklenmiyor.
 		case Decoder::Opcode::ImageBvhIntersectRay:
+		case Decoder::Opcode::ImageBvh64IntersectRay:
 		case Decoder::Opcode::ImageSample: return true;
 		default: return false;
 	}

@@ -1749,26 +1749,69 @@ static bool SpliceMergedEsGs(uint64_t es_addr, uint64_t gs_addr, std::vector<uin
 	ShaderRecompiler::Decoder::DecodeProgram(es, &es_program, &es_error);
 
 	uint32_t cut_dwords = 0;
+	bool used_fallback_a = false;
+	bool used_fallback_b = false;
+
+	// Primary: s_setpc_b64
 	for (const auto& inst: es_program.instructions) {
 		if (inst.opcode == ShaderRecompiler::Decoder::Opcode::SSetpcB64) {
 			cut_dwords = inst.pc / sizeof(uint32_t);
 			break;
 		}
 	}
+
+	// Fallback A: s_branch
 	if (cut_dwords == 0) {
-		printf("[MS-SPLICE] ES'te s_setpc_b64 bulunamadi (es=0x%llx, %llu komut) - splice iptal\n",
-		       (unsigned long long)es_addr, (unsigned long long)es_program.instructions.size());
+		for (const auto& inst: es_program.instructions) {
+			if (inst.opcode == ShaderRecompiler::Decoder::Opcode::SBranch) {
+				cut_dwords = inst.pc / sizeof(uint32_t);
+				used_fallback_a = true;
+				break;
+			}
+		}
+	}
+
+	// Fallback B: Contiguous (whole ES)
+	if (cut_dwords == 0) {
+		if (es_addr == gs_addr) {
+			printf("[MS-SPLICE] UYARI: es_addr == gs_addr (0x%llx) - tek parca shader. Splice atlandi, orjinal koda (GS) dusuluyor.\n", (unsigned long long)es_addr);
+			fflush(stdout);
+			return false; // Fallback to full shader code via GS address
+		}
+		
+		cut_dwords = es.size();
+		used_fallback_b = true;
+	}
+
+	if (cut_dwords == 0 || cut_dwords > es.size()) {
+		printf("[MS-SPLICE] UYARI: Hicbir atlama yontemi gecerli bir ES siniri bulamadi. Eski davranisa (sadece GS) donuluyor!\n");
 		fflush(stdout);
 		return false;
+	}
+
+	if (used_fallback_a) {
+		printf("[MS-SPLICE] Fallback A (s_branch) kullanildi, ES boyutu tahmini: %u dwords\n", cut_dwords);
+		fflush(stdout);
+	} else if (used_fallback_b) {
+		printf("[MS-SPLICE] Fallback B (contiguous) kullanildi, ES boyutu tahmini: %u dwords (%llu instruction)\n", 
+			cut_dwords, (unsigned long long)es_program.instructions.size());
+		fflush(stdout);
 	}
 
 	out->clear();
 	out->reserve(cut_dwords + gs.size());
 	out->insert(out->end(), es.begin(), es.begin() + cut_dwords);
 	out->insert(out->end(), gs.begin(), gs.end());
+	
+	// Sanity Check
+	if (out->size() != (cut_dwords + gs.size()) || out->size() < 10) {
+		printf("[MS-SPLICE] UYARI: Sanity check basarisiz. Birlesik shader cok kucuk veya boyutu hatali!\n");
+		fflush(stdout);
+		return false;
+	}
 
 	static std::atomic<uint32_t> s_n {0};
-	if (s_n.fetch_add(1) < 8) {
+	if (s_n.fetch_add(1) < 8 && !used_fallback_a && !used_fallback_b) {
 		printf("[MS-SPLICE] es=0x%llx (%llu dword, setpc pc=0x%x -> %u dword kirpildi) + "
 		       "gs=0x%llx (%llu dword) = %llu dword tek parca\n",
 		       (unsigned long long)es_addr, (unsigned long long)es.size(),

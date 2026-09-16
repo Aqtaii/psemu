@@ -39,8 +39,15 @@ extern uint64_t g_dmem_base_addr;
 // Variant II kuraliyla *(tp) = tp saglanir; negatif offsetler (tp - X) .tdata/.tbss'e erisir.
 extern uint64_t g_tls_base;
 
+// Misafir sanal adres alani rezervi (0x1000000000..0x9000000000 = 512 GB)
+extern uint64_t g_guest_virtual_reserved_base;
+extern uint64_t g_guest_virtual_reserved_size;
+
 class Core {
 public:
+    // Misafir sanal bellek alanini hicbir thread acilmadan once rezerve eder
+    static void PreReserveVirtualAddressSpace();
+
     // VEH'i kaydeder ve Windows Thread'ini baslatarak oyunu yurutur
     static void StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t text_size, uint64_t original_entry, uint64_t procparam_vaddr,
                                 uint64_t tls_vaddr, uint64_t tls_filesz, uint64_t tls_memsz, uint64_t tls_align, uint64_t module_size,

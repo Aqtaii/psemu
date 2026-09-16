@@ -497,6 +497,7 @@ static void ConfigureSubgroupSize(const GraphicContext* gctx, vk::ShaderStageFla
 	}
 
 	required->sType = vk::StructureType::ePipelineShaderStageRequiredSubgroupSizeCreateInfo;
+	required->pNext = nullptr;
 	required->requiredSubgroupSize = config.required_size;
 	stage->pNext                   = required;
 }
@@ -1063,11 +1064,23 @@ void CreatePipelineInternal(PipelineCache::ComputePipeline* pipeline,
 	create_info.flags    = {};
 	create_info.codeSize = cs_shader.size() * 4;
 	create_info.pCode    = cs_shader.data();
-	LOGF("PipelineTrace: vkCreateShaderModule CS begin words=%" PRIu64 "\n",
-	     static_cast<uint64_t>(cs_shader.size()));
+	{
+		static int s_dump_id = 0;
+		char fname[64];
+		std::snprintf(fname, sizeof(fname), "cs_dump_%d.spv", ++s_dump_id);
+		FILE* f = std::fopen(fname, "wb");
+		if (f) {
+			std::fwrite(cs_shader.data(), 4, cs_shader.size(), f);
+			std::fclose(f);
+			std::printf("[SPV-DUMP] %s yazildi (%llu words)\n", fname, static_cast<unsigned long long>(cs_shader.size()));
+			std::fflush(stdout);
+		}
+	}
+	std::printf("[VK-CS] vkCreateShaderModule cagrilacak (words=%llu)...\n", static_cast<unsigned long long>(cs_shader.size()));
+	std::fflush(stdout);
 	auto result = gctx->device.createShaderModule(&create_info, nullptr, &comp_shader_module);
-	LOGF("PipelineTrace: vkCreateShaderModule CS done result=%s module=%p\n",
-	     VulkanToString(result).c_str(), static_cast<void*>(comp_shader_module));
+	std::printf("[VK-CS] vkCreateShaderModule bitti result=%s module=%p\n", VulkanToString(result).c_str(), static_cast<void*>(comp_shader_module));
+	std::fflush(stdout);
 	EXIT_NOT_IMPLEMENTED(result != vk::Result::eSuccess);
 
 	EXIT_NOT_IMPLEMENTED(comp_shader_module == nullptr);
@@ -1084,6 +1097,9 @@ void CreatePipelineInternal(PipelineCache::ComputePipeline* pipeline,
 	EXIT_IF(!input_info->stage);
 	ConfigureSubgroupSize(gctx, vk::ShaderStageFlagBits::eCompute, *input_info->stage.program,
 	                      &comp_subgroup_size, &comp_shader_stage_info);
+
+	std::printf("[VK-CS] stage pNext=%p reqSubgroupSize=%u\n", comp_shader_stage_info.pNext, comp_subgroup_size.requiredSubgroupSize);
+	std::fflush(stdout);
 
 	vk::DescriptorSetLayout set_layouts[1]  = {};
 	uint32_t                set_layouts_num = 0;
@@ -1108,12 +1124,12 @@ void CreatePipelineInternal(PipelineCache::ComputePipeline* pipeline,
 
 	EXIT_IF(pipeline->pipeline_layout != nullptr);
 
-	LOGF("PipelineTrace: vkCreatePipelineLayout CS begin set_layouts=%u push_constants=%u\n",
-	     set_layouts_num, push_constant_info_num);
+	std::printf("[VK-CS] vkCreatePipelineLayout cagrilacak (set_layouts=%u push_constants=%u)...\n", set_layouts_num, push_constant_info_num);
+	std::fflush(stdout);
 	result = gctx->device.createPipelineLayout(&pipeline_layout_info, nullptr,
 	                                           &pipeline->pipeline_layout);
-	LOGF("PipelineTrace: vkCreatePipelineLayout CS done result=%s layout=%p\n",
-	     VulkanToString(result).c_str(), static_cast<void*>(pipeline->pipeline_layout));
+	std::printf("[VK-CS] vkCreatePipelineLayout bitti result=%s layout=%p\n", VulkanToString(result).c_str(), static_cast<void*>(pipeline->pipeline_layout));
+	std::fflush(stdout);
 	EXIT_NOT_IMPLEMENTED(result != vk::Result::eSuccess);
 
 	EXIT_NOT_IMPLEMENTED(pipeline->pipeline_layout == nullptr);
@@ -1129,11 +1145,11 @@ void CreatePipelineInternal(PipelineCache::ComputePipeline* pipeline,
 
 	EXIT_IF(pipeline->pipeline != nullptr);
 
-	LOGF("PipelineTrace: vkCreateComputePipelines begin layout=%p\n",
-	     static_cast<void*>(pipeline->pipeline_layout));
+	std::printf("[VK-CS] vkCreateComputePipelines cagrilacak (layout=%p info.pNext=%p)...\n", static_cast<void*>(pipeline->pipeline_layout), info.pNext);
+	std::fflush(stdout);
 	result = gctx->device.createComputePipelines(nullptr, 1, &info, nullptr, &pipeline->pipeline);
-	LOGF("PipelineTrace: vkCreateComputePipelines done result=%s pipeline=%p\n",
-	     VulkanToString(result).c_str(), static_cast<void*>(pipeline->pipeline));
+	std::printf("[VK-CS] vkCreateComputePipelines bitti result=%s pipeline=%p\n", VulkanToString(result).c_str(), static_cast<void*>(pipeline->pipeline));
+	std::fflush(stdout);
 	EXIT_NOT_IMPLEMENTED(result != vk::Result::eSuccess);
 
 	EXIT_NOT_IMPLEMENTED(pipeline->pipeline == nullptr);
