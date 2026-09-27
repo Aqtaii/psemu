@@ -6809,8 +6809,11 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         // ================================================================
         if (access_type != 0 && access_type != 1) { // EXEC violation
             void* page = reinterpret_cast<void*>(access_addr & ~0xFFFULL);
-            DWORD old_prot = 0;
-            if (VirtualProtect(page, 0x1000, PAGE_EXECUTE_READWRITE, &old_prot)) {
+            void* allocated = VirtualAlloc(page, 0x1000, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+            if (!allocated) {
+                allocated = VirtualAlloc(page, 0x1000, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+            }
+            if (allocated) {
                 uint8_t* p = reinterpret_cast<uint8_t*>(access_addr);
                 p[0] = 0x31; // xor eax, eax
                 p[1] = 0xC0;
@@ -6821,15 +6824,18 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 if (s_nplt_logged.fetch_add(1) < 10) {
                     std::stringstream nplt_ss;
                     nplt_ss << "[PRX-HLE] Non-PLT EXEC adresi @ 0x" << std::hex << access_addr
-                            << " kalici 'xor eax,eax; ret' ile yamalandi.";
+                            << " kalici 'xor eax,eax; ret' ile olusturuldu.";
                     LOG_INFO(nplt_ss.str());
                 }
                 return EXCEPTION_CONTINUE_EXECUTION;
             }
 
-            std::stringstream nplt_ss;
-            nplt_ss << "[PRX-HLE] Non-PLT EXEC Violation yakalandi @ 0x" << std::hex << access_addr;
-            LOG_INFO(nplt_ss.str());
+            static std::atomic<int> s_nplt_unhandled{0};
+            if (s_nplt_unhandled.fetch_add(1) < 10) {
+                std::stringstream nplt_ss;
+                nplt_ss << "[PRX-HLE] Non-PLT EXEC Violation yakalandi @ 0x" << std::hex << access_addr;
+                LOG_INFO(nplt_ss.str());
+            }
 
             // Donguye takilma tespiti: HLE stub'lari her zaman RAX=0 dondurdugu icin,
             // oyun kodu gercek bir yan etki (ornegin bir GNM komut tamponu imlecinin
@@ -6867,9 +6873,12 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 // (ornegin call/jmp derinligi desenkronize oldugundan) kor RET yerine
                 // acikca hata raporla.
                 if (ret_addr != 0 && IsInModuleRange(ret_addr)) {
-                    std::stringstream ret_ss;
-                    ret_ss << "[PLT-HOOK] HLE Stub calisti -> Return RAX=0 | RET to: 0x" << std::hex << ret_addr;
-                    LOG_INFO(ret_ss.str());
+                    static std::atomic<int> s_ret_logged{0};
+                    if (s_ret_logged.fetch_add(1) < 10) {
+                        std::stringstream ret_ss;
+                        ret_ss << "[PLT-HOOK] HLE Stub calisti -> Return RAX=0 | RET to: 0x" << std::hex << ret_addr;
+                        LOG_INFO(ret_ss.str());
+                    }
 
                     ctx->Rax = 0; // Basarili donus degeri
                     ctx->Rip = ret_addr;
