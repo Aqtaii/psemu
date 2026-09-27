@@ -750,6 +750,134 @@ static PSEMU_SYSV int NativeStrncmp(const char* a, const char* b, size_t n) {
         return 0;
     }
 }
+
+// Kyty SymbolDatabase'deki fonksiyonu SysV ABI adresi olarak dondurur.
+// (gpu/adapter/agc_bridge.cpp)
+extern "C" void* PsemuKytyGetFunc(const char* nid);
+
+// ============================================================================
+// SysV Native Libc & Matematik Fonksiyonlari
+// ----------------------------------------------------------------------------
+// Oyun ici donanim sayfa hatasi (0xC0000005) olusmadan, misafirin (Construct 2)
+// dogrudan calistirabilecegi SysV ABI fonksiyonlari.
+// ============================================================================
+
+static PSEMU_SYSV double NativeSin(double x) { return sin(x); }
+static PSEMU_SYSV double NativeCos(double x) { return cos(x); }
+static PSEMU_SYSV double NativeTan(double x) { return tan(x); }
+static PSEMU_SYSV double NativeAtan2(double y, double x) { return atan2(y, x); }
+static PSEMU_SYSV double NativePow(double x, double y) { return pow(x, y); }
+static PSEMU_SYSV double NativeLog(double x) { return log(x); }
+static PSEMU_SYSV double NativeLog10(double x) { return log10(x); }
+static PSEMU_SYSV double NativeExp(double x) { return exp(x); }
+static PSEMU_SYSV double NativeFmod(double x, double y) { return fmod(x, y); }
+static PSEMU_SYSV double NativeFloor(double x) { return floor(x); }
+static PSEMU_SYSV double NativeCeil(double x) { return ceil(x); }
+static PSEMU_SYSV double NativeSqrt(double x) { return sqrt(x); }
+static PSEMU_SYSV double NativeFabs(double x) { return fabs(x); }
+
+static PSEMU_SYSV float NativeSinf(float x) { return sinf(x); }
+static PSEMU_SYSV float NativeCosf(float x) { return cosf(x); }
+static PSEMU_SYSV float NativeTanf(float x) { return tanf(x); }
+static PSEMU_SYSV float NativeAtan2f(float y, float x) { return atan2f(y, x); }
+static PSEMU_SYSV float NativePowf(float x, float y) { return powf(x, y); }
+static PSEMU_SYSV float NativeLogf(float x) { return logf(x); }
+static PSEMU_SYSV float NativeLog10f(float x) { return log10f(x); }
+static PSEMU_SYSV float NativeExpf(float x) { return expf(x); }
+static PSEMU_SYSV float NativeFmodf(float x, float y) { return fmodf(x, y); }
+static PSEMU_SYSV float NativeFloorf(float x) { return floorf(x); }
+static PSEMU_SYSV float NativeCeilf(float x) { return ceilf(x); }
+static PSEMU_SYSV float NativeSqrtf(float x) { return sqrtf(x); }
+static PSEMU_SYSV float NativeFabsf(float x) { return fabsf(x); }
+
+static PSEMU_SYSV void NativeSincosf(float x, float* s, float* c) {
+    if (s) *s = sinf(x);
+    if (c) *c = cosf(x);
+}
+
+static PSEMU_SYSV char* NativeStrcpy(char* dest, const char* src) {
+    if (!dest || !src) return dest;
+    __try {
+        return strcpy(dest, src);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return dest;
+    }
+}
+
+static PSEMU_SYSV char* NativeStrncpy(char* dest, const char* src, size_t n) {
+    if (!dest || !src || n == 0) return dest;
+    __try {
+        return strncpy(dest, src, n);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return dest;
+    }
+}
+
+static PSEMU_SYSV char* NativeStrcat(char* dest, const char* src) {
+    if (!dest || !src) return dest;
+    __try {
+        return strcat(dest, src);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return dest;
+    }
+}
+
+static PSEMU_SYSV const char* NativeStrstr(const char* haystack, const char* needle) {
+    if (!haystack || !needle) return nullptr;
+    __try {
+        return strstr(haystack, needle);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
+static PSEMU_SYSV int NativeStrcasecmp(const char* s1, const char* s2) {
+    if (!s1 || !s2) return (s1 == s2) ? 0 : (s1 ? 1 : -1);
+    __try {
+        return _stricmp(s1, s2);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+static PSEMU_SYSV int NativeStrncasecmp(const char* s1, const char* s2, size_t n) {
+    if (n == 0) return 0;
+    if (!s1 || !s2) return (s1 == s2) ? 0 : (s1 ? 1 : -1);
+    __try {
+        return _strnicmp(s1, s2, n);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+
+
+static PSEMU_SYSV int NativeClockGettime(int clk, int64_t* tp) {
+    if (tp) {
+        uint64_t ns = (clk == 0) ? RealtimeNs() : MonotonicNs();
+        tp[0] = static_cast<int64_t>(ns / 1000000000ull);
+        tp[1] = static_cast<int64_t>(ns % 1000000000ull);
+    }
+    return 0;
+}
+
+static PSEMU_SYSV int NativeGettimeofday(int64_t* tv, void* /*tz*/) {
+    if (tv) {
+        uint64_t ns = RealtimeNs();
+        tv[0] = static_cast<int64_t>(ns / 1000000000ull);
+        tv[1] = static_cast<int64_t>((ns % 1000000000ull) / 1000ull);
+    }
+    return 0;
+}
+
+static PSEMU_SYSV int NativePthreadYield() {
+    SwitchToThread();
+    return 0;
+}
+
+static PSEMU_SYSV int NativeCondSignal(void* /*cond*/) {
+    return 0;
+}
+
 static PSEMU_SYSV int NativeUsleep(uint64_t us) {
     const DWORD ms = static_cast<DWORD>(us / 1000);
     Sleep(ms != 0 ? ms : 1);
@@ -875,14 +1003,24 @@ extern "C" void* PsemuNativePltStub(int plt_index) {
     auto it = g_plt_names.find(plt_index);
     if (it == g_plt_names.end()) return nullptr;
 
-    // NID -> okunabilir isim (tam eslesme, yoksa 11 karakterlik onek).
+    // 1. Kyty SymbolDatabase NID eslesmesi (AGC, VideoOut, Graphics, Pad)
+    // it->second = ham NID dizesidir (or. "d-6uF9sZDIU#A#B" veya "d-6uF9sZDIU")
+    const std::string& raw_nid = it->second;
+    std::string kyty_nid = raw_nid.substr(0, raw_nid.find('#'));
+    if (!kyty_nid.empty()) {
+        if (void* fn = PsemuKytyGetFunc(kyty_nid.c_str())) {
+            return fn;
+        }
+    }
+
+    // 2. NID -> okunabilir isim (tam eslesme, yoksa 11 karakterlik onek).
     const std::string* rn = nullptr;
-    auto exact = g_nid_to_name.find(it->second);
+    auto exact = g_nid_to_name.find(raw_nid);
     if (exact != g_nid_to_name.end()) {
         rn = &exact->second;
-    } else if (it->second.size() >= 11) {
+    } else if (raw_nid.size() >= 11) {
         const auto& pidx = NidPrefixIndex();
-        auto pit = pidx.find(it->second.substr(0, 11));
+        auto pit = pidx.find(raw_nid.substr(0, 11));
         if (pit != pidx.end()) rn = pit->second;
     }
     if (rn == nullptr) return nullptr;
@@ -892,35 +1030,64 @@ extern "C" void* PsemuNativePltStub(int plt_index) {
     if (n == "memset")  return reinterpret_cast<void*>(&NativeMemset);
     if (n == "memmove") return reinterpret_cast<void*>(&NativeMemmove);
     if (n == "memcmp" || n == "bcmp") return reinterpret_cast<void*>(&NativeMemcmp);
+    if (n == "strlen") return reinterpret_cast<void*>(&NativeStrlen);
+    if (n == "strcmp") return reinterpret_cast<void*>(&NativeStrcmp);
+    if (n == "strncmp") return reinterpret_cast<void*>(&NativeStrncmp);
+    if (n == "strcpy") return reinterpret_cast<void*>(&NativeStrcpy);
+    if (n == "strncpy") return reinterpret_cast<void*>(&NativeStrncpy);
+    if (n == "strcat") return reinterpret_cast<void*>(&NativeStrcat);
+    if (n == "strstr") return reinterpret_cast<void*>(&NativeStrstr);
+    if (n == "strcasecmp") return reinterpret_cast<void*>(&NativeStrcasecmp);
+    if (n == "strncasecmp") return reinterpret_cast<void*>(&NativeStrncasecmp);
+
+    // Matematik
+    if (n == "sin") return reinterpret_cast<void*>(&NativeSin);
+    if (n == "cos") return reinterpret_cast<void*>(&NativeCos);
+    if (n == "tan") return reinterpret_cast<void*>(&NativeTan);
+    if (n == "atan2") return reinterpret_cast<void*>(&NativeAtan2);
+    if (n == "pow") return reinterpret_cast<void*>(&NativePow);
+    if (n == "log") return reinterpret_cast<void*>(&NativeLog);
+    if (n == "log10") return reinterpret_cast<void*>(&NativeLog10);
+    if (n == "exp") return reinterpret_cast<void*>(&NativeExp);
+    if (n == "fmod") return reinterpret_cast<void*>(&NativeFmod);
+    if (n == "floor") return reinterpret_cast<void*>(&NativeFloor);
+    if (n == "ceil") return reinterpret_cast<void*>(&NativeCeil);
+    if (n == "sqrt") return reinterpret_cast<void*>(&NativeSqrt);
+    if (n == "fabs") return reinterpret_cast<void*>(&NativeFabs);
+
+    if (n == "sinf") return reinterpret_cast<void*>(&NativeSinf);
+    if (n == "cosf") return reinterpret_cast<void*>(&NativeCosf);
+    if (n == "tanf") return reinterpret_cast<void*>(&NativeTanf);
+    if (n == "atan2f") return reinterpret_cast<void*>(&NativeAtan2f);
+    if (n == "powf") return reinterpret_cast<void*>(&NativePowf);
+    if (n == "logf") return reinterpret_cast<void*>(&NativeLogf);
+    if (n == "log10f") return reinterpret_cast<void*>(&NativeLog10f);
+    if (n == "expf") return reinterpret_cast<void*>(&NativeExpf);
+    if (n == "fmodf") return reinterpret_cast<void*>(&NativeFmodf);
+    if (n == "floorf") return reinterpret_cast<void*>(&NativeFloorf);
+    if (n == "ceilf") return reinterpret_cast<void*>(&NativeCeilf);
+    if (n == "sqrtf") return reinterpret_cast<void*>(&NativeSqrtf);
+    if (n == "fabsf") return reinterpret_cast<void*>(&NativeFabsf);
+    if (n == "sincosf") return reinterpret_cast<void*>(&NativeSincosf);
+
+    // Zaman
+    if (n == "clock_gettime" || n == "sceKernelClockGettime")
+        return reinterpret_cast<void*>(&NativeClockGettime);
+    if (n == "gettimeofday" || n == "sceKernelGettimeofday")
+        return reinterpret_cast<void*>(&NativeGettimeofday);
+
+    // Senkronizasyon & Is Parcacigi
     if (n == "scePthreadMutexLock" || n == "pthread_mutex_lock")
         return reinterpret_cast<void*>(&NativeMutexLock);
     if (n == "scePthreadMutexUnlock" || n == "pthread_mutex_unlock")
         return reinterpret_cast<void*>(&NativeMutexUnlock);
-    // sceKernelWaitSema ARTIK NATIVE DEGIL: gercek semafor implementasyonu
-    // geldi (bloklamasi ve zaman asimini onurlandirmasi gerekiyor), o yuzden
-    // VEH'teki erken dala gitmeli.
-    if (n == "__error")           return reinterpret_cast<void*>(&NativeErrno);
-    if (n == "strlen") return reinterpret_cast<void*>(&NativeStrlen);
-    if (n == "strcmp") return reinterpret_cast<void*>(&NativeStrcmp);
-    if (n == "strncmp") return reinterpret_cast<void*>(&NativeStrncmp);
-    // DENENDI VE GERI ALINDI (2026-07-27): scePthreadGetthreadid.
-    // Gerekce makuldu - Astro Bot'un is parcaciklari onu siki bir dongude
-    // cagiriyor ve her cagri bir exception turu. Native'e alindi, GOT'a
-    // gercekten yazildi (native slot 11 -> 12, PLT#72 artik hic [PLT-HLE]
-    // uretmiyor). AMA CPU yuku HIC DEGISMEDI (25 sn'de ~230 sn, ~9 cekirdek):
-    // yani cekirdekleri yakan sey bu degilmis. Ustelik ayni derlemede
-    // Dreaming Sarah T+2.31'de takildi (oncesinde 12.5 FPS oynuyordu).
-    // Faydasi olculemeyen, riski olcumle gorunen bir degisikligi tutmuyoruz.
-    // Yukaridaki notun uyardigi tam da bu: bu liste tek tek ve BIRDEN FAZLA
-    // kosuyla genisletilmeli.
-    // LISTEYI GENISLETME DENEMESI GERI ALINDI (2026-07-26):
-    // libc_char_table (3.700 cagri/sn), sceKernelUsleep ve strcmp eklendiginde
-    // kosular erken cokmeye basladi. ANCAK bunu onlara guvenle YUKLEYEMIYORUM:
-    // temel de aralikli olarak erken takiliyor/cokuyor (ayni oturumda native
-    // PLT'den ONCE de 398/402/408 cagride olen kosular oldu). Tek kosuya bakip
-    // suclu ilan etmek yanlis olur. Once o kararsizlik cozulmeli, sonra liste
-    // tek tek ve her biri icin BIRDEN FAZLA kosuyla genisletilmeli.
-    // Yukaridaki set 12 FPS ile dogrulanmis olan settir.
+    if (n == "scePthreadYield" || n == "pthread_yield" || n == "sched_yield")
+        return reinterpret_cast<void*>(&NativePthreadYield);
+    if (n == "scePthreadCondSignal" || n == "pthread_cond_signal")
+        return reinterpret_cast<void*>(&NativeCondSignal);
+
+    if (n == "__error") return reinterpret_cast<void*>(&NativeErrno);
+
     return nullptr;
 }
 
@@ -2926,16 +3093,8 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 // (_Locksyslock/_Unlocksyslock MSVC STL locale kodunda cok sik cagrilir.)
                 else if (readable_name == "_Locksyslock" ||
                          readable_name == "_Unlocksyslock" ||
-                         readable_name == "uncaught_exception") f = FOP_RET0;
-                // sceKernelWaitSema HENUZ IMPLEMENTE DEGIL: bugun zincirin
-                // sonundaki varsayilan stub'a dusup RAX=0 donuyor. Hizli yola
-                // almak DAVRANISI DEGISTIRMEZ, yalnizca 195 string
-                // karsilastirmasini atlar. Olcum: cagri basina 19.933 dongu,
-                // saniyede ~42.000 cagri (menude en pahali ikinci kalem).
-                // NOT: gercek cozum semaforu implemente etmektir - oyun su an
-                // her zaman "basarili" cevabi aldigi icin bekleyen thread
-                // donuyor (spin). Bu yuzden cagri sayisi bu kadar yuksek.
-                else if (readable_name == "sceKernelWaitSema") f = FOP_RET0;
+                         readable_name == "uncaught_exception" ||
+                         readable_name == "sceKernelWaitSema") f = FOP_RET0;
                 s_fop[plt_index] = f;
                 fop = FOP_NONE; // ILK cagri normal yoldan gitsin (loglanabilsin)
             }

@@ -1,11 +1,12 @@
-﻿#include "linker.h"
+#include "linker.h"
 #include "scanner.h"
 #include "logger.h"
+#include "agc.h"
 
 // core.cpp: plt_index icin exception'siz native karsilik (yoksa nullptr).
 extern "C" void* PsemuNativePltStub(int plt_index);
 
-// Sahte (Stub) kÃ¼tÃ¼phane fonksiyonlarÄ±mÄ±z
+// Sahte (Stub) kütüphane fonksiyonlarımız
 extern "C" uint64_t Stub_sceLibcInit() {
     LOG_INFO("[PRX] libSceLibc -> sceLibcInit() Ã§aÄŸrÄ±ldÄ±! (Stubbed)");
     return 0;
@@ -38,6 +39,9 @@ static bool PatchGOT(uint64_t got_addr, uint64_t magic_addr) {
 void Linker::ResolveImports(uint8_t* base_addr, size_t text_size) {
     LOG_INFO("[LINKER] Dinamik kutuphane cagrilari (PRX Imports) cozumleniyor...");
     LOG_INFO("[LINKER] PLT/GOT Hook altyapisi kuruluyor...");
+    
+    // Grafik ve Kyty sembol veritabanini onceden baslat
+    Agc::EnsureKytyGraphicsInit();
     
     // Debug: text_size'i goster
     printf("[DEBUG-LINKER] base_addr=0x%llx, text_size=0x%llx\n", 

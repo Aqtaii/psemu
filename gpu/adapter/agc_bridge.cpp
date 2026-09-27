@@ -50,6 +50,20 @@ extern "C" bool PsemuKytyHasNid(const char* nid) {
 	return (rec != nullptr && rec->vaddr != 0);
 }
 
+// Kyty veritabanindaki fonksiyonun SysV ABI adresini dogrudan dondurur.
+// GOT'a yazilinca cagri VEH/exception olmadan dogrudan native calisir.
+extern "C" void* PsemuKytyGetFunc(const char* nid) {
+	if (nid == nullptr || nid[0] == '\0') {
+		return nullptr;
+	}
+	EnsureDb();
+	const Loader::SymbolRecord* rec = g_kyty_db->FindByNid(nid, Loader::SymbolType::Func);
+	if (rec != nullptr && rec->vaddr != 0) {
+		return reinterpret_cast<void*>(rec->vaddr);
+	}
+	return nullptr;
+}
+
 // Oyunun (suffix'siz) NID'siyle Kyty fonksiyonunu bulur ve SysV ABI ile cagirir.
 extern "C" bool PsemuKytyAgcCall(const char* nid, CONTEXT* ctx) {
 	EnsureDb();

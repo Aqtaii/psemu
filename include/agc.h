@@ -19,6 +19,8 @@
 
 namespace Agc {
 
+void EnsureKytyGraphicsInit();
+
 // `name` bu modulun ele aldigi bir AGC fonksiyonuysa: ctx'ten argumanlari okur,
 // HLE isini yapar, ctx->Rax'i ayarlar ve true doner. Degilse hicbir yan etki
 // birakmadan false doner (dispatch zinciri devam etsin diye).
