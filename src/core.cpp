@@ -6808,6 +6808,25 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         // Non-PLT EXEC violation handler (Harici kÃ¼tÃ¼phane atlamalarÄ±)
         // ================================================================
         if (access_type != 0 && access_type != 1) { // EXEC violation
+            void* page = reinterpret_cast<void*>(access_addr & ~0xFFFULL);
+            DWORD old_prot = 0;
+            if (VirtualProtect(page, 0x1000, PAGE_EXECUTE_READWRITE, &old_prot)) {
+                uint8_t* p = reinterpret_cast<uint8_t*>(access_addr);
+                p[0] = 0x31; // xor eax, eax
+                p[1] = 0xC0;
+                p[2] = 0xC3; // ret
+                FlushInstructionCache(GetCurrentProcess(), p, 3);
+                ctx->Rip = access_addr;
+                static std::atomic<int> s_nplt_logged{0};
+                if (s_nplt_logged.fetch_add(1) < 10) {
+                    std::stringstream nplt_ss;
+                    nplt_ss << "[PRX-HLE] Non-PLT EXEC adresi @ 0x" << std::hex << access_addr
+                            << " kalici 'xor eax,eax; ret' ile yamalandi.";
+                    LOG_INFO(nplt_ss.str());
+                }
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+
             std::stringstream nplt_ss;
             nplt_ss << "[PRX-HLE] Non-PLT EXEC Violation yakalandi @ 0x" << std::hex << access_addr;
             LOG_INFO(nplt_ss.str());
@@ -6820,7 +6839,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             // durduruyoruz (asagida normal CRASH/STACK DUMP raporuna dusuyoruz).
             static uint64_t s_recent_fault_addrs[2] = { 0, 0 };
             static int s_stuck_counter = 0;
-            constexpr int STUCK_LIMIT = 200;
+            constexpr int STUCK_LIMIT = 50000;
 
             bool seen_recently = (access_addr == s_recent_fault_addrs[0] || access_addr == s_recent_fault_addrs[1]);
             if (access_addr != s_recent_fault_addrs[0]) {
