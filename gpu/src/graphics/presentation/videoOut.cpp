@@ -415,6 +415,11 @@ static int DeleteVideoOutEvent(int handle, EventQueue::KernelEqueue eq, VideoOut
 }
 
 static void WaitForNextVblank() {
+	static const bool s_uncap = (std::getenv("PSEMU_UNCAP_FPS") != nullptr);
+	if (s_uncap) {
+		return;
+	}
+
 	static uint64_t next_vblank_ticks = 0;
 
 	const uint64_t frequency = Common::Timer::QueryPerformanceFrequency();

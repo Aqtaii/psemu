@@ -1,4 +1,4 @@
-﻿// psemu: SDL -> Win32.
+// psemu: SDL -> Win32.
 #include <windows.h>
 #include "common/assert.h"
 #include "common/common.h"
@@ -188,13 +188,21 @@ VulkanSwapchain::~VulkanSwapchain() = default;
 	EXIT_NOT_IMPLEMENTED(r->formats.empty());
 
 	vk::Extent2D extent {};
-	extent.width  = std::clamp(width, r->capabilities.minImageExtent.width,
-	                           r->capabilities.maxImageExtent.width);
-	extent.height = std::clamp(height, r->capabilities.minImageExtent.height,
-	                           r->capabilities.maxImageExtent.height);
+	if (r->capabilities.currentExtent.width != UINT32_MAX && r->capabilities.currentExtent.width != 0) {
+		extent = r->capabilities.currentExtent;
+	} else {
+		extent.width  = std::clamp(width, r->capabilities.minImageExtent.width,
+		                           r->capabilities.maxImageExtent.width);
+		extent.height = std::clamp(height, r->capabilities.minImageExtent.height,
+		                           r->capabilities.maxImageExtent.height);
+	}
 
-	image_count =
-	    std::clamp(image_count, r->capabilities.minImageCount, r->capabilities.maxImageCount);
+	if (image_count < r->capabilities.minImageCount) {
+		image_count = r->capabilities.minImageCount;
+	}
+	if (r->capabilities.maxImageCount > 0 && image_count > r->capabilities.maxImageCount) {
+		image_count = r->capabilities.maxImageCount;
+	}
 
 	vk::SwapchainCreateInfoKHR create_info {};
 	create_info.sType         = vk::StructureType::eSwapchainCreateInfoKHR;
@@ -221,10 +229,22 @@ VulkanSwapchain::~VulkanSwapchain() = default;
 	    vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransferDst;
 	create_info.imageSharingMode      = vk::SharingMode::eExclusive;
 	create_info.queueFamilyIndexCount = 0;
-	create_info.pQueueFamilyIndices   = nullptr;
 	create_info.preTransform          = r->capabilities.currentTransform;
 	create_info.compositeAlpha        = vk::CompositeAlphaFlagBitsKHR::eOpaque;
-	create_info.presentMode           = vk::PresentModeKHR::eFifo;
+	vk::PresentModeKHR chosen_present_mode = vk::PresentModeKHR::eFifo;
+	static const bool s_uncap = (std::getenv("PSEMU_UNCAP_FPS") != nullptr);
+	if (s_uncap) {
+		for (auto mode : r->present_modes) {
+			if (mode == vk::PresentModeKHR::eMailbox) {
+				chosen_present_mode = mode;
+				break;
+			}
+			if (mode == vk::PresentModeKHR::eImmediate) {
+				chosen_present_mode = mode;
+			}
+		}
+	}
+	create_info.presentMode           = chosen_present_mode;
 	create_info.clipped               = VK_TRUE;
 	create_info.oldSwapchain          = nullptr;
 

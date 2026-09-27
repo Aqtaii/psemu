@@ -15,12 +15,14 @@ REM  + null-byte sorunu YOK).
 REM ============================================================
 setlocal
 set "LOGFILE=loader_log.txt"
+set "ARGS=%*"
+if "%ARGS%"=="" set "ARGS=PPSA02929-app0\eboot.bin"
 
-echo [run.bat] Calistiriliyor: loader.exe %*
+echo [run.bat] Calistiriliyor: loader.exe %ARGS%
 echo [run.bat] Cikti CANLI: ekran + "%LOGFILE%" (UTF-8)
 echo.
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$sw=[System.IO.StreamWriter]::new('%LOGFILE%',$false,[System.Text.Encoding]::UTF8); $sw.AutoFlush=$true; try { cmd /c '.\loader.exe %* 2>&1' | ForEach-Object { [Console]::WriteLine($_); $sw.WriteLine($_) } } finally { $sw.Close() }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$sw=[System.IO.StreamWriter]::new('%LOGFILE%',$false,[System.Text.Encoding]::UTF8); $sw.AutoFlush=$true; try { cmd /c '.\loader.exe %ARGS% 2>&1' | ForEach-Object { [Console]::WriteLine($_); $sw.WriteLine($_) } } finally { $sw.Close() }"
 
 echo.
 echo ============================================================

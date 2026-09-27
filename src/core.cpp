@@ -1,4 +1,4 @@
-﻿#include "core.h"
+#include "core.h"
 #include "agc.h"
 #include "logger.h"
 #include "syscalls.h"
@@ -734,8 +734,21 @@ static PSEMU_SYSV int NativeMutexUnlock(uint64_t* slot) {
 static PSEMU_SYSV int NativeRet0() { return 0; }
 static PSEMU_SYSV int* NativeErrno() { return &g_guest_errno; }
 static PSEMU_SYSV int NativeStrcmp(const char* a, const char* b) {
-    if (a == nullptr || b == nullptr) return 0;
-    return strcmp(a, b);
+    if (a == nullptr || b == nullptr) return (a == b) ? 0 : (a ? 1 : -1);
+    __try {
+        return strcmp(a, b);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
+}
+static PSEMU_SYSV int NativeStrncmp(const char* a, const char* b, size_t n) {
+    if (n == 0) return 0;
+    if (a == nullptr || b == nullptr) return (a == b) ? 0 : (a ? 1 : -1);
+    __try {
+        return strncmp(a, b, n);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return 0;
+    }
 }
 static PSEMU_SYSV int NativeUsleep(uint64_t us) {
     const DWORD ms = static_cast<DWORD>(us / 1000);
@@ -888,6 +901,8 @@ extern "C" void* PsemuNativePltStub(int plt_index) {
     // VEH'teki erken dala gitmeli.
     if (n == "__error")           return reinterpret_cast<void*>(&NativeErrno);
     if (n == "strlen") return reinterpret_cast<void*>(&NativeStrlen);
+    if (n == "strcmp") return reinterpret_cast<void*>(&NativeStrcmp);
+    if (n == "strncmp") return reinterpret_cast<void*>(&NativeStrncmp);
     // DENENDI VE GERI ALINDI (2026-07-27): scePthreadGetthreadid.
     // Gerekce makuldu - Astro Bot'un is parcaciklari onu siki bir dongude
     // cagiriyor ve her cagri bir exception turu. Native'e alindi, GOT'a
