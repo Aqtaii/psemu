@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <string>
 #include <unordered_map>
 
@@ -236,6 +236,7 @@ inline std::unordered_map<std::string, std::string> g_nid_to_name = {
     {"2AA9QT1IUgs#O#P", "_ZNK3sce2Np9CppWebApi14SessionManager2V119PlayerSessionPlayer16getJoinTimestampEv"},
     {"2HRyZzguZzs#O#P", "_ZN3sce2Np9CppWebApi6Common15TransactionBaseINS2_12IntrusivePtrINS1_14SessionManager2V155PostPlayerSessionsSessionIdMemberSpectatorsResponseBodyEEENS4_INS2_18ResponseHeaderBaseEEEE6finishEv"},
     {"2HnmKiLmV6s#s#s", "_Atomic_fetch_sub_4"},
+    {"2HnmKiLmV6s#T#T", "_Atomic_fetch_sub_4"},
     {"2V-RL56o5cU#O#P", "_ZNK3sce2Np9CppWebApi6Common12IntrusivePtrINS1_14SessionManager2V126RequestPlayerSessionPlayerEEptEv"},
     {"2eoKrZYhFTw#O#P", "_ZN3sce2Np9CppWebApi6Common11TransactionINS2_12IntrusivePtrINS1_14SessionManager2V150PostGameSessionsSessionIdMemberPlayersResponseBodyEEENS4_INS2_18ResponseHeaderBaseEEEED1Ev"},
     {"2iNYrcGDF6g#O#P", "_ZNK3sce2Np9CppWebApi14SessionManager2V120PlayerSessionForRead11leaderIsSetEv"},
@@ -1009,6 +1010,7 @@ inline std::unordered_map<std::string, std::string> g_nid_to_name = {
     {"iGNQ7R33THQ#O#P", "_ZN3sce2Np9CppWebApi6Common6VectorINS2_12IntrusivePtrINS1_14SessionManager2V117GameSessionPlayerEEEE5beginEv"},
     {"iMgibUAAwdg#O#P", "_ZNK3sce2Np9CppWebApi6Common12IntrusivePtrINS2_6VectorINS3_INS1_14SessionManager2V120PlayerSessionForReadEEEEEEdeEv"},
     {"iPBqs+YUUFw#s#s", "_Atomic_fetch_add_4"},
+    {"iPBqs+YUUFw#T#T", "_Atomic_fetch_add_4"},
     {"iPfI2v+oYnQ#O#P", "_ZN3sce2Np9CppWebApi6Common8IteratorINS2_12IntrusivePtrINS1_11UserProfile2V112BasicProfileEEEEppEv"},
     {"iRNZ5GV5b0Q#O#P", "_ZNK3sce2Np9CppWebApi12Leaderboards2V122GetRankingResponseBody18getTotalEntryCountEv"},
     {"iS4aWbUonl0#s#s", "_Mtx_lock"},

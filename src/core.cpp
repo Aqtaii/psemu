@@ -733,6 +733,30 @@ static PSEMU_SYSV int NativeMutexUnlock(uint64_t* slot) {
 // Davranis birebir ayni, yalnizca exception maliyeti yok.
 static PSEMU_SYSV int NativeRet0() { return 0; }
 static PSEMU_SYSV int* NativeErrno() { return &g_guest_errno; }
+
+static PSEMU_SYSV int32_t NativeAtomicFetchAdd4(volatile int32_t* obj, int32_t val, int /*order*/ = 0) {
+    if (!obj) return 0;
+    return _InterlockedExchangeAdd(reinterpret_cast<volatile long*>(obj), val);
+}
+
+static PSEMU_SYSV int32_t NativeAtomicFetchSub4(volatile int32_t* obj, int32_t val, int /*order*/ = 0) {
+    if (!obj) return 0;
+    return _InterlockedExchangeAdd(reinterpret_cast<volatile long*>(obj), -val);
+}
+
+static PSEMU_SYSV int32_t NativeAtomicLoad4(volatile const int32_t* obj, int /*order*/ = 0) {
+    if (!obj) return 0;
+    return *obj;
+}
+
+static PSEMU_SYSV int NativeAtomicCompareExchangeWeak4(volatile int32_t* obj, int32_t* expected, int32_t desired, int /*succ*/ = 0, int /*fail*/ = 0) {
+    if (!obj || !expected) return 0;
+    long exp = *expected;
+    long old = _InterlockedCompareExchange(reinterpret_cast<volatile long*>(obj), desired, exp);
+    if (old == exp) return 1;
+    *expected = old;
+    return 0;
+}
 static PSEMU_SYSV int NativeStrcmp(const char* a, const char* b) {
     if (a == nullptr || b == nullptr) return (a == b) ? 0 : (a ? 1 : -1);
     __try {
@@ -874,7 +898,10 @@ static PSEMU_SYSV int NativePthreadYield() {
     return 0;
 }
 
-static PSEMU_SYSV int NativeCondSignal(void* /*cond*/) {
+static GuestCond* GetOrCreateCond(uint64_t* slot);
+static PSEMU_SYSV int NativeCondSignal(uint64_t* slot) {
+    GuestCond* c = GetOrCreateCond(slot);
+    if (c != nullptr) WakeConditionVariable(&c->cv);
     return 0;
 }
 
@@ -951,6 +978,10 @@ extern "C" void* PsemuNativeDataSymbol(const char* raw_nid) {
     if (n == "free")                 return reinterpret_cast<void*>(&NativeFree);
     if (n == "memcpy")               return reinterpret_cast<void*>(&NativeMemcpy);
     if (n == "memset")               return reinterpret_cast<void*>(&NativeMemset);
+    if (n == "_Atomic_fetch_add_4")  return reinterpret_cast<void*>(&NativeAtomicFetchAdd4);
+    if (n == "_Atomic_fetch_sub_4")  return reinterpret_cast<void*>(&NativeAtomicFetchSub4);
+    if (n == "_Atomic_load_4")       return reinterpret_cast<void*>(&NativeAtomicLoad4);
+    if (n == "_Atomic_compare_exchange_weak_4") return reinterpret_cast<void*>(&NativeAtomicCompareExchangeWeak4);
     return nullptr;
 }
 
@@ -1085,6 +1116,16 @@ extern "C" void* PsemuNativePltStub(int plt_index) {
         return reinterpret_cast<void*>(&NativePthreadYield);
     if (n == "scePthreadCondSignal" || n == "pthread_cond_signal")
         return reinterpret_cast<void*>(&NativeCondSignal);
+
+    // Atomikler (C11 / libc++ atomik operasyonlar)
+    if (n == "_Atomic_fetch_add_4")
+        return reinterpret_cast<void*>(&NativeAtomicFetchAdd4);
+    if (n == "_Atomic_fetch_sub_4")
+        return reinterpret_cast<void*>(&NativeAtomicFetchSub4);
+    if (n == "_Atomic_load_4")
+        return reinterpret_cast<void*>(&NativeAtomicLoad4);
+    if (n == "_Atomic_compare_exchange_weak_4")
+        return reinterpret_cast<void*>(&NativeAtomicCompareExchangeWeak4);
 
     if (n == "__error") return reinterpret_cast<void*>(&NativeErrno);
 
@@ -2125,7 +2166,7 @@ extern "C" void PsemuDumpPltTop() {
         // OYUN THREAD'INDEKI DUVAR SAATINE gore sirala: kare suresini yiyen sey
         // budur (bloklayan cagrilar dongu harcamaz ama kareyi yer).
         for (int k = 0; k < 12; k++) {
-            if (dw > top[k].wall) {
+            if (dn > top[k].calls) {
                 for (int m = 11; m > k; m--) top[m] = top[m - 1];
                 top[k] = Row{i, dn, dc, dw};
                 break;
@@ -2153,15 +2194,13 @@ extern "C" void PsemuDumpPltTop() {
     LARGE_INTEGER qf;
     QueryPerformanceFrequency(&qf);
     const double ms_per_tick = 1000.0 / static_cast<double>(qf.QuadPart);
-    printf("[PLT-TOP] OYUN THREAD'inde HLE icinde gecen sure (son aralik, toplam %.0f ms):\n",
-           static_cast<double>(total_wall) * ms_per_tick);
+    printf("[PLT-TOP] En cok cagrilan PLT fonksiyonlari (son aralik):\n");
     for (int k = 0; k < 12 && top[k].calls > 0; k++) {
         const std::string* rn = g_plt_rn_cache[top[k].idx];
         const std::string* fn = g_plt_fn_cache[top[k].idx];
         const char* nm = (rn && !rn->empty()) ? rn->c_str() : (fn ? fn->c_str() : "?");
-        printf("   %8.1f ms  %6u cagri  %7.3f ms/cagri  PLT#%u %s\n",
-               static_cast<double>(top[k].wall) * ms_per_tick, top[k].calls,
-               top[k].calls ? static_cast<double>(top[k].wall) * ms_per_tick / top[k].calls : 0.0,
+        printf("   %6u cagri (%8.1f ms)  PLT#%u %s\n",
+               top[k].calls, static_cast<double>(top[k].wall) * ms_per_tick,
                top[k].idx, nm);
     }
     fflush(stdout);
@@ -3093,8 +3132,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 // (_Locksyslock/_Unlocksyslock MSVC STL locale kodunda cok sik cagrilir.)
                 else if (readable_name == "_Locksyslock" ||
                          readable_name == "_Unlocksyslock" ||
-                         readable_name == "uncaught_exception" ||
-                         readable_name == "sceKernelWaitSema") f = FOP_RET0;
+                         readable_name == "uncaught_exception") f = FOP_RET0;
                 s_fop[plt_index] = f;
                 fop = FOP_NONE; // ILK cagri normal yoldan gitsin (loglanabilsin)
             }
@@ -3275,6 +3313,61 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 uint32_t x = s_rnd.fetch_add(0x6D2B79F5u, std::memory_order_relaxed);
                 x ^= x >> 15; x *= 0x2C1B3C6Du; x ^= x >> 12; x *= 0x297A2D39u; x ^= x >> 15;
                 ctx->Rax  = x;
+                ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                ctx->Rsp += 8;
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+
+            // ========================================================
+            // _Atomic_* - C11 / libc++ ATOMIK OPERASYONLAR
+            // ========================================================
+            if (readable_name == "_Atomic_fetch_add_4") {
+                volatile int32_t* ptr = reinterpret_cast<volatile int32_t*>(ctx->Rdi);
+                int32_t val = static_cast<int32_t>(ctx->Rsi);
+                if (ptr && SafeWritable(const_cast<int32_t*>(ptr), 4)) {
+                    ctx->Rax = static_cast<uint64_t>(_InterlockedExchangeAdd(reinterpret_cast<volatile long*>(ptr), val));
+                } else {
+                    ctx->Rax = 0;
+                }
+                ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                ctx->Rsp += 8;
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+            if (readable_name == "_Atomic_fetch_sub_4") {
+                volatile int32_t* ptr = reinterpret_cast<volatile int32_t*>(ctx->Rdi);
+                int32_t val = static_cast<int32_t>(ctx->Rsi);
+                if (ptr && SafeWritable(const_cast<int32_t*>(ptr), 4)) {
+                    ctx->Rax = static_cast<uint64_t>(_InterlockedExchangeAdd(reinterpret_cast<volatile long*>(ptr), -val));
+                } else {
+                    ctx->Rax = 0;
+                }
+                ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                ctx->Rsp += 8;
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+            if (readable_name == "_Atomic_load_4") {
+                volatile const int32_t* ptr = reinterpret_cast<volatile const int32_t*>(ctx->Rdi);
+                ctx->Rax  = (ptr && SafeReadable(const_cast<int32_t*>(ptr), 4)) ? *ptr : 0;
+                ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                ctx->Rsp += 8;
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
+            if (readable_name == "_Atomic_compare_exchange_weak_4") {
+                volatile int32_t* ptr = reinterpret_cast<volatile int32_t*>(ctx->Rdi);
+                int32_t* exp = reinterpret_cast<int32_t*>(ctx->Rsi);
+                int32_t desired = static_cast<int32_t>(ctx->Rdx);
+                if (ptr && exp && SafeWritable(const_cast<int32_t*>(ptr), 4) && SafeWritable(exp, 4)) {
+                    long expected_val = *exp;
+                    long old = _InterlockedCompareExchange(reinterpret_cast<volatile long*>(ptr), desired, expected_val);
+                    if (old == expected_val) {
+                        ctx->Rax = 1;
+                    } else {
+                        *exp = old;
+                        ctx->Rax = 0;
+                    }
+                } else {
+                    ctx->Rax = 0;
+                }
                 ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
                 ctx->Rsp += 8;
                 return EXCEPTION_CONTINUE_EXECUTION;
@@ -6809,11 +6902,13 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         // ================================================================
         if (access_type != 0 && access_type != 1) { // EXEC violation
             void* page = reinterpret_cast<void*>(access_addr & ~0xFFFULL);
-            void* allocated = VirtualAlloc(page, 0x1000, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-            if (!allocated) {
-                allocated = VirtualAlloc(page, 0x1000, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+            DWORD old_prot = 0;
+            bool ok = VirtualProtect(page, 0x1000, PAGE_EXECUTE_READWRITE, &old_prot) != 0;
+            if (!ok) {
+                ok = (VirtualAlloc(page, 0x1000, MEM_COMMIT, PAGE_EXECUTE_READWRITE) != nullptr) ||
+                     (VirtualAlloc(page, 0x1000, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE) != nullptr);
             }
-            if (allocated) {
+            if (ok) {
                 uint8_t* p = reinterpret_cast<uint8_t*>(access_addr);
                 p[0] = 0x31; // xor eax, eax
                 p[1] = 0xC0;
@@ -6821,10 +6916,16 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 FlushInstructionCache(GetCurrentProcess(), p, 3);
                 ctx->Rip = access_addr;
                 static std::atomic<int> s_nplt_logged{0};
-                if (s_nplt_logged.fetch_add(1) < 10) {
+                if (s_nplt_logged.fetch_add(1) < 20) {
+                    uint64_t ret_addr = (SafeReadable(reinterpret_cast<void*>(ctx->Rsp), 8)) ?
+                                        *reinterpret_cast<uint64_t*>(ctx->Rsp) : 0;
                     std::stringstream nplt_ss;
                     nplt_ss << "[PRX-HLE] Non-PLT EXEC adresi @ 0x" << std::hex << access_addr
-                            << " kalici 'xor eax,eax; ret' ile olusturuldu.";
+                            << " (cagiran RET: 0x" << ret_addr;
+                    if (IsInModuleRange(ret_addr)) {
+                        nplt_ss << " [RVA: 0x" << (ret_addr - g_base_addr) << "]";
+                    }
+                    nplt_ss << ") kalici 'xor eax,eax; ret' ile yamalandi.";
                     LOG_INFO(nplt_ss.str());
                 }
                 return EXCEPTION_CONTINUE_EXECUTION;
@@ -6892,6 +6993,23 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     // Asagiya devam et, normal CRASH loglari basilsin
                 }
             }
+        }
+
+        // Construct 2 std::string::assign (0x104ac0) guard:
+        // CFunction veya Event sheet calisirken parametre dizesi yok/bos referans (RSI=0 veya gecersiz)
+        // olabiliyor. 0x104ace'de mov rax, [rsi + 0x18] dogrudan erisim ihlaline yol acar.
+        // RSI okunamaz ise fonksiyonun bos dize atayip dondugu 0x104c0f adresine
+        // yonlendiriyoruz: boylece dize "" (bos) kalir ve motor guvenle ilerler.
+        if (ctx->Rip == g_base_addr + 0x104ace && !SafeReadable(reinterpret_cast<void*>(ctx->Rsi), 32)) {
+            ctx->R14 = ctx->Rdi;
+            ctx->Rax = (ctx->Rdi && SafeReadable(reinterpret_cast<void*>(ctx->Rdi + 0x20), 8)) ?
+                       *reinterpret_cast<uint64_t*>(ctx->Rdi + 0x20) : 0;
+            ctx->Rip = g_base_addr + 0x104c0f;
+            static std::atomic<int> s_str_null_logged{0};
+            if (s_str_null_logged.fetch_add(1) < 10) {
+                LOG_INFO("[CONSTRUCT2-FIX] 0x104ace std::string::assign NULL/gecersiz rsi bypass -> bos dize donduruldu");
+            }
+            return EXCEPTION_CONTINUE_EXECUTION;
         }
 
         ss_init() << " | " << (access_type == 0 ? "READ" : (access_type == 1 ? "WRITE" : "EXEC"))

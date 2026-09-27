@@ -29,6 +29,16 @@ void InitPad_1(Loader::SymbolDatabase* s);
 
 namespace {
 Loader::SymbolDatabase* g_kyty_db = nullptr;
+Loader::SymbolDatabase* g_graphics_db = nullptr;
+
+void EnsureGraphicsDb() {
+	if (g_graphics_db != nullptr) {
+		return;
+	}
+	auto* db = new Loader::SymbolDatabase;
+	Libs::InitGraphicsDriver_1(db); // SADECE AGC Dcb + Graphics + GraphicsDriver
+	g_graphics_db = db;
+}
 
 void EnsureDb() {
 	if (g_kyty_db != nullptr) {
@@ -52,12 +62,15 @@ extern "C" bool PsemuKytyHasNid(const char* nid) {
 
 // Kyty veritabanindaki fonksiyonun SysV ABI adresini dogrudan dondurur.
 // GOT'a yazilinca cagri VEH/exception olmadan dogrudan native calisir.
+// KRITIK: Yalnizca InitGraphicsDriver_1 fonksiyonlarini dondurur.
+// sceVideoOut* ve scePad* fonksiyonlari HLE handler'larinda ozel mantiga
+// (Video::Flip, pad handle=1 kontrolu) bagli oldugundan GOT'tan dogrudan kancalanmaz.
 extern "C" void* PsemuKytyGetFunc(const char* nid) {
 	if (nid == nullptr || nid[0] == '\0') {
 		return nullptr;
 	}
-	EnsureDb();
-	const Loader::SymbolRecord* rec = g_kyty_db->FindByNid(nid, Loader::SymbolType::Func);
+	EnsureGraphicsDb();
+	const Loader::SymbolRecord* rec = g_graphics_db->FindByNid(nid, Loader::SymbolType::Func);
 	if (rec != nullptr && rec->vaddr != 0) {
 		return reinterpret_cast<void*>(rec->vaddr);
 	}
