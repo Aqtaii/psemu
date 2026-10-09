@@ -31,6 +31,8 @@ static LONG WINAPI TestVeh(EXCEPTION_POINTERS* info) {
     ExitProcess(2);
 }
 int main() {
+    setvbuf(stdout, nullptr, _IONBF, 0);
+    std::puts("STAGE valid atomics");
     auto* veh = AddVectoredExceptionHandler(1, TestVeh);
     CHECK(veh != nullptr);
     volatile int32_t value = 7;
@@ -42,6 +44,7 @@ int main() {
     expected = 3;
     CHECK(NativeAtomicCompareExchangeWeak4(&value, &expected, 11) == 0 && expected == 9 && value == 9);
     const auto queries = g_vq_calls.load();
+    std::puts("STAGE concurrent atomics");
     volatile int32_t shared = 0;
     std::vector<std::thread> workers;
     for (int i = 0; i < 4; ++i) workers.emplace_back([&] {
@@ -51,6 +54,7 @@ int main() {
     CHECK(shared == 400000);
     CHECK(g_vq_calls.load() == queries);
     CHECK(!NativeAtomicGuard::active);
+    std::puts("STAGE low pointers");
     for (uintptr_t address : {uintptr_t(0), uintptr_t(0xa), uintptr_t(0xfffc)}) {
         auto* bad = reinterpret_cast<volatile int32_t*>(address);
         CHECK(NativeAtomicFetchAdd4(bad, 1) == 0);
@@ -60,6 +64,7 @@ int main() {
         CHECK(NativeAtomicCompareExchangeWeak4(&value, const_cast<int32_t*>(bad), 1) == 0);
     }
     CHECK(g_vq_calls.load() == queries);
+    std::puts("STAGE benchmark");
     LARGE_INTEGER frequency, begin, end;
     QueryPerformanceFrequency(&frequency);
     QueryPerformanceCounter(&begin);
@@ -83,6 +88,7 @@ int main() {
     *page = 21;
     DWORD previous;
     CHECK(VirtualProtect(page, info.dwPageSize, PAGE_READONLY, &previous));
+    std::puts("STAGE readonly memory");
     CHECK(NativeAtomicLoad4(page) == 21);
     CHECK(NativeAtomicFetchSub4(page, 1) == 0 && *page == 21);
     CHECK(NativeAtomicFetchAdd4(page, 1) == 0 && *page == 21);
@@ -93,15 +99,18 @@ int main() {
     CHECK(VirtualProtect(page, info.dwPageSize, PAGE_READONLY, &previous));
     CHECK(NativeAtomicCompareExchangeWeak4(&value, page, 123) == 0 && value == 9 && *page == 9);
     auto* second = reinterpret_cast<int32_t*>(reinterpret_cast<uint8_t*>(page) + info.dwPageSize);
+    std::puts("STAGE noaccess memory");
     CHECK(VirtualProtect(second, info.dwPageSize, PAGE_NOACCESS, &previous));
     CHECK(NativeAtomicLoad4(second) == 0);
     CHECK(NativeAtomicFetchSub4(second, 1) == 0);
     auto* boundary = reinterpret_cast<int32_t*>(reinterpret_cast<uint8_t*>(second) - 2);
     CHECK(NativeAtomicLoad4(boundary) == 0);
     CHECK(NativeAtomicFetchAdd4(boundary, 1) == 0);
+    std::puts("STAGE guard memory");
     CHECK(VirtualProtect(page, info.dwPageSize, PAGE_READWRITE | PAGE_GUARD, &previous));
     CHECK(NativeAtomicLoad4(page) == 0);
     CHECK(NativeAtomicFetchSub4(page, 1) == 0);
+    std::puts("STAGE released memory");
     CHECK(VirtualFree(page, 0, MEM_RELEASE));
     CHECK(NativeAtomicLoad4(page) == 0);
     CHECK(NativeAtomicFetchAdd4(page, 1) == 0);
@@ -120,7 +129,7 @@ try {
     & clang-cl /nologo /std:c++20 /Od /EHsc /MD "/I$root\include" $file /Fe:native_atomic_test.exe
     if ($LASTEXITCODE -ne 0) { throw 'Native atomic test compilation failed' }
     & '.\native_atomic_test.exe'
-    if ($LASTEXITCODE -ne 0) { throw 'Native atomic regression test failed' }
+    if ($LASTEXITCODE -ne 0) { throw "Native atomic regression test failed, exit code $LASTEXITCODE" }
 } finally {
     Pop-Location
 }
