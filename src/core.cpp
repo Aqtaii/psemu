@@ -1,4 +1,5 @@
 #include "core.h"
+#include "native_atomic_guard.h"
 #include "agc.h"
 #include "logger.h"
 #include "syscalls.h"
@@ -750,34 +751,62 @@ static PSEMU_SYSV int NativeMutexUnlock(uint64_t* slot) {
 static PSEMU_SYSV int NativeRet0() { return 0; }
 static PSEMU_SYSV int* NativeErrno() { return &g_guest_errno; }
 
+// Live sampling found VirtualQuery dominating valid atomic imports. Keep
+// invalid-pointer behavior through local SEH, with no system calls on success.
 static PSEMU_SYSV int32_t NativeAtomicFetchAdd4(volatile int32_t* obj, int32_t val, int /*order*/ = 0) {
-    if (reinterpret_cast<uintptr_t>(obj) < 0x10000 ||
-        !SafeWritable(const_cast<int32_t*>(obj), sizeof(*obj))) return 0;
-    return _InterlockedExchangeAdd(reinterpret_cast<volatile long*>(obj), val);
+    if (reinterpret_cast<uintptr_t>(obj) < 0x10000) return 0;
+    const bool previous = NativeAtomicGuard::active;
+    NativeAtomicGuard::active = true;
+    int32_t result = 0;
+    __try {
+        result = _InterlockedExchangeAdd(reinterpret_cast<volatile long*>(obj), val);
+    } __except (NativeAtomicGuard::Filter(GetExceptionInformation())) {}
+    NativeAtomicGuard::active = previous;
+    return result;
 }
 
 static PSEMU_SYSV int32_t NativeAtomicFetchSub4(volatile int32_t* obj, int32_t val, int /*order*/ = 0) {
-    if (reinterpret_cast<uintptr_t>(obj) < 0x10000 ||
-        !SafeWritable(const_cast<int32_t*>(obj), sizeof(*obj))) return 0;
-    return _InterlockedExchangeAdd(reinterpret_cast<volatile long*>(obj), -val);
+    if (reinterpret_cast<uintptr_t>(obj) < 0x10000) return 0;
+    const bool previous = NativeAtomicGuard::active;
+    NativeAtomicGuard::active = true;
+    int32_t result = 0;
+    __try {
+        // Unsigned subtraction also handles INT32_MIN without signed overflow.
+        result = _InterlockedExchangeAdd(reinterpret_cast<volatile long*>(obj),
+                                         static_cast<long>(0u - static_cast<uint32_t>(val)));
+    } __except (NativeAtomicGuard::Filter(GetExceptionInformation())) {}
+    NativeAtomicGuard::active = previous;
+    return result;
 }
 
 static PSEMU_SYSV int32_t NativeAtomicLoad4(volatile const int32_t* obj, int /*order*/ = 0) {
-    if (reinterpret_cast<uintptr_t>(obj) < 0x10000 ||
-        !SafeReadable(const_cast<const int32_t*>(obj), sizeof(*obj))) return 0;
-    return *obj;
+    if (reinterpret_cast<uintptr_t>(obj) < 0x10000) return 0;
+    const bool previous = NativeAtomicGuard::active;
+    NativeAtomicGuard::active = true;
+    int32_t result = 0;
+    __try {
+        result = *obj;
+    } __except (NativeAtomicGuard::Filter(GetExceptionInformation())) {}
+    NativeAtomicGuard::active = previous;
+    return result;
 }
 
 static PSEMU_SYSV int NativeAtomicCompareExchangeWeak4(volatile int32_t* obj, int32_t* expected, int32_t desired, int /*succ*/ = 0, int /*fail*/ = 0) {
     if (reinterpret_cast<uintptr_t>(obj) < 0x10000 ||
-        reinterpret_cast<uintptr_t>(expected) < 0x10000 ||
-        !SafeWritable(const_cast<int32_t*>(obj), sizeof(*obj)) ||
-        !SafeWritable(expected, sizeof(*expected))) return 0;
-    long exp = *expected;
-    long old = _InterlockedCompareExchange(reinterpret_cast<volatile long*>(obj), desired, exp);
-    if (old == exp) return 1;
-    *expected = old;
-    return 0;
+        reinterpret_cast<uintptr_t>(expected) < 0x10000) return 0;
+    const bool previous = NativeAtomicGuard::active;
+    NativeAtomicGuard::active = true;
+    int result = 0;
+    __try {
+        // Validate expected's write access before changing obj, including when
+        // CAS succeeds. This RMW leaves its value unchanged on both branches.
+        const long exp = _InterlockedCompareExchange(reinterpret_cast<volatile long*>(expected), 0, 0);
+        const long old = _InterlockedCompareExchange(reinterpret_cast<volatile long*>(obj), desired, exp);
+        if (old == exp) result = 1;
+        else *expected = old;
+    } __except (NativeAtomicGuard::Filter(GetExceptionInformation())) {}
+    NativeAtomicGuard::active = previous;
+    return result;
 }
 static PSEMU_SYSV int NativeStrcmp(const char* a, const char* b) {
     if (a == nullptr || b == nullptr) return (a == b) ? 0 : (a ? 1 : -1);
@@ -2297,6 +2326,8 @@ struct VehTimer {
 } // namespace
 
 LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
+    if (NativeAtomicGuard::DeferException(ExceptionInfo->ExceptionRecord->ExceptionCode))
+        return EXCEPTION_CONTINUE_SEARCH;
     VehTimer veh_timer;
     DWORD code = ExceptionInfo->ExceptionRecord->ExceptionCode;
     PCONTEXT ctx = ExceptionInfo->ContextRecord;
