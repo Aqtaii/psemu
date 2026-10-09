@@ -3,6 +3,7 @@
 #include "logger.h"
 #include "syscalls.h"
 #include <string>
+#include <array>
 #include <sstream>
 #include <iomanip>
 #include <cstring>
