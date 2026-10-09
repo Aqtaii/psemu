@@ -34,6 +34,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR})
 set(PSEMU_SOURCES
     src/agc.cpp src/core.cpp src/game_profile.cpp src/linker.cpp
     src/loader.cpp src/logger.cpp src/scanner.cpp src/syscalls.cpp src/video.cpp
+    src/native_atomic_guard.cpp
 )
 
 add_executable(loader ${PSEMU_SOURCES})
@@ -49,6 +50,8 @@ if(MSVC)
     # Optimizasyonu kapatiyoruz; release CRT (-MD, IDL=0) korunuyor ki gpu/SDK
     # lib'leriyle linklenebilsin. Strict-aliasing UB'sini de kapatiyoruz.
     target_compile_options(loader PRIVATE /Od)
+    # Hardware-fault recovery is isolated; preserve the rest of the core's flags.
+    set_source_files_properties(src/native_atomic_guard.cpp PROPERTIES COMPILE_OPTIONS "/EHa")
     if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         target_compile_options(loader PRIVATE /clang:-fno-strict-aliasing)
     endif()
