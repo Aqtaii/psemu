@@ -925,15 +925,24 @@ static PSEMU_SYSV int NativeUsleep(uint64_t us) {
     Sleep(ms != 0 ? ms : 1);
     return 0;
 }
-// Same 1024-byte identity table used by the existing HLE fallback.
+// Guest ctype<char> reads 16-bit case maps at +0x18 (lower) and +0x20 (upper).
 // Constant initialization makes the address stable across threads without
 // per-character VirtualAlloc checks, exception dispatch or string matching.
 static constexpr auto g_native_char_table = [] {
     std::array<uint8_t, 1024> table{};
-    for (size_t i = 0; i < 256; ++i) table[i * 2] = static_cast<uint8_t>(i);
+    for (size_t i = 0; i < 256; ++i)
+        table[i * 2] = static_cast<uint8_t>(i >= 'A' && i <= 'Z' ? i + ('a' - 'A') : i);
     return table;
 }();
 static PSEMU_SYSV const void* NativeCharTable() { return g_native_char_table.data(); }
+static constexpr auto g_native_upper_table = [] {
+    std::array<uint8_t, 1024> table{};
+    for (size_t i = 0; i < 256; ++i)
+        table[i * 2] = static_cast<uint8_t>(i >= 'a' && i <= 'z' ? i - ('a' - 'A') : i);
+    return table;
+}();
+static PSEMU_SYSV const void* NativeUpperTable() { return g_native_upper_table.data(); }
+
 static PSEMU_SYSV uint64_t NativeReturnZero() { return 0; }
 
 // ============================================================================
@@ -1161,6 +1170,7 @@ extern "C" void* PsemuNativePltStub(int plt_index) {
 
     if (n == "__error") return reinterpret_cast<void*>(&NativeErrno);
     if (n == "libc_char_table") return reinterpret_cast<void*>(&NativeCharTable);
+    if (n == "_Getptoupper") return reinterpret_cast<void*>(&NativeUpperTable);
     // These functions already take the FOP_RET0 path in the VEH handler.
     if (n == "_Locksyslock" || n == "_Unlocksyslock" || n == "uncaught_exception")
         return reinterpret_cast<void*>(&NativeReturnZero);
@@ -5362,6 +5372,9 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     }
                 }
                 ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(result));
+                special_return_set = true;
+            } else if (readable_name == "_Getptoupper") {
+                ctx->Rax = reinterpret_cast<uint64_t>(NativeUpperTable());
                 special_return_set = true;
             } else if (func_name.find("sUP1hBaouOw") != std::string::npos) {
                 // _Getpctype(): CRT'nin KARAKTER TIPI TABLOSUNU dondurur.
