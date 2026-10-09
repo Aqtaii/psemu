@@ -45,6 +45,10 @@ jobs:
             Get-Command $tool -ErrorAction Stop | Select-Object Name, Source
           }
 
+      - name: Test native atomics against invalid guest pointers
+        shell: pwsh
+        run: ./tools/scripts/test_native_atomics.ps1
+
       - name: Install pinned Vulkan SDK on runner
         shell: pwsh
         run: |

@@ -735,22 +735,28 @@ static PSEMU_SYSV int NativeRet0() { return 0; }
 static PSEMU_SYSV int* NativeErrno() { return &g_guest_errno; }
 
 static PSEMU_SYSV int32_t NativeAtomicFetchAdd4(volatile int32_t* obj, int32_t val, int /*order*/ = 0) {
-    if (!obj) return 0;
+    if (reinterpret_cast<uintptr_t>(obj) < 0x10000 ||
+        !SafeWritable(const_cast<int32_t*>(obj), sizeof(*obj))) return 0;
     return _InterlockedExchangeAdd(reinterpret_cast<volatile long*>(obj), val);
 }
 
 static PSEMU_SYSV int32_t NativeAtomicFetchSub4(volatile int32_t* obj, int32_t val, int /*order*/ = 0) {
-    if (!obj) return 0;
+    if (reinterpret_cast<uintptr_t>(obj) < 0x10000 ||
+        !SafeWritable(const_cast<int32_t*>(obj), sizeof(*obj))) return 0;
     return _InterlockedExchangeAdd(reinterpret_cast<volatile long*>(obj), -val);
 }
 
 static PSEMU_SYSV int32_t NativeAtomicLoad4(volatile const int32_t* obj, int /*order*/ = 0) {
-    if (!obj) return 0;
+    if (reinterpret_cast<uintptr_t>(obj) < 0x10000 ||
+        !SafeReadable(const_cast<const int32_t*>(obj), sizeof(*obj))) return 0;
     return *obj;
 }
 
 static PSEMU_SYSV int NativeAtomicCompareExchangeWeak4(volatile int32_t* obj, int32_t* expected, int32_t desired, int /*succ*/ = 0, int /*fail*/ = 0) {
-    if (!obj || !expected) return 0;
+    if (reinterpret_cast<uintptr_t>(obj) < 0x10000 ||
+        reinterpret_cast<uintptr_t>(expected) < 0x10000 ||
+        !SafeWritable(const_cast<int32_t*>(obj), sizeof(*obj)) ||
+        !SafeWritable(expected, sizeof(*expected))) return 0;
     long exp = *expected;
     long old = _InterlockedCompareExchange(reinterpret_cast<volatile long*>(obj), desired, exp);
     if (old == exp) return 1;
