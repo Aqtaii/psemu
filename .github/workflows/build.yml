@@ -1,26 +1,98 @@
-name: Build C++ Loader
+name: Build psemu Windows
 
-on: 
+on:
   push:
-  workflow_dispatch: # Manuel tetikleme butonu ekler
+    branches: [main, branch-dreaming-sarah]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  build:
-    runs-on: windows-latest
-
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    env:
+      VULKAN_VERSION: 1.4.350.0
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup MSVC (Visual Studio Compiler)
+      - name: Set up x64 Visual Studio environment
         uses: ilammy/msvc-dev-cmd@v1
-        
-      - name: Build Loader
+        with:
+          arch: x64
+
+      - name: Locate build tools
+        shell: pwsh
         run: |
-          cl /EHsc /std:c++17 loader.cpp logger.cpp syscalls.cpp core.cpp scanner.cpp linker.cpp /link /out:loader.exe
-        
-      - name: Olusan EXE dosyasini yuke
+          $ErrorActionPreference = 'Stop'
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw 'Visual Studio C++ tools not found' }
+          $toolDirs = @(
+            "$env:ProgramFiles\LLVM\bin",
+            "$vs\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin",
+            "$vs\Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja"
+          )
+          foreach ($dir in $toolDirs) {
+            if (Test-Path -LiteralPath $dir) {
+              $dir | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+              $env:PATH = "$dir;$env:PATH"
+            }
+          }
+          foreach ($tool in @('cmake', 'ninja', 'clang-cl', 'lld-link')) {
+            Get-Command $tool -ErrorAction Stop | Select-Object Name, Source
+          }
+
+      - name: Install pinned Vulkan SDK on runner
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Join-Path $env:RUNNER_TEMP 'vulkan_sdk.exe'
+          $sdk = Join-Path $env:RUNNER_TEMP "VulkanSDK\$env:VULKAN_VERSION"
+          $url = "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/vulkan_sdk.exe"
+          Invoke-WebRequest -Uri $url -OutFile $installer
+          $args = @('--root', $sdk, '--accept-licenses', '--default-answer', '--confirm-command', 'install', 'copy_only=1')
+          $process = Start-Process -FilePath $installer -ArgumentList $args -Wait -PassThru -WindowStyle Hidden
+          if ($process.ExitCode -ne 0) { throw "Vulkan SDK installer failed: $($process.ExitCode)" }
+          foreach ($file in @('Include\spirv-tools\libspirv.hpp', 'Lib\vulkan-1.lib', 'Lib\SPIRV-Tools.lib', 'Lib\SPIRV-Tools-opt.lib', 'Lib\SPIRV-Tools-link.lib')) {
+            if (!(Test-Path -LiteralPath (Join-Path $sdk $file))) { throw "SDK dependency missing: $file" }
+          }
+          "VULKAN_SDK=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build complete emulator
+        shell: cmd
+        run: call cmbuild.bat
+
+      - name: Package executable and runtime dependencies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Path dist\tools\scripts -Force | Out-Null
+          Copy-Item -LiteralPath loader.exe, gpu\3rdparty\winpthread\bin\libwinpthread-1.dll, run.bat, run_sarah.bat, LICENSE -Destination dist
+          Copy-Item -LiteralPath tools\scripts\run_performance.bat -Destination dist\tools\scripts
+          Copy-Item -LiteralPath gpu\3rdparty\winpthread\COPYING -Destination dist\WINPTHREAD-LICENSE.txt
+          Copy-Item -LiteralPath LICENSES -Destination dist -Recurse
+          $redist = Join-Path $env:VCToolsRedistDir 'x64'
+          $crt = Get-ChildItem -LiteralPath $redist -Directory -Filter 'Microsoft.VC*.CRT' | Select-Object -First 1
+          if (!$crt) { throw 'Visual C++ runtime directory not found' }
+          Get-ChildItem -LiteralPath $crt.FullName -Filter '*.dll' | Copy-Item -Destination dist
+          @'
+          Extract this package into your psemu folder after closing the emulator.
+          Keep your existing game directory and save data.
+          Run: run.bat PPSA02929-app0\eboot.bin
+          Performance comparison: tools\scripts\run_performance.bat fast
+          Detailed profiling: tools\scripts\run_performance.bat profile
+          A Vulkan-compatible graphics driver is required. Game files are not included.
+          '@ | Set-Content -LiteralPath dist\README.txt -Encoding utf8
+          $manifest = Get-ChildItem -LiteralPath dist -File -Recurse | Get-FileHash -Algorithm SHA256
+          $manifest | ForEach-Object { "$($_.Hash)  $([IO.Path]::GetRelativePath((Resolve-Path dist).Path, $_.Path))" } | Set-Content dist\SHA256SUMS.txt
+
+      - name: Upload downloadable Windows package
         uses: actions/upload-artifact@v4
         with:
-          name: PSEmu-Loader-Windows
-          path: loader.exe
+          name: psemu-windows-x64
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14

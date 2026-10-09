@@ -2105,7 +2105,19 @@ static std::atomic<uint64_t> g_plt_cycles[kPltCacheMax];
 // DUVAR SAATIYLE (QPC) olculen sure. CPU dongusu yetmiyor cunku bloklayan
 // cagrilar (uyku/bekleme) dongu harcamaz ama kareyi yer.
 static std::atomic<uint64_t> g_plt_wall[kPltCacheMax];
-static DWORD                 g_game_tid = 0;
+static std::atomic<DWORD>    g_game_tid{0};
+
+// Detailed timers perform OS queries on every exception/HLE call. Keep them
+// off during normal play; FPS and call counters remain available.
+extern "C" bool PsemuHleProfilingEnabled() {
+    static const bool enabled = [] {
+        const char* profile = std::getenv("PSEMU_HLE_PROFILE");
+        const char* top = std::getenv("PSEMU_PLT_TOP");
+        return (profile && profile[0] && profile[0] != '0') ||
+               (top && top[0] && top[0] != '0');
+    }();
+    return enabled;
+}
 
 // ============================================================================
 // SON HLE CAGRILARI HALKA TAMPONU
@@ -2223,15 +2235,17 @@ static thread_local int t_veh_depth = 0;
 namespace {
 struct VehTimer {
     ULONG64 c0 = 0;
+    bool timed = false;
     VehTimer() {
         if (++t_veh_depth > 1) {
             g_veh_nested.fetch_add(1, std::memory_order_relaxed);
         }
-        QueryThreadCycleTime(GetCurrentThread(), &c0);
+        timed = PsemuHleProfilingEnabled() &&
+                QueryThreadCycleTime(GetCurrentThread(), &c0);
     }
     ~VehTimer() {
         ULONG64 c1 = 0;
-        if (QueryThreadCycleTime(GetCurrentThread(), &c1) && c1 > c0) {
+        if (timed && QueryThreadCycleTime(GetCurrentThread(), &c1) && c1 > c0) {
             PsemuMetricAddVehCycles(c1 - c0);
         }
         --t_veh_depth;
@@ -2928,16 +2942,19 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 ULONG64       c0;
                 LARGE_INTEGER w0;
                 uint32_t      idx;
-                bool          is_game;
+                bool          is_game = false;
+                bool          timed = false;
                 explicit PltTimer(uint32_t i) : c0(0), idx(i) {
-                    is_game = (g_game_tid != 0 && GetCurrentThreadId() == g_game_tid);
-                    QueryThreadCycleTime(GetCurrentThread(), &c0);
+                    if (!PsemuHleProfilingEnabled() || idx >= kPltCacheMax) return;
+                    const DWORD game_tid = g_game_tid.load(std::memory_order_relaxed);
+                    is_game = (game_tid != 0 && GetCurrentThreadId() == game_tid);
+                    timed = QueryThreadCycleTime(GetCurrentThread(), &c0) != 0;
                     if (is_game) QueryPerformanceCounter(&w0);
                 }
                 ~PltTimer() {
                     if (idx >= kPltCacheMax) return;
                     ULONG64 c1 = 0;
-                    if (QueryThreadCycleTime(GetCurrentThread(), &c1) && c1 > c0) {
+                    if (timed && QueryThreadCycleTime(GetCurrentThread(), &c1) && c1 > c0) {
                         g_plt_cycles[idx].fetch_add(c1 - c0, std::memory_order_relaxed);
                     }
                     if (is_game) {
@@ -2959,9 +2976,9 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             // Kareyi SUREN thread'i tespit et: flip'i kim cagiriyorsa odur.
             // ExecutionThread degil (olculdu: orada HLE icinde 0 ms geciyor) -
             // C2 dongusu oyunun kendi olusturdugu bir pthread'de calisiyor.
-            if (g_plt_rn_cache[plt_index] != nullptr &&
+            if (plt_index < kPltCacheMax && g_plt_rn_cache[plt_index] != nullptr &&
                 g_plt_rn_cache[plt_index]->find("Flip") != std::string::npos) {
-                g_game_tid = GetCurrentThreadId();
+                g_game_tid.store(GetCurrentThreadId(), std::memory_order_relaxed);
             }
             static std::deque<std::string> s_interned; // UNKNOWN_PLT_* kalici depo
             static std::mutex s_intern_mutex;
@@ -3093,15 +3110,6 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 e.tid  = GetCurrentThreadId();
             }
             
-            // SPIN/ORAN MONITORU: LOG-FILTRE bir fonksiyonu 8 cagridan sonra
-            // susturdugu icin sonsuz donguler log'da GORUNMUYORDU (menu donmasi).
-            // Toplam PLT cagri sayacini periyodik basip o anki fonksiyonu
-            // gosteriyoruz -> hangi fn spin ediyor kesin belli olur.
-            {
-                static std::atomic<uint64_t> s_plt_total{0};
-                s_plt_total.fetch_add(1, std::memory_order_relaxed);
-            }
-
             // ============================================================
             // HIZLI YOL: sicak fonksiyonlar icin string-karsilastirmasiz
             // dispatch. Olculdu: handler basina ~14us CPU; buyuk kismi dev

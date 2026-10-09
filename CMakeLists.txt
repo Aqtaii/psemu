@@ -1,4 +1,4 @@
-﻿# ============================================================================
+# ============================================================================
 # psemu â€” PS5 emulator (KytyPS5 GPU port entegrasyonu icin CMake build)
 # ----------------------------------------------------------------------------
 # Onceki build tek komuttu: cl /EHsc /std:c++17 src\*.cpp /I include.
@@ -20,15 +20,24 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
 endif()
 
-add_definitions(-D_CRT_SECURE_NO_WARNINGS)
+if(NOT WIN32)
+    message(FATAL_ERROR "psemu currently supports Windows x64 only.")
+endif()
+if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
+    message(FATAL_ERROR "Configure with an x64 toolchain.")
+endif()
 
 # loader.exe repo kokune ciksin ki mevcut run.bat degismeden calissin.
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 # --- psemu cekirdegi (mevcut kaynaklar) -------------------------------------
-file(GLOB PSEMU_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/*.cpp)
+set(PSEMU_SOURCES
+    src/agc.cpp src/core.cpp src/game_profile.cpp src/linker.cpp
+    src/loader.cpp src/logger.cpp src/scanner.cpp src/syscalls.cpp src/video.cpp
+)
 
 add_executable(loader ${PSEMU_SOURCES})
+target_compile_definitions(loader PRIVATE _CRT_SECURE_NO_WARNINGS)
 target_include_directories(loader PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 if(MSVC)
@@ -39,7 +48,10 @@ if(MSVC)
     # type-punning) bozup oyunu erken cokertiyor (UB, -O2'de patliyor).
     # Optimizasyonu kapatiyoruz; release CRT (-MD, IDL=0) korunuyor ki gpu/SDK
     # lib'leriyle linklenebilsin. Strict-aliasing UB'sini de kapatiyoruz.
-    target_compile_options(loader PRIVATE /Od /clang:-fno-strict-aliasing)
+    target_compile_options(loader PRIVATE /Od)
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+        target_compile_options(loader PRIVATE /clang:-fno-strict-aliasing)
+    endif()
 endif()
 
 # user32/gdi32 zaten video.cpp icinde #pragma comment(lib,...) ile linkleniyor;

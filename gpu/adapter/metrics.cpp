@@ -19,6 +19,7 @@
 #include <cstdlib>
 
 extern "C" void PsemuDumpPltTop();
+extern "C" bool PsemuHleProfilingEnabled();
 
 namespace {
 
@@ -108,14 +109,20 @@ bool PsemuMetricFormat(char* buf, size_t buf_size) {
 	// VEH'in CPU maliyeti: saniyede kac milyar dongu. Tum threadlerin toplami,
 	// yani "kac cekirdek dolusu CPU" olarak okunur (~4 GHz'de 1.0 = 1 cekirdek).
 	const double   veh_gc  = ((vn - last_veh) / 1e9) / dt;
+	char veh_text[48];
+	if (PsemuHleProfilingEnabled()) {
+		std::snprintf(veh_text, sizeof(veh_text), "%.2f Gdongu/sn", veh_gc);
+	} else {
+		std::snprintf(veh_text, sizeof(veh_text), "profil kapali");
+	}
 
 	std::snprintf(buf, buf_size,
 	              "psemu - PS5   |  FPS %.1f  |  kare %.1f ms  |  present %.2f ms  |  "
 	              "submit %.2f ms  |  cizim/kare %.0f  |  tex %llu  |  tls %.0f/sn  |  "
-	              "plt %.0f/sn  |  veh %.2f Gdongu/sn",
+	              "plt %.0f/sn  |  veh %s",
 	              fps, (fps > 0.0 ? 1000.0 / fps : 0.0), pres_ms, sub_ms, dpf,
 	              static_cast<unsigned long long>(g_textures.load(std::memory_order_relaxed)),
-	              tls_ps, plt_ps, veh_gc);
+	              tls_ps, plt_ps, veh_text);
 
 	last_qpc    = now;
 	last_frames = f;

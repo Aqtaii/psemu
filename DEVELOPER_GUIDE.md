@@ -75,3 +75,13 @@ When a crash occurs, look for `--- Fatal Error ---` at the end of `loader_log.tx
 2. **HLE String/Memory Functions (`wmemchr`, `wmemmove`):**
    - GameMaker uses `libSceLibcInternal` HLE calls for text localization parsing.
    - Standard PLT stubs returning `0` will cause string parsers to freeze or return empty text. Always provide valid HLE pointer search fallbacks in `src/core.cpp`.
+
+## Build entry points
+
+Run `build.bat` or `cmbuild.bat` from any directory. Both use the same CMake/Ninja build, including the GPU library, and propagate failures to the caller.
+
+Required: Windows x64, Visual Studio C++ tools, clang-cl, CMake, Ninja, and a Vulkan SDK with SPIRV-Tools headers and libraries. Put CMake, Ninja, and clang-cl on PATH and set VULKAN_SDK to the installed SDK directory. The script preserves that SDK selection.
+
+Visual Studio is discovered through vswhere. For a custom installation, set PSEMU_VCVARS64 to the full path of vcvars64.bat, or run from an x64 Developer Command Prompt. Additional build arguments are forwarded to cmake --build; for example: cmbuild.bat --verbose.
+
+The core source list is explicit in CMakeLists.txt; add new src/*.cpp files there. Core optimization remains disabled because the existing low-level runtime depends on it.
