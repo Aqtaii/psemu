@@ -49,6 +49,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_native_atomics.ps1
 
+      - name: Test host allocation ownership
+        shell: pwsh
+        run: ./tools/scripts/test_allocation_ownership.ps1
+
       - name: Test guest call range and trampoline allocation
         shell: cmd
         run: |

@@ -79,6 +79,7 @@ void InitProfile(const std::string& eboot_path) {
 
 	if (id == "PPSA02929") {
 		g_current.name                                = "Dreaming Sarah";
+		g_current.quirk_guest_free_host_bridge        = true;
 		g_current.quirk_c2_type_registration_overflow = true;
 		g_current.quirk_texture_meta_recover          = true;
 		g_current.quirk_call_dt_init                  = true;

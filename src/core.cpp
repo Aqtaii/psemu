@@ -417,14 +417,16 @@ static uint64_t RealtimeNs() {
 // ardindan "KEY NOT FOUND: music_atten/master_atten" ve ana menu
 // metinlerinin bos kalmasi. Cozum: istenen boyutu kaydet, realloc
 // min(eski, yeni) kadar kopyalasin.
-// NOT: free() kasitli olarak no-op oldugu icin kayitlar bayatlamaz.
+// Host releases remove both size and ownership records under the same lock.
 static std::mutex             g_alloc_size_mutex;
 static std::map<void*, size_t> g_alloc_sizes;
+static std::set<void*> g_host_allocations;
 
-static void RegisterAllocSize(void* p, size_t requested) {
+static void RegisterAllocSize(void* p, size_t requested, bool host_owned = true) {
     if (p == nullptr) return;
     std::lock_guard<std::mutex> lk(g_alloc_size_mutex);
     g_alloc_sizes[p] = requested;
+    if (host_owned) g_host_allocations.insert(p);
 }
 
 static size_t LookupAllocSize(void* p) {
@@ -432,6 +434,19 @@ static size_t LookupAllocSize(void* p) {
     std::lock_guard<std::mutex> lk(g_alloc_size_mutex);
     auto it = g_alloc_sizes.find(p);
     return (it == g_alloc_sizes.end()) ? 0 : it->second;
+}
+
+// Only exact, live host allocations may enter the Windows aligned heap.
+// Mspace bump allocations have size records too, but are guest-owned.
+static bool FreeHostAllocation(void* p) {
+    if (!p) return false;
+    {
+        std::lock_guard<std::mutex> lock(g_alloc_size_mutex);
+        if (g_host_allocations.erase(p) == 0) return false;
+        g_alloc_sizes.erase(p);
+    }
+    _aligned_free(p);
+    return true;
 }
 
 // ========================================================
@@ -956,7 +971,17 @@ static PSEMU_SYSV void* NativeMalloc(size_t n) {
     return p;
 }
 static PSEMU_SYSV void NativeFree(void* p) {
-    if (p != nullptr) _aligned_free(p);
+    FreeHostAllocation(p);
+}
+// The C2 runtime sometimes releases imported malloc blocks through its
+// inlined page allocator. Its page header is not present on a CRT block.
+extern "C" PSEMU_SYSV bool PsemuReleaseImportedAllocation(void* p) {
+    if (!FreeHostAllocation(p)) return false;
+    static std::atomic<unsigned> count{0};
+    if (count.fetch_add(1, std::memory_order_relaxed) < 8) {
+        printf("[ALLOC-OWNER] Imported host block released via guest free: %p\n", p);
+    }
+    return true;
 }
 static PSEMU_SYSV int NativePersonality() { return 0; }
 
@@ -3597,7 +3622,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 readable_name == "_ZdlPvRKSt9nothrow_t" ||
                 readable_name == "_ZdaPvRKSt9nothrow_t") {
                 void* p = reinterpret_cast<void*>(ctx->Rdi);
-                if (p != nullptr) _aligned_free(p);
+                FreeHostAllocation(p);
                 ctx->Rax  = 0;
                 ctx->Rip  = *reinterpret_cast<uint64_t*>(ctx->Rsp);
                 ctx->Rsp += 8;
@@ -3666,7 +3691,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 } else if (readable_name == "sceLibcMspaceFree") {
                     // Free(mspace, ptr)
                     void* p = reinterpret_cast<void*>(ctx->Rsi);
-                    if (p != nullptr) _aligned_free(p);
+                    FreeHostAllocation(p);
                     rv = 0;
                 } else if (readable_name == "sceLibcMspaceMallocUsableSize") {
                     rv = LookupAllocSize(reinterpret_cast<void*>(ctx->Rsi));
@@ -3696,7 +3721,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     if (old_p == nullptr) {
                         if (void* gp = MspaceBumpAlloc(ctx->Rdi, n ? n : 16, align)) {
                             memset(gp, 0, n ? n : 16);
-                            RegisterAllocSize(gp, n);
+                            RegisterAllocSize(gp, n, false);
                             rv = reinterpret_cast<uint64_t>(gp);
                             goto mspace_done;
                         }
@@ -3712,7 +3737,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                             const size_t old_n = LookupAllocSize(old_p);
                             const size_t cp    = (old_n < n) ? old_n : n;
                             if (cp != 0) memcpy(p, old_p, cp);
-                            _aligned_free(old_p);
+                            FreeHostAllocation(old_p);
                         }
                         RegisterAllocSize(p, n);
                     }
@@ -4386,6 +4411,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 size_t alloc_sz = size ? (size + 65536) : 65536;
                 void* p = _aligned_malloc(alloc_sz, align);
                 if (p) memset(p, 0, alloc_sz);
+                RegisterAllocSize(p, size);
                 if (memptr != nullptr && SafeWritable(memptr, sizeof(void*))) {
                     *memptr = p;
                 }
@@ -4969,6 +4995,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 size_t size = static_cast<size_t>(ctx->Rdi);
                 void* p = _aligned_malloc(size ? size : 1, 16);
                 if (p) memset(p, 0, size ? size : 1);
+                RegisterAllocSize(p, size);
                 ctx->Rax = reinterpret_cast<uint64_t>(p);
                 special_return_set = true;
             } else if (readable_name == "strtol" || readable_name == "strtoll" ||
@@ -7124,6 +7151,19 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
          << "  R12=0x" << ctx->R12 << " R13=0x" << ctx->R13
          << " R14=0x" << ctx->R14 << " R15=0x" << ctx->R15;
     LOG_ERROR(regs.str());
+
+    if (Game::Current().quirk_guest_free_host_bridge && ctx->Rip == g_base_addr + 0x2c5f65) {
+        const uint64_t page = ctx->Rdi & ~0xffffULL;
+        uint32_t header = 0;
+        if (SafeReadable(reinterpret_cast<void*>(page), sizeof(header)))
+            memcpy(&header, reinterpret_cast<void*>(page), sizeof(header));
+        std::stringstream owner;
+        owner << "[ALLOC-OWNER] guest free fault: ptr=0x" << std::hex << ctx->Rdi
+              << " page_header=0x" << header << " requested_size=0x"
+              << LookupAllocSize(reinterpret_cast<void*>(ctx->Rdi))
+              << " direct_memory_base=0x" << g_dmem_base_addr;
+        LOG_ERROR(owner.str());
+    }
 
     // Tip-kayit fonksiyonu (0x2dfff0) kac kez cagrildi? Sayac 4-slot
     // tabloyu tasiriyorsa, bu deger beklenenden (<=4) fazla olmali.

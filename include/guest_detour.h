@@ -75,4 +75,50 @@ inline bool InstallCall(uint8_t* site, const void* target, const void* original_
     return true;
 }
 
+// Known relocation-free C2 free prologue: 17 bytes, whole instructions.
+inline constexpr uint8_t FreePrologue[] = {
+    0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41,
+    0x55, 0x41, 0x54, 0x53, 0x48, 0x83, 0xec, 0x58
+};
+
+// helper uses SysV ABI, accepts RDI and returns bool in AL. False executes
+// the original guest allocator, including its complete prologue.
+inline uint8_t* InstallFreeOwnershipBridge(uint8_t* site, const void* helper) {
+    if (!site || !helper || std::memcmp(site, FreePrologue, sizeof(FreePrologue))) return nullptr;
+    auto* tr = static_cast<uint8_t*>(VirtualAlloc(nullptr, 0x1000,
+        MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE));
+    if (!tr) return nullptr;
+    size_t p = 0;
+    tr[p++] = 0x57; // push rdi; also aligns stack before helper call
+    tr[p++] = 0x48; tr[p++] = 0xb8;
+    const uint64_t callback = reinterpret_cast<uint64_t>(helper);
+    std::memcpy(tr + p, &callback, 8); p += 8;
+    tr[p++] = 0xff; tr[p++] = 0xd0;
+    tr[p++] = 0x84; tr[p++] = 0xc0; // test al, al
+    tr[p++] = 0x5f; // pop rdi; does not change flags
+    tr[p++] = 0x75; tr[p++] = 30; // handled -> ret, after prologue + absolute jump
+    std::memcpy(tr + p, FreePrologue, sizeof(FreePrologue)); p += sizeof(FreePrologue);
+    tr[p++] = 0x49; tr[p++] = 0xbb;
+    const uint64_t resume = reinterpret_cast<uint64_t>(site + sizeof(FreePrologue));
+    std::memcpy(tr + p, &resume, 8); p += 8;
+    tr[p++] = 0x41; tr[p++] = 0xff; tr[p++] = 0xe3;
+    tr[p++] = 0xc3;
+    FlushInstructionCache(GetCurrentProcess(), tr, p);
+    DWORD previous;
+    if (!VirtualProtect(site, sizeof(FreePrologue), PAGE_EXECUTE_READWRITE, &previous)) {
+        VirtualFree(tr, 0, MEM_RELEASE);
+        return nullptr;
+    }
+    // Indirect RIP-relative absolute jump preserves every argument register.
+    uint8_t jump[sizeof(FreePrologue)] = {0xff, 0x25, 0, 0, 0, 0};
+    const uint64_t target = reinterpret_cast<uint64_t>(tr);
+    std::memcpy(jump + 6, &target, 8);
+    std::memset(jump + 14, 0x90, sizeof(jump) - 14);
+    std::memcpy(site, jump, sizeof(jump));
+    DWORD ignored;
+    VirtualProtect(site, sizeof(FreePrologue), previous, &ignored);
+    FlushInstructionCache(GetCurrentProcess(), site, sizeof(FreePrologue));
+    return tr;
+}
+
 } // namespace GuestDetour

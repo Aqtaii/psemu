@@ -1,4 +1,4 @@
-﻿#include <iostream>
+#include <iostream>
 #include <fstream>
 #include <vector>
 #include <string>
@@ -20,6 +20,7 @@ extern "C" bool PsemuFillVtableCell(void* cell, size_t bytes, const char* raw_ni
 
 // utf16 detour tanisi (core.cpp'de tanimli); trampoline'den cagirilir.
 extern "C" void Utf16DiagValue(void*);
+extern "C" __attribute__((sysv_abi)) bool PsemuReleaseImportedAllocation(void*);
 #include "scanner.h"
 #include "linker.h"
 
@@ -981,6 +982,15 @@ bool LoadEboot(const std::string& filePath) {
         }
         std::cout << "[UTF16-NONFATAL] invalid_utf16 throw dallari NOP'landi "
                      "(0x216462, 0x2164cc)" << std::endl;
+    }
+
+    if (Game::Current().quirk_guest_free_host_bridge && max_vaddr_end >= 0x2c5f20 + sizeof(GuestDetour::FreePrologue)) {
+        auto* site = reinterpret_cast<uint8_t*>(base_address) + 0x2c5f20;
+        auto* bridge = GuestDetour::InstallFreeOwnershipBridge(site,
+            reinterpret_cast<void*>(&PsemuReleaseImportedAllocation));
+        std::cout << "[ALLOC-OWNER] C2 free ownership bridge "
+                  << (bridge ? "installed" : "rejected (prologue mismatch or allocation failure)")
+                  << std::endl;
     }
 
     // ==========================================

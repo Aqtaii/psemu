@@ -2,6 +2,12 @@
 #include <cstdio>
 
 #define CHECK(expr) do { if (!(expr)) { std::printf("FAIL line %d: %s\n", __LINE__, #expr); return 1; } } while (0)
+static void* handled_pointer = nullptr;
+static void* seen_pointer = nullptr;
+static __attribute__((sysv_abi)) bool FreeCallback(void* p) {
+    seen_pointer = p;
+    return p == handled_pointer;
+}
 int main() {
     const uint64_t site_address = 0x100000000;
     const uint64_t next = site_address + 5;
@@ -34,6 +40,30 @@ int main() {
     CHECK(installed == offset);
     image[0] = 0x90;
     CHECK(!GuestDetour::InstallCall(image, trampoline, image + 32));
+    // Execute both branches with the real guest prologue and a synthetic body.
+    std::memcpy(image, GuestDetour::FreePrologue, sizeof(GuestDetour::FreePrologue));
+    const uint8_t body[] = {
+        0x48, 0x89, 0xf8, // mov rax, rdi: validates argument preservation
+        0x48, 0x83, 0xc4, 0x58, 0x5b, 0x41, 0x5c,
+        0x41, 0x5d, 0x41, 0x5e, 0x41, 0x5f, 0x5d, 0xc3
+    };
+    std::memcpy(image + sizeof(GuestDetour::FreePrologue), body, sizeof(body));
+    DWORD protection;
+    CHECK(VirtualProtect(image, 0x10000, PAGE_EXECUTE_READWRITE, &protection));
+    FlushInstructionCache(GetCurrentProcess(), image, 0x10000);
+    auto* bridge = GuestDetour::InstallFreeOwnershipBridge(image, reinterpret_cast<void*>(&FreeCallback));
+    CHECK(bridge != nullptr);
+    using GuestFree = uintptr_t(__attribute__((sysv_abi)) *)(void*);
+    auto release = reinterpret_cast<GuestFree>(image);
+    handled_pointer = image + 0x4000;
+    release(handled_pointer);
+    CHECK(seen_pointer == handled_pointer);
+    CHECK(release(image + 0x5000) == reinterpret_cast<uintptr_t>(image + 0x5000));
+    CHECK(seen_pointer == image + 0x5000);
+    handled_pointer = image + 0x4000;
+    CHECK(release(nullptr) == 0);
+    CHECK(GuestDetour::InstallFreeOwnershipBridge(image, reinterpret_cast<void*>(&FreeCallback)) == nullptr);
+    CHECK(VirtualFree(bridge, 0, MEM_RELEASE));
     CHECK(VirtualFree(trampoline, 0, MEM_RELEASE));
     CHECK(VirtualFree(image, 0, MEM_RELEASE));
     std::puts("PASS: signed rel32 boundaries, actual crash addresses, near allocation and safe patch rejection");

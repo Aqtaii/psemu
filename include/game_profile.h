@@ -30,6 +30,8 @@ struct Profile {
 	// Tip-kayit fonksiyonu (RVA 0x2dfff0..0x2e0900) 4 slotluk tabloya 5. kaydi
 	// yapmaya calisiyor; NULL-base erisimleri dummy buffer'a yonlendiriyoruz.
 	bool quirk_c2_type_registration_overflow = false;
+	// Route known imported host allocations before the internal page-based free.
+	bool quirk_guest_free_host_bridge = false;
 	// RVA 0x1654f8'deki texture metadata okumasi cokuyor; sahneyi ilerletmek
 	// icin komutu atlayip RSI=1 zorluyoruz.
 	bool quirk_texture_meta_recover = false;
