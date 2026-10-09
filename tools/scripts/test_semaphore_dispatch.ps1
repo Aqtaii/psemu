@@ -73,7 +73,7 @@ New-Item -ItemType Directory -Force $out | Out-Null
 $cpp = Join-Path $out 'semaphore_dispatch_test.cpp'
 $exe = Join-Path $out 'semaphore_dispatch_test.exe'
 [IO.File]::WriteAllText($cpp, "$prefix`n$memory`n$wrapper`n$dispatch`n$tests", [Text.UTF8Encoding]::new($false))
-& clang-cl /nologo /std:c++20 /Od /EHsc /MD "/I:$root\include" $cpp "/Fe:$exe" "/Fo:$out\semaphore_dispatch_test.obj"
+& clang-cl /nologo /std:c++20 /Od /EHsc /MD "/I$root\include" $cpp "/Fe:$exe" "/Fo:$out\semaphore_dispatch_test.obj"
 if ($LASTEXITCODE -ne 0) { throw 'Semaphore regression compilation failed' }
 & $exe
 if ($LASTEXITCODE -ne 0) { throw 'Semaphore regression failed' }
