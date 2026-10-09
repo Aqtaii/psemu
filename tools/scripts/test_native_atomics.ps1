@@ -126,7 +126,7 @@ $file = Join-Path $directory 'native_atomic_test.cpp'
 ($prefix + "`n#include <initializer_list>`n" + $memory + "`n" + $atomics + "`n" + $tests) | Set-Content -LiteralPath $file -Encoding utf8
 Push-Location $directory
 try {
-    & clang-cl /nologo /std:c++20 /Od /EHsc /MD "/I$root\include" $file /Fe:native_atomic_test.exe
+    & clang-cl /nologo /std:c++20 /Od /EHa /MD "/I$root\include" $file /Fe:native_atomic_test.exe
     if ($LASTEXITCODE -ne 0) { throw 'Native atomic test compilation failed' }
     & '.\native_atomic_test.exe'
     if ($LASTEXITCODE -ne 0) { throw "Native atomic regression test failed, exit code $LASTEXITCODE" }
