@@ -931,14 +931,16 @@ static PSEMU_SYSV int NativeUsleep(uint64_t us) {
     Sleep(ms != 0 ? ms : 1);
     return 0;
 }
-// libc_char_table: bugun HIC implemente degil, zincirin sonundaki varsayilan
-// stub'a dusup 0 donuyor. Burada da BILEREK 0 donduruyoruz - bu adim yalnizca
-// exception maliyetini kaldirmali, davranisi degil. Oyun bunu saniyede ~3.700
-// kez cagiriyor, yani tek basina kalan yukun buyuk kismi.
-// AYRI KONU: NULL dondurmek muhtemelen yanlis (gercek bir ctype tablosu
-// donmeli, bkz. _Getpctype icin kurdugumuz 257 girdili tablo). Once dogru
-// tablonun duzenini dogrulamak gerek; tahminle doldurmak yeni hata uretir.
-static PSEMU_SYSV void* NativeCharTable() { return nullptr; }
+// Same 1024-byte identity table used by the existing HLE fallback.
+// Constant initialization makes the address stable across threads without
+// per-character VirtualAlloc checks, exception dispatch or string matching.
+static constexpr auto g_native_char_table = [] {
+    std::array<uint8_t, 1024> table{};
+    for (size_t i = 0; i < 256; ++i) table[i * 2] = static_cast<uint8_t>(i);
+    return table;
+}();
+static PSEMU_SYSV const void* NativeCharTable() { return g_native_char_table.data(); }
+static PSEMU_SYSV uint64_t NativeReturnZero() { return 0; }
 
 // ============================================================================
 // VERI SEMBOLU olarak import edilen FONKSIYONLAR
@@ -976,6 +978,11 @@ static PSEMU_SYSV void NativeFree(void* p) {
 // The C2 runtime sometimes releases imported malloc blocks through its
 // inlined page allocator. Its page header is not present on a CRT block.
 extern "C" PSEMU_SYSV bool PsemuReleaseImportedAllocation(void* p) {
+    // The reserved direct-memory range cannot contain a CRT allocation.
+    // Most guest frees land here: avoid the host registry mutex entirely.
+    const uint64_t address = reinterpret_cast<uint64_t>(p);
+    if (g_dmem_base_addr && address >= g_dmem_base_addr &&
+        address - g_dmem_base_addr < kDmemSize) return false;
     if (!FreeHostAllocation(p)) return false;
     static std::atomic<unsigned> count{0};
     if (count.fetch_add(1, std::memory_order_relaxed) < 8) {
@@ -1159,6 +1166,10 @@ extern "C" void* PsemuNativePltStub(int plt_index) {
         return reinterpret_cast<void*>(&NativeAtomicCompareExchangeWeak4);
 
     if (n == "__error") return reinterpret_cast<void*>(&NativeErrno);
+    if (n == "libc_char_table") return reinterpret_cast<void*>(&NativeCharTable);
+    // These functions already take the FOP_RET0 path in the VEH handler.
+    if (n == "_Locksyslock" || n == "_Unlocksyslock" || n == "uncaught_exception")
+        return reinterpret_cast<void*>(&NativeReturnZero);
 
     return nullptr;
 }
@@ -5521,20 +5532,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 ctx->Rax = (pos == std::string::npos) ? 0 : (ctx->Rdi + pos);
                 special_return_set = true;
             } else if (readable_name == "libc_char_table") {
-                // Karakter donusum tablosu dondurur; kod table[char*2] okuyup
-                // sonucu dogrudan cikti string'ine yaziyor (RVA 0x2b622e).
-                // Gercek tablo icerigi bilinmedigi icin IDENTITY kuruyoruz:
-                // table[c*2] = c  -> non-ASCII karakterler DEGISMEDEN gecer.
-                // (Sifir birakmak tum non-ASCII karakterleri yok ederdi.)
-                static uint8_t* s_char_table = nullptr;
-                if (s_char_table == nullptr) {
-                    s_char_table = reinterpret_cast<uint8_t*>(
-                        VirtualAlloc(nullptr, 1024, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE));
-                    if (s_char_table) {
-                        for (int i = 0; i < 256; i++) s_char_table[i * 2] = static_cast<uint8_t>(i);
-                    }
-                }
-                ctx->Rax = reinterpret_cast<uint64_t>(s_char_table);
+                ctx->Rax = reinterpret_cast<uint64_t>(NativeCharTable());
                 special_return_set = true;
             }
             // ========================================================
