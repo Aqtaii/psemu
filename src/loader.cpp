@@ -2,11 +2,13 @@
 #include <fstream>
 #include <vector>
 #include <string>
+#include <cstdlib>
 #include <map>
 #include <windows.h>
 #include "elf64.h"
 #include "logger.h"
 #include "game_profile.h"
+#include "guest_detour.h"
 
 // core.cpp: plt_index icin exception'siz native karsilik (yoksa nullptr).
 extern "C" void* PsemuNativePltStub(int plt_index);
@@ -856,8 +858,7 @@ bool LoadEboot(const std::string& filePath) {
     if (Game::Current().quirk_c2_type_registration_overflow) {
         uint8_t* base_ptr2 = reinterpret_cast<uint8_t*>(base_address);
         uint64_t target = reinterpret_cast<uint64_t>(base_ptr2) + 0x2dfff0;
-        uint8_t* tr = reinterpret_cast<uint8_t*>(
-            VirtualAlloc(nullptr, 0x80, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+        uint8_t* tr = GuestDetour::AllocateNear(base_ptr2 + 0xe3813, 0x80);
         if (tr) {
             const uint32_t LOCK  = 0x40;              // kilit bayti offseti
             const uint32_t CNTR  = 0x48;              // cagri sayaci offseti (4 byte)
@@ -877,7 +878,9 @@ bool LoadEboot(const std::string& filePath) {
             memcpy(tr + p, &dc, 4); p += 4;
             tr[p++] = 0x49; tr[p++] = 0xBB;            // movabs r11, target
             memcpy(tr + p, &target, 8); p += 8;
+            tr[p++] = 0x48; tr[p++] = 0x83; tr[p++] = 0xEC; tr[p++] = 0x08; // align SysV stack
             tr[p++] = 0x41; tr[p++] = 0xFF; tr[p++] = 0xD3; // call r11
+            tr[p++] = 0x48; tr[p++] = 0x83; tr[p++] = 0xC4; tr[p++] = 0x08;
             tr[p++] = 0xC6; tr[p++] = 0x05;            // mov byte [rip+d2], 0
             int32_t d2 = (int32_t)LOCK - (p + 5);
             memcpy(tr + p, &d2, 4); p += 4;
@@ -889,18 +892,14 @@ bool LoadEboot(const std::string& filePath) {
             g_reg_call_count_ptr = reinterpret_cast<uint32_t*>(tr + CNTR);
 
             uint64_t tramp = reinterpret_cast<uint64_t>(tr);
+            FlushInstructionCache(GetCurrentProcess(), tr, p);
             // Iki cagri yerini (E8 rel32) trampoline'e yonlendir.
             // NOT: bu RVA'lar E8 KOMUTUNUN kendi konumu (donus adresi degil).
             for (uint64_t call_rva : { (uint64_t)0xe3813, (uint64_t)0xe75c3 }) {
                 uint8_t* call_site = base_ptr2 + call_rva;
-                DWORD oldp;
-                if (VirtualProtect(call_site, 5, PAGE_EXECUTE_READWRITE, &oldp)) {
-                    // yeni rel32 = hedef - (E8 + 5)
-                    int32_t rel = (int32_t)(tramp -
-                        (reinterpret_cast<uint64_t>(base_ptr2) + call_rva + 5));
-                    call_site[0] = 0xE8;
-                    memcpy(call_site + 1, &rel, 4);
-                    VirtualProtect(call_site, 5, oldp, &oldp);
+                if (!GuestDetour::InstallCall(call_site, tr, reinterpret_cast<void*>(target))) {
+                    std::cout << "[YARIS-FIX] Call patch rejected at RVA 0x"
+                              << std::hex << call_rva << std::dec << std::endl;
                 }
             }
             std::cout << "[YARIS-FIX] 0x2dfff0 serilestirildi (trampoline @0x"
@@ -916,24 +915,26 @@ bool LoadEboot(const std::string& filePath) {
     // ==========================================
     // PROFILE BAGLI: 0x17b818 / 0x17b120 Dreaming Sarah'ya ozgu. Astro Bot'ta
     // bu yama da ayni sekilde kodu bozuyordu (bir cokme RVA 0x17b81c'de goruldu).
-    if (Game::Current().quirk_rva_diagnostics) {
+    const char* utf16_diag = std::getenv("PSEMU_UTF16_DIAG");
+    if (Game::Current().quirk_rva_diagnostics && utf16_diag && utf16_diag[0] && utf16_diag[0] != '0') {
         uint8_t* base_ptr3 = reinterpret_cast<uint8_t*>(base_address);
         uint64_t conv = reinterpret_cast<uint64_t>(base_ptr3) + 0x17b120;
         uint64_t diag = reinterpret_cast<uint64_t>(&Utf16DiagValue);
-        uint8_t* tr = reinterpret_cast<uint8_t*>(
-            VirtualAlloc(nullptr, 0x80, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE));
+        uint8_t* tr = GuestDetour::AllocateNear(base_ptr3 + 0x17b818, 0x80);
         if (tr) {
             int p = 0;
             tr[p++] = 0x55;                                  // push rbp
             tr[p++] = 0x48; tr[p++] = 0x89; tr[p++] = 0xE5;  // mov rbp, rsp
             tr[p++] = 0x57;                                  // push rdi
             tr[p++] = 0x56;                                  // push rsi
+            tr[p++] = 0x52;                                  // preserve converter's RDX argument
             tr[p++] = 0x48; tr[p++] = 0x89; tr[p++] = 0xF1;  // mov rcx, rsi
-            tr[p++] = 0x48; tr[p++] = 0x83; tr[p++] = 0xEC; tr[p++] = 0x20; // sub rsp,0x20
+            tr[p++] = 0x48; tr[p++] = 0x83; tr[p++] = 0xEC; tr[p++] = 0x28; // shadow space + alignment
             tr[p++] = 0x48; tr[p++] = 0xB8;                  // movabs rax, diag
             memcpy(tr + p, &diag, 8); p += 8;
             tr[p++] = 0xFF; tr[p++] = 0xD0;                  // call rax
-            tr[p++] = 0x48; tr[p++] = 0x83; tr[p++] = 0xC4; tr[p++] = 0x20; // add rsp,0x20
+            tr[p++] = 0x48; tr[p++] = 0x83; tr[p++] = 0xC4; tr[p++] = 0x28;
+            tr[p++] = 0x5A;                                  // pop rdx
             tr[p++] = 0x5E;                                  // pop rsi
             tr[p++] = 0x5F;                                  // pop rdi
             tr[p++] = 0x49; tr[p++] = 0xBB;                  // movabs r11, conv
@@ -944,16 +945,14 @@ bool LoadEboot(const std::string& filePath) {
 
             uint64_t tramp = reinterpret_cast<uint64_t>(tr);
             uint8_t* cs = base_ptr3 + 0x17b818;              // E8 call 0x17b120
-            DWORD oldp;
-            if (VirtualProtect(cs, 5, PAGE_EXECUTE_READWRITE, &oldp)) {
-                int32_t rel = (int32_t)(tramp -
-                    (reinterpret_cast<uint64_t>(base_ptr3) + 0x17b818 + 5));
-                cs[0] = 0xE8;
-                memcpy(cs + 1, &rel, 4);
-                VirtualProtect(cs, 5, oldp, &oldp);
+            FlushInstructionCache(GetCurrentProcess(), tr, p);
+            if (!GuestDetour::InstallCall(cs, tr, reinterpret_cast<void*>(conv))) {
+                VirtualFree(tr, 0, MEM_RELEASE);
+                std::cout << "[UTF16-DETOUR] Patch rejected; original converter preserved" << std::endl;
+            } else {
+                std::cout << "[UTF16-DETOUR] converter cagrisi yonlendirildi (tramp @0x"
+                          << std::hex << tramp << std::dec << ")" << std::endl;
             }
-            std::cout << "[UTF16-DETOUR] converter cagrisi yonlendirildi (tramp @0x"
-                      << std::hex << tramp << std::dec << ")" << std::endl;
         }
     }
 
