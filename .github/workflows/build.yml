@@ -65,6 +65,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_kernel_file_io.ps1
 
+      - name: Test Astro host allocation memory usage
+        shell: pwsh
+        run: ./tools/scripts/test_host_allocation_size.ps1
+
       - name: Test host allocation ownership
         shell: pwsh
         run: ./tools/scripts/test_allocation_ownership.ps1

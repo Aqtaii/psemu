@@ -2,6 +2,7 @@
 #include "native_atomic_guard.h"
 #include "guest_stub_memory.h"
 #include "guest_file_stat.h"
+#include "host_allocation_size.h"
 #include <io.h>
 #include <unordered_map>
 #include "agc.h"
@@ -1025,9 +1026,13 @@ static PSEMU_SYSV void NativePureVirtual() {
                   "kurulmamis ya da yikilmis olabilir). Cokmemek icin donuluyor.");
     }
 }
+static size_t HostAllocationSize(size_t n) {
+    return GuestHostAllocationSize(n, Game::Current().title_id != "PPSA21564");
+}
+
 static PSEMU_SYSV void* NativeMalloc(size_t n) {
-    const size_t sz = n ? (n + 65536) : 65536;
-    void*        p  = _aligned_malloc(sz, 16);
+    const size_t sz = HostAllocationSize(n);
+    void*        p  = sz ? _aligned_malloc(sz, 16) : nullptr;
     if (p != nullptr) {
         memset(p, 0, sz);
         RegisterAllocSize(p, n);
@@ -3838,8 +3843,8 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     // Bolgesiz tutamac: host yigini. malloc yolundaki ayni
                     // comert tampon (oyun bazen istediginden fazlasina dokunuyor).
                     {
-                    const size_t alloc_sz = n ? (n + 65536) : 65536;
-                    void*        p        = _aligned_malloc(alloc_sz, align);
+                    const size_t alloc_sz = HostAllocationSize(n);
+                    void*        p        = alloc_sz ? _aligned_malloc(alloc_sz, align) : nullptr;
                     if (p != nullptr) {
                         memset(p, 0, alloc_sz);
                         if (old_p != nullptr) {
@@ -4437,8 +4442,8 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             else if (readable_name == "_Znwm" || readable_name == "_Znam" ||
                      readable_name == "operator new") {
                 const size_t size     = static_cast<size_t>(ctx->Rdi);
-                const size_t alloc_sz = size ? (size + 65536) : 65536;
-                void*        p        = _aligned_malloc(alloc_sz, 16);
+                const size_t alloc_sz = HostAllocationSize(size);
+                void*        p        = alloc_sz ? _aligned_malloc(alloc_sz, 16) : nullptr;
                 if (p) memset(p, 0, alloc_sz);
                 RegisterAllocSize(p, size);
                 ctx->Rax = reinterpret_cast<uint64_t>(p);
@@ -4447,8 +4452,8 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             else if (readable_name == "malloc") {
                 // malloc(size): RDI=size
                 size_t size = static_cast<size_t>(ctx->Rdi);
-                size_t alloc_sz = size ? (size + 65536) : 65536;
-                void* p = _aligned_malloc(alloc_sz, 16);
+                size_t alloc_sz = HostAllocationSize(size);
+                void* p = alloc_sz ? _aligned_malloc(alloc_sz, 16) : nullptr;
                 if (p) memset(p, 0, alloc_sz);
                 RegisterAllocSize(p, size); // realloc dogru kopyalayabilsin
                 ctx->Rax = reinterpret_cast<uint64_t>(p);
@@ -4465,9 +4470,10 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 // calloc(nmemb, size): RDI=nmemb, RSI=size
                 size_t nmemb = static_cast<size_t>(ctx->Rdi);
                 size_t size = static_cast<size_t>(ctx->Rsi);
-                size_t total = nmemb * size;
-                size_t alloc_sz = total ? (total + 65536) : 65536;
-                void* p = _aligned_malloc(alloc_sz, 16);
+                const bool overflow = size && nmemb > SIZE_MAX / size;
+                size_t total = overflow ? 0 : nmemb * size;
+                size_t alloc_sz = overflow ? 0 : HostAllocationSize(total);
+                void* p = alloc_sz ? _aligned_malloc(alloc_sz, 16) : nullptr;
                 if (p) memset(p, 0, alloc_sz);
                 RegisterAllocSize(p, total);
                 ctx->Rax = reinterpret_cast<uint64_t>(p);
@@ -4476,8 +4482,8 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 // realloc(ptr, size): RDI=ptr, RSI=size
                 void* old_p = reinterpret_cast<void*>(ctx->Rdi);
                 size_t size = static_cast<size_t>(ctx->Rsi);
-                size_t alloc_sz = size ? (size + 65536) : 65536;
-                void* p = _aligned_malloc(alloc_sz, 16);
+                size_t alloc_sz = HostAllocationSize(size);
+                void* p = alloc_sz ? _aligned_malloc(alloc_sz, 16) : nullptr;
                 if (p) {
                     memset(p, 0, alloc_sz);
                     if (old_p != nullptr && SafeReadable(old_p, 1)) {
@@ -4505,8 +4511,8 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 size_t align = static_cast<size_t>(ctx->Rdi);
                 size_t size = static_cast<size_t>(ctx->Rsi);
                 if (align < 16 || (align & (align - 1)) != 0) align = 16;
-                size_t alloc_sz = size ? (size + 65536) : 65536;
-                void* p = _aligned_malloc(alloc_sz, align);
+                size_t alloc_sz = HostAllocationSize(size);
+                void* p = alloc_sz ? _aligned_malloc(alloc_sz, align) : nullptr;
                 if (p) memset(p, 0, alloc_sz);
                 RegisterAllocSize(p, size);
                 ctx->Rax = reinterpret_cast<uint64_t>(p);
@@ -4517,8 +4523,8 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 size_t align = static_cast<size_t>(ctx->Rsi);
                 size_t size = static_cast<size_t>(ctx->Rdx);
                 if (align < 16 || (align & (align - 1)) != 0) align = 16;
-                size_t alloc_sz = size ? (size + 65536) : 65536;
-                void* p = _aligned_malloc(alloc_sz, align);
+                size_t alloc_sz = HostAllocationSize(size);
+                void* p = alloc_sz ? _aligned_malloc(alloc_sz, align) : nullptr;
                 if (p) memset(p, 0, alloc_sz);
                 RegisterAllocSize(p, size);
                 if (memptr != nullptr && SafeWritable(memptr, sizeof(void*))) {
