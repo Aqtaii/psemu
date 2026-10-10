@@ -39,6 +39,10 @@ $header+='uint32_t NumBytesPerElement(uint32_t format) {return format==GpuEnumVa
 $header+="`n"+(Slice $info 'struct ImageInfo {' '// Common image-to-buffer copy description.')
 $header+="`n[[nodiscard]] inline constexpr bool`n"+(Slice $info 'IsSupportedStandard64RenderTarget(' '[[nodiscard]] inline constexpr bool IsTiledRenderTarget')
 $header+="`n"+(Slice $tile 'static constexpr uint32_t Depth64KB8XOffsetBytes' 'void TileConvertTiledToLinearStandard4KB(')
+$shader=[IO.File]::ReadAllText("$root\gpu\src\graphics\shader\shader.h")
+$views=[IO.File]::ReadAllText("$root\gpu\src\graphics\host_gpu\renderer\imageView.h")
+$header+="`n"+(Slice $shader 'constexpr uint32_t DstSel(' 'inline uint8_t GetDstSel(')
+$header+="`n"+(Slice $views '[[nodiscard]] inline bool IsSupportedStorageSwizzle(' '[[nodiscard]] inline bool IsSupportedStorageDepthTile(')
 $source=Join-Path $out 'depth_storage_production.cpp'
 [IO.File]::WriteAllText($source,$header+"`n"+[IO.File]::ReadAllText("$root\tests\depth_storage_test.cpp"),[Text.UTF8Encoding]::new($false))
 Push-Location $out

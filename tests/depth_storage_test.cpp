@@ -1,5 +1,8 @@
 static void Require(bool ok) {if(!ok) throw std::runtime_error("regression failed");}
 int main() {
+ Require(IsSupportedStorageSwizzle(Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16Float),0x22c));
+ Require(!IsSupportedStorageSwizzle(Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16Float),DstSel(5,4,0,1)));
+ Require(!IsSupportedStorageSwizzle(Prospero::GpuEnumValue(Prospero::BufferFormat::k16Float),0x22c));
  ImageInfo info{};
  info.address=0x10000;info.size=0x280000;info.width=960;info.height=540;info.pitch=1024;
  info.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float);
