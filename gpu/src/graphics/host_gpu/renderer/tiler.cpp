@@ -172,6 +172,11 @@ void Tiler::TileImage(void* dst, const void* src, const RenderTargetInfo& info) 
 }
 
 void Tiler::TileImage(void* dst, const void* src, const ImageInfo& info) const {
+	if (IsSupportedDepthStorageBacking(info)) {
+		TileConvertLinearToTiledDepth(dst, src, info.format, info.width, info.height,
+		                              info.pitch, info.size);
+		return;
+	}
 	const bool image_2d =
 	    info.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) && info.depth == 1;
 	const auto bytes_per_element = Prospero::RenderTargetBytesPerElement(info.format);

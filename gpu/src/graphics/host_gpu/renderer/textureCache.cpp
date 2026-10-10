@@ -493,7 +493,8 @@ struct TextureCache::ReadbackWorker {
 		const bool linear = info.tile_mode == Prospero::GpuEnumValue(Prospero::TileMode::kLinear);
 		const bool tiled_target = target && IsTiledRenderTarget(cached.target);
 		const bool tiled_storage =
-		    storage && info.tile_mode == Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget);
+		    storage && (info.tile_mode == Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) ||
+		                IsSupportedDepthStorageBacking(cached.info));
 		bool single_layer_storage = false;
 		if (storage) {
 			switch (static_cast<Prospero::ImageType>(cached.info.type)) {
@@ -545,7 +546,11 @@ struct TextureCache::ReadbackWorker {
 			                                               info.tile_mode,
 			                                               info.levels,
 			                                               1};
-			cache.m_tiler.TileImage(guest.data(), download.data(), layout);
+			if (storage) {
+				cache.m_tiler.TileImage(guest.data(), download.data(), cached.info);
+			} else {
+				cache.m_tiler.TileImage(guest.data(), download.data(), layout);
+			}
 			Libs::LibKernel::Memory::WriteBacking(info.address, guest.data(), info.size);
 		} else {
 			Libs::LibKernel::Memory::WriteBacking(info.address, download.data(), info.size);
@@ -1072,7 +1077,8 @@ void TextureCache::RetireStorageDepthAliasLocked(GraphicContext* ctx, const Imag
 		    depth.guest_format == Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float) &&
 		    depth.bytes_per_element == 4 && depth.width == requested.width &&
 		    depth.height == requested.height && depth.pitch == requested.pitch &&
-		    requested.format == Prospero::GpuEnumValue(Prospero::BufferFormat::k32UInt) &&
+		    (requested.format == Prospero::GpuEnumValue(Prospero::BufferFormat::k32UInt) ||
+		     requested.format == Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float)) &&
 		    requested.tile == Prospero::GpuEnumValue(Prospero::TileMode::kDepth) &&
 		    requested.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) &&
 		    requested.depth == 1 && requested.levels == 1;
@@ -1310,7 +1316,9 @@ StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   com
 	const bool supported_depth_tile =
 	    info.tile == Prospero::GpuEnumValue(Prospero::TileMode::kDepth) &&
 	    IsSupportedStorageDepthTile(info.format, info.type, info.width, info.height, info.depth);
-	if (info.address == 0 || info.size == 0 || info.address >= TRACKER_ADDRESS_SIZE ||
+	if ((supported_depth_tile && info.format == Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float) &&
+	     !IsSupportedDepthStorageBacking(info)) ||
+	    info.address == 0 || info.size == 0 || info.address >= TRACKER_ADDRESS_SIZE ||
 	    info.size > TRACKER_ADDRESS_SIZE - info.address || info.width == 0 || info.height == 0 ||
 	    info.depth == 0 || info.levels == 0 || info.levels > 16 || info.base_level >= info.levels ||
 	    info.view_levels != 1 || info.base_array != 0 || !supported_type ||
@@ -1349,8 +1357,7 @@ StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   com
 	}
 	FaultSafeTextureLock lock(this, m_lock);
 	RequireNoMetaOverlapLocked(info.address, info.size);
-	if (supported_depth_tile &&
-	    info.format == Prospero::GpuEnumValue(Prospero::BufferFormat::k32UInt)) {
+	if (supported_depth_tile && IsSupportedDepthStorageBacking(info)) {
 		RetireStorageDepthAliasLocked(ctx, info);
 	}
 
@@ -2522,10 +2529,11 @@ void TextureCache::SynchronizeColorImageToBufferLocked(CachedImage& cached, uint
 		target.tile_mode         = info.tile_mode;
 	}
 	const bool    linear = target.tile_mode == Prospero::GpuEnumValue(Prospero::TileMode::kLinear);
-	const bool    tiled  = IsTiledRenderTarget(target);
+	const bool depth_storage = storage && IsSupportedDepthStorageBacking(cached.info);
+	const bool    tiled  = IsTiledRenderTarget(target) || depth_storage;
 	TileSizeAlign exact {};
 	bool          single_slice = false;
-	if (IsSupportedStandard64RenderTarget(target)) {
+	if (IsSupportedStandard64RenderTarget(target) || depth_storage) {
 		exact        = {static_cast<uint32_t>(target.size), 65536};
 		single_slice = true;
 	} else {
@@ -2585,7 +2593,7 @@ void TextureCache::SynchronizeColorImageToBufferLocked(CachedImage& cached, uint
 		auto layout = TextureCalcUploadLayout(
 		    cached.info.format, cached.info.width, cached.info.height, cached.info.levels,
 		    cached.info.depth, cached.info.pitch, cached.info.tile, cached.info.size, true, false,
-		    false, "StorageTextureReadback");
+		    depth_storage, "StorageTextureReadback");
 		auto uploads = TextureBuildUploadRegions(
 		    layout, cached.image->format, cached.info.width, cached.info.height, cached.info.depth,
 		    cached.info.levels, false, false, TextureUploadDestination::MipLevels,

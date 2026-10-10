@@ -444,6 +444,27 @@ IsSupportedStandard64RenderTarget(const RenderTargetInfo& info) noexcept {
 	       info.size == expected_pitch * padded_height * info.bytes_per_element;
 }
 
+[[nodiscard]] inline constexpr bool IsSupportedDepthStorageBacking(const ImageInfo& info) noexcept {
+	if (info.tile != Prospero::GpuEnumValue(Prospero::TileMode::kDepth) ||
+	    (info.format != Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float) &&
+	     info.format != Prospero::GpuEnumValue(Prospero::BufferFormat::k32UInt)) ||
+	    info.type != Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) || info.depth != 1 ||
+	    info.base_level != 0 || info.levels != 1 || info.view_levels != 1 || info.base_array != 0) {
+		return false;
+	}
+	// The 32-bit depth layout has the same 128x128 allocation footprint as Standard64KB,
+	// but a different pixel permutation. Only reuse the footprint check.
+	RenderTargetInfo footprint {};
+	footprint.address = info.address;
+	footprint.size = info.size;
+	footprint.width = info.width;
+	footprint.height = info.height;
+	footprint.pitch = info.pitch;
+	footprint.bytes_per_element = 4;
+	footprint.tile_mode = Prospero::GpuEnumValue(Prospero::TileMode::kStandard64KB);
+	return IsSupportedStandard64RenderTarget(footprint);
+}
+
 [[nodiscard]] inline constexpr bool IsTiledRenderTarget(const RenderTargetInfo& info) noexcept {
 	return info.tile_mode == Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) ||
 	       IsSupportedStandard64RenderTarget(info);

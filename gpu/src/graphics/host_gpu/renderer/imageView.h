@@ -35,7 +35,8 @@ namespace Libs::Graphics {
 	return (format == Prospero::GpuEnumValue(Prospero::BufferFormat::k8UInt) &&
 	        type == Prospero::GpuEnumValue(Prospero::ImageType::kColor2DArray) && width != 0 &&
 	        height != 0 && depth == 1) ||
-	       (format == Prospero::GpuEnumValue(Prospero::BufferFormat::k32UInt) &&
+	       ((format == Prospero::GpuEnumValue(Prospero::BufferFormat::k32UInt) ||
+	         format == Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float)) &&
 	        type == Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) && width != 0 &&
 	        height != 0 && depth == 1);
 }
