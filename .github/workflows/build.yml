@@ -73,6 +73,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_gpu_memory_bridge.ps1
 
+      - name: Test native font handles and glyph rendering
+        shell: pwsh
+        run: ./tools/scripts/test_font.ps1
+
       - name: Test host allocation ownership
         shell: pwsh
         run: ./tools/scripts/test_allocation_ownership.ps1

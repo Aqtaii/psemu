@@ -13,6 +13,7 @@ set(GPU_TP  ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty)
 set(GPU_INCLUDES
     ${GPU_SRC}
     ${CMAKE_CURRENT_SOURCE_DIR}/generated   # cmake_config.h (Kyty configure_file karsiligi)
+    ${GPU_TP}/stb
     ${GPU_TP}/fmt/include
     ${GPU_TP}/spdlog/include
     ${GPU_TP}/magic_enum/include/magic_enum
@@ -50,6 +51,8 @@ file(GLOB_RECURSE GPU_KERNEL_SRC   CONFIGURE_DEPENDS ${GPU_SRC}/kernel/*.cpp)
 file(GLOB_RECURSE GPU_GRAPHICS_SRC CONFIGURE_DEPENDS ${GPU_SRC}/graphics/*.cpp)
 
 set(GPU_LIBS_SRC
+    ${GPU_SRC}/libs/libFont.cpp
+    ${GPU_SRC}/libs/libFontFt.cpp
     ${GPU_SRC}/libs/agc.cpp
     ${GPU_SRC}/libs/libGraphicsDriver.cpp
     ${GPU_SRC}/libs/libVideoOut.cpp

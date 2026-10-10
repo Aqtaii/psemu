@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// From KytyPS5 commit 307fdcf7ad5d9d15b5966288fcc598ac9dbca188.
 #include "common/abi.h"
 #include "common/common.h"
 #include "libs/errno.h"

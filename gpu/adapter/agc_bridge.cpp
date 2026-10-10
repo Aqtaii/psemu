@@ -25,6 +25,8 @@ namespace Libs {
 void InitGraphicsDriver_1(Loader::SymbolDatabase* s);
 void InitVideoOut_1(Loader::SymbolDatabase* s);
 void InitPad_1(Loader::SymbolDatabase* s);
+void InitFont_1(Loader::SymbolDatabase* s);
+void InitFontFt_1(Loader::SymbolDatabase* s);
 } // namespace Libs
 
 namespace {
@@ -36,6 +38,8 @@ void EnsureGraphicsDb() {
 		return;
 	}
 	auto* db = new Loader::SymbolDatabase;
+	Libs::InitFont_1(db);
+	Libs::InitFontFt_1(db);
 	Libs::InitGraphicsDriver_1(db); // SADECE AGC Dcb + Graphics + GraphicsDriver
 	g_graphics_db = db;
 }
@@ -45,6 +49,8 @@ void EnsureDb() {
 		return;
 	}
 	auto* db = new Loader::SymbolDatabase;
+	Libs::InitFont_1(db);
+	Libs::InitFontFt_1(db);
 	Libs::InitGraphicsDriver_1(db); // AGC Dcb + Graphics + GraphicsDriver
 	Libs::InitVideoOut_1(db);       // sceVideoOut*
 	Libs::InitPad_1(db);            // scePad*
