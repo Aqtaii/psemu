@@ -37,6 +37,8 @@
 #include <timeapi.h>  // timeBeginPeriod: Sleep granulerligi
 
 extern "C" void PsemuMarkCpuModified(uint64_t vaddr, uint64_t size);
+extern "C" void PsemuRegisterGpuMemory(uint64_t vaddr, uint64_t size, uint32_t protection);
+extern "C" bool PsemuHandleGpuMemoryFault(uint64_t vaddr, bool write);
 // Performans metrikleri (gpu/adapter/metrics.cpp) - pencere basliginda gosterilir.
 extern "C" void PsemuMetricAddTlsFault();
 extern "C" void PsemuMetricAddPltCall();
@@ -2932,6 +2934,13 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         uint64_t access_type = ExceptionInfo->ExceptionRecord->ExceptionInformation[0];
         uint64_t access_addr = ExceptionInfo->ExceptionRecord->ExceptionInformation[1];
 
+        // Resolve tracked GPU pages before the generic protection/commit fallback.
+        if (Game::Current().title_id == "PPSA21564" &&
+            (access_type == 0 || access_type == 1) &&
+            PsemuHandleGpuMemoryFault(access_addr, access_type == 1)) {
+            return EXCEPTION_CONTINUE_EXECUTION;
+        }
+
         // ================================================================
         // GENEL BELLEK OTOMATIK SAYFA COMMITTER (%100 COKME KORUMASI)
         // ================================================================
@@ -4369,6 +4378,12 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     // Havuz disi/basarisiz: eski davranisa dus (en azindan bellek ver)
                     mem = VirtualAlloc(nullptr, alloc_size,
                                        MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+                }
+
+                if (mem && Game::Current().title_id == "PPSA21564" && (ctx->Rdx & 0x30)) {
+                    Agc::EnsureKytyGraphicsInit();
+                    PsemuRegisterGpuMemory(reinterpret_cast<uint64_t>(mem), alloc_size,
+                                           static_cast<uint32_t>(ctx->Rdx));
                 }
 
                 void** out_ptr = reinterpret_cast<void**>(ctx->Rdi);

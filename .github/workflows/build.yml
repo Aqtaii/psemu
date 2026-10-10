@@ -69,6 +69,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_host_allocation_size.ps1
 
+      - name: Test GPU memory mapping and fault resolution
+        shell: pwsh
+        run: ./tools/scripts/test_gpu_memory_bridge.ps1
+
       - name: Test host allocation ownership
         shell: pwsh
         run: ./tools/scripts/test_allocation_ownership.ps1

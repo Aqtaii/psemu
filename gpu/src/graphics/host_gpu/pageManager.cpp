@@ -501,7 +501,9 @@ void PageManager::BeginBackingWrite(uint64_t vaddr, uint64_t size) noexcept {
 		SpinGuard lock(page.lock);
 		if (page.mappings == 0 || page.resolving || page.backing_writer != 0 ||
 		    page.access_watchers == 0) {
-			Fatal("backing write races page resolution at 0x%016" PRIx64, address);
+			Fatal("invalid backing write at 0x%016" PRIx64 " mappings=%u resolving=%u "
+                  "writer=%u access_watchers=%u", address, page.mappings,
+                  static_cast<unsigned>(page.resolving), page.backing_writer, page.access_watchers);
 		}
 		page.resolving            = true;
 		page.resolving_read_write = true;

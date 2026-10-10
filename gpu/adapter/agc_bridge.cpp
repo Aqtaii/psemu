@@ -118,3 +118,22 @@ extern "C" void PsemuMarkCpuModified(uint64_t vaddr, uint64_t size) {
 		}
 	}
 }
+
+// Core direct-memory HLE owns the host allocation; mirror GPU permissions in the tracker.
+extern "C" void PsemuRegisterGpuMemory(uint64_t vaddr, uint64_t size, uint32_t protection) {
+    if (Libs::Graphics::g_render_ctx == nullptr) std::abort();
+    auto* resources = Libs::Graphics::g_render_ctx->GetGpuResources();
+    const bool read = (protection & 0x10) != 0;
+    const bool write = (protection & 0x20) != 0;
+    if (!read && !write) return;
+    const auto access = read && write ? Libs::Graphics::GpuAccess::ReadWrite
+                      : read ? Libs::Graphics::GpuAccess::Read : Libs::Graphics::GpuAccess::Write;
+    resources->MapMemory(vaddr, size, access);
+}
+
+extern "C" bool PsemuHandleGpuMemoryFault(uint64_t vaddr, bool write) {
+    if (Libs::Graphics::g_render_ctx == nullptr) return false;
+    return Libs::Graphics::g_render_ctx->GetGpuResources()->HandleFault(
+        write ? Libs::Graphics::PageFaultAccess::Write : Libs::Graphics::PageFaultAccess::Read,
+        vaddr);
+}
