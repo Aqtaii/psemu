@@ -3,6 +3,7 @@
 #include "graphics/host_gpu/regionDefinitions.h"
 
 #include <array>
+#include <algorithm>
 #include <atomic>
 #include <cstdarg>
 #include <cstdio>
@@ -268,10 +269,10 @@ struct PageManager::Impl {
 	}
 
 	static void Protect(uint64_t vaddr, uint32_t protection, uint32_t expected_old,
-	                    bool fault_path) noexcept {
+	                    bool fault_path, uint64_t bytes = PAGE_SIZE) noexcept {
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 		DWORD old_protection = 0;
-		if (VirtualProtect(reinterpret_cast<void*>(static_cast<uintptr_t>(vaddr)), PAGE_SIZE,
+		if (VirtualProtect(reinterpret_cast<void*>(static_cast<uintptr_t>(vaddr)), bytes,
 		                   protection, &old_protection) == 0 ||
 		    (old_protection != expected_old && old_protection != PAGE_EXECUTE_READWRITE &&
 		     old_protection != PAGE_READWRITE)) {
@@ -369,14 +370,28 @@ void PageManager::UpdatePageWatchers(bool track, uint64_t vaddr, uint64_t size,
 	// COK SICAK (her izlenen aralik icin sayfa sayfa donuyor) ve o sayac tek
 	// basina Dreaming Sarah'yi T+2'de takilir hale getirdi. Olcum araci
 	// olcugu seyi bozdu; kaldirildi.
-	for (auto page_vaddr = PageStart(vaddr); page_vaddr < end; page_vaddr += PAGE_SIZE) {
+    // Keep each block locked until its protection changes are published. Ascending
+    // acquisition preserves the same page order across concurrent watcher updates.
+    struct Transition { uint64_t address; uint32_t next; uint32_t previous; };
+    for (auto block = PageStart(vaddr); block < end; ) {
+        const auto block_end = std::min(end, block + REGION_SIZE);
+        std::vector<std::unique_ptr<SpinGuard>> locks;
+        std::vector<Transition> changes;
+        locks.reserve((block_end - block) / PAGE_SIZE);
+        changes.reserve((block_end - block) / PAGE_SIZE);
+        for (auto address = block; address < block_end; address += PAGE_SIZE) {
+            auto* region = track ? m_impl->GetOrCreateRegion(address) : m_impl->FindRegion(address);
+            if (!region) Fatal("untracking unknown page 0x%016" PRIx64, address);
+            locks.push_back(std::make_unique<SpinGuard>(m_impl->GetPage(*region, address).lock));
+        }
+        for (auto page_vaddr = block; page_vaddr < block_end; page_vaddr += PAGE_SIZE) {
 		auto* region =
 		    track ? m_impl->GetOrCreateRegion(page_vaddr) : m_impl->FindRegion(page_vaddr);
 		if (region == nullptr) {
 			Fatal("untracking unknown page 0x%016" PRIx64, page_vaddr);
 		}
 		auto&     page = m_impl->GetPage(*region, page_vaddr);
-		SpinGuard lock(page.lock);
+
 		if (page.resolving && track) {
 			FailFast("new page watcher raced active fault resolution");
 		}
@@ -398,7 +413,7 @@ void PageManager::UpdatePageWatchers(bool track, uint64_t vaddr, uint64_t size,
 			watchers++;
 			const auto new_protection = Impl::WatcherProtection(page);
 			if (new_protection != old_protection) {
-				Impl::Protect(page_vaddr, new_protection, old_protection, false);
+				changes.push_back({page_vaddr, new_protection, old_protection});
 			}
 			switch (new_protection) {
 				case PAGE_NOACCESS:
@@ -419,7 +434,7 @@ void PageManager::UpdatePageWatchers(bool track, uint64_t vaddr, uint64_t size,
 			watchers--;
 			const auto new_protection = Impl::WatcherProtection(page);
 			if (page.backing_writer == 0 && new_protection != old_protection) {
-				Impl::Protect(page_vaddr, new_protection, old_protection, false);
+				changes.push_back({page_vaddr, new_protection, old_protection});
 			}
 			if (page.backing_writer == 0) {
 				Impl::PublishDelayedFaults(page, old_protection, new_protection);
@@ -429,6 +444,20 @@ void PageManager::UpdatePageWatchers(bool track, uint64_t vaddr, uint64_t size,
 			}
 		}
 	}
+        for (size_t i = 0; i < changes.size(); ) {
+            const auto first = changes[i];
+            uint64_t bytes = PAGE_SIZE;
+            ++i;
+            while (i < changes.size() && changes[i].address == first.address + bytes &&
+                   changes[i].next == first.next && changes[i].previous == first.previous) {
+                bytes += PAGE_SIZE;
+                ++i;
+            }
+            Impl::Protect(first.address, first.next, first.previous, false, bytes);
+        }
+        block = block_end;
+    }
+
 }
 
 void PageManager::OnGpuMap(uint64_t vaddr, uint64_t size, GpuAccess access) {

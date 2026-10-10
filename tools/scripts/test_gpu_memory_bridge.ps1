@@ -8,6 +8,9 @@ $prefix=@"
 #define NOMINMAX
 #include <windows.h>
 #include <cstdlib>
+#include <chrono>
+#include <thread>
+#include "shared_direct_memory.h"
 #include <cstdio>
 #include "graphics/host_gpu/pageManager.h"
 using namespace Libs::Graphics;
@@ -45,7 +48,26 @@ int main(){
  CHECK(PsemuHandleGpuMemoryFault(addr,true)); CHECK(phases==6); mem[0]=7;
  CHECK(mem[0]==7 && !PsemuHandleGpuMemoryFault(addr+16384,true));
  pages.OnGpuUnmap(addr,4096,GpuAccess::ReadWrite); pages.OnGpuUnmap(addr+4096,4096,GpuAccess::Read);
- CHECK(VirtualFree(mem,0,MEM_RELEASE));g_render_ctx=nullptr;
+ CHECK(VirtualFree(mem,0,MEM_RELEASE));
+ SharedDirectMemory shared; CHECK(shared.Initialize(0x400000000ULL));
+ auto large=shared.GuestBase(); constexpr uint64_t bytes=32*1024*1024;
+ CHECK(VirtualAlloc(large,bytes,MEM_COMMIT,PAGE_READWRITE)==large);
+ const auto base=reinterpret_cast<uint64_t>(large); pages.OnGpuMap(base,bytes,GpuAccess::ReadWrite);
+ const auto begin=std::chrono::steady_clock::now();
+ pages.UpdatePageWatchers(true,base,bytes,PageWatchMode::Write);
+ pages.UpdatePageWatchers(true,base+bytes/2,bytes/2,PageWatchMode::ReadWrite);
+ pages.UpdatePageWatchers(false,base,bytes,PageWatchMode::Write);
+ MEMORY_BASIC_INFORMATION info{};
+ CHECK(VirtualQuery(large,&info,sizeof(info)) && info.Protect==PAGE_READWRITE);
+ CHECK(VirtualQuery(large+bytes/2,&info,sizeof(info)) && info.Protect==PAGE_NOACCESS);
+ pages.UpdatePageWatchers(false,base+bytes/2,bytes/2,PageWatchMode::ReadWrite);
+ CHECK(VirtualQuery(large+bytes-1,&info,sizeof(info)) && info.Protect==PAGE_READWRITE);
+ auto worker=[&](){for(int i=0;i<4;++i){pages.UpdatePageWatchers(true,base,bytes,PageWatchMode::Write);pages.UpdatePageWatchers(false,base,bytes,PageWatchMode::Write);}};
+ std::thread a(worker),b(worker); a.join();b.join();
+ large[0]=19;large[bytes-1]=23;CHECK(large[0]==19 && large[bytes-1]==23);
+ pages.OnGpuUnmap(base,bytes,GpuAccess::ReadWrite);
+ std::printf("32MB shared-view protection batches and concurrent overlap: %.1f ms\n",std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-begin).count());
+ g_render_ctx=nullptr;
  std::puts("PASS: real PageManager GPU mapping permissions, backing write reservation and read/write fault resolution");
 }
 "@
@@ -55,7 +77,7 @@ $cpp=Join-Path $out 'gpu_memory_bridge_test.cpp';$exe=Join-Path $out 'gpu_memory
 [IO.File]::WriteAllText($cpp,"$prefix`n$production`n$tests",[Text.UTF8Encoding]::new($false))
 Push-Location $out
 try {
- & clang-cl /nologo /std:c++20 /Od /EHsc /MD "/I$root\gpu\src" "/I$root\gpu\generated" $cpp "$root\gpu\src\graphics\host_gpu\pageManager.cpp" "/Fe:$exe"
+ & clang-cl /nologo /std:c++20 /Od /EHsc /MD "/I$root\include" "/I$root\gpu\src" "/I$root\gpu\generated" $cpp "$root\gpu\src\graphics\host_gpu\pageManager.cpp" "/Fe:$exe"
  if($LASTEXITCODE -ne 0){throw 'GPU memory bridge compilation failed'}
  & $exe
  if($LASTEXITCODE -ne 0){throw 'GPU memory bridge regression failed'}
