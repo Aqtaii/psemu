@@ -311,6 +311,9 @@ struct EmitterState {
 	uint32_t                               void_type                      = 0;
 	uint32_t                               bool_type                      = 0;
 	uint32_t                               uint_type                      = 0;
+	uint32_t                               guest_uint64_type              = 0;
+	uint32_t                               guest_physical_uint_ptr        = 0;
+	uint32_t                               guest_address_read_function    = 0;
 	uint32_t                               uint_pair_type                 = 0;
 	uint32_t                               int_pair_type                  = 0;
 	uint32_t                               int_type                       = 0;

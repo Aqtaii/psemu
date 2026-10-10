@@ -1,3 +1,4 @@
+#include "graphics/shader/recompiler/spirvEmitter/guestAddressRead.h"
 #include "graphics/shader/recompiler/spirvEmitter/guestAddressLookup.h"
 #include "graphics/shader/recompiler/spirvEmitter/spirvEmitterInternal.h"
 
@@ -520,7 +521,14 @@ void EmitHeaderAndTypes(EmitterState* state) {
 		state->builder.AddExtension("SPV_KHR_compute_shader_derivatives");
 	}
 	state->builder.AddExtInstImport(state->glsl_std450, "GLSL.std.450");
-	state->builder.AddMemoryModel({AddressingModelLogical, MemoryModelGLSL450});
+	if (state->guest_address_table_variable != 0) {
+		state->builder.AddCapability({11}); // Int64.
+		state->builder.AddCapability({5347}); // PhysicalStorageBufferAddresses.
+		state->builder.AddExtension("SPV_KHR_physical_storage_buffer");
+		state->builder.AddMemoryModel({5348, MemoryModelGLSL450});
+	} else {
+		state->builder.AddMemoryModel({AddressingModelLogical, MemoryModelGLSL450});
+	}
 	state->builder.AddEntryPoint(ExecutionModelForStage(state->stage), state->main_func, "main",
 	                             state->interface_variables);
 	if (state->stage == ShaderType::Compute) {
@@ -568,6 +576,12 @@ void EmitHeaderAndTypes(EmitterState* state) {
 	state->builder.AddType({OpTypeVoid, state->void_type});
 	state->builder.AddType({OpTypeBool, state->bool_type});
 	state->builder.AddType({OpTypeInt, state->uint_type, 32, 0});
+	if (state->guest_address_table_variable != 0) {
+		state->guest_uint64_type = state->builder.AllocateId();
+		state->guest_physical_uint_ptr = state->builder.AllocateId();
+		state->builder.AddType({OpTypeInt, state->guest_uint64_type, 64, 0});
+		state->builder.AddType({OpTypePointer, state->guest_physical_uint_ptr, 5349, state->uint_type});
+	}
 	state->builder.AddType(
 	    {OpTypeStruct, state->uint_pair_type, state->uint_type, state->uint_type});
 	state->builder.AddType({OpTypeInt, state->int_type, 32, 1});
@@ -735,6 +749,10 @@ void EmitHeaderAndTypes(EmitterState* state) {
 		    state->builder, state->uint_type, state->bool_type, state->vec2_uint_type,
 		    state->uint_pair_type, state->ptr_storage_buffer_uint,
 		    state->guest_address_table_variable);
+		state->guest_address_read_function = DefineGuestAddressRead(
+		    state->builder, state->uint_type, state->guest_uint64_type, state->bool_type,
+		    state->vec2_uint_type, state->guest_physical_uint_ptr,
+		    state->guest_address_lookup_function);
 	}
 	if (state->stage == ShaderType::Compute || state->needs_function_lds) {
 		const auto storage_class =
