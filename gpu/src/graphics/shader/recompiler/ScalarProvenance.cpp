@@ -781,7 +781,10 @@ private:
 			if (incoming.empty()) {
 				return ScalarProvenance::Undefined;
 			}
-			if (incoming.size() == 1) {
+			// Keep an allocated Phi's identity even when its incoming values temporarily
+			// agree. Collapsing it during the worklist iteration can alternate old/new
+			// definitions around a loop forever instead of reaching a fixed point.
+			if (incoming.size() == 1 && *phi == ScalarProvenance::Undefined) {
 				return incoming[0];
 			}
 			if (*phi == ScalarProvenance::Undefined) {
