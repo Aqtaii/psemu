@@ -945,6 +945,43 @@ static PSEMU_SYSV const void* NativeUpperTable() { return g_native_upper_table.d
 
 static PSEMU_SYSV uint64_t NativeReturnZero() { return 0; }
 
+// Dinkumware's C locale owner. The guest calls _Init/_Getgloballocale and
+// immediately invokes facet::_Incref at vtable +0x10 (observed RVA 0x185423).
+// Empty facet slots let the guest build its own typed facets; host STL objects
+// cannot be substituted because their virtual methods use the Windows ABI.
+struct NativeLocaleOwner {
+    const void* const* vtable;
+    std::atomic<uint32_t> references{1};
+    uint32_t padding = 0;
+    void** facets;
+    uint64_t facet_count = 0;
+    std::array<uint64_t, 12> remaining{};
+};
+static PSEMU_SYSV void NativeLocaleAddRef(NativeLocaleOwner* owner) {
+    owner->references.fetch_add(1, std::memory_order_relaxed);
+}
+static PSEMU_SYSV NativeLocaleOwner* NativeLocaleRelease(NativeLocaleOwner* owner) {
+    // The process owns one permanent reference; guest releases never delete it.
+    uint32_t refs = owner->references.load(std::memory_order_relaxed);
+    while (refs > 1 && !owner->references.compare_exchange_weak(
+               refs, refs - 1, std::memory_order_relaxed)) {}
+    return nullptr;
+}
+static std::array<void*, 256> g_native_locale_facets{};
+static const std::array<const void*, 4> g_native_locale_vtable = {
+    reinterpret_cast<const void*>(&NativeReturnZero),
+    reinterpret_cast<const void*>(&NativeReturnZero),
+    reinterpret_cast<const void*>(&NativeLocaleAddRef),
+    reinterpret_cast<const void*>(&NativeLocaleRelease)
+};
+static NativeLocaleOwner g_native_locale_owner{
+    g_native_locale_vtable.data(), 1, 0, g_native_locale_facets.data()
+};
+static_assert(offsetof(NativeLocaleOwner, references) == 8);
+static_assert(offsetof(NativeLocaleOwner, facets) == 0x10);
+static PSEMU_SYSV void* NativeGlobalLocale() { return &g_native_locale_owner; }
+
+
 // ============================================================================
 // VERI SEMBOLU olarak import edilen FONKSIYONLAR
 // ----------------------------------------------------------------------------
@@ -1171,6 +1208,8 @@ extern "C" void* PsemuNativePltStub(int plt_index) {
     if (n == "__error") return reinterpret_cast<void*>(&NativeErrno);
     if (n == "libc_char_table") return reinterpret_cast<void*>(&NativeCharTable);
     if (n == "_Getptoupper") return reinterpret_cast<void*>(&NativeUpperTable);
+    if (n == "_ZNSt6locale5_InitEv" || n == "_ZNSt6locale16_GetgloballocaleEv")
+        return reinterpret_cast<void*>(&NativeGlobalLocale);
     // These functions already take the FOP_RET0 path in the VEH handler.
     if (n == "_Locksyslock" || n == "_Unlocksyslock" || n == "uncaught_exception")
         return reinterpret_cast<void*>(&NativeReturnZero);
@@ -5372,6 +5411,10 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     }
                 }
                 ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(result));
+                special_return_set = true;
+            } else if (readable_name == "_ZNSt6locale5_InitEv" ||
+                       readable_name == "_ZNSt6locale16_GetgloballocaleEv") {
+                ctx->Rax = reinterpret_cast<uint64_t>(NativeGlobalLocale());
                 special_return_set = true;
             } else if (readable_name == "_Getptoupper") {
                 ctx->Rax = reinterpret_cast<uint64_t>(NativeUpperTable());

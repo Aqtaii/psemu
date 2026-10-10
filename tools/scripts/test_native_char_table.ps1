@@ -8,6 +8,7 @@ $production = $source.Substring($first, $last - $first)
 $prefix = @'
 #include <array>
 #include <cstdint>
+#include <cstddef>
 #include <cstdio>
 #include <thread>
 #include <vector>
@@ -45,7 +46,30 @@ int main() {
     for (auto& thread : threads) thread.join();
     CHECK(valid.load());
     CHECK(NativeReturnZero() == 0);
-    std::puts("PASS: ASCII case maps, Construct 2 name matching, SysV ABI and concurrent stable addresses");
+    // Reproduce the exact failing guest instruction sequence:
+    // locale = _Getgloballocale(); vtable = *locale; call vtable[2](locale).
+    auto* locale = static_cast<NativeLocaleOwner*>(NativeGlobalLocale());
+    CHECK(locale && locale->vtable && locale->facets);
+    using AddRefFn = void (__attribute__((sysv_abi)) *)(NativeLocaleOwner*);
+    using ReleaseFn = NativeLocaleOwner* (__attribute__((sysv_abi)) *)(NativeLocaleOwner*);
+    auto addref = reinterpret_cast<AddRefFn>(const_cast<void*>(locale->vtable[2]));
+    auto release = reinterpret_cast<ReleaseFn>(const_cast<void*>(locale->vtable[3]));
+    const auto initial_refs = locale->references.load();
+    addref(locale);
+    CHECK(locale->references.load() == initial_refs + 1);
+    CHECK(release(locale) == nullptr && locale->references.load() == initial_refs);
+    threads.clear();
+    for (int i = 0; i < 8; ++i) threads.emplace_back([&] {
+        for (int n = 0; n < 10000; ++n) {
+            if (NativeGlobalLocale() != locale) valid = false;
+            addref(locale);
+            if (release(locale) != nullptr) valid = false;
+        }
+    });
+    for (auto& thread : threads) thread.join();
+    CHECK(valid.load() && locale->references.load() == initial_refs);
+
+    std::puts("PASS: ASCII case maps, Construct 2 name matching, SysV ABI, stable addresses and actual global-locale crash sequence");
 }
 '@
 $out = Join-Path $root 'build\native-atomic-tests'
