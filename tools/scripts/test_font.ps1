@@ -6,6 +6,8 @@ $source=[regex]::Replace($source,'(?m)^LIB_VERSION\([^\r\n]+','')
 $source=$source.Substring(0,$source.IndexOf('LIB_DEFINE(InitFont_1)'))+"`n} // Libs`n"
 $prefix=@"
 #define KYTY_SYSV_ABI __attribute__((sysv_abi))
+#include <cstdlib>
+#define EXIT_NOT_IMPLEMENTED(x) do { if (x) std::abort(); } while(0)
 #define PRINT_NAME() ((void)0)
 #define LOGF(...) ((void)0)
 namespace Libs { constexpr int OK=0; }
