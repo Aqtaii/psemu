@@ -1,3 +1,5 @@
+#include "graphics/shader/recompiler/SrtPatcher.h"
+#include "graphics/shader/recompiler/spirvEmitter/scalarMemoryGroup.h"
 #include "graphics/shader/recompiler/spirvEmitter/guestAddressRead.h"
 #include <functional>
 #include <unordered_set>
@@ -88,6 +90,54 @@ struct Recorder {
  }
 };
 int main() {
+ namespace IR=Libs::Graphics::ShaderRecompiler::IR;
+ auto group_plan=[](bool all_static) {
+  IR::Program p;p.srt_plan_complete=true;p.blocks.resize(1);
+  p.provenance.values.resize(6);
+  for(uint32_t i=0;i<4;++i) {
+   p.provenance.values[i+2].op=IR::ScalarValueOp::ReadConst;
+   IR::Instruction inst;inst.op=IR::Opcode::SLoadDword;inst.pc=0x2030;
+   inst.dst.kind=IR::OperandKind::Register;inst.dst.reg={IR::RegisterFile::Scalar,8+i};
+   inst.src_count=1;inst.src[0].kind=IR::OperandKind::Register;
+   inst.src[0].reg={IR::RegisterFile::Scalar,12};
+   inst.scalar_value=i+2;inst.memory.kind=IR::ResourceKind::ScalarBuffer;
+   inst.memory.resource=8;inst.memory.component_count=4;inst.memory.component_index=i;
+   inst.memory.offset=i*4;p.blocks[0].instructions.push_back(inst);
+   if(all_static || i==0 || i==3)
+    p.srt.reads.push_back({i+2,uint32_t(p.srt.reads.size()),0x2030});
+  }
+  return p;
+ };
+ std::string patch_error;
+ auto partial=group_plan(false);
+ if(!IR::PatchSrtReads(&partial,&patch_error))throw std::runtime_error(patch_error);
+ if(partial.blocks[0].instructions[0].op!=IR::Opcode::LoadSrtDword ||
+    partial.blocks[0].instructions[1].op!=IR::Opcode::SLoadDword)
+  throw std::runtime_error("partial patch regression");
+ for(uint32_t i=0;i<4;++i) {
+  auto& group=partial.blocks[0].instructions[i].scalar_memory_group;
+  if(!group.valid || group.base_sgpr!=8 || group.component_index!=i ||
+     group.component_count!=4 || group.dynamic_offset.reg.index!=12)
+   throw std::runtime_error("scalar group address metadata lost");
+ }
+ std::array<uint32_t,128> regs{};regs[8]=0xfffffffc;regs[9]=0x123;regs[12]=4;
+ const auto snapshot=CaptureScalarMemoryGroup(
+  partial.blocks[0].instructions[0].scalar_memory_group,
+  [&](const IR::Operand& source){return regs.at(source.reg.index);});
+ regs[8]=7;regs[9]=8;regs[12]=9;
+ if(snapshot!=std::array<uint32_t,3>{0xfffffffc,0x123,4})
+  throw std::runtime_error("overlapping writes changed captured address");
+ auto fixed=group_plan(true);
+ if(!IR::PatchSrtReads(&fixed,&patch_error))throw std::runtime_error(patch_error);
+ for(auto& inst:fixed.blocks[0].instructions)
+  if(inst.scalar_memory_group.valid)throw std::runtime_error("static read captured unnecessarily");
+ auto malformed=group_plan(false);
+ malformed.blocks[0].instructions[3].memory.resource=10;
+ if(IR::PatchSrtReads(&malformed,&patch_error))throw std::runtime_error("malformed group accepted");
+ for(auto& inst:malformed.blocks[0].instructions)
+  if(inst.op!=IR::Opcode::SLoadDword || inst.scalar_memory_group.valid)
+   throw std::runtime_error("group failure partially modified program");
+
  Libs::Graphics::ShaderRecompiler::IR::Program plan;
  plan.user_data_count=0;plan.shader_info_complete=true;plan.uses_guest_address_table=true;
  Libs::Graphics::ShaderRecompiler::IR::BindingLayoutOptions options;

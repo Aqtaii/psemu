@@ -1,3 +1,4 @@
+#include "graphics/shader/recompiler/spirvEmitter/scalarMemoryGroup.h"
 #include "graphics/shader/recompiler/spirvEmitter/spirvEmitterInternal.h"
 
 namespace Libs::Graphics::ShaderRecompiler::Spirv::Emitter {
@@ -365,6 +366,14 @@ void EmitVertexInputRegisters(EmitterState* state) {
 }
 
 void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
+	if (state->program->uses_guest_address_table && inst.scalar_memory_group.valid &&
+	    inst.scalar_memory_group.component_index == 0) {
+		state->guest_scalar_group_values[inst.pc] = CaptureScalarMemoryGroup(
+		    inst.scalar_memory_group, [&](const IR::Operand& source) {
+		        return EmitValueLoad(state, source);
+		    });
+	}
+
 	switch (inst.op) {
 		case IR::Opcode::ControlNop: EmitControlNop(state, inst); break;
 		case IR::Opcode::Waitcnt: EmitWaitcnt(state, inst); break;

@@ -298,6 +298,7 @@ struct SampledImageDescriptors {
 };
 
 struct EmitterState {
+	std::map<uint32_t, std::array<uint32_t,3>> guest_scalar_group_values;
 	Builder                                builder;
 	const IR::Program*                     program                        = nullptr;
 	const IR::ResourceSnapshot*            resources                      = nullptr;

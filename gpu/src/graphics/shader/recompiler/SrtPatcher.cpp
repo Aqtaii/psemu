@@ -116,6 +116,48 @@ bool PatchSrtReads(Program* program, std::string* error) {
 		}
 	}
 
+	// Preserve grouped source registers before individual SRT substitutions erase
+	// memory metadata. A dynamic component must use the pre-group address even
+	// when an earlier (statically patched) component overwrites that address.
+	std::vector<std::pair<Instruction*, ScalarMemoryGroup>> groups;
+	for (auto& block: program->blocks) {
+		for (size_t index = 0; index < block.instructions.size();) {
+			auto& first = block.instructions[index];
+			if (first.op != Opcode::SLoadDword || first.memory.component_count <= 1) {
+				++index;
+				continue;
+			}
+			const auto count = first.memory.component_count;
+			if (first.memory.component_index != 0 || count > 16 ||
+			    count > block.instructions.size() - index || first.memory.resource >= 127) {
+				if (error) *error = "invalid scalar read group before SRT patching";
+				return false;
+			}
+			bool dynamic = false;
+			for (uint32_t i = 0; i < count; ++i) {
+				const auto& component = block.instructions[index + i];
+				if (component.op != first.op || component.pc != first.pc ||
+				    component.memory.resource != first.memory.resource ||
+				    component.memory.component_count != count ||
+				    component.memory.component_index != i) {
+					if (error) *error = "inconsistent scalar read group before SRT patching";
+					return false;
+				}
+				dynamic |= !offsets.contains(component.scalar_value);
+			}
+			if (dynamic) {
+				Operand offset;
+				offset.kind = OperandKind::ImmediateU32;
+				if (first.src_count != 0) offset = first.src[0];
+				for (uint32_t i = 0; i < count; ++i)
+					groups.emplace_back(&block.instructions[index+i],
+					                    ScalarMemoryGroup{true, first.memory.resource, i, count, offset});
+			}
+			index += count;
+		}
+	}
+	for (const auto& [inst, group]: groups) inst->scalar_memory_group = group;
+
 	for (const auto& patch: patches) {
 		patch.inst->op        = Opcode::LoadSrtDword;
 		patch.inst->src_count = 1;

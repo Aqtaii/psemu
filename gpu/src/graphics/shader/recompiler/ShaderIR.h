@@ -475,6 +475,15 @@ struct BvhInfo {
 	bool operator==(const BvhInfo& other) const = default;
 };
 
+struct ScalarMemoryGroup {
+ bool valid = false;
+ uint32_t base_sgpr = 0;
+ uint32_t component_index = 0;
+ uint32_t component_count = 0;
+ Operand dynamic_offset;
+ bool operator==(const ScalarMemoryGroup&) const = default;
+};
+
 struct Instruction {
 	uint32_t     pc = 0;
 	Opcode       op = Opcode::MoveU32;
@@ -486,6 +495,7 @@ struct Instruction {
 	uint32_t     scalar_value      = 0;
 	MemoryInfo   memory;
 	BvhInfo      bvh;
+	ScalarMemoryGroup scalar_memory_group;
 	ExportInfo   export_info;
 	InputInfo    input_info;
 	SaveexecMode saveexec_mode = SaveexecMode::And;

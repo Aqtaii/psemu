@@ -188,6 +188,13 @@ void CollectRegisters(const IR::Program& program, std::vector<RegisterBinding>* 
 	CollectMaskStateRegisters(registers);
 	for (const auto& block: program.blocks) {
 		for (const auto& inst: block.instructions) {
+			if (program.uses_guest_address_table && inst.scalar_memory_group.valid) {
+				CollectRegister(registers, {IR::RegisterFile::Scalar, inst.scalar_memory_group.base_sgpr});
+				CollectRegister(registers, {IR::RegisterFile::Scalar, inst.scalar_memory_group.base_sgpr+1});
+				if (inst.scalar_memory_group.dynamic_offset.kind == IR::OperandKind::Register)
+					CollectRegister(registers, inst.scalar_memory_group.dynamic_offset.reg);
+			}
+
 			if (inst.dst.kind == IR::OperandKind::Register) {
 				CollectRegister(registers, inst.dst.reg);
 			}
