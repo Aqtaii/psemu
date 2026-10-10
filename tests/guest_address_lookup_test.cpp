@@ -182,8 +182,19 @@ int main() {
  auto wide_sb=group_plan(false);wide_sb.srt.reads.clear();
  for(auto& inst:wide_sb.blocks[0].instructions)inst.op=IR::Opcode::SBufferLoadDword;
  wide_sb.uses_guest_address_table=true;
- if(!IR::PatchSrtReads(&wide_sb,&patch_error) || IR::TrackResources(&wide_sb,&patch_error))
-  throw std::runtime_error("unsupported wide scalar descriptor fallback accepted");
+ if(!IR::PatchSrtReads(&wide_sb,&patch_error) || !IR::TrackResources(&wide_sb,&patch_error))
+  throw std::runtime_error("wide scalar descriptor fallback rejected");
+ for(auto& inst:wide_sb.blocks[0].instructions)
+  if(!inst.memory.guest_buffer_read || inst.scalar_memory_group.descriptor_dwords!=4 ||
+     inst.scalar_memory_group.base_sgpr!=32)
+   throw std::runtime_error("wide scalar descriptor metadata lost");
+ std::array<uint32_t,128> buffer_regs{};
+ buffer_regs[32]=1;buffer_regs[33]=2;buffer_regs[34]=3;buffer_regs[35]=4;buffer_regs[12]=5;
+ auto buffer_snapshot=CaptureScalarBufferGroup(wide_sb.blocks[0].instructions[0].scalar_memory_group,
+  [&](const IR::Operand& source){return buffer_regs.at(source.reg.index);});
+ buffer_regs.fill(0);
+ if(buffer_snapshot!=std::array<uint32_t,5>{1,2,3,4,5})
+  throw std::runtime_error("buffer descriptor/address changed after overlapping write");
  auto legacy=group_plan(false);
  if(!IR::PatchSrtReads(&legacy,&patch_error))throw std::runtime_error(patch_error);
  if(IR::TrackResources(&legacy,&patch_error))throw std::runtime_error("disabled fallback accepted unknown address");

@@ -310,7 +310,8 @@ bool ValidateNativeProgram(const IR::Program& program, std::string* error) {
 			    inst.op == IR::Opcode::SLoadDword || memory == IR::ResourceKind::Flat ||
 			    memory == IR::ResourceKind::Global || memory == IR::ResourceKind::Scratch;
 			if(inst.memory.guest_buffer_read && (!program.uses_guest_address_table ||
-			 inst.op!=IR::Opcode::SBufferLoadDword || inst.memory.component_count!=1))
+			 inst.op!=IR::Opcode::SBufferLoadDword || !inst.scalar_memory_group.valid ||
+			 inst.scalar_memory_group.descriptor_dwords!=4))
 			 return Fail(error,"invalid scalar buffer runtime read topology");
 			if(inst.memory.guest_address_read && (!program.uses_guest_address_table ||
 			   inst.op!=IR::Opcode::SLoadDword || !inst.scalar_memory_group.valid)) {

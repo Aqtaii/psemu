@@ -123,13 +123,14 @@ bool PatchSrtReads(Program* program, std::string* error) {
 	for (auto& block: program->blocks) {
 		for (size_t index = 0; index < block.instructions.size();) {
 			auto& first = block.instructions[index];
-			if (first.op != Opcode::SLoadDword || first.memory.component_count == 0) {
+			if ((first.op != Opcode::SLoadDword && first.op != Opcode::SBufferLoadDword) || first.memory.component_count == 0) {
 				++index;
 				continue;
 			}
 			const auto count = first.memory.component_count;
 			if (first.memory.component_index != 0 || count > 16 ||
-			    count > block.instructions.size() - index || first.memory.resource >= 127) {
+			    count > block.instructions.size() - index ||
+			    (first.op==Opcode::SLoadDword?first.memory.resource>=127:first.memory.resource>=26)) {
 				if (error) *error = "invalid scalar read group before SRT patching";
 				return false;
 			}
@@ -151,7 +152,8 @@ bool PatchSrtReads(Program* program, std::string* error) {
 				if (first.src_count != 0) offset = first.src[0];
 				for (uint32_t i = 0; i < count; ++i)
 					groups.emplace_back(&block.instructions[index+i],
-					                    ScalarMemoryGroup{true, first.memory.resource, i, count, offset});
+					                    ScalarMemoryGroup{true, first.op==Opcode::SLoadDword?first.memory.resource:first.memory.resource*4u,
+				                                      i, count, offset,first.op==Opcode::SLoadDword?2u:4u});
 			}
 			index += count;
 		}

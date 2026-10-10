@@ -483,6 +483,7 @@ struct ScalarMemoryGroup {
  uint32_t component_index = 0;
  uint32_t component_count = 0;
  Operand dynamic_offset;
+	uint32_t descriptor_dwords = 2;
  bool operator==(const ScalarMemoryGroup&) const = default;
 };
 

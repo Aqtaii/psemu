@@ -442,7 +442,9 @@ private:
                             inst->pc,&descriptor_error)) {
          if(m_program.uses_guest_address_table && inst->op==Opcode::SBufferLoadDword &&
             inst->memory.kind==ResourceKind::ScalarBuffer && inst->src_count==1 &&
-            inst->memory.component_count==1 && inst->memory.component_index==0 &&
+            inst->memory.component_count>=1 && inst->memory.component_count<=16 &&
+		    inst->scalar_memory_group.valid && inst->scalar_memory_group.descriptor_dwords==4 &&
+		    inst->memory.component_index<inst->memory.component_count &&
             inst->memory.resource<26 && inst->memory.data_bits==32 &&
             inst->memory.data_dwords==1 && !inst->memory.typed && !inst->memory.formatted &&
             !inst->memory.glc && !inst->memory.slc) {

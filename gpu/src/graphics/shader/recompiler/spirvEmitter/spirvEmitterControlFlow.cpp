@@ -368,7 +368,10 @@ void EmitVertexInputRegisters(EmitterState* state) {
 void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
 	if (state->program->uses_guest_address_table && inst.scalar_memory_group.valid &&
 	    inst.scalar_memory_group.component_index == 0) {
-		state->guest_scalar_group_values[inst.pc] = CaptureScalarMemoryGroup(
+		if(inst.scalar_memory_group.descriptor_dwords==4) {
+		 state->guest_scalar_buffer_group_values[inst.pc]=CaptureScalarBufferGroup(
+		  inst.scalar_memory_group,[&](const IR::Operand& source){return EmitValueLoad(state,source);});
+		} else state->guest_scalar_group_values[inst.pc] = CaptureScalarMemoryGroup(
 		    inst.scalar_memory_group, [&](const IR::Operand& source) {
 		        return EmitValueLoad(state, source);
 		    });

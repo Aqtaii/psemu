@@ -1166,15 +1166,12 @@ void EmitAtomicU32(EmitterState* state, const IR::Instruction& inst, uint32_t op
 
 void EmitGuestScalarBufferRead(EmitterState* s,const IR::Instruction& inst) {
  EXIT_IF(!s->guest_scalar_buffer_function);
- std::array<uint32_t,4> words;
- for(unsigned i=0;i<4;++i) {
-  IR::Operand source;source.kind=IR::OperandKind::Register;
-  source.reg={IR::RegisterFile::Scalar,inst.memory.resource*4u+i};
-  words[i]=EmitValueLoad(s,source);
- }
+ const auto found=s->guest_scalar_buffer_group_values.find(inst.pc);
+ EXIT_IF(found==s->guest_scalar_buffer_group_values.end());
+ const auto& words=found->second;
  auto desc=s->builder.AllocateId();
  s->builder.AddFunction({OpCompositeConstruct,s->vec4_uint_type,desc,words[0],words[1],words[2],words[3]});
- auto offset=EmitValueLoad(s,inst.src[0]),result=s->builder.AllocateId(),
+ auto offset=words[4],result=s->builder.AllocateId(),
       value=s->builder.AllocateId(),status=s->builder.AllocateId(),
       success=s->builder.AllocateId(),selected=s->builder.AllocateId();
  s->builder.AddFunction({57,s->vec2_uint_type,result,s->guest_scalar_buffer_function,
