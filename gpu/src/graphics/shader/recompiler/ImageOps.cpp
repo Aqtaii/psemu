@@ -271,6 +271,7 @@ bool DecodeMimg(uint32_t pc, std::span<const uint32_t> code, uint32_t word_index
 	                            : opcode == 0x09u   ? Opcode::ImageStoreMip
 	                            : opcode == 0x0eu   ? Opcode::ImageGetResinfo
 	                            : opcode == 0x60u   ? Opcode::ImageGetLod
+	                            : (opcode == 0xe6u || opcode == 0xe7u) ? Opcode::ImageBvhIntersectRay
 	                                                : Opcode::Unsupported);
 	inst->dmask              = (word0 >> 8u) & 0xfu;
 	inst->data_dwords        = gather != nullptr ? 4u : CountDmaskComponents(inst->dmask);
@@ -281,6 +282,7 @@ bool DecodeMimg(uint32_t pc, std::span<const uint32_t> code, uint32_t word_index
 	                                                : 0u) |
 	                           (a16 ? ImageSampleFlagA16 : 0u);
 	inst->image_dimension    = dimension;
+	inst->image_r128         = ((word0 >> 15u) & 1u) != 0;
 	inst->image_nsa_dwords   = nsa_dwords;
 	for (uint32_t i = 0; i < nsa_dwords * 4u && i < MaxImageNsaAddressComponents; i++) {
 		inst->image_nsa_addr[i] = (code[word_index + 2u + i / 4u] >> ((i % 4u) * 8u)) & 0xffu;
@@ -289,6 +291,8 @@ bool DecodeMimg(uint32_t pc, std::span<const uint32_t> code, uint32_t word_index
 	    sample != nullptr   ? ImageSampleAddressComponents(sample->flags, dimension)
 	    : gather != nullptr ? ImageSampleAddressComponents(gather->flags, dimension)
 	    : atomic != nullptr ? 3u
+	    : opcode == 0xe6u   ? 11u
+	    : opcode == 0xe7u   ? 12u
 	    : opcode == 0x60u   ? ImageCoordComponents(dimension)
 	    : opcode == 0x01u   ? ImageCoordComponents(dimension) + 1u
 	    : opcode == 0x00u   ? ImageCoordComponents(dimension)
@@ -304,6 +308,16 @@ bool DecodeMimg(uint32_t pc, std::span<const uint32_t> code, uint32_t word_index
 		SetUnsupported(inst, Family::MIMG, opcode,
 		               "MIMG image gather requires exactly one dmask bit");
 	}
+
+    if (inst->opcode == Opcode::ImageBvhIntersectRay) {
+        // KytyPS5 requires full-float ray words, 128-bit descriptor, four outputs.
+        const bool d16 = ((word1 >> 31u) & 1u) != 0;
+        if (a16 || d16 || !inst->image_r128 || inst->dmask != 0xfu ||
+            (nsa_dwords != 0u && nsa_dwords != 3u)) {
+            SetUnsupported(inst, Family::MIMG, opcode,
+                "BVH intersection requires full-float ray DWORDs, R128, dmask:0xf and complete NSA");
+        }
+    }
 
 	DecodeVectorGpr(vdata, &inst->dst, nullptr);
 	DecodeVectorGpr(vaddr, &inst->src0, nullptr);

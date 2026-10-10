@@ -498,6 +498,7 @@ enum class Opcode {
 	DsReadAddtidB32,
 	ImageGetResinfo,
 	ImageGetLod,
+	ImageBvhIntersectRay,
 	ImageLoad,
 	ImageLoadMip,
 	ImageStore,
@@ -632,6 +633,7 @@ struct Instruction {
 	uint32_t       image_sample_flags                           = 0;
 	ImageDimension image_dimension                              = ImageDimension::Unknown;
 	uint32_t       image_address_components                     = 0;
+	bool           image_r128 = false;
 	uint32_t       image_nsa_dwords                             = 0;
 	uint32_t       image_nsa_addr[MaxImageNsaAddressComponents] = {};
 	uint32_t       memory_segment                               = 0;

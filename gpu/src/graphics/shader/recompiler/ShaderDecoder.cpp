@@ -899,6 +899,7 @@ std::string OpcodeToString(Opcode opcode) {
 		case Opcode::DsReadAddtidB32: return "ds_read_addtid_b32";
 		case Opcode::ImageGetResinfo: return "image_get_resinfo";
 		case Opcode::ImageGetLod: return "image_get_lod";
+		case Opcode::ImageBvhIntersectRay: return "image_bvh_intersect_ray";
 		case Opcode::ImageLoad: return "image_load";
 		case Opcode::ImageLoadMip: return "image_load_mip";
 		case Opcode::ImageStore: return "image_store";
@@ -1070,6 +1071,7 @@ std::string InstructionToString(const Instruction& inst) {
 		case Opcode::ImageLoadMip:
 		case Opcode::ImageGetResinfo:
 		case Opcode::ImageGetLod:
+		case Opcode::ImageBvhIntersectRay:
 		case Opcode::ImageGather4Lz:
 		case Opcode::ImageGather4C:
 		case Opcode::ImageGather4CLz:

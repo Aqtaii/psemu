@@ -41,3 +41,16 @@ the identical word continues into the following V_MOV and store (expected 42).
 Our explicit STrap decoder preserves the immediate and lowers to existing ControlNop.
 This assumes no guest GPU trap handler is installed; it does not implement GPU debugger traps.
 Captured decoder regression checks its immediate and explicit trap opcode.
+
+### Astro BVH decoder foundation
+Captured MIMG0xe6 at PC0x2190: f1989f07 00040505 4442413d 4543403e 00004746.
+Upstream frontend/decode/ImageOps.cpp defines IMAGE_BVH_INTERSECT_RAY (0xe6/0xe7):
+11/12 full-float ray DWORDs, R128 descriptor and DMASK0xf; NSA length must be0 or3.
+Tests preserve v5, s[16:19], all10 nonsequential ray registers, wide/sequential encoding,
+reject A16/D16, missing R128, partial DMASK, incomplete/truncated NSA.
+Decoder support alone is NOT runnable BVH support. Upstream translator Memory.cpp,
+spirvEmitterBvh.cpp, ResourceTracking.cpp and ShaderInfoCollection.cpp also participate.
+Our backend has no physical storage buffer/BDA guest-address translation path.
+Next: bind the real BVH backing memory or implement guest-address GPU lookup; adapt
+triangle and full/half-box kernels and match upstream GPU conformance fixtures.
+Keep unsupported lowering explicit until real intersection execution is implemented.

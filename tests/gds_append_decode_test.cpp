@@ -1,5 +1,6 @@
 #include "graphics/shader/recompiler/MemoryOps.h"
 #include "graphics/shader/recompiler/ScalarAluOps.h"
+#include "graphics/shader/recompiler/ImageOps.h"
 #include "graphics/shader/recompiler/VectorAluOps.h"
 #include <array>
 #include <cstdio>
@@ -7,6 +8,35 @@
 using namespace Libs::Graphics::ShaderRecompiler::Decoder;
 static void Check(bool ok) {if(!ok) throw std::runtime_error("GDS decoder regression");}
 int main() {
+ // Captured Astro instruction: v5 output, s[16:19] BVH descriptor, 11 ray words.
+ std::array<uint32_t,5> bvh{0xf1989f07,0x00040505,0x4442413d,0x4543403e,0x00004746};
+ Instruction ray;std::string ray_error;
+ Check(DecodeMimg(0x2190,bvh,0,&ray,&ray_error));
+ Check(ray.opcode==Opcode::ImageBvhIntersectRay && ray.opcode_id==0xe6);
+ Check(ray.word_count==5 && ray.image_nsa_dwords==3 && ray.image_address_components==11);
+ Check(ray.image_r128 && ray.dmask==15 && ray.data_dwords==4);
+ Check(ray.dst.kind==OperandKind::Vgpr && ray.dst.reg==5);
+ Check(ray.src0.kind==OperandKind::Vgpr && ray.src0.reg==5);
+ Check(ray.src1.kind==OperandKind::Sgpr && ray.src1.reg==16);
+ constexpr std::array<uint32_t,10> addresses{61,65,66,68,62,64,67,69,70,71};
+ for(unsigned i=0;i<addresses.size();i++) Check(ray.image_nsa_addr[i]==addresses[i]);
+ auto wide=bvh;wide[0]+=0x40000;
+ Check(DecodeMimg(0,wide,0,&ray,&ray_error) && ray.opcode==Opcode::ImageBvhIntersectRay);
+ Check(ray.image_address_components==12);
+ auto sequential=bvh;sequential[0]&=~6u;
+ Check(DecodeMimg(0,std::span<const uint32_t>(sequential.data(),2),0,&ray,&ray_error));
+ Check(ray.opcode==Opcode::ImageBvhIntersectRay && ray.word_count==2);
+ for(unsigned malformed=0;malformed<5;malformed++) {
+  auto bad=bvh;
+  if(malformed==0) bad[0]&=~0x8000u; // R128 off
+  if(malformed==1) bad[0]&=~0x100u;  // partial output mask
+  if(malformed==2) bad[1]|=0x40000000u; // A16
+  if(malformed==3) bad[1]|=0x80000000u; // D16
+  if(malformed==4) bad[0]=(bad[0]&~6u)|2u; // incomplete NSA
+  Check(DecodeMimg(0,bad,0,&ray,&ray_error) && ray.opcode==Opcode::Unsupported);
+ }
+ Check(!DecodeMimg(0,std::span<const uint32_t>(bvh.data(),4),0,&ray,&ray_error));
+
  // Astro's exact S_TRAP word: preserve immediate and fall-through classification.
  const std::array<uint32_t,1> trap_code{0xbf920001};
  Instruction trap;std::string trap_error;
