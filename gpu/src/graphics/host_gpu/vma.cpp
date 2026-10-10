@@ -74,6 +74,9 @@ bool VulkanCreateAllocator(GraphicContext* ctx) {
 	info.pVulkanFunctions = &functions;
 	info.vulkanApiVersion = VULKAN_TARGET_API_VERSION;
 	info.flags = ctx->memory_budget_ext_enabled ? VMA_ALLOCATOR_CREATE_EXT_MEMORY_BUDGET_BIT : 0;
+	if (ctx->bvh_device_address_enabled) {
+		info.flags |= VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+	}
 
 	const auto result = static_cast<vk::Result>(vmaCreateAllocator(&info, &ctx->allocator));
 	if (result != vk::Result::eSuccess) {
@@ -122,6 +125,11 @@ void VulkanCreateBuffer(GraphicContext* ctx, uint64_t size, VulkanBuffer* buffer
 	buffer_info.sType       = vk::StructureType::eBufferCreateInfo;
 	buffer_info.size        = size;
 	buffer_info.usage       = buffer->usage;
+	if (ctx->bvh_device_address_enabled &&
+	    (buffer->usage & vk::BufferUsageFlagBits::eStorageBuffer)) {
+		buffer->usage |= vk::BufferUsageFlagBits::eShaderDeviceAddress;
+		buffer_info.usage = buffer->usage;
+	}
 	buffer_info.sharingMode = vk::SharingMode::eExclusive;
 
 	VmaAllocationCreateInfo alloc_info {};
@@ -144,6 +152,14 @@ void VulkanCreateBuffer(GraphicContext* ctx, uint64_t size, VulkanBuffer* buffer
 	buffer->memory.offset    = buffer->memory.allocation_info.offset;
 	buffer->memory.unique_id = VulkanNextMemoryUniqueId();
 	buffer->buffer_size      = size;
+	buffer->device_address = 0;
+	if (ctx->bvh_device_address_enabled &&
+	    (buffer->usage & vk::BufferUsageFlagBits::eShaderDeviceAddress)) {
+		vk::BufferDeviceAddressInfo address_info {};
+		address_info.buffer = buffer->buffer;
+		buffer->device_address = ctx->device.getBufferAddress(address_info);
+		EXIT_IF(buffer->device_address == 0);
+	}
 	VulkanTrackAllocation(&buffer->memory);
 }
 
@@ -155,6 +171,7 @@ void VulkanDeleteBuffer(GraphicContext* ctx, VulkanBuffer* buffer) {
 	VulkanUntrackAllocation(&buffer->memory);
 	vmaDestroyBuffer(ctx->allocator, buffer->buffer, buffer->memory.allocation);
 	buffer->buffer                 = nullptr;
+	buffer->device_address         = 0;
 	buffer->memory.memory          = nullptr;
 	buffer->memory.allocation      = nullptr;
 	buffer->memory.allocation_info = {};

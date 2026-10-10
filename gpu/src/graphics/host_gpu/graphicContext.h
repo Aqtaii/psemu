@@ -43,6 +43,8 @@ struct VulkanCommandPool {
 };
 
 struct GraphicContext: public VulkanInstance {
+	// Both features must be enabled before physical-address shader accesses.
+	bool                                  bvh_device_address_enabled = false;
 	uint32_t                              screen_width  = 0;
 	uint32_t                              screen_height = 0;
 	std::array<Common::Mutex, QUEUES_NUM> queue_mutexes;
@@ -148,6 +150,7 @@ struct VulkanBuffer {
 	VulkanMemory         memory;
 	vk::BufferUsageFlags usage       = {};
 	uint64_t             buffer_size = 0;
+	vk::DeviceAddress    device_address = 0;
 };
 
 struct StorageVulkanBuffer: public VulkanBuffer {};

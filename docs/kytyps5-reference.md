@@ -98,3 +98,14 @@ and failure without partially appended IR. GPU EXEC/write semantics remain
 unverified until intersection emission is implemented.
 Emitter contract explicitly rejects BVH execution until GPU guest-address
 mapping and real intersection emission are available.
+
+### BVH physical-address prerequisites
+KytyPS5 presentation/window/vulkanWindow.cpp requires bufferDeviceAddress and
+shaderInt64. psemu now queries both and enables them together only if available.
+VMA receives its buffer-device-address allocator flag; storage buffers get
+shader-device-address usage and a queried device address, cleared on deletion.
+No hardware ray tracing extension is required by the software intersection path.
+This is allocation infrastructure only: the guest GPU page table, descriptor
+bindings, fault resolution and intersection emission remain to be integrated.
+Unsupported hardware retains the ordinary buffer allocation path; BVH execution
+still fails explicitly rather than emitting an invalid physical-address shader.

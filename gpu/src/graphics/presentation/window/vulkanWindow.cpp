@@ -590,9 +590,12 @@ static vk::Device VulkanCreateDevice(vk::PhysicalDevice physical_device, vk::Sur
 	subgroup_size_control.sType = vk::StructureType::ePhysicalDeviceSubgroupSizeControlFeatures;
 	subgroup_size_control.pNext = &features12;
 
+	vk::PhysicalDeviceVulkan12Features supported_features12 {};
+	supported_features12.sType = vk::StructureType::ePhysicalDeviceVulkan12Features;
+
 	vk::PhysicalDeviceVulkan13Features supported_features13 {};
 	supported_features13.sType = vk::StructureType::ePhysicalDeviceVulkan13Features;
-	supported_features13.pNext = nullptr;
+	supported_features13.pNext = &supported_features12;
 
 	const auto robustness2_ext_enabled =
 	    HasExtension(device_extensions, VK_EXT_ROBUSTNESS_2_EXTENSION_NAME);
@@ -601,15 +604,24 @@ static vk::Device VulkanCreateDevice(vk::PhysicalDevice physical_device, vk::Sur
 	supported_robustness2.sType = vk::StructureType::ePhysicalDeviceRobustness2FeaturesEXT;
 	supported_robustness2.pNext = nullptr;
 	if (robustness2_ext_enabled) {
-		supported_features13.pNext = &supported_robustness2;
+		supported_features12.pNext = &supported_robustness2;
 	}
 
 	vk::PhysicalDeviceFeatures2 supported_features2 {};
 	supported_features2.sType = vk::StructureType::ePhysicalDeviceFeatures2;
 	supported_features2.pNext = &supported_features13;
 	physical_device.getFeatures2(&supported_features2);
+	ctx->bvh_device_address_enabled = supported_features12.bufferDeviceAddress == VK_TRUE &&
+	                                  supported_features2.features.shaderInt64 == VK_TRUE;
+	features12.bufferDeviceAddress = ctx->bvh_device_address_enabled ? VK_TRUE : VK_FALSE;
+
 
 	vk::PhysicalDeviceFeatures device_features {};
+	device_features.shaderInt64 = ctx->bvh_device_address_enabled ? VK_TRUE : VK_FALSE;
+	LOGF("Vulkan BVH address prerequisites: bufferDeviceAddress=%s shaderInt64=%s enabled=%s\n",
+	     supported_features12.bufferDeviceAddress == VK_TRUE ? "true" : "false",
+	     supported_features2.features.shaderInt64 == VK_TRUE ? "true" : "false",
+	     ctx->bvh_device_address_enabled ? "true" : "false");
 	device_features.fragmentStoresAndAtomics             = VK_TRUE;
 	device_features.samplerAnisotropy                    = VK_TRUE;
 	device_features.robustBufferAccess                   = VK_TRUE;
