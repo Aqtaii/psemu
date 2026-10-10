@@ -96,7 +96,17 @@ vk::DescriptorImageInfo MakeDescriptorImageInfo(const DescriptorCache::TextureBi
 	EXIT_IF(texture.image == nullptr || texture.view < 0 || texture.view >= VulkanImage::VIEW_MAX);
 	const auto view = texture.image_view != nullptr ? texture.image_view
 	                                                : texture.image->image_view[texture.view];
-	EXIT_IF(view == nullptr);
+    if (view == nullptr) {
+        EXIT("missing descriptor image view: image_type=%u selected=%d native_image=%d "
+             "slots=%d,%d,%d,%d explicit=%d format=%u extent=%ux%u layers=%u mips=%u layout=%u\n",
+             static_cast<unsigned>(texture.image->type), texture.view,
+             texture.image->image != nullptr,
+             texture.image->image_view[0] != nullptr, texture.image->image_view[1] != nullptr,
+             texture.image->image_view[2] != nullptr, texture.image->image_view[3] != nullptr,
+             texture.image_view != nullptr, static_cast<unsigned>(texture.image->format),
+             texture.image->extent.width, texture.image->extent.height, texture.image->layers,
+             texture.image->mip_levels, static_cast<unsigned>(texture.image->layout));
+    }
 	return {nullptr, view, layout};
 }
 
