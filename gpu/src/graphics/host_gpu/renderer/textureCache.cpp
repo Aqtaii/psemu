@@ -1,4 +1,4 @@
-﻿#include "graphics/host_gpu/renderer/textureCache.h"
+#include "graphics/host_gpu/renderer/textureCache.h"
 
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -2593,7 +2593,7 @@ void TextureCache::SynchronizeColorImageToBufferLocked(CachedImage& cached, uint
 		auto layout = TextureCalcUploadLayout(
 		    cached.info.format, cached.info.width, cached.info.height, cached.info.levels,
 		    cached.info.depth, cached.info.pitch, cached.info.tile, cached.info.size, true, false,
-		    depth_storage, "StorageTextureReadback");
+		    false, "StorageTextureReadback");
 		auto uploads = TextureBuildUploadRegions(
 		    layout, cached.image->format, cached.info.width, cached.info.height, cached.info.depth,
 		    cached.info.levels, false, false, TextureUploadDestination::MipLevels,
