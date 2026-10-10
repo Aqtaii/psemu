@@ -118,8 +118,11 @@ int main() {
  b.AddType({30,carry,u,u});b.AddType({29,array,u});b.AddType({30,structure,array});
  b.AddType({32,ptr,12,u});b.AddType({32,ptr_struct,12,structure});
  b.AddType({59,ptr_struct,table,12});b.AddType({19,vo});b.AddType({33,main_type,vo});
- DefineGuestAddressLookup(b,u,bo,pair,carry,ptr,table);
+ const auto lookup=DefineGuestAddressLookup(b,u,bo,pair,carry,ptr,table);
+ const auto z=b.AllocateId(),four=b.AllocateId(),input=b.AllocateId(),call=b.AllocateId();
+ b.AddType({43,u,z,0});b.AddType({43,u,four,4});b.AddType({44,pair,input,z,z});
  b.AddFunction({54,vo,main,0,main_type});b.AddFunction({248,label});
+ b.AddFunction({57,pair,call,lookup,input,four});
  b.AddFunction({253});b.AddFunction({56});
  const auto binary=b.Build();
  auto f=std::fopen("guest_address_lookup.spv","wb");if(!f)return 1;

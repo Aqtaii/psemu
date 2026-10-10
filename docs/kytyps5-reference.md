@@ -155,3 +155,13 @@ BufferCache::CaptureAddressSnapshot holds resource/cache locks in existing order
 Regression tests/guest_address_table_test.cpp covers captured high guest-address shape, independently resolved 64-byte blocks around a 16KB boundary, unrelated device backing, overlap/overflow/missing ranges, null arguments, maximum entry count, and transactional invalid-input preservation.
 
 Validation: source commit 46d4d300bd4ce5c72d24160fbb924fcbeeb0e7cb, CI38092001848 all regressions and full Windows build succeeded. Downloaded outputs/psemu-windows-x64-astro-address-table.zip and extracted work/ci-astro-address-table under D:/proje/psemu-codex. Archive SHA256 digest plus all19 manifest entries verified. No runtime test because CaptureAddressSnapshot is not wired into dispatch yet; previous Astro dynamic scalar load blocker is unchanged. Next: table binding/physical SPIR-V lookup, coherence preparation/fence retention, then dynamic scalar reads preserving group base and missing-page diagnostics.
+
+## Shader address-table binding and lookup
+
+Compared pinned KytyPS5 307fdcf7ad5d9d15b5966288fcc598ac9dbca188, src/graphics/shader/recompiler/backend/spirv/spirvEmitterMemory.cpp::DefineGetBdaPointer and src/graphics/host_gpu/renderer/cache/bufferCache.cpp::ChangeRegister. Adaptation is original code for psemu sorted range snapshots, not a direct copy of the upstream dense-page implementation.
+
+GuestAddressTable descriptor is declared only for a program explicitly requesting it (default disabled). Binding allocation, SPIR-V declaration/topology checks and host descriptor writes use the same kind. DefineGuestAddressLookup emits a callable uvec2-address function over the serialized 8-DWORD entries using 32-bit pair arithmetic and bounded upper-bound search (17 decisions for 65536 entries). Missing, empty, malformed-length and cross-owner reads return zero. This is address resolution only: physical-storage loads and fault reporting remain follow-up work.
+
+Host binding uploads exact serialized bytes (OpArrayLength excludes stream allocation padding), keeps every backing buffer until the command fence, and checks recording reset after upload. Unprepared CPU/GPU-dirty or image-alias ranges are rejected, not silently made coherent. Dynamic execution remains disabled until coherence preparation, missing-page reporting and scalar group address capture are integrated.
+
+Test guest_address_lookup_test.cpp interprets emitted production SPIR-V operations and compares to the separate CPU range resolver for maximum-size tables, boundary cases and 2000 random accesses. It also checks the production binding allocator and builds a callable compute module for spirv-val --target-env vulkan1.1. Validation result recorded after CI.
