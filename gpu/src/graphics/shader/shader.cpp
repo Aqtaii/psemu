@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fmt/format.h>
 #include <memory>
@@ -1530,6 +1531,8 @@ bool ShaderCompileSpirvCS(const HW::ComputeShaderInfo* regs, const HW::ShaderReg
 	options.descriptor_set       = 0;
 	options.push_constant_offset = 0;
 	options.compute_input_info   = input_info;
+	const auto* scalar_reads = std::getenv("PSEMU_GPU_SCALAR_READS");
+	options.allow_guest_scalar_reads = scalar_reads && std::string_view(scalar_reads)=="1";
 	options.wave_size            = input_info->wave_size;
 	options.dump_ir              = ShaderRecompilerTextDumpEnabled();
 	options.early_dump           = options.dump_ir;
