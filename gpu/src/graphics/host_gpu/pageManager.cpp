@@ -204,11 +204,18 @@ struct PageManager::Impl {
 		}
 	}
 
-	static uint32_t QueryProtection(uint64_t vaddr) {
+	static uint32_t QueryProtection(uint64_t vaddr, uint64_t* unchanged_end = nullptr) {
 #if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
 		MEMORY_BASIC_INFORMATION info {};
 		VirtualQuery(reinterpret_cast<const void*>(static_cast<uintptr_t>(vaddr)), &info,
 		             sizeof(info));
+        if (unchanged_end != nullptr) {
+            *unchanged_end = vaddr + PAGE_SIZE;
+            if (info.State == MEM_COMMIT &&
+                (info.Protect == PAGE_READWRITE || info.Protect == PAGE_EXECUTE_READWRITE)) {
+                *unchanged_end = reinterpret_cast<uint64_t>(info.BaseAddress) + info.RegionSize;
+            }
+        }
 		// psemu: PageManager write-tracking'i, fault olmadan ONCE proaktif olarak
 		// sayfanin RW-committed olmasini bekler. Ama psemu guest sayfalarini lazy
 		// (VEH commit-on-fault) yonetir; ayrica bazi V#'ler gecersiz/null-bound
@@ -384,6 +391,8 @@ void PageManager::UpdatePageWatchers(bool track, uint64_t vaddr, uint64_t size,
             if (!region) Fatal("untracking unknown page 0x%016" PRIx64, address);
             locks.push_back(std::make_unique<SpinGuard>(m_impl->GetPage(*region, address).lock));
         }
+        uint64_t queried_end = 0;
+        uint32_t queried_protection = 0;
         for (auto page_vaddr = block; page_vaddr < block_end; page_vaddr += PAGE_SIZE) {
 		auto* region =
 		    track ? m_impl->GetOrCreateRegion(page_vaddr) : m_impl->FindRegion(page_vaddr);
@@ -407,7 +416,10 @@ void PageManager::UpdatePageWatchers(bool track, uint64_t vaddr, uint64_t size,
 			}
 			const bool first_watcher = page.write_watchers == 0 && page.access_watchers == 0;
 			if (first_watcher) {
-				page.original_protection = Impl::QueryProtection(page_vaddr);
+				if (page_vaddr >= queried_end) {
+                    queried_protection = Impl::QueryProtection(page_vaddr, &queried_end);
+                }
+                page.original_protection = queried_protection;
 			}
 			const auto old_protection = Impl::WatcherProtection(page);
 			watchers++;
