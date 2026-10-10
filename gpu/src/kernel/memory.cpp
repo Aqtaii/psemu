@@ -45,6 +45,9 @@
 #include <unistd.h>
 #endif
 
+extern "C" bool PsemuTryReadDirectBacking(uint64_t address, void* data, uint64_t size);
+extern "C" bool PsemuTryWriteDirectBacking(uint64_t address, const void* data, uint64_t size);
+
 namespace Libs::LibKernel::Memory {
 
 namespace VirtualMemory = Common::VirtualMemory;
@@ -867,6 +870,7 @@ static void                     MemoryPoolSubtractCommitted(uint64_t len);
 static std::recursive_mutex g_memory_operation_mutex;
 
 bool TryWriteBacking(uint64_t vaddr, const void* data, uint64_t size) {
+    if (PsemuTryWriteDirectBacking(vaddr, data, size)) return true;
 	if (g_direct_memory_backing->TryWriteBacking(vaddr, data, size)) {
 		return true;
 	}
@@ -889,6 +893,7 @@ bool TryWriteBacking(uint64_t vaddr, const void* data, uint64_t size) {
 }
 
 bool TryReadBacking(uint64_t vaddr, void* data, uint64_t size) {
+    if (PsemuTryReadDirectBacking(vaddr, data, size)) return true;
 	if (g_direct_memory_backing->TryReadBacking(vaddr, data, size)) {
 		return true;
 	}

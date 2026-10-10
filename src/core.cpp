@@ -3,6 +3,7 @@
 #include "guest_stub_memory.h"
 #include "guest_file_stat.h"
 #include "host_allocation_size.h"
+#include "shared_direct_memory.h"
 #include <io.h>
 #include <unordered_map>
 #include "agc.h"
@@ -553,6 +554,7 @@ static volatile long g_n_strtod   = 0;
 // tablosunu digerinden sifir olarak okuyup RVA 0x105495'te cokuyordu.
 // Cozum: tek buyuk rezervasyon, fiziksel adres = havuz icindeki offset.
 // Boylece ayni phys her zaman ayni belleye dusuyor.
+static SharedDirectMemory g_shared_dmem;
 static uint8_t*        g_dmem_base = nullptr;
 static std::mutex      g_dmem_mutex;
 // PS5'te 16 GB birlesik bellek var ve Astro Bot fiziksel adres alaninda
@@ -569,6 +571,13 @@ static const uint64_t  kDmemSize   = 0x400000000ULL; // 16 GB adres alani rezerv
 // AGC (GPU) modulunun descriptor'lardaki FIZIKSEL adresleri CPU'ya cevirebilmesi
 // icin havuz tabanini disari veriyoruz (CPU = g_dmem_base_addr + phys).
 uint64_t g_dmem_base_addr = 0;
+
+extern "C" bool PsemuTryReadDirectBacking(uint64_t address, void* data, uint64_t size) {
+    return g_shared_dmem.TryRead(address, data, size);
+}
+extern "C" bool PsemuTryWriteDirectBacking(uint64_t address, const void* data, uint64_t size) {
+    return g_shared_dmem.TryWrite(address, data, size);
+}
 
 // mspace tutamaci -> kapasite. sceLibcMspaceCreate'in 3. argumani, daha
 // sonra sceLibcMspaceMallocStats ile oyuna geri bildirilir.
@@ -633,8 +642,13 @@ static void* MspaceBumpAlloc(uint64_t handle, size_t n, size_t align) {
 static uint8_t* DmemBase() {
     std::lock_guard<std::mutex> lock(g_dmem_mutex);
     if (g_dmem_base == nullptr) {
-        g_dmem_base = reinterpret_cast<uint8_t*>(
-            VirtualAlloc(nullptr, kDmemSize, MEM_RESERVE, PAGE_NOACCESS));
+        if (Game::Current().title_id == "PPSA21564") {
+            if (g_shared_dmem.Initialize(kDmemSize)) g_dmem_base = g_shared_dmem.GuestBase();
+            else LOG_ERROR("[MEMORY-HLE] Shared direct-memory views could not be created");
+        } else {
+            g_dmem_base = reinterpret_cast<uint8_t*>(
+                VirtualAlloc(nullptr, kDmemSize, MEM_RESERVE, PAGE_NOACCESS));
+        }
         if (g_dmem_base) {
             // Ilk 64 MB'yi hemen commit et (anlik baslangic).
             // Geri kalan 4 GB bellek ihtiyac duyuldugunda On-Demand Committer
