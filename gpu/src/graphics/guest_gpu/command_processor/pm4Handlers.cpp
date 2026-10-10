@@ -2279,6 +2279,13 @@ KYTY_CP_OP_PARSER(CpOpDmaData) {
 	const uint8_t  wait_previous = static_cast<uint8_t>((control2 >> 30u) & 0x1u);
 	const uint8_t  write_confirm = static_cast<uint8_t>((control2 >> 31u) & 0x1u);
 	const uint32_t num_bytes     = control2 & 0x03ffffffu;
+	if ((num_bytes & 3u) != 0) {
+		static std::atomic<uint32_t> dma_packet_count {0};
+		if (dma_packet_count.fetch_add(1, std::memory_order_relaxed) < 16) {
+			std::fprintf(stderr, "[DMA-PACKET] header=%08x payload=%08x,%08x,%08x,%08x,%08x,%08x\n",
+			             cmd_id, buffer[0], buffer[1], buffer[2], buffer[3], buffer[4], buffer[5]);
+		}
+	}
 
 	cp->DmaData(engine, dst_sel, dst_cache_policy, dst, src_sel, src_cache_policy, src, num_bytes,
 	            wait_previous, write_confirm, block_engine);
