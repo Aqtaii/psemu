@@ -22,12 +22,14 @@ uint32_t DefineGuestAddressFault(B& b, uint32_t u32, uint32_t boolean,
  };
  auto pointer=[&](uint32_t index){return op(65,storage_uint_ptr,{fault_buffer,zero,index});};
  auto merge=b.AllocateId(),claim=b.AllocateId();
+ auto failed=op(171,boolean,{status,zero});
  b.AddFunction({247,merge,0});
- b.AddFunction({250,op(171,boolean,{status,zero}),claim,merge});
+ b.AddFunction({250,failed,claim,merge});
  b.AddFunction({248,claim});
  auto old=op(230,u32,{pointer(zero),one,zero,zero,status,zero});
  auto write=b.AllocateId(),finish=b.AllocateId();
- b.AddFunction({247,finish,0});b.AddFunction({250,op(170,boolean,{old,zero}),write,finish});
+ auto won=op(170,boolean,{old,zero});
+ b.AddFunction({247,finish,0});b.AddFunction({250,won,write,finish});
  b.AddFunction({248,write});
  auto lo=op(81,u32,{guest,0}),hi=op(81,u32,{guest,1});
  b.AddFunction({62,pointer(one),lo});b.AddFunction({62,pointer(two),hi});
