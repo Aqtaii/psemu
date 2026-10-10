@@ -125,3 +125,13 @@ Tests compile the actual emitter with a SPIR-V operation evaluator, covering all
 64 bit positions, zero/all-ones, overlap ordering and10000 generated inputs.
 The new runtime test has not yet established BVH lowering/execution success;
 the previous run stopped in CFG decoding before those phases.
+
+## Astro descriptor provenance capture (464e1fe)
+
+Reference remains KytyPS5 307fdcf7ad5d9d15b5966288fcc598ac9dbca188, src/graphics/shader/recompiler/ir/passes/ResourceTracking.cpp::Collect: unresolved scalar loads use the restricted IndirectBuffer/DMA path. No fallback is enabled in psemu yet.
+
+The failed compute shader previously exited before its original/IR dump could be saved. Preserve decoded and CFG/IR diagnostics on resource-tracking failure and write failed CS dumps before the fatal exit. This work adds diagnostics only; successful shaders keep their existing dump policy.
+
+Windows CI run 38078584242 passed every regression and complete build. Verified archive digest plus all 19 manifest entries. Separate Astro test (PID 17792, now exited) reproduced PC 0x20b8 with shader address 0x265a0531000. Captured 14384-byte original, 114737-byte RDNA2 text, and 319794-byte CFG/IR under D:/proje/psemu/_Shaders/original.
+
+Evidence: PC 0x2090 s_lshl_b64 s8,s28,3 feeds PC 0x20b8 s_load_dwordx4 s20,s8,offset=88. ScalarProvenance::Operation does not model ShiftLeftLogicalU64, so it loses this address. s28/s29 are also overwritten by v_readlane within the traversal loop (0x2294, 0x22dc, 0x22ec and subsequent paths); CPU provenance support alone cannot be assumed to resolve all iterations. Follow up with pair-shift provenance tests and the restricted GPU scalar address-load path. Do not replace unknown addresses with zero, and do not claim BVH execution or first frame.
