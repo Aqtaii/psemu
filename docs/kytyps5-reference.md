@@ -54,3 +54,33 @@ Our backend has no physical storage buffer/BDA guest-address translation path.
 Next: bind the real BVH backing memory or implement guest-address GPU lookup; adapt
 triangle and full/half-box kernels and match upstream GPU conformance fixtures.
 Keep unsupported lowering explicit until real intersection execution is implemented.
+
+### BVH memory integration audit
+Upstream fixture: tests/ShaderRayTracingGpuTests.inc::BvhIntersections
+(included by ShaderRecompilerComputeTests.cpp), pinned commit as above.
+It builds the four-word descriptor in shader SGPRs rather than materializing
+an image descriptor on the host. Preserve those live values in the IR.
+Required cases: triangle kinds 0..3, FP16 boxes kind4, FP32 boxes kind5,
+invalid kind/address/ray, barycentric versus triangle-id outputs, sorted
+versus original-order children, exclusive ray extent, box growth, inactive
+EXEC destinations, NSA, and wide node pointers above the 32-bit range.
+The FP32 fixture also deliberately splits a 128-byte node across guest pages
+whose physical backing is separated by a 64-byte gap. Resolve the second
+64-byte block independently; never assume adjacent guest pages are adjacent
+in physical GPU backing.
+
+Local constraints: ResourceMaterialization.cpp specializes known FLAT bases
+into FlatAddressWindowSize (0x10000), and renderer/descriptors.cpp::NativeAddressBuffer
+binds one contiguous read-only host range. The normal buffer/image descriptor
+formats do not represent a BVH descriptor. Extending that window alone would
+not handle shader-produced descriptors or discontiguous page backing.
+
+Integration order:
+1. Add dedicated BvhIntersect IR carrying four live descriptor words, all
+   11/12 ray words, node width and EXEC; keep ordinary images separate.
+2. Provide command-lifetime guest-page-to-GPU-buffer address lookup, with
+   independent node block resolution, bounds and missing-page behavior.
+3. Adapt upstream triangle/box SPIR-V routines to this IR and memory interface.
+4. Run the above conformance cases and SPIR-V validation before installing
+   a runtime build; then rerun Astro and record the next actual blocker.
+No constant-miss or null-output substitute constitutes intersection support.
