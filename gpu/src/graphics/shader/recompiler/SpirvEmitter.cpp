@@ -239,6 +239,7 @@ bool ValidateNativeProgram(const IR::Program& program, std::string* error) {
 	}
 	if (program.uses_guest_address_table) {
 		Expect(Kind::GuestAddressTable);
+		Expect(Kind::GuestAddressFault);
 	}
 	if (!program.srt.reads.empty()) {
 		Expect(Kind::FlattenedSrt);

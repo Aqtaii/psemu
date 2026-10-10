@@ -266,6 +266,7 @@ bool AllocateBindings(Program* program, const BindingLayoutOptions& options, std
 	}
 	if (program->uses_guest_address_table) {
 		AddBinding(&next, DescriptorBindingKind::GuestAddressTable);
+		AddBinding(&next, DescriptorBindingKind::GuestAddressFault);
 	}
 	if (!program->srt.reads.empty()) {
 		AddBinding(&next, DescriptorBindingKind::FlattenedSrt);

@@ -1,3 +1,4 @@
+#include "graphics/shader/recompiler/spirvEmitter/guestAddressFault.h"
 #include "graphics/shader/recompiler/spirvEmitter/guestAddressRead.h"
 #include "graphics/shader/recompiler/spirvEmitter/guestAddressLookup.h"
 #include "graphics/shader/recompiler/spirvEmitter/spirvEmitterInternal.h"
@@ -364,6 +365,8 @@ void AddDescriptorAnnotationsAndNames(EmitterState* state) {
 		Decorate(state->gds_variable, "gds", IR::DescriptorBindingKind::Gds);
 	}
 	if (state->guest_address_table_variable != 0) {
+		Decorate(state->guest_address_fault_variable, "guest_address_fault",
+		         IR::DescriptorBindingKind::GuestAddressFault);
 		Decorate(state->guest_address_table_variable, "guest_address_table",
 		         IR::DescriptorBindingKind::GuestAddressTable);
 	}
@@ -749,10 +752,15 @@ void EmitHeaderAndTypes(EmitterState* state) {
 		    state->builder, state->uint_type, state->bool_type, state->vec2_uint_type,
 		    state->uint_pair_type, state->ptr_storage_buffer_uint,
 		    state->guest_address_table_variable);
-		state->guest_address_read_function = DefineGuestAddressRead(
+		state->builder.AddType({OpVariable, state->ptr_storage_buffer,
+                                state->guest_address_fault_variable, StorageClassStorageBuffer});
+        const auto fault_fn = DefineGuestAddressFault(
+            state->builder, state->uint_type, state->bool_type, state->vec2_uint_type,
+            state->ptr_storage_buffer_uint, state->guest_address_fault_variable);
+        state->guest_address_read_function = DefineGuestAddressRead(
 		    state->builder, state->uint_type, state->guest_uint64_type, state->bool_type,
 		    state->vec2_uint_type, state->guest_physical_uint_ptr,
-		    state->guest_address_lookup_function);
+		    state->guest_address_lookup_function, fault_fn);
 	}
 	if (state->stage == ShaderType::Compute || state->needs_function_lds) {
 		const auto storage_class =
@@ -924,6 +932,7 @@ void AllocateDescriptorVariables(EmitterState* state) {
 	}
 	if (DescriptorBinding(*state, IR::DescriptorBindingKind::GuestAddressTable) != nullptr) {
 		state->guest_address_table_variable = state->builder.AllocateId();
+		state->guest_address_fault_variable = state->builder.AllocateId();
 	}
 	if (DescriptorBinding(*state, IR::DescriptorBindingKind::FlattenedSrt) != nullptr) {
 		state->flattened_srt_variable = state->builder.AllocateId();

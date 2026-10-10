@@ -684,7 +684,7 @@ void BufferCache::UnmapMemory(uint64_t vaddr, uint64_t size) {
 std::pair<VulkanBuffer*, uint64_t> BufferCache::ObtainBuffer(CommandBuffer*  command,
                                                              GraphicContext* ctx, uint64_t vaddr,
                                                              uint64_t size, bool is_written,
-                                                             bool is_read, bool is_formatted) {
+                                                             bool is_read, bool is_formatted, bool force_resident) {
 	if (command == nullptr || command->IsInvalid() || command->IsExecute() || ctx == nullptr ||
 	    vaddr == 0 || size == 0 || size > UINT64_MAX - vaddr || command->GetQueue() < 0 ||
 	    command->GetQueue() >= 64) {
@@ -704,7 +704,7 @@ std::pair<VulkanBuffer*, uint64_t> BufferCache::ObtainBuffer(CommandBuffer*  com
 	// views may coexist with a small CPU-current read; Kyty's separate image trackers require
 	// GPU-dirty ownership guards here. Read physical backing so
 	// host page protection is irrelevant.
-	if (is_read && !is_written && size <= CACHING_PAGE_SIZE &&
+	if (!force_resident && is_read && !is_written && size <= CACHING_PAGE_SIZE &&
 	    !m_memory_tracker.IsRegionGpuModified(vaddr, size) &&
 	    m_memory_tracker.IsRegionCpuModified(vaddr, size) && !texture_region.gpu_image_bytes &&
 	    !texture_region.gpu_metadata_bytes) {

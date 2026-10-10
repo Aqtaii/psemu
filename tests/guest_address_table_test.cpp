@@ -1,9 +1,29 @@
 #include "graphics/host_gpu/renderer/guestAddressTable.h"
+#include "graphics/host_gpu/renderer/fenceCompletionActions.h"
+#include "graphics/host_gpu/renderer/guestAddressFaultRecord.h"
+#include <memory>
 #include <cstdio>
 #include <array>
 using namespace Libs::Graphics;
 #define CHECK(x) do {if(!(x)){std::printf("FAIL %d: %s\n",__LINE__,#x);return 1;}}while(0)
 int main() {
+ FenceCompletionActions actions;
+ int completed=0;
+ auto resource=std::make_shared<int>(42);std::weak_ptr<int> weak=resource;
+ actions.Add([resource,&completed]{if(*resource==42)++completed;});
+ resource.reset();CHECK(!weak.expired());CHECK(completed==0);
+ actions.Complete();CHECK(completed==1);CHECK(weak.expired());
+ actions.Complete();CHECK(completed==1);
+ resource=std::make_shared<int>(7);weak=resource;
+ actions.Add([resource,&completed]{++completed;});resource.reset();
+ actions.Discard();CHECK(weak.expired());actions.Complete();CHECK(completed==1);
+ CHECK(CanPrepareGuestAddressFault({1,0x56789abc,0x1234,0}));
+ CHECK(!CanPrepareGuestAddressFault({0,0x56789abc,0x1234,0}));
+ CHECK(!CanPrepareGuestAddressFault({2,0x56789abc,0x1234,0}));
+ CHECK(!CanPrepareGuestAddressFault({1,0,0,0}));
+ CHECK(!CanPrepareGuestAddressFault({1,4,0x10000,0}));
+ CHECK(!CanPrepareGuestAddressFault({1,5,0,0}));
+ CHECK(!CanPrepareGuestAddressFault({1,4,0,1}));
  const uint64_t base=0x265a0000000ull;
  std::vector<GuestAddressRange> table;
  const std::array input{GuestAddressRange{base+16384,0x90004000,16384,0},

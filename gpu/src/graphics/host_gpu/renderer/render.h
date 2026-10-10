@@ -6,6 +6,7 @@
 #include "graphics/host_gpu/renderer/streamBuffer.h"
 #include "graphics/host_gpu/vulkanCommon.h"
 
+#include "graphics/host_gpu/renderer/fenceCompletionActions.h"
 #include <memory>
 #include <vector>
 
@@ -93,6 +94,7 @@ public:
 	void WaitForFenceAndReset();
 	void DeleteAfterFence(VulkanBuffer* buffer);
 	void RetainResourceUntilFence(std::shared_ptr<void> resource);
+	void OnFenceComplete(std::function<void()> action);
 	void RecycleDescriptorAfterFence(VulkanDescriptorSet* set);
 
 	[[nodiscard]] vk::CommandBuffer Handle() const;
@@ -127,6 +129,7 @@ private:
 	uint64_t                          m_debug_arg4           = 0;
 	std::vector<VulkanBuffer*>        m_delete_after_fence;
 	FenceResourceRetainer             m_fence_resources;
+	FenceCompletionActions           m_fence_actions;
 	std::vector<VulkanDescriptorSet*> m_descriptor_sets_after_fence;
 	HostStreamBuffer                  m_host_stream;
 };

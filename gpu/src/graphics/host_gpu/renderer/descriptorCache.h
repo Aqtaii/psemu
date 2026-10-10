@@ -64,6 +64,7 @@ public:
 		BufferView                  gds;
 		BufferView                  flattened_srt;
 		BufferView                  guest_address_table;
+		BufferView                  guest_address_fault;
 		BufferView                  user_data;
 	};
 

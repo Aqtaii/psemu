@@ -717,6 +717,7 @@ enum class DescriptorBindingKind {
 	AddressMemory,
 	FlattenedSrt,
 	GuestAddressTable,
+	GuestAddressFault,
 	UserData,
 	Count,
 };

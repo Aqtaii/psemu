@@ -231,7 +231,7 @@ VulkanDescriptorSet* DescriptorCache::GetDescriptor(Stage                       
 	EXIT_NOT_IMPLEMENTED(set == nullptr);
 
 	const auto descriptor_count = program.info.buffers.size() + program.info.images.size() +
-	                              program.info.samplers.size() + program.info.addresses.size() + 4u;
+	                              program.info.samplers.size() + program.info.addresses.size() + 5u;
 	std::vector<vk::DescriptorBufferInfo> buffer_infos;
 	std::vector<vk::DescriptorImageInfo>  image_infos;
 	std::vector<vk::WriteDescriptorSet>   writes;
@@ -258,6 +258,9 @@ VulkanDescriptorSet* DescriptorCache::GetDescriptor(Stage                       
 				for (const auto resource: binding.resources) {
 					buffer_infos.push_back(BufferInfo(data.addresses.at(resource)));
 				}
+				break;
+			case BindingKind::GuestAddressFault:
+				buffer_infos.push_back(BufferInfo(data.guest_address_fault));
 				break;
 			case BindingKind::GuestAddressTable:
 				buffer_infos.push_back(BufferInfo(data.guest_address_table));

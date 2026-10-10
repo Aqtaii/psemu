@@ -1,3 +1,4 @@
+#include "graphics/host_gpu/renderer/guestAddressFaultRecord.h"
 #include "graphics/host_gpu/renderer/bufferCache.h"
 #include "graphics/host_gpu/renderer/textureCache.h"
 #include "graphics/host_gpu/renderer/descriptors.h"
@@ -1010,6 +1011,45 @@ static BufferView NativeUpload(CommandBuffer* command_buffer, std::span<const ui
 	return result;
 }
 
+static BufferView NativeGuestAddressFault(CommandBuffer* command) {
+ auto* ctx = g_render_ctx->GetGraphicCtx();
+ auto backing = std::shared_ptr<VulkanBuffer>(new VulkanBuffer, [ctx](VulkanBuffer* b) {
+  VulkanDeleteBuffer(ctx,b); delete b;
+ });
+ backing->usage = vk::BufferUsageFlagBits::eStorageBuffer;
+ backing->memory.property = vk::MemoryPropertyFlagBits::eHostVisible |
+                            vk::MemoryPropertyFlagBits::eHostCoherent;
+ VulkanCreateBuffer(ctx,sizeof(GuestAddressFaultRecord),backing.get());
+ void* mapped = nullptr;
+ VulkanMapMemory(ctx,&backing->memory,&mapped);
+ std::memset(mapped,0,sizeof(GuestAddressFaultRecord));
+ VulkanUnmapMemory(ctx,&backing->memory);
+ command->OnFenceComplete([ctx,backing] {
+  void* data = nullptr;
+  VulkanMapMemory(ctx,&backing->memory,&data);
+  GuestAddressFaultRecord fault;
+  std::memcpy(&fault,data,sizeof(fault));
+  VulkanUnmapMemory(ctx,&backing->memory);
+  // Partial dispatch outputs cannot be published as correct guest results.
+  // Page population/replay must be connected before allowing continuation.
+  if(fault.status) {
+   EXIT("GPU guest-address read failed: status=%u address=0x%016" PRIx64
+        " preparable=%d\\n",fault.status,fault.Address(),
+        static_cast<int>(CanPrepareGuestAddressFault(fault)));
+  }
+ });
+ vk::BufferMemoryBarrier barrier {};
+ barrier.sType=vk::StructureType::eBufferMemoryBarrier;
+ barrier.srcAccessMask=vk::AccessFlagBits::eHostWrite;
+ barrier.dstAccessMask=vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite;
+ barrier.srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+ barrier.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+ barrier.buffer=backing->buffer;barrier.offset=0;barrier.size=sizeof(GuestAddressFaultRecord);
+ command->Handle().pipelineBarrier(vk::PipelineStageFlagBits::eHost,
+  vk::PipelineStageFlagBits::eAllCommands,{},0,nullptr,1,&barrier,0,nullptr);
+ return {backing.get(),0,sizeof(GuestAddressFaultRecord)};
+}
+
 void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
                      vk::PipelineBindPoint pipeline_bind_point, vk::PipelineLayout layout,
                      const ShaderStageRuntime& runtime, vk::ShaderStageFlags vk_stage,
@@ -1103,6 +1143,9 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 		// OpArrayLength must reflect serialized bytes, never stream-buffer padding.
 		descriptors.guest_address_table.range = words.size() * sizeof(uint32_t);
 		for (const auto& backing: addresses.backing) buffer->RetainResourceUntilFence(backing);
+	}
+	if (program.uses_guest_address_table) {
+		descriptors.guest_address_fault = NativeGuestAddressFault(buffer);
 	}
 	if (ShaderRecompiler::IR::FindBinding(
 	        program.bindings, ShaderRecompiler::IR::DescriptorBindingKind::FlattenedSrt) !=

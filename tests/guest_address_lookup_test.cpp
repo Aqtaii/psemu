@@ -158,7 +158,9 @@ int main() {
  std::string error;
  if(!Libs::Graphics::ShaderRecompiler::IR::AllocateBindings(&plan,options,&error) ||
     !Libs::Graphics::ShaderRecompiler::IR::FindBinding(plan.bindings,
-      Libs::Graphics::ShaderRecompiler::IR::DescriptorBindingKind::GuestAddressTable))
+      Libs::Graphics::ShaderRecompiler::IR::DescriptorBindingKind::GuestAddressTable) ||
+    !Libs::Graphics::ShaderRecompiler::IR::FindBinding(plan.bindings,
+      Libs::Graphics::ShaderRecompiler::IR::DescriptorBindingKind::GuestAddressFault))
   throw std::runtime_error("guest table descriptor missing");
 
  Recorder r;DefineGuestAddressLookup(r,100000,100001,100002,100003,100004,100005);

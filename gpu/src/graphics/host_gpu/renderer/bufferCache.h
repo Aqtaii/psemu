@@ -63,7 +63,8 @@ public:
 	void               UnmapMemory(uint64_t vaddr, uint64_t size);
 	[[nodiscard]] std::pair<VulkanBuffer*, uint64_t>
 	ObtainBuffer(CommandBuffer* command, GraphicContext* ctx, uint64_t vaddr, uint64_t size,
-	             bool is_written = false, bool is_read = true, bool is_formatted = false);
+	             bool is_written = false, bool is_read = true, bool is_formatted = false,
+	             bool force_resident = false);
 	// Emulator-owned, CPU-current scratch only. Guest ranges must use ObtainBuffer so page
 	// ownership is resolved before any CPU access.
 	[[nodiscard]] bool UploadHostData(CommandBuffer* command, GraphicContext* ctx, const void* src,

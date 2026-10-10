@@ -245,6 +245,7 @@ void CommandBuffer::Free() {
 
 	WaitForFence();
 
+	m_fence_actions.Discard();
 	m_host_stream.Release();
 
 	m_pool->busy[m_index] = false;
@@ -266,6 +267,11 @@ void CommandBuffer::RetainResourceUntilFence(std::shared_ptr<void> resource) {
 		EXIT("cannot retain a resource on an invalid or submitted command buffer\n");
 	}
 	m_fence_resources.Retain(std::move(resource));
+}
+
+void CommandBuffer::OnFenceComplete(std::function<void()> action) {
+ EXIT_IF(IsInvalid() || m_execute || !action);
+ m_fence_actions.Add(std::move(action));
 }
 
 void CommandBuffer::RecycleDescriptorAfterFence(VulkanDescriptorSet* set) {
@@ -296,7 +302,15 @@ void CommandBuffer::Begin() const {
 }
 
 void CommandBuffer::End() const {
-	auto buffer = Handle();
+ auto buffer = Handle();
+ if(!m_fence_actions.Empty()) {
+  vk::MemoryBarrier barrier {};
+  barrier.sType=vk::StructureType::eMemoryBarrier;
+  barrier.srcAccessMask=vk::AccessFlagBits::eShaderWrite;
+  barrier.dstAccessMask=vk::AccessFlagBits::eHostRead;
+  buffer.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
+   vk::PipelineStageFlagBits::eHost,{},1,&barrier,0,nullptr,0,nullptr);
+ }
 
 	auto result = buffer.end();
 
@@ -433,6 +447,8 @@ void CommandBuffer::FinalizeFence(bool reset_recording) {
 	const bool was_executed = m_execute;
 	WaitForFenceOnly();
 	if (was_executed) {
+		// Read dedicated diagnostic backing before any stream reset/resource release.
+		m_fence_actions.Complete();
 		m_execute      = false;
 		m_fence_waited = false;
 		if (reset_recording) {
