@@ -85,6 +85,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_scalar_provenance_loop.ps1
 
+      - name: Test scalar 64-bit address shift provenance
+        shell: pwsh
+        run: ./tools/scripts/test_scalar_address_shift.ps1
+
       - name: Test direct native character table
         shell: pwsh
         run: ./tools/scripts/test_native_char_table.ps1

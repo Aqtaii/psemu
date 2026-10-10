@@ -89,6 +89,20 @@ bool ApplyOperation(ScalarValueOp op, const uint32_t args[3], uint32_t* result) 
 			                                                  : static_cast<uint32_t>(value >> 32u);
 			break;
 		}
+		case ScalarValueOp::ShiftLeftU64Low:
+		case ScalarValueOp::ShiftLeftU64High:
+		case ScalarValueOp::ShiftRightU64Low:
+		case ScalarValueOp::ShiftRightU64High: {
+			const uint64_t input = uint64_t{args[0]} | (uint64_t{args[1]} << 32u);
+			const auto amount = args[2] & 63u;
+			const bool left = op == ScalarValueOp::ShiftLeftU64Low ||
+			                  op == ScalarValueOp::ShiftLeftU64High;
+			const auto value = left ? input << amount : input >> amount;
+			const bool high = op == ScalarValueOp::ShiftLeftU64High ||
+			                  op == ScalarValueOp::ShiftRightU64High;
+			*result = static_cast<uint32_t>(high ? value >> 32u : value);
+			break;
+		}
 		case ScalarValueOp::Add3: *result = args[0] + args[1] + args[2]; break;
 		case ScalarValueOp::ShiftLeftAdd: *result = (args[0] << shift) + args[2]; break;
 		case ScalarValueOp::ShiftLeftAddCarry:

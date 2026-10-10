@@ -25,6 +25,10 @@ uint32_t ScalarValueArgCount(ScalarValueOp op) {
 		case ScalarValueOp::BitFieldMaskU32:
 		case ScalarValueOp::BitFieldMaskU64Low:
 		case ScalarValueOp::BitFieldMaskU64High: return 2;
+		case ScalarValueOp::ShiftLeftU64Low:
+		case ScalarValueOp::ShiftLeftU64High:
+		case ScalarValueOp::ShiftRightU64Low:
+		case ScalarValueOp::ShiftRightU64High:
 		case ScalarValueOp::AddCarry:
 		case ScalarValueOp::Carry:
 		case ScalarValueOp::SubBorrow:
@@ -591,6 +595,27 @@ private:
 						        : 0u);
 					}
 				}
+				break;
+			}
+			case Opcode::ShiftLeftLogicalU64:
+			case Opcode::ShiftRightLogicalU64: {
+				uint32_t src = 0;
+				if (inst.src_count < 2 || dst + 1 >= ScalarRegisters) break;
+				ScalarValue node;
+				node.pc = inst.pc;
+				if (ScalarRegister(inst.src[0], src) && src + 1 < ScalarRegisters) {
+					node.args[0] = before.regs[src];
+					node.args[1] = before.regs[src + 1];
+				} else if (inst.src[0].kind == OperandKind::ImmediateU32) {
+					node.args[0] = Constant(inst.src[0].imm);
+					node.args[1] = Constant(inst.src[0].sext_64 ? UINT32_MAX : 0u);
+				} else break;
+				node.args[2] = OperandValue(inst.src[1], before);
+				const bool left = inst.op == Opcode::ShiftLeftLogicalU64;
+				node.op = left ? ScalarValueOp::ShiftLeftU64Low : ScalarValueOp::ShiftRightU64Low;
+				value = InternValue(node);
+				node.op = left ? ScalarValueOp::ShiftLeftU64High : ScalarValueOp::ShiftRightU64High;
+				state->regs[dst + 1] = InternValue(node);
 				break;
 			}
 			case Opcode::BitFieldMaskU64:
