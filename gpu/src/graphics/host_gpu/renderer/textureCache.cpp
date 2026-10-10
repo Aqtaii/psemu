@@ -122,6 +122,12 @@ struct TextureCache::CachedImage {
 			     static_cast<const void*>(ctx), static_cast<const void*>(image),
 			     static_cast<uint32_t>(kind), registered);
 		}
+		static std::atomic_uint destruction_logs {0};
+		if (destruction_logs.fetch_add(1, std::memory_order_relaxed) < 32) {
+			std::fprintf(stderr, "[IMAGE-DESTROY] record=%p image=%p guest=0x%llx kind=%u\n",
+			             static_cast<void*>(this), static_cast<void*>(image),
+			             static_cast<unsigned long long>(Address(0)), static_cast<unsigned>(kind));
+		}
 		ImageOps::Destroy(ctx, image);
 		image = nullptr;
 	}
@@ -246,6 +252,14 @@ VulkanImage* TextureCache::PublishImage(CommandBuffer*               command,
 		     image != nullptr && image->registered);
 	}
 	auto result = image->image;
+	static std::atomic_uint publication_logs {0};
+	if (publication_logs.fetch_add(1, std::memory_order_relaxed) < 32) {
+		std::fprintf(stderr, "[IMAGE-PUBLISH] record=%p image=%p guest=0x%llx native=%d views=%d,%d refs=%ld\n",
+		             static_cast<void*>(image.get()), static_cast<void*>(result),
+		             static_cast<unsigned long long>(image->Address(0)), result->image != nullptr,
+		             result->image_view[0] != nullptr, result->image_view[1] != nullptr,
+		             static_cast<long>(image.use_count()));
+	}
 	command->RetainResourceUntilFence(image);
 	m_images.push_back(std::move(image));
 	RegisterImageLocked(*m_images.back());

@@ -971,6 +971,13 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 	                                image_view != nullptr)) {
 		view = SelectSampledTextureArrayView(image, view);
 	}
+	static std::atomic_uint binding_logs {0};
+	if (binding_logs.fetch_add(1, std::memory_order_relaxed) < 32) {
+		std::fprintf(stderr, "[IMAGE-BIND] guest=0x%llx image=%p native=%d view=%d slots=%d,%d explicit=%d\n",
+		             static_cast<unsigned long long>(address), static_cast<void*>(image),
+		             image->image != nullptr, view, image->image_view[0] != nullptr,
+		             image->image_view[1] != nullptr, image_view != nullptr);
+	}
 	return {image, view, image_view};
 }
 
