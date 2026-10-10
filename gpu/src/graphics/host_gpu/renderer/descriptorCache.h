@@ -63,6 +63,7 @@ public:
 		std::vector<BufferView>     addresses;
 		BufferView                  gds;
 		BufferView                  flattened_srt;
+		BufferView                  guest_address_table;
 		BufferView                  user_data;
 	};
 

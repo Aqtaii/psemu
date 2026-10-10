@@ -1,3 +1,5 @@
+#include "graphics/host_gpu/renderer/bufferCache.h"
+#include "graphics/host_gpu/renderer/textureCache.h"
 #include "graphics/host_gpu/renderer/descriptors.h"
 
 #include "common/assert.h"
@@ -1076,6 +1078,31 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 		if (recording_changed()) {
 			return;
 		}
+	}
+	if (ShaderRecompiler::IR::FindBinding(
+	        program.bindings, ShaderRecompiler::IR::DescriptorBindingKind::GuestAddressTable)) {
+		BufferAddressSnapshot addresses;
+		auto* cache = g_render_ctx->GetBufferCache();
+		EXIT_IF(!cache->CaptureAddressSnapshot(g_render_ctx->GetGraphicCtx(), &addresses));
+		// Dynamic execution is not enabled yet. Reject unprepared coherence rather
+		// than publishing stale bytes when a future caller enables the table.
+		for (const auto& range: addresses.ranges) {
+			const auto alias = g_render_ctx->GetTextureCache()->QueryRegion(range.guest_base, range.size);
+			if (cache->IsRegionCpuModified(range.guest_base, range.size) ||
+			    cache->IsRegionGpuModified(range.guest_base, range.size) ||
+			    alias.gpu_image_bytes || alias.gpu_metadata_bytes) {
+				EXIT("GPU address table requires coherent prepared backing\\n");
+			}
+		}
+		// One zero-sized sentinel makes an empty SSBO legal; lookup returns zero.
+		if (addresses.ranges.empty()) addresses.ranges.push_back({});
+		std::vector<uint32_t> words(addresses.ranges.size() * 8u);
+		std::memcpy(words.data(), addresses.ranges.data(), words.size() * sizeof(uint32_t));
+		descriptors.guest_address_table = NativeUpload(buffer, words);
+		if (recording_changed()) return;
+		// OpArrayLength must reflect serialized bytes, never stream-buffer padding.
+		descriptors.guest_address_table.range = words.size() * sizeof(uint32_t);
+		for (const auto& backing: addresses.backing) buffer->RetainResourceUntilFence(backing);
 	}
 	if (ShaderRecompiler::IR::FindBinding(
 	        program.bindings, ShaderRecompiler::IR::DescriptorBindingKind::FlattenedSrt) !=

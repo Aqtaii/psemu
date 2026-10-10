@@ -1,3 +1,4 @@
+#include "graphics/shader/recompiler/BindingLayout.h"
 #include "graphics/shader/recompiler/SpirvBuilder.h"
 #include "graphics/shader/recompiler/spirvEmitter/guestAddressLookup.h"
 #include "graphics/host_gpu/renderer/guestAddressTable.h"
@@ -68,6 +69,15 @@ struct Recorder {
  }
 };
 int main() {
+ Libs::Graphics::ShaderRecompiler::IR::Program plan;
+ plan.user_data_count=0;plan.shader_info_complete=true;plan.uses_guest_address_table=true;
+ Libs::Graphics::ShaderRecompiler::IR::BindingLayoutOptions options;
+ std::string error;
+ if(!Libs::Graphics::ShaderRecompiler::IR::AllocateBindings(&plan,options,&error) ||
+    !Libs::Graphics::ShaderRecompiler::IR::FindBinding(plan.bindings,
+      Libs::Graphics::ShaderRecompiler::IR::DescriptorBindingKind::GuestAddressTable))
+  throw std::runtime_error("guest table descriptor missing");
+
  Recorder r;DefineGuestAddressLookup(r,100000,100001,100002,100003,100004,100005);
  std::vector<GuestAddressRange> ranges;
  for(uint32_t i=0;i<65536;++i)

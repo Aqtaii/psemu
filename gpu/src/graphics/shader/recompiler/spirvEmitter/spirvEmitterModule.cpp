@@ -1,3 +1,4 @@
+#include "graphics/shader/recompiler/spirvEmitter/guestAddressLookup.h"
 #include "graphics/shader/recompiler/spirvEmitter/spirvEmitterInternal.h"
 
 namespace Libs::Graphics::ShaderRecompiler::Spirv::Emitter {
@@ -361,6 +362,10 @@ void AddDescriptorAnnotationsAndNames(EmitterState* state) {
 	if (state->gds_variable != 0) {
 		Decorate(state->gds_variable, "gds", IR::DescriptorBindingKind::Gds);
 	}
+	if (state->guest_address_table_variable != 0) {
+		Decorate(state->guest_address_table_variable, "guest_address_table",
+		         IR::DescriptorBindingKind::GuestAddressTable);
+	}
 	if (state->flattened_srt_variable != 0) {
 		Decorate(state->flattened_srt_variable, "flattened_srt",
 		         IR::DescriptorBindingKind::FlattenedSrt);
@@ -723,6 +728,14 @@ void EmitHeaderAndTypes(EmitterState* state) {
 		state->builder.AddType({OpVariable, state->ptr_storage_buffer,
 		                        state->flattened_srt_variable, StorageClassStorageBuffer});
 	}
+	if (state->guest_address_table_variable != 0) {
+		state->builder.AddType({OpVariable, state->ptr_storage_buffer,
+		                        state->guest_address_table_variable, StorageClassStorageBuffer});
+		state->guest_address_lookup_function = DefineGuestAddressLookup(
+		    state->builder, state->uint_type, state->bool_type, state->vec2_uint_type,
+		    state->uint_pair_type, state->ptr_storage_buffer_uint,
+		    state->guest_address_table_variable);
+	}
 	if (state->stage == ShaderType::Compute || state->needs_function_lds) {
 		const auto storage_class =
 		    state->needs_function_lds ? StorageClassFunction : StorageClassWorkgroup;
@@ -890,6 +903,9 @@ void AllocateDescriptorVariables(EmitterState* state) {
 	}
 	if (DescriptorBinding(*state, IR::DescriptorBindingKind::UserData) != nullptr) {
 		state->vsharp_storage_variable = state->builder.AllocateId();
+	}
+	if (DescriptorBinding(*state, IR::DescriptorBindingKind::GuestAddressTable) != nullptr) {
+		state->guest_address_table_variable = state->builder.AllocateId();
 	}
 	if (DescriptorBinding(*state, IR::DescriptorBindingKind::FlattenedSrt) != nullptr) {
 		state->flattened_srt_variable = state->builder.AllocateId();

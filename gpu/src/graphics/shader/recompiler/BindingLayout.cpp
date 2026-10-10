@@ -264,6 +264,9 @@ bool AllocateBindings(Program* program, const BindingLayoutOptions& options, std
 		}
 		AddBinding(&next, DescriptorBindingKind::AddressMemory, std::move(resources));
 	}
+	if (program->uses_guest_address_table) {
+		AddBinding(&next, DescriptorBindingKind::GuestAddressTable);
+	}
 	if (!program->srt.reads.empty()) {
 		AddBinding(&next, DescriptorBindingKind::FlattenedSrt);
 	}

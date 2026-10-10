@@ -364,6 +364,8 @@ struct EmitterState {
 	uint32_t                               push_constant_variable         = 0;
 	uint32_t                               vsharp_storage_variable        = 0;
 	uint32_t                               flattened_srt_variable         = 0;
+	uint32_t                               guest_address_table_variable   = 0;
+	uint32_t                               guest_address_lookup_function  = 0;
 	uint32_t                               lds_array_type                 = 0;
 	uint32_t                               ptr_workgroup_array            = 0;
 	uint32_t                               ptr_workgroup_uint             = 0;
