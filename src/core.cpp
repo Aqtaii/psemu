@@ -341,12 +341,18 @@ static std::string TranslateGuestPath(const std::string& guest) {
 // Her PLT cagrisini loglamak saniyede binlerce satir uretip ilerlemeyi
 // gorunmez kiliyor. Her fonksiyonu ilk N kez logla, sonra sustur; boylece
 // YENI/nadir olaylar (VideoOut, cokmeler, oyun mesajlari) one cikar.
-static std::map<uint32_t, uint64_t> g_plt_call_counts;
 static const uint64_t kPltLogLimit = 8;
 
 // Bu PLT icin log basilmali mi? (ilk kez limiti asinca bir kez uyari verir)
 static bool ShouldLogPlt(uint32_t plt_index, const std::string& label) {
-    uint64_t n = ++g_plt_call_counts[plt_index];
+    // Worker threads share PLT imports; mutating a shared map here races.
+    static std::atomic<uint64_t> counts[65536]{};
+    static std::atomic<uint64_t> overflow_count{0};
+    const char* verbose = std::getenv("PSEMU_VERBOSE_HLE");
+    if (Game::Current().title_id == "PPSA02929" &&
+        !(verbose && verbose[0] && verbose[0] != '0')) return false;
+    uint64_t n = (plt_index < 65536 ? counts[plt_index] : overflow_count)
+        .fetch_add(1, std::memory_order_relaxed) + 1;
     if (n <= kPltLogLimit) return true;
     if (n == kPltLogLimit + 1) {
         std::stringstream ss;
@@ -1043,7 +1049,11 @@ static PSEMU_SYSV void NativePureVirtual() {
     }
 }
 static size_t HostAllocationSize(size_t n) {
-    return GuestHostAllocationSize(n, Game::Current().title_id != "PPSA21564");
+    // Keep an explicit compatibility escape hatch for older guest allocators.
+    const char* legacy = std::getenv("PSEMU_LEGACY_HOST_PADDING");
+    const bool legacy_padding = legacy && legacy[0] && legacy[0] != '0';
+    return GuestHostAllocationSize(n, legacy_padding ||
+        (Game::Current().title_id != "PPSA21564" && Game::Current().title_id != "PPSA02929"));
 }
 
 static PSEMU_SYSV void* NativeMalloc(size_t n) {
@@ -1054,6 +1064,10 @@ static PSEMU_SYSV void* NativeMalloc(size_t n) {
         RegisterAllocSize(p, n);
     }
     return p;
+}
+static PSEMU_SYSV void* NativeCalloc(size_t count, size_t size) {
+    if (size && count > SIZE_MAX / size) return nullptr;
+    return NativeMalloc(count * size);
 }
 static PSEMU_SYSV void NativeFree(void* p) {
     FreeHostAllocation(p);
@@ -1178,6 +1192,9 @@ extern "C" void* PsemuNativePltStub(int plt_index) {
     if (rn == nullptr) return nullptr;
 
     const std::string& n = *rn;
+    if (n == "malloc" || n == "_Znwm" || n == "_Znam")
+        return reinterpret_cast<void*>(&NativeMalloc);
+    if (n == "calloc") return reinterpret_cast<void*>(&NativeCalloc);
     if (n == "memcpy")  return reinterpret_cast<void*>(&NativeMemcpy);
     if (n == "memset")  return reinterpret_cast<void*>(&NativeMemset);
     if (n == "memmove") return reinterpret_cast<void*>(&NativeMemmove);
@@ -3061,7 +3078,11 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 // haritaya hic dokunmuyoruz. Harita ayrica thread_local -
                 // eski paylasimli hali kilitsizdi ve threadler arasi yaris iceriyordu.
                 static std::atomic<uint64_t> s_tls_total{0};
-                if (s_tls_total.fetch_add(1, std::memory_order_relaxed) < 5000) {
+                static const bool trace_tls = [] {
+                    const char* e = std::getenv("PSEMU_TLS_TRACE");
+                    return e && e[0] && e[0] != '0';
+                }();
+                if (trace_tls && s_tls_total.fetch_add(1, std::memory_order_relaxed) < 5000) {
                     static thread_local std::map<uint64_t, int> s_tls_seen;
                     int n = ++s_tls_seen[ctx->Rip];
                     if (n <= 2) {

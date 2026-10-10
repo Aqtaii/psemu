@@ -11,6 +11,7 @@ $prefix = @"
 #include <psapi.h>
 #include <malloc.h>
 #include <cstring>
+#include <cstdlib>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -29,7 +30,14 @@ int main() {
  CHECK(GuestHostAllocationSize(0,true)==65536);
  CHECK(GuestHostAllocationSize(SIZE_MAX,true)==0);
  Game::Current().title_id="PPSA02929";
+ _putenv_s("PSEMU_LEGACY_HOST_PADDING","1");
  CHECK(HostAllocationSize(48)==65584); CHECK(NativeMalloc(SIZE_MAX)==nullptr);
+ _putenv_s("PSEMU_LEGACY_HOST_PADDING","0");
+ CHECK(HostAllocationSize(48)==48);
+ CHECK(NativeCalloc(SIZE_MAX,2)==nullptr);
+ auto zeros=static_cast<unsigned char*>(NativeCalloc(64,4)); CHECK(zeros);
+ for(int i=0;i<256;i++) CHECK(zeros[i]==0);
+ _aligned_free(zeros);
  Game::Current().title_id="PPSA21564";
  std::vector<void*> allocations; allocations.reserve(10000);
  const SIZE_T before=Commit(); CHECK(before);

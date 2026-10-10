@@ -1,6 +1,7 @@
 #include "logger.h"
 #include <iomanip>
 #include <chrono>
+#include <cstdio>
 
 std::mutex Logger::log_mutex;
 
@@ -25,12 +26,15 @@ void Logger::Init() {
 
 void Logger::Info(const std::string& message) {
     std::lock_guard<std::mutex> lock(log_mutex);
-    std::cout << TimeTag() << "[INFO] " << message << std::endl;
+    const auto line = TimeTag() + "[INFO] " + message + "\n";
+    // Share the CRT stream lock with the renderer and VEH printf diagnostics.
+    // One write avoids the C++ stream/CRT lock inversion and per-fragment flushes.
+    std::fwrite(line.data(), 1, line.size(), stdout);
 }
 
 void Logger::Error(const std::string& message) {
     std::lock_guard<std::mutex> lock(log_mutex);
-    std::cerr << "[-] ERROR: " << message << std::endl;
+    std::fprintf(stderr, "[-] ERROR: %s\n", message.c_str());
 }
 
 void Logger::Syscall(int id, const std::string& name, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4, uint64_t arg5, uint64_t arg6) {
