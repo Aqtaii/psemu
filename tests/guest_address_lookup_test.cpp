@@ -4,6 +4,7 @@
 #include "graphics/shader/recompiler/spirvEmitter/guestAddressRead.h"
 #include "graphics/shader/recompiler/ResourceTracking.h"
 #include "graphics/shader/recompiler/spirvEmitter/guestScalarAddress.h"
+#include "graphics/shader/recompiler/spirvEmitter/guestBvhIntersect.h"
 #include <functional>
 #include <unordered_set>
 #include "graphics/shader/recompiler/BindingLayout.h"
@@ -294,11 +295,23 @@ int main() {
  b.AddAnnotation({71,fault_buffer,33,1});b.AddAnnotation({71,fault_buffer,34,0});
  const auto report_fn=DefineGuestAddressFault(b,u,bo,pair,ptr,fault_buffer);
  const auto read=DefineGuestAddressRead(b,u,u64,bo,pair,physical_ptr,lookup,report_fn);
+ const auto float_type=b.AllocateId(),vec2f=b.AllocateId(),vec3f=b.AllocateId(),
+            vec4u=b.AllocateId(),glsl=b.AllocateId();
+ b.AddType({22,float_type,32});b.AddType({23,vec2f,float_type,2});
+ b.AddType({23,vec3f,float_type,3});b.AddType({23,vec4u,u,4});
+ b.AddExtInstImport(glsl,"GLSL.std.450");
+ const auto bvh=Bvh::Define(b,u,float_type,bo,u64,pair,vec4u,vec2f,vec3f,
+                            physical_ptr,glsl,lookup,report_fn);
  const auto z=b.AllocateId(),four=b.AllocateId(),input=b.AllocateId(),call=b.AllocateId();
  b.AddType({43,u,z,0});b.AddType({43,u,four,4});b.AddType({44,pair,input,z,z});
  b.AddFunction({54,vo,main,0,main_type});b.AddFunction({248,label});
  const auto scalar_address=EmitGuestScalarAddress(b,u,u64,bo,pair,z,z,four,z);
  b.AddFunction({57,pair,call,read,scalar_address});
+ const auto descriptor=b.AllocateId(),node=b.AllocateId(),extent=b.AllocateId(),
+            origin=b.AllocateId(),bvh_call=b.AllocateId();
+ b.AddType({44,vec4u,descriptor,z,z,z,z});b.AddType({43,u64,node,0,0});
+ b.AddType({43,float_type,extent,0});b.AddType({44,vec3f,origin,extent,extent,extent});
+ b.AddFunction({57,vec4u,bvh_call,bvh,descriptor,node,extent,origin,origin,origin});
  b.AddFunction({253});b.AddFunction({56});
  const auto binary=b.Build();
  auto f=std::fopen("guest_address_lookup.spv","wb");if(!f)return 1;

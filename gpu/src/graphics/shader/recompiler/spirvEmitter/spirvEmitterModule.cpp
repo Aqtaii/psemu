@@ -1,3 +1,4 @@
+#include "graphics/shader/recompiler/spirvEmitter/guestBvhIntersect.h"
 #include "graphics/shader/recompiler/spirvEmitter/guestAddressFault.h"
 #include "graphics/shader/recompiler/spirvEmitter/guestAddressRead.h"
 #include "graphics/shader/recompiler/spirvEmitter/guestAddressLookup.h"
@@ -761,6 +762,15 @@ void EmitHeaderAndTypes(EmitterState* state) {
 		    state->builder, state->uint_type, state->guest_uint64_type, state->bool_type,
 		    state->vec2_uint_type, state->guest_physical_uint_ptr,
 		    state->guest_address_lookup_function, fault_fn);
+        if(std::ranges::any_of(state->program->blocks,[](const auto& block) {
+         return std::ranges::any_of(block.instructions,[](const auto& inst) {
+          return inst.op==IR::Opcode::BvhIntersect;
+         });
+        })) state->guest_bvh_function=Bvh::Define(
+            state->builder,state->uint_type,state->float_type,state->bool_type,
+            state->guest_uint64_type,state->vec2_uint_type,state->vec4_uint_type,
+            state->vec2_float_type,state->vec3_float_type,state->guest_physical_uint_ptr,
+            state->glsl_std450,state->guest_address_lookup_function,fault_fn);
 	}
 	if (state->stage == ShaderType::Compute || state->needs_function_lds) {
 		const auto storage_class =

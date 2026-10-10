@@ -126,7 +126,11 @@ uint32_t BufferAddressOperandCount(const IR::Instruction& inst) {
 
 bool ValidateInstructionContract(const IR::Instruction& inst, std::string* error) {
 	if (inst.op == IR::Opcode::BvhIntersect) {
-		return Fail(error, "BVH intersection requires GPU guest-address mapping and intersection emission");
+		if(inst.bvh.node_dwords<1 || inst.bvh.node_dwords>2 ||
+           inst.bvh.ray.size()!=inst.bvh.node_dwords+10 || inst.src_count!=4 ||
+           inst.dst.kind!=IR::OperandKind::Register ||
+           inst.dst.reg.file!=IR::RegisterFile::Vector || inst.dst.reg.index>252)
+         return Fail(error,"invalid BVH ray/result contract");
 	}
 	if (inst.src_count > std::size(inst.src)) {
 		return Fail(error, "instruction source count exceeds fixed IR storage");
@@ -285,6 +289,8 @@ bool ValidateNativeProgram(const IR::Program& program, std::string* error) {
 			if (!ValidateInstructionContract(inst, error)) {
 				return false;
 			}
+			if(inst.op==IR::Opcode::BvhIntersect && !program.uses_guest_address_table)
+			 return Fail(error,"BVH intersection requires enabled guest-address table");
 			const auto memory = inst.memory.kind;
 			if ((memory == IR::ResourceKind::Buffer || (memory == IR::ResourceKind::ScalarBuffer &&
 			                                            inst.op == IR::Opcode::SBufferLoadDword)) &&

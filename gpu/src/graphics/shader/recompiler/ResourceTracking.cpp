@@ -180,7 +180,10 @@ public:
 		}
 		LinkImageAliases();
 		for(auto* inst:m_guest_reads) inst->memory.guest_address_read=true;
-		m_program.uses_guest_address_table=!m_guest_reads.empty();
+		m_program.uses_guest_address_table=!m_guest_reads.empty() ||
+		 (m_program.uses_guest_address_table && std::ranges::any_of(m_program.blocks,[](const auto& block) {
+		  return std::ranges::any_of(block.instructions,[](const auto& inst){return inst.op==Opcode::BvhIntersect;});
+		 }));
 		m_program.info = std::move(m_info);
 		for (const auto& patch: m_patches) {
 			patch.inst->memory.resource        = patch.resource;

@@ -731,6 +731,7 @@ void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
 		case IR::Opcode::FMin3F32: EmitMinMax3F32(state, inst, false); break;
 		case IR::Opcode::FMax3F32: EmitMinMax3F32(state, inst, true); break;
 		case IR::Opcode::FMed3F32: EmitMed3F32(state, inst); break;
+		case IR::Opcode::BvhIntersect: EmitBvhIntersect(state,inst); break;
 		case IR::Opcode::SLoadDword: EmitSLoadDword(state, inst); break;
 		case IR::Opcode::SBufferLoadDword:
 			EmitMemoryLoadU32(state, inst, IR::ResourceKind::ScalarBuffer, 0, 1);
