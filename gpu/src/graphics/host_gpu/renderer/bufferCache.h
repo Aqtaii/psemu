@@ -6,6 +6,7 @@
 #include "common/threads.h"
 #include "graphics/host_gpu/memoryTracker.h"
 #include "graphics/host_gpu/rangeSet.h"
+#include "graphics/host_gpu/renderer/guestAddressTable.h"
 
 #include <map>
 #include <memory>
@@ -18,6 +19,13 @@ struct VulkanBuffer;
 class CommandBuffer;
 class TextureCache;
 class ResourceMutex;
+
+// Metadata only: a caller must resolve CPU/GPU coherence before using it in a
+// dispatch, and retain this snapshot until that dispatch fence completes.
+struct BufferAddressSnapshot {
+ std::vector<GuestAddressRange> ranges;
+ std::vector<std::shared_ptr<VulkanBuffer>> backing;
+};
 
 struct BufferImageCopySource {
 	VulkanBuffer* buffer      = nullptr;
@@ -73,6 +81,11 @@ public:
 	void               PublishImageBacking(uint64_t vaddr, uint64_t size);
 	void ValidateGpuAccess(uint64_t vaddr, uint64_t size, bool is_read, bool is_written) const;
 	void SetTextureCache(TextureCache& texture_cache);
+
+	// Snapshot cache ownership under the same lock order as ObtainBuffer.
+	// Does not populate missing guest pages or implicitly upload CPU-dirty bytes.
+	[[nodiscard]] bool CaptureAddressSnapshot(GraphicContext* ctx,
+	                                           BufferAddressSnapshot* output);
 
 	void ResetNullBuffer();
 

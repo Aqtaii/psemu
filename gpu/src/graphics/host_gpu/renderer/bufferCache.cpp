@@ -182,6 +182,25 @@ struct BufferCache::CachedBuffer {
 	std::shared_ptr<VulkanBuffer> buffer;
 };
 
+bool BufferCache::CaptureAddressSnapshot(GraphicContext* ctx,
+                                         BufferAddressSnapshot* output) {
+ if (ctx == nullptr || output == nullptr || !ctx->bvh_device_address_enabled) return false;
+ std::lock_guard transaction(m_resource_mutex);
+ FaultSafeCacheLock lock(this, m_mutex);
+ BufferAddressSnapshot snapshot;
+ if (m_buffers.size() > GuestAddressMaxRanges) return false;
+ for (const auto& [address, cached]: m_buffers) {
+  if (cached->ctx != ctx || !cached->buffer || !cached->buffer->device_address) return false;
+  snapshot.ranges.push_back({address, cached->buffer->device_address, cached->size, 0});
+  snapshot.backing.push_back(cached->buffer);
+ }
+ std::vector<GuestAddressRange> validated;
+ if (!BuildGuestAddressTable(snapshot.ranges, &validated)) return false;
+ snapshot.ranges = std::move(validated);
+ *output = std::move(snapshot);
+ return true;
+}
+
 struct BufferCache::ReadbackWorker {
 	static constexpr uint32_t MAX_RANGES = READBACK_MAX_RANGES;
 	enum class State : uint32_t {
