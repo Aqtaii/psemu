@@ -10,6 +10,7 @@ $implementation=$source.Substring($start,$end-$start)
 $signature=$implementation.Substring(0,$implementation.IndexOf('{')).Replace('CommandProcessor::','')
 $prefix=@'
 #include <atomic>
+#include <cstdio>
 #include <cstdint>
 #include <cinttypes>
 #include <stdexcept>
