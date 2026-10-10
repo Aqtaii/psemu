@@ -542,7 +542,7 @@ static void VulkanInitSubgroupSizeControl(vk::PhysicalDevice physical_device, Gr
 static vk::Device VulkanCreateDevice(vk::PhysicalDevice physical_device, vk::SurfaceKHR surface,
                                      const VulkanExtensions* r, const VulkanQueues& queues,
                                      const std::vector<const char*>& device_extensions,
-                                     const GraphicContext*           ctx) {
+                                     GraphicContext*                 ctx) {
 	EXIT_IF(physical_device == nullptr);
 	EXIT_IF(r == nullptr);
 	EXIT_IF(surface == nullptr);
