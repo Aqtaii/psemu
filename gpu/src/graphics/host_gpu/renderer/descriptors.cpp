@@ -1034,7 +1034,7 @@ static BufferView NativeGuestAddressFault(CommandBuffer* command) {
   // Page population/replay must be connected before allowing continuation.
   if(fault.status) {
    EXIT("GPU guest-address read failed: status=%u address=0x%016" PRIx64
-        " preparable=%d\\n",fault.status,fault.Address(),
+        " preparable=%d\n",fault.status,fault.Address(),
         static_cast<int>(CanPrepareGuestAddressFault(fault)));
   }
  });
@@ -1125,7 +1125,7 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 		auto* cache = g_render_ctx->GetBufferCache();
         if(!cache->PrepareAddressSnapshot(buffer,g_render_ctx->GetGraphicCtx(),&addresses)) {
          if(recording_changed()) return;
-         EXIT("GPU address table could not prepare coherent resident backing\\n");
+         EXIT("GPU address table could not prepare coherent resident backing\n");
         }
 		// One zero-sized sentinel makes an empty SSBO legal; lookup returns zero.
 		if (addresses.ranges.empty()) addresses.ranges.push_back({});

@@ -106,7 +106,9 @@ struct Recorder {
   throw std::runtime_error("no return");
  }
 };
+#include "guest_bvh_semantic_test.h"
 int main() {
+ TestGuestBvhSemantics();
  namespace IR=Libs::Graphics::ShaderRecompiler::IR;
  auto group_plan=[](bool all_static) {
   IR::Program p;p.srt_plan_complete=true;p.blocks.resize(1);
