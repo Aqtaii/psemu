@@ -902,6 +902,46 @@ std::pair<VulkanBuffer*, uint64_t> BufferCache::ObtainBuffer(CommandBuffer*  com
 	return {cached.buffer.get(), vaddr - cached.vaddr};
 }
 
+bool BufferCache::PrepareAddressSnapshot(CommandBuffer* command, GraphicContext* ctx,
+                                         BufferAddressSnapshot* output) {
+ if(!command || command->IsInvalid() || command->IsExecute() || !ctx || !output ||
+    !ctx->bvh_device_address_enabled) return false;
+ const auto generation=command->GetRecordingGeneration();
+ // ObtainBuffer owns ResourceMutex itself; never nest it beneath snapshot locks.
+ for(unsigned attempt=0;attempt<4;++attempt) {
+  BufferAddressSnapshot before;
+  if(!CaptureAddressSnapshot(ctx,&before)) return false;
+  for(const auto& range: before.ranges) {
+   const auto alias=m_texture_cache->QueryRegion(range.guest_base,range.size);
+   if(alias.gpu_image_bytes || alias.gpu_metadata_bytes) return false;
+   const auto resident=ObtainBuffer(command,ctx,range.guest_base,range.size,
+                                   false,true,false,true);
+   if(command->GetRecordingGeneration()!=generation) return false;
+   if(!resident.first || !resident.first->device_address) return false;
+  }
+  BufferAddressSnapshot prepared;
+  if(!CaptureAddressSnapshot(ctx,&prepared)) return false;
+  bool current=true;
+  for(const auto& range: prepared.ranges) {
+   const auto alias=m_texture_cache->QueryRegion(range.guest_base,range.size);
+   if(IsRegionCpuModified(range.guest_base,range.size) ||
+      alias.gpu_image_bytes || alias.gpu_metadata_bytes) {current=false;break;}
+  }
+  if(!current) continue;
+  // GPU-dirty cached buffers are already the authoritative backing, unlike
+  // newer image-owned bytes. Make preceding writes visible to physical loads.
+  vk::MemoryBarrier barrier {};
+  barrier.sType=vk::StructureType::eMemoryBarrier;
+  barrier.srcAccessMask=vk::AccessFlagBits::eMemoryWrite;
+  barrier.dstAccessMask=vk::AccessFlagBits::eShaderRead;
+  command->Handle().pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands,
+   vk::PipelineStageFlagBits::eAllCommands,{},1,&barrier,0,nullptr,0,nullptr);
+  *output=std::move(prepared);
+  return true;
+ }
+ return false;
+}
+
 bool BufferCache::UploadHostData(CommandBuffer* command, GraphicContext* ctx, const void* src,
                                  uint64_t size, uint64_t alignment, VulkanBuffer** out_buffer,
                                  uint64_t* out_offset, uint64_t* out_range) {

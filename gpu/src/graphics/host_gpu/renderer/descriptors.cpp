@@ -1123,17 +1123,10 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 	        program.bindings, ShaderRecompiler::IR::DescriptorBindingKind::GuestAddressTable)) {
 		BufferAddressSnapshot addresses;
 		auto* cache = g_render_ctx->GetBufferCache();
-		EXIT_IF(!cache->CaptureAddressSnapshot(g_render_ctx->GetGraphicCtx(), &addresses));
-		// Dynamic execution is not enabled yet. Reject unprepared coherence rather
-		// than publishing stale bytes when a future caller enables the table.
-		for (const auto& range: addresses.ranges) {
-			const auto alias = g_render_ctx->GetTextureCache()->QueryRegion(range.guest_base, range.size);
-			if (cache->IsRegionCpuModified(range.guest_base, range.size) ||
-			    cache->IsRegionGpuModified(range.guest_base, range.size) ||
-			    alias.gpu_image_bytes || alias.gpu_metadata_bytes) {
-				EXIT("GPU address table requires coherent prepared backing\\n");
-			}
-		}
+        if(!cache->PrepareAddressSnapshot(buffer,g_render_ctx->GetGraphicCtx(),&addresses)) {
+         if(recording_changed()) return;
+         EXIT("GPU address table could not prepare coherent resident backing\\n");
+        }
 		// One zero-sized sentinel makes an empty SSBO legal; lookup returns zero.
 		if (addresses.ranges.empty()) addresses.ranges.push_back({});
 		std::vector<uint32_t> words(addresses.ranges.size() * 8u);

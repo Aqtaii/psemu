@@ -88,7 +88,11 @@ public:
 	[[nodiscard]] bool CaptureAddressSnapshot(GraphicContext* ctx,
 	                                           BufferAddressSnapshot* output);
 
-	void ResetNullBuffer();
+	// Prepare every currently resident owner for physical shader reads; CPU-dirty
+ // pages must update the cached allocation, not a temporary stream view.
+ [[nodiscard]] bool PrepareAddressSnapshot(CommandBuffer* command, GraphicContext* ctx,
+                                           BufferAddressSnapshot* output);
+ void ResetNullBuffer();
 
 private:
 	struct CachedBuffer;
