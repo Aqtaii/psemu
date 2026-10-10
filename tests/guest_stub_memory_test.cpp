@@ -7,8 +7,8 @@ int main() {
     CHECK(!TryInstallGuestReturnZero(0));
     CHECK(!TryInstallGuestReturnZero(1));
     CHECK(!TryInstallGuestReturnZero(0xffff));
-    CHECK(!TryInstallGuestReturnZero(std::numeric_limits<uint64_t>::max()));
-    CHECK(!TryInstallGuestReturnZero(std::numeric_limits<uint64_t>::max() - 1));
+    CHECK(!TryInstallGuestReturnZero((std::numeric_limits<uint64_t>::max)()));
+    CHECK(!TryInstallGuestReturnZero((std::numeric_limits<uint64_t>::max)() - 1));
     SYSTEM_INFO system{}; GetSystemInfo(&system);
     auto* reserved = static_cast<uint8_t*>(VirtualAlloc(nullptr,system.dwAllocationGranularity,MEM_RESERVE,PAGE_NOACCESS));
     CHECK(reserved != nullptr);
