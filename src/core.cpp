@@ -3,6 +3,7 @@
 #include "guest_stub_memory.h"
 #include "guest_file_stat.h"
 #include "host_allocation_size.h"
+#include "sarah_tls_sites.h"
 #include "shared_direct_memory.h"
 #include <io.h>
 #include <unordered_map>
@@ -1505,7 +1506,9 @@ void PsemuInitTlsFastPath() {
     // statik taramayla uygulamak. O yapilana kadar varsayilan kapali.
     // Acmak icin: PSEMU_TLS_PATCH=1
     const char* e = getenv("PSEMU_TLS_PATCH");
-    if (e == nullptr || e[0] == '0') {
+    const bool static_sarah = Game::Current().title_id == "PPSA02929" &&
+        !(e && e[0] == '0');
+    if (!static_sarah && (e == nullptr || e[0] == '0')) {
         printf("[TLS] Hizli yol KAPALI (varsayilan; PSEMU_TLS_PATCH=1 ile acilir) - "
                "her fs:[0] VEH'e dusecek\n");
         fflush(stdout);
@@ -2166,7 +2169,7 @@ static void LogPatchSkip(const uint8_t* code, const char* why) {
 }
 
 static void TryPatchFsMov(uint8_t* code, const FsMovInfo& info) {
-    if (g_teb_slot_off == 0) return;
+    if (g_teb_slot_off == 0 || Game::Current().title_id == "PPSA02929") return;
     if (info.disp != 0) { LogPatchSkip(code, "disp!=0"); return; }
 
     int p = 0;
@@ -2212,6 +2215,25 @@ static void TryPatchFsMov(uint8_t* code, const FsMovInfo& info) {
                n, reinterpret_cast<uint64_t>(code), g_teb_slot_off);
         fflush(stdout);
     }
+}
+
+static void PrepareSarahTlsBeforeEntry(uint64_t image_base) {
+    if (Game::Current().title_id != "PPSA02929" || !g_teb_slot_off) return;
+    GetThreadTlsBase(); // Initial thread may predate allocation of the TEB slot.
+    unsigned patched = 0;
+    for (const auto& site : SarahTlsSites) {
+        auto* code = reinterpret_cast<uint8_t*>(image_base + site.rva);
+        std::array<uint8_t,12> replacement{};
+        if (!SafeReadable(code,12) || !PrepareSarahTlsPatch(code,site,g_teb_slot_off,&replacement)) continue;
+        DWORD old_protect=0;
+        if (!VirtualProtect(code,12,PAGE_EXECUTE_READWRITE,&old_protect)) continue;
+        std::memcpy(code,replacement.data(),12);
+        DWORD ignored=0;
+        VirtualProtect(code,12,old_protect,&ignored);
+        FlushInstructionCache(GetCurrentProcess(),code,12);
+        ++patched;
+    }
+    printf("[TLS-STATIC] Sarah: prepared %u verified TLS loads before guest entry; unmatched sites use VEH\\n",patched);
 }
 
 // Cozulen hedef register koduna gore CONTEXT alanina yazan yardimci fonksiyon
@@ -7800,6 +7822,7 @@ void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t tex
     // fs:[0] hizli yolu icin Windows TLS slotunu VEH'ten ONCE ayir: VEH
     // icinde TlsAlloc gibi kilit alan is yapmiyoruz.
     PsemuInitTlsFastPath();
+    PrepareSarahTlsBeforeEntry(base_addr);
 
     // DENENDI VE GERI ALINDI: timeBeginPeriod(1) + usleep icin yuksek
     // cozunurluklu bekleme zamanlayicisi. Beklenti kare suresini dusurmekti;

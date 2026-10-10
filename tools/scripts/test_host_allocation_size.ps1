@@ -16,6 +16,7 @@ $prefix = @"
 #include <string>
 #include <vector>
 #include "host_allocation_size.h"
+#include "sarah_tls_sites.h"
 #define PSEMU_SYSV
 namespace Game { struct Profile { std::string title_id; }; Profile& Current() { static Profile p; return p; } }
 static void RegisterAllocSize(void*,size_t) {}
@@ -24,6 +25,17 @@ $tests = @"
 #define CHECK(x) do { if (!(x)) { std::printf("FAIL line %d: %s\n",__LINE__,#x); return 1; } } while(0)
 static SIZE_T Commit() { PROCESS_MEMORY_COUNTERS_EX p{}; p.cb=sizeof(p); if(!GetProcessMemoryInfo(GetCurrentProcess(),reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&p),sizeof(p))) return 0; return p.PrivateUsage; }
 int main() {
+ for(const auto& site:SarahTlsSites) {
+  std::array<uint8_t,12> patched{};
+  CHECK(PrepareSarahTlsPatch(site.bytes.data(),site,0x1480,&patched));
+  CHECK(patched[3]==0x65 && patched[8]==0x80 && patched[9]==0x14 && patched[10]==0 && patched[11]==0);
+  for(int i=0;i<8;i++) if(i!=3) CHECK(patched[i]==site.bytes[i]);
+  auto changed=site.bytes;changed[6]^=8;
+  CHECK(!PrepareSarahTlsPatch(changed.data(),site,0x1480,&patched));
+  CHECK(!PrepareSarahTlsPatch(site.bytes.data(),site,0,&patched));
+  CHECK(!PrepareSarahTlsPatch(site.bytes.data(),site,0x10000,&patched));
+ }
+
  CHECK(GuestHostAllocationSize(48,false)==48);
  CHECK(GuestHostAllocationSize(0,false)==16);
  CHECK(GuestHostAllocationSize(48,true)==65584);
