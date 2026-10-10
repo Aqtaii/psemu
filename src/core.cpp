@@ -5533,19 +5533,8 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 //     metinleri de bu yuzden hic olusmuyor: oyun hala yukluyor.
                 //  2) Fonksiyon argumansiz oldugundan RDI COPTUR; oraya 8 bayt
                 //     yazmak alakasiz bellegi bozabilir.
-                // HER IKI SOZLESME: degeri RAX'ta dondur (gercek API) VE RDI
-                // gecerli/yazilabilir gorunuyorsa oraya da yaz. Bazi
-                // sarmalayicilar isaretci bicimini bekliyor olabilir; C2
-                // runtime'inin "Wait" zamanlayicisi bu saate bagli oldugu icin
-                // yanlis bicim beklemeleri sonsuza kilitler.
-                {
-                    uint64_t us = MonotonicNs() / 1000ull;
-                    ctx->Rax    = us;
-                    uint64_t* out = reinterpret_cast<uint64_t*>(ctx->Rdi);
-                    if (out != nullptr && ctx->Rdi > 0x10000ULL && SafeWritable(out, 8)) {
-                        *out = us;
-                    }
-                }
+                // No arguments: RDI is caller-owned scratch state, never an output pointer.
+                ctx->Rax = MonotonicNs() / 1000ull;
                 special_return_set = true;
             } else if (readable_name == "sceKernelGetProcessTimeCounter") {
                 // GERCEK API: uint64_t sceKernelGetProcessTimeCounter(void)
@@ -5554,10 +5543,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     LARGE_INTEGER now; QueryPerformanceCounter(&now);
                     uint64_t v = static_cast<uint64_t>(now.QuadPart);
                     ctx->Rax   = v;
-                    uint64_t* out = reinterpret_cast<uint64_t*>(ctx->Rdi);
-                    if (out != nullptr && ctx->Rdi > 0x10000ULL && SafeWritable(out, 8)) {
-                        *out = v;
-                    }
+
                 }
                 special_return_set = true;
             } else if (readable_name == "sceKernelReadTsc") {
