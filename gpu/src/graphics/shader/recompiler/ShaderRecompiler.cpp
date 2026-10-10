@@ -759,6 +759,10 @@ bool TryRecompile(std::span<const uint32_t> code, const CompileOptions& options,
 	}
 
 	if (!IR::PatchSrtReads(&ir, error) || !IR::TrackResources(&ir, error)) {
+		// Preserve the failing program before returning: successful-program dumps
+		// cannot explain unknown descriptor provenance at this phase.
+		result->decoded_dump = Decoder::ProgramToString(decoded);
+		result->ir_dump = MakeIrDump(cfg, ir);
 		return false;
 	}
 	if (options.stage == ShaderType::Vertex) {

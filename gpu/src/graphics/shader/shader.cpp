@@ -1538,6 +1538,17 @@ bool ShaderCompileSpirvCS(const HW::ComputeShaderInfo* regs, const HW::ShaderReg
 	ShaderRecompiler::CompileResult result;
 	std::string                     error;
 	if (!ShaderRecompiler::TryRecompile(code, options, &result, &error)) {
+		DumpShaderRecompilerOriginal("cs_failed", options.shader_hash, code, result.decoded_dump);
+		if (!result.ir_dump.empty()) {
+			const auto path = Config::GetShaderLogFolder() / "original" /
+			                  fmt::format("failed_cs_{:016x}.ir", options.shader_hash);
+			Common::File file;
+			file.Create(path);
+			if (!file.IsInvalid()) {
+				file.Printf("%s", result.ir_dump.c_str());
+				file.Close();
+			}
+		}
 		ExitShaderRecompilerFailure("ShaderRecompiler CS", options.shader_hash, error.c_str());
 	}
 	DumpShaderRecompilerOriginal("cs", options.shader_hash, code, result.decoded_dump);
