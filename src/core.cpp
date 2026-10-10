@@ -2828,6 +2828,37 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 }
                 *ss_ptr << std::dec;
             }
+            // Astro Bot 1.007: retain resource state at its depth-target assertion.
+            // Read-only fatal diagnostics; never skip the assertion or fabricate a target.
+            if (Game::Current().title_id == "PPSA21564" &&
+                ctx->Rip == g_base_addr + 0x74109c8 && ctx->Rbp > 0x840) {
+                auto words = [&](const char* label, uint64_t address, size_t count) {
+                    *ss_ptr << "\n[ASTRO-DEPTH] " << label << " @0x" << std::hex << address;
+                    if (!SafeReadable(reinterpret_cast<void*>(address), count * 8)) {
+                        *ss_ptr << " unreadable";
+                        return;
+                    }
+                    const auto* data = reinterpret_cast<const uint64_t*>(address);
+                    for (size_t i = 0; i < count; ++i) {
+                        *ss_ptr << " +" << (i * 8) << "=0x" << data[i];
+                        if (data[i] >= g_base_addr && data[i] < g_base_addr + g_module_size)
+                            *ss_ptr << "(RVA 0x" << (data[i] - g_base_addr) << ")";
+                    }
+                };
+                const uint64_t cell = ctx->Rbp - 0x840;
+                words("resource-cell", cell, 1);
+                if (SafeReadable(reinterpret_cast<void*>(cell), 8)) {
+                    const uint64_t object = *reinterpret_cast<const uint64_t*>(cell);
+                    words("resource", object, 16);
+                    if (SafeReadable(reinterpret_cast<void*>(object), 8)) {
+                        const uint64_t table = *reinterpret_cast<const uint64_t*>(object);
+                        words("vtable", table, 12);
+                    }
+                }
+                words("surface-description", ctx->Rbp - 0x740, 32);
+                words("allocation-state", ctx->Rbp - 0x840, 16);
+                *ss_ptr << std::dec;
+            }
             // ISTEGE BAGLI BAYT DOKUMU: PSEMU_DUMP_RVA=0xe3810,0x24ae30
             // Bellekteki kodun dosyadakiyle ayni olup olmadigini KESIN
             // karsilastirmak icin. "Kod uzerine mi yazildi?" sorusunu
