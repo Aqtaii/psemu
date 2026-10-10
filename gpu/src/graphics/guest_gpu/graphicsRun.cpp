@@ -679,7 +679,14 @@ void CommandProcessor::DmaData(uint8_t engine, uint8_t dst_sel, uint8_t dst_cach
 	if (num_bytes == 0) {
 		return;
 	}
-	EXIT_NOT_IMPLEMENTED((num_bytes & 3u) != 0);
+	if ((num_bytes & 3u) != 0) {
+		static std::atomic<uint32_t> byte_dma_log_count {0};
+		if (byte_dma_log_count.fetch_add(1, std::memory_order_relaxed) < 16) {
+			LOGF("[DMA-BYTES] engine=%u src_sel=%u dst_sel=%u src=0x%016" PRIx64
+			     " dst=0x%016" PRIx64 " bytes=%u\n", engine, src_sel, dst_sel,
+			     src_address_or_offset_or_immediate, dst_address_or_offset, num_bytes);
+		}
+	}
 	EXIT_NOT_IMPLEMENTED(dst_cache_policy > 3);
 	EXIT_NOT_IMPLEMENTED(src_cache_policy > 3);
 	EXIT_NOT_IMPLEMENTED(wait_for_previous > 1);

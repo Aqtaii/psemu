@@ -53,6 +53,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_semaphore_dispatch.ps1
 
+      - name: Test byte-sized DMA transfers
+        shell: pwsh
+        run: ./tools/scripts/test_dma_bytes.ps1
+
       - name: Test R32Float depth storage readback
         shell: pwsh
         run: ./tools/scripts/test_depth_storage.ps1

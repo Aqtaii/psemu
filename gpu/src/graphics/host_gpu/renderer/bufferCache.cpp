@@ -1,4 +1,5 @@
 #include "graphics/host_gpu/renderer/bufferCache.h"
+#include "graphics/host_gpu/renderer/dmaBytes.h"
 
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -1076,11 +1077,6 @@ vk::CommandBuffer GetDmaCommandBuffer(CommandBuffer* command) {
 
 void BufferCache::FillBuffer(CommandBuffer* command, GraphicContext* ctx, uint64_t vaddr,
                              uint64_t size, uint32_t value) {
-	if ((vaddr & 3u) != 0 || (size & 3u) != 0) {
-		EXIT("BufferCache: fill range must be dword aligned, addr=0x%016" PRIx64
-		     " size=0x%016" PRIx64 "\n",
-		     vaddr, size);
-	}
 	ValidateGpuAccess(vaddr, size, false, true);
 	{
 		std::lock_guard transaction(m_resource_mutex);
@@ -1092,8 +1088,7 @@ void BufferCache::FillBuffer(CommandBuffer* command, GraphicContext* ctx, uint64
 			if (image_overlap) {
 				m_texture_cache->PrepareHostWrite(vaddr, size);
 			}
-			auto* dst = reinterpret_cast<uint32_t*>(vaddr);
-			std::fill(dst, dst + size / sizeof(uint32_t), value);
+			FillDmaBytes(reinterpret_cast<void*>(vaddr), static_cast<size_t>(size), value);
 			return;
 		}
 		if (image_overlap) {
@@ -1118,7 +1113,31 @@ void BufferCache::FillBuffer(CommandBuffer* command, GraphicContext* ctx, uint64
 	vk_buffer.pipelineBarrier(
 	    vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer,
 	    vk::DependencyFlagBits::eByRegion, 0, nullptr, 1, &before, 0, nullptr);
-	vk_buffer.fillBuffer(dst->buffer, dst_offset, size, value);
+	if (((dst_offset | size) & 3u) == 0) {
+		vk_buffer.fillBuffer(dst->buffer, dst_offset, size, value);
+	} else {
+		// vkCmdFillBuffer requires dword alignment; byte copies do not. A dedicated
+		// host-coherent source preserves both boundary bytes and recording order.
+		auto source = MakeSharedVulkanBuffer(ctx);
+		source->usage = vk::BufferUsageFlagBits::eTransferSrc;
+		source->memory.property = vk::MemoryPropertyFlagBits::eHostVisible |
+		                          vk::MemoryPropertyFlagBits::eHostCoherent;
+		VulkanCreateBuffer(ctx, size, source.get());
+		void* data = nullptr;
+		VulkanMapMemory(ctx, &source->memory, &data);
+		FillDmaBytes(data, static_cast<size_t>(size), value);
+		VulkanUnmapMemory(ctx, &source->memory);
+		command->RetainResourceUntilFence(source);
+		const auto ready = MakeDmaBarrier(source.get(), 0, size,
+		                                   vk::AccessFlagBits::eHostWrite,
+		                                   vk::AccessFlagBits::eTransferRead);
+		vk_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eHost,
+		                          vk::PipelineStageFlagBits::eTransfer,
+		                          vk::DependencyFlagBits::eByRegion, 0, nullptr, 1, &ready,
+		                          0, nullptr);
+		const vk::BufferCopy copy {0, dst_offset, size};
+		vk_buffer.copyBuffer(source->buffer, dst->buffer, 1, &copy);
+	}
 	const auto after =
 	    MakeDmaBarrier(dst, dst_offset, size, vk::AccessFlagBits::eTransferWrite,
 	                   vk::AccessFlagBits::eMemoryRead | vk::AccessFlagBits::eMemoryWrite);
@@ -1129,10 +1148,7 @@ void BufferCache::FillBuffer(CommandBuffer* command, GraphicContext* ctx, uint64
 
 void BufferCache::CopyBuffer(CommandBuffer* command, GraphicContext* ctx, uint64_t dst_vaddr,
                              uint64_t src_vaddr, uint64_t size) {
-	if (dst_vaddr == 0 || src_vaddr == 0 || size == 0 ||
-	    ((dst_vaddr | src_vaddr | size) & 3u) != 0 || size > UINT64_MAX - dst_vaddr ||
-	    size > UINT64_MAX - src_vaddr ||
-	    (src_vaddr < dst_vaddr + size && dst_vaddr < src_vaddr + size)) {
+	if (!IsValidDmaCopyRange(dst_vaddr, src_vaddr, size)) {
 		EXIT("BufferCache: invalid or overlapping copy range, src=0x%016" PRIx64
 		     " dst=0x%016" PRIx64 " size=0x%016" PRIx64 "\n",
 		     src_vaddr, dst_vaddr, size);
