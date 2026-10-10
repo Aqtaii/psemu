@@ -47,6 +47,14 @@ int main(){
  pages.UpdatePageWatchers(true,addr,4096,PageWatchMode::Write);
  CHECK(PsemuHandleGpuMemoryFault(addr,true)); CHECK(phases==6); mem[0]=7;
  CHECK(mem[0]==7 && !PsemuHandleGpuMemoryFault(addr+16384,true));
+ DWORD previous=0; CHECK(VirtualProtect(mem+4096,4096,PAGE_EXECUTE_READWRITE,&previous));
+ pages.UpdatePageWatchers(true,addr,8192,PageWatchMode::Write);
+ MEMORY_BASIC_INFORMATION mixed{};
+ CHECK(VirtualQuery(mem,&mixed,sizeof(mixed)) && mixed.Protect==PAGE_READONLY);
+ CHECK(VirtualQuery(mem+4096,&mixed,sizeof(mixed)) && mixed.Protect==PAGE_READONLY);
+ pages.UpdatePageWatchers(false,addr,8192,PageWatchMode::Write);
+ CHECK(VirtualQuery(mem,&mixed,sizeof(mixed)) && mixed.Protect==PAGE_READWRITE);
+ CHECK(VirtualQuery(mem+4096,&mixed,sizeof(mixed)) && mixed.Protect==PAGE_EXECUTE_READWRITE);
  pages.OnGpuUnmap(addr,4096,GpuAccess::ReadWrite); pages.OnGpuUnmap(addr+4096,4096,GpuAccess::Read);
  CHECK(VirtualFree(mem,0,MEM_RELEASE));
  SharedDirectMemory shared; CHECK(shared.Initialize(0x400000000ULL));
