@@ -3,6 +3,10 @@ int main() {
  Require(IsSupportedStorageSwizzle(Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16Float),0x22c));
  Require(!IsSupportedStorageSwizzle(Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16Float),DstSel(5,4,0,1)));
  Require(!IsSupportedStorageSwizzle(Prospero::GpuEnumValue(Prospero::BufferFormat::k16Float),0x22c));
+ for(auto f:std::array<Prospero::BufferFormat,9>{Prospero::BufferFormat::k8_8UNorm,Prospero::BufferFormat::k8_8SNorm,Prospero::BufferFormat::k8_8UInt,Prospero::BufferFormat::k16_16UNorm,Prospero::BufferFormat::k16_16SNorm,Prospero::BufferFormat::k16_16UInt,Prospero::BufferFormat::k16_16Float,Prospero::BufferFormat::k32_32UInt,Prospero::BufferFormat::k32_32Float}) {
+  Require(IsSupportedStorageSwizzle(Prospero::GpuEnumValue(f),0x22c));
+  Require(!IsSupportedStorageSwizzle(Prospero::GpuEnumValue(f),DstSel(5,4,0,1)));
+ }
  ImageInfo info{};
  info.address=0x10000;info.size=0x280000;info.width=960;info.height=540;info.pitch=1024;
  info.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float);

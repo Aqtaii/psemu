@@ -20,7 +20,14 @@ namespace Libs::Graphics {
 	return swizzle == DstSel(4, 5, 6, 7) ||
 	       (single_channel && (swizzle == DstSel(4, 0, 0, 0) || swizzle == DstSel(4, 0, 0, 1) ||
 	                           swizzle == DstSel(4, 4, 4, 4))) ||
-	       ((format == Prospero::GpuEnumValue(Prospero::BufferFormat::k32_32UInt) ||
+	       ((format == Prospero::GpuEnumValue(Prospero::BufferFormat::k8_8UNorm) ||
+	         format == Prospero::GpuEnumValue(Prospero::BufferFormat::k8_8SNorm) ||
+	         format == Prospero::GpuEnumValue(Prospero::BufferFormat::k8_8UInt) ||
+	         format == Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16UNorm) ||
+	         format == Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16SNorm) ||
+	         format == Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16UInt) ||
+	         format == Prospero::GpuEnumValue(Prospero::BufferFormat::k32_32Float) ||
+	         format == Prospero::GpuEnumValue(Prospero::BufferFormat::k32_32UInt) ||
          format == Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16Float)) &&
 	        swizzle == DstSel(4, 5, 0, 1)) ||
 	       ((format == Prospero::GpuEnumValue(Prospero::BufferFormat::k8_8_8_8UNorm) ||
@@ -181,7 +188,14 @@ IsSupportedSampledDepthUintResource(const ShaderRecompiler::IR::ImageResource& r
 	    swizzle == DstSel(4, 5, 6, 7) ||
 	    (single_channel && (swizzle == DstSel(4, 0, 0, 0) || swizzle == DstSel(4, 0, 0, 1) ||
 	                        swizzle == DstSel(4, 4, 4, 4))) ||
-	    ((view_format == vk::Format::eR32G32Uint || view_format == vk::Format::eR16G16Sfloat) &&
+	    ((view_format == vk::Format::eR8G8Unorm ||
+	      view_format == vk::Format::eR8G8Snorm ||
+	      view_format == vk::Format::eR8G8Uint ||
+	      view_format == vk::Format::eR16G16Unorm ||
+	      view_format == vk::Format::eR16G16Snorm ||
+	      view_format == vk::Format::eR16G16Uint ||
+	      view_format == vk::Format::eR32G32Sfloat ||
+	      view_format == vk::Format::eR32G32Uint || view_format == vk::Format::eR16G16Sfloat) &&
      swizzle == DstSel(4, 5, 0, 1)) ||
 	    ((view_format == vk::Format::eR8G8B8A8Unorm || view_format == vk::Format::eR8G8B8A8Uint) &&
 	     (swizzle == DstSel(4, 5, 6, 1) || swizzle == DstSel(6, 5, 4, 7))) ||
