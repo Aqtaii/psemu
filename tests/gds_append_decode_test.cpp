@@ -10,7 +10,7 @@ int main() {
    const std::array<uint32_t,2> code{0xd8000000u|(opcode<<18u)|(1u<<17u)|offset,0};
    Instruction inst; std::string error;
    Check(DecodeDs(0xbf4,code,0,&inst,&error));
-#ifdef EXPECT_OLD_GDS_REJECTION
+#if EXPECT_OLD_GDS_REJECTION
    Check(inst.opcode==(offset?Opcode::Unsupported:(opcode==0x3e?Opcode::DsAppend:Opcode::DsConsume)));
 #else
    Check(inst.opcode==(opcode==0x3e?Opcode::DsAppend:Opcode::DsConsume));
