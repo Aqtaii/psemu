@@ -1,5 +1,6 @@
 #include "core.h"
 #include "native_atomic_guard.h"
+#include "guest_stub_memory.h"
 #include "agc.h"
 #include "logger.h"
 #include "syscalls.h"
@@ -7039,19 +7040,24 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         // Non-PLT EXEC violation handler (Harici kÃ¼tÃ¼phane atlamalarÄ±)
         // ================================================================
         if (access_type != 0 && access_type != 1) { // EXEC violation
-            void* page = reinterpret_cast<void*>(access_addr & ~0xFFFULL);
-            DWORD old_prot = 0;
-            bool ok = VirtualProtect(page, 0x1000, PAGE_EXECUTE_READWRITE, &old_prot) != 0;
-            if (!ok) {
-                ok = (VirtualAlloc(page, 0x1000, MEM_COMMIT, PAGE_EXECUTE_READWRITE) != nullptr) ||
-                     (VirtualAlloc(page, 0x1000, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE) != nullptr);
+            if (access_addr < 0x10000ULL) {
+                static std::atomic<unsigned> invalid_exec_logs{0};
+                if (invalid_exec_logs.fetch_add(1, std::memory_order_relaxed) < 16) {
+                    const uint64_t ret = SafeReadable(reinterpret_cast<void*>(ctx->Rsp), 8)
+                        ? *reinterpret_cast<const uint64_t*>(ctx->Rsp) : 0;
+                    std::stringstream bad;
+                    bad << "[INVALID-EXEC] tid=" << GetCurrentThreadId() << std::hex
+                        << " target=0x" << access_addr << " caller=0x" << ret;
+                    if (IsInModuleRange(ret)) bad << " caller-RVA=0x" << (ret - g_base_addr);
+                    bad << " RAX=0x" << ctx->Rax << " RDI=0x" << ctx->Rdi
+                        << " RSI=0x" << ctx->Rsi << " RDX=0x" << ctx->Rdx
+                        << " RCX=0x" << ctx->Rcx << " RSP=0x" << ctx->Rsp;
+                    LOG_ERROR(bad.str());
+                }
+                // Preserve the original guest fault; never allocate at nullptr or fake a return.
+                return EXCEPTION_CONTINUE_SEARCH;
             }
-            if (ok) {
-                uint8_t* p = reinterpret_cast<uint8_t*>(access_addr);
-                p[0] = 0x31; // xor eax, eax
-                p[1] = 0xC0;
-                p[2] = 0xC3; // ret
-                FlushInstructionCache(GetCurrentProcess(), p, 3);
+            if (TryInstallGuestReturnZero(access_addr)) {
                 ctx->Rip = access_addr;
                 static std::atomic<int> s_nplt_logged{0};
                 if (s_nplt_logged.fetch_add(1) < 20) {
