@@ -29,8 +29,25 @@ int main() {
  resources.kind=0;
  cp.DmaData(0,0,0,0x2001,0,0,0x1003,0,1,1,0);
  Check(resources.kind==0);
+ Check(IsValidGdsDmaRange(0, 8));
+ Check(IsValidGdsDmaRange(DMA_GDS_BYTES-1, 1));
+ Check(!IsValidGdsDmaRange(DMA_GDS_BYTES-1, 2));
+ Check(!IsValidGdsDmaRange(UINT64_MAX, 1));
+ Check(!IsValidGdsDmaRange(0, 0));
+ cp.DmaData(0,1,0,0,2,0,0x44332211,8,1,1,0);
+ Check(resources.kind==2 && resources.dst_gds && resources.dst==0);
+ cp.DmaData(0,1,0,0x10,0,0,0x1000,8,1,1,0);
+ Check(resources.kind==1 && resources.dst_gds && !resources.src_gds && resources.dst==0x10);
+ cp.DmaData(0,0,0,0x2000,1,0,0,8,1,1,0);
+ Check(resources.kind==1 && !resources.dst_gds && resources.src_gds && resources.src==0);
+ cp.DmaData(0,1,0,0x20,1,0,0,8,1,1,0);
+ Check(resources.kind==1 && resources.dst_gds && resources.src_gds);
  bool rejected=false;
- try {cp.DmaData(0,0,0,0x2001,1,0,0x1003,5,1,1,0);}
+ try {cp.DmaData(0,0,0,0x2001,4,0,0x1003,5,1,1,0);}
+ catch(const std::runtime_error&) {rejected=true;}
+ Check(rejected);
+ rejected=false;
+ try {cp.DmaData(0,2,0,0x2000,0,0,0x1000,8,1,1,0);}
  catch(const std::runtime_error&) {rejected=true;}
  Check(rejected);
  std::puts("PASS: byte DMA dispatch, fill boundaries and copy range validation");

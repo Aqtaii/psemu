@@ -19,9 +19,9 @@ $prefix=@'
 #define LOGF(...) ((void)0)
 namespace Common {struct LockGuard {explicit LockGuard(int&) {}};}
 struct Resources {
- int kind=0;uint64_t dst=0,src=0,size=0;uint32_t value=0;
- void CopyBuffer(void*,uint64_t d,uint64_t s,uint64_t n){kind=1;dst=d;src=s;size=n;}
- void FillBuffer(void*,uint64_t d,uint64_t n,uint32_t v){kind=2;dst=d;size=n;value=v;}
+ int kind=0;uint64_t dst=0,src=0,size=0;uint32_t value=0;bool dst_gds=false,src_gds=false;
+ void CopyBuffer(void*,uint64_t d,uint64_t s,uint64_t n,bool dg,bool sg){kind=1;dst=d;src=s;size=n;dst_gds=dg;src_gds=sg;}
+ void FillBuffer(void*,uint64_t d,uint64_t n,uint32_t v,bool dg){kind=2;dst=d;size=n;value=v;dst_gds=dg;src_gds=false;}
 } resources;
 Resources* GetGpuResources(){return &resources;}
 struct CommandProcessor {int m_mutex=0;void* CurrentBuffer(){return this;}

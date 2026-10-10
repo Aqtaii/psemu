@@ -64,9 +64,9 @@ public:
 	[[nodiscard]] VulkanBuffer* ObtainNullBuffer(CommandBuffer* command, GraphicContext* ctx);
 	[[nodiscard]] BufferImageCopySource ObtainBufferForImage(uint64_t vaddr, uint64_t size);
 	void FillBuffer(CommandBuffer* command, GraphicContext* ctx, uint64_t vaddr, uint64_t size,
-	                uint32_t value);
+	                uint32_t value, bool dst_gds = false);
 	void CopyBuffer(CommandBuffer* command, GraphicContext* ctx, uint64_t dst_vaddr,
-	                uint64_t src_vaddr, uint64_t size);
+	                uint64_t src_vaddr, uint64_t size, bool dst_gds = false, bool src_gds = false);
 	[[nodiscard]] bool HasPageOverlap(uint64_t vaddr, uint64_t size);
 	[[nodiscard]] bool IsRegionCpuModified(uint64_t vaddr, uint64_t size);
 	[[nodiscard]] bool IsRegionGpuModified(uint64_t vaddr, uint64_t size);

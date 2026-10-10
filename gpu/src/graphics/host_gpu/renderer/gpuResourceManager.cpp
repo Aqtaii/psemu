@@ -83,21 +83,21 @@ void GpuResourceManager::UnmapMemory(uint64_t vaddr, uint64_t size, GpuAccess ac
 }
 
 void GpuResourceManager::FillBuffer(CommandBuffer* command, uint64_t vaddr, uint64_t size,
-                                    uint32_t value) {
+                                    uint32_t value, bool dst_gds) {
 	if (g_render_ctx == nullptr || command == nullptr || command->IsInvalid()) {
 		EXIT("cannot fill a buffer without a valid render command context\n");
 	}
 	Common::LockGuard lock(g_render_ctx->GetMutex());
-	m_buffer_cache.FillBuffer(command, g_render_ctx->GetGraphicCtx(), vaddr, size, value);
+	m_buffer_cache.FillBuffer(command, g_render_ctx->GetGraphicCtx(), vaddr, size, value, dst_gds);
 }
 
 void GpuResourceManager::CopyBuffer(CommandBuffer* command, uint64_t dst_vaddr, uint64_t src_vaddr,
-                                    uint64_t size) {
+                                    uint64_t size, bool dst_gds, bool src_gds) {
 	if (g_render_ctx == nullptr || command == nullptr || command->IsInvalid()) {
 		EXIT("cannot copy a buffer without a valid render command context\n");
 	}
 	Common::LockGuard lock(g_render_ctx->GetMutex());
-	m_buffer_cache.CopyBuffer(command, g_render_ctx->GetGraphicCtx(), dst_vaddr, src_vaddr, size);
+	m_buffer_cache.CopyBuffer(command, g_render_ctx->GetGraphicCtx(), dst_vaddr, src_vaddr, size, dst_gds, src_gds);
 }
 
 } // namespace Libs::Graphics

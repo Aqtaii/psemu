@@ -2,6 +2,7 @@
 #define EMULATOR_SRC_GRAPHICS_HOST_GPU_RENDERER_GDSBUFFER_H_
 
 #include "common/abi.h"
+#include "graphics/host_gpu/renderer/dmaBytes.h"
 #include "common/assert.h"
 #include "common/common.h"
 #include "common/threads.h"
@@ -23,7 +24,7 @@ public:
 	VulkanBuffer* GetBuffer(GraphicContext* ctx);
 
 private:
-	static constexpr uint64_t DW_SIZE = 0x3000;
+	static constexpr uint64_t DW_SIZE = DMA_GDS_BYTES / 4;
 
 	void Init(GraphicContext* ctx);
 

@@ -679,7 +679,7 @@ void CommandProcessor::DmaData(uint8_t engine, uint8_t dst_sel, uint8_t dst_cach
 	if (num_bytes == 0) {
 		return;
 	}
-	if ((num_bytes & 3u) != 0) {
+	if ((num_bytes & 3u) != 0 || dst_sel == 1 || src_sel == 1) {
 		static std::atomic<uint32_t> byte_dma_log_count {0};
 		if (byte_dma_log_count.fetch_add(1, std::memory_order_relaxed) < 16) {
 			std::fprintf(stderr, "[DMA-BYTES] engine=%u src_sel=%u dst_sel=%u src=0x%016" PRIx64
@@ -694,18 +694,18 @@ void CommandProcessor::DmaData(uint8_t engine, uint8_t dst_sel, uint8_t dst_cach
 	EXIT_NOT_IMPLEMENTED(block_engine > 1);
 	const bool dst_memory = dst_sel == 0 || dst_sel == 3;
 	const bool src_memory = src_sel == 0 || src_sel == 3;
-	if (!dst_memory) {
+	if (!dst_memory && dst_sel != 1) {
 		EXIT("unsupported dmaData destination selector 0x%02" PRIx8 "\n", dst_sel);
 	}
 	if (src_sel == 2) {
 		GetGpuResources()->FillBuffer(
 		    CurrentBuffer(), dst_address_or_offset, num_bytes,
-		    static_cast<uint32_t>(src_address_or_offset_or_immediate & 0xffffffffu));
+		    static_cast<uint32_t>(src_address_or_offset_or_immediate & 0xffffffffu), dst_sel == 1);
 		return;
 	}
-	if (src_memory) {
+	if (src_memory || src_sel == 1) {
 		GetGpuResources()->CopyBuffer(CurrentBuffer(), dst_address_or_offset,
-		                              src_address_or_offset_or_immediate, num_bytes);
+		                              src_address_or_offset_or_immediate, num_bytes, dst_sel == 1, src_sel == 1);
 		return;
 	}
 	EXIT("unsupported dmaData source selector 0x%02" PRIx8 "\n", src_sel);

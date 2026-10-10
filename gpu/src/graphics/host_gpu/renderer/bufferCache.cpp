@@ -1,5 +1,7 @@
 #include "graphics/host_gpu/renderer/bufferCache.h"
 #include "graphics/host_gpu/renderer/dmaBytes.h"
+#include "graphics/host_gpu/renderer/gdsBuffer.h"
+#include "graphics/host_gpu/renderer/renderContext.h"
 
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -1076,9 +1078,13 @@ vk::CommandBuffer GetDmaCommandBuffer(CommandBuffer* command) {
 } // namespace
 
 void BufferCache::FillBuffer(CommandBuffer* command, GraphicContext* ctx, uint64_t vaddr,
-                             uint64_t size, uint32_t value) {
-	ValidateGpuAccess(vaddr, size, false, true);
-	{
+                             uint64_t size, uint32_t value, bool dst_gds) {
+	if (dst_gds) {
+		EXIT_NOT_IMPLEMENTED(!IsValidGdsDmaRange(vaddr, size));
+	} else {
+		ValidateGpuAccess(vaddr, size, false, true);
+	}
+	if (!dst_gds) {
 		std::lock_guard transaction(m_resource_mutex);
 		const auto      texture_region      = m_texture_cache->QueryRegion(vaddr, size);
 		const bool      image_overlap       = texture_region.image_bytes;
@@ -1105,7 +1111,9 @@ void BufferCache::FillBuffer(CommandBuffer* command, GraphicContext* ctx, uint64
 			     vaddr, size);
 		}
 	}
-	const auto [dst, dst_offset] = ObtainBuffer(command, ctx, vaddr, size, true, false);
+	const auto [dst, dst_offset] = dst_gds
+	    ? std::pair<VulkanBuffer*, uint64_t>{g_render_ctx->GetGdsBuffer()->GetBuffer(ctx), vaddr}
+	    : ObtainBuffer(command, ctx, vaddr, size, true, false);
 	const auto before            = MakeDmaBarrier(
 	    dst, dst_offset, size, vk::AccessFlagBits::eMemoryRead | vk::AccessFlagBits::eMemoryWrite,
 	    vk::AccessFlagBits::eTransferWrite);
@@ -1147,16 +1155,36 @@ void BufferCache::FillBuffer(CommandBuffer* command, GraphicContext* ctx, uint64
 }
 
 void BufferCache::CopyBuffer(CommandBuffer* command, GraphicContext* ctx, uint64_t dst_vaddr,
-                             uint64_t src_vaddr, uint64_t size) {
-	if (!IsValidDmaCopyRange(dst_vaddr, src_vaddr, size)) {
+                             uint64_t src_vaddr, uint64_t size, bool dst_gds, bool src_gds) {
+	if (!dst_gds && !src_gds && !IsValidDmaCopyRange(dst_vaddr, src_vaddr, size)) {
 		EXIT("BufferCache: invalid or overlapping copy range, src=0x%016" PRIx64
 		     " dst=0x%016" PRIx64 " size=0x%016" PRIx64 "\n",
 		     src_vaddr, dst_vaddr, size);
 	}
-	ValidateGpuAccess(src_vaddr, size, true, false);
-	ValidateGpuAccess(dst_vaddr, size, false, true);
+	if (src_gds) {
+		EXIT_NOT_IMPLEMENTED(!IsValidGdsDmaRange(src_vaddr, size));
+	} else {
+		ValidateGpuAccess(src_vaddr, size, true, false);
+	}
+	if (dst_gds) {
+		EXIT_NOT_IMPLEMENTED(!IsValidGdsDmaRange(dst_vaddr, size));
+	} else {
+		ValidateGpuAccess(dst_vaddr, size, false, true);
+	}
 	bool dst_image_transition = false;
-	{
+	if (src_gds || dst_gds) {
+		// GDS has its own address space. Never query guest page ownership with its offset.
+		std::lock_guard transaction(m_resource_mutex);
+		if (!src_gds) {
+			const auto region = m_texture_cache->QueryRegion(src_vaddr, size);
+			EXIT_NOT_IMPLEMENTED(region.gpu_image_bytes || region.non_sampled_pages || region.metadata_bytes);
+		}
+		if (!dst_gds) {
+			dst_image_transition = m_texture_cache->InvalidateMemoryFromGPU(dst_vaddr, size);
+			const auto region = m_texture_cache->QueryRegion(dst_vaddr, size);
+			EXIT_NOT_IMPLEMENTED(region.non_sampled_pages || region.metadata_bytes);
+		}
+	} else {
 		std::lock_guard transaction(m_resource_mutex);
 		const auto      src_region    = m_texture_cache->QueryRegion(src_vaddr, size);
 		const auto      dst_region    = m_texture_cache->QueryRegion(dst_vaddr, size);
@@ -1207,9 +1235,12 @@ void BufferCache::CopyBuffer(CommandBuffer* command, GraphicContext* ctx, uint64
 			     src_vaddr, dst_vaddr, size);
 		}
 	}
-	const auto [src, src_offset] = ObtainBuffer(command, ctx, src_vaddr, size, false, true);
-	const auto [dst, dst_offset] =
-	    ObtainBuffer(command, ctx, dst_vaddr, size, true, false, dst_image_transition);
+	const auto [src, src_offset] = src_gds
+	    ? std::pair<VulkanBuffer*, uint64_t>{g_render_ctx->GetGdsBuffer()->GetBuffer(ctx), src_vaddr}
+	    : ObtainBuffer(command, ctx, src_vaddr, size, false, true);
+	const auto [dst, dst_offset] = dst_gds
+	    ? std::pair<VulkanBuffer*, uint64_t>{g_render_ctx->GetGdsBuffer()->GetBuffer(ctx), dst_vaddr}
+	    : ObtainBuffer(command, ctx, dst_vaddr, size, true, false, dst_image_transition);
 	if (src == dst && src_offset < dst_offset + size && dst_offset < src_offset + size) {
 		EXIT("BufferCache: resolved Vulkan copy ranges overlap, src_offset=0x%016" PRIx64
 		     " dst_offset=0x%016" PRIx64 " size=0x%016" PRIx64 "\n",

@@ -10,7 +10,9 @@ void GdsBuffer::Init(GraphicContext* ctx) {
 	if (m_buffer == nullptr) {
 		m_buffer = std::make_unique<VulkanBuffer>();
 
-		m_buffer->usage           = vk::BufferUsageFlagBits::eStorageBuffer;
+		m_buffer->usage           = vk::BufferUsageFlagBits::eStorageBuffer |
+		                            vk::BufferUsageFlagBits::eTransferSrc |
+		                            vk::BufferUsageFlagBits::eTransferDst;
 		m_buffer->memory.property = vk::MemoryPropertyFlagBits::eHostVisible |
 		                            vk::MemoryPropertyFlagBits::eHostCoherent |
 		                            vk::MemoryPropertyFlagBits::eHostCached;

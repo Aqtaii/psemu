@@ -28,8 +28,9 @@ public:
 	[[nodiscard]] bool IsMapped(uint64_t vaddr, uint64_t size) const noexcept;
 	void               MapMemory(uint64_t vaddr, uint64_t size, GpuAccess access);
 	void               UnmapMemory(uint64_t vaddr, uint64_t size, GpuAccess access);
-	void FillBuffer(CommandBuffer* command, uint64_t vaddr, uint64_t size, uint32_t value);
-	void CopyBuffer(CommandBuffer* command, uint64_t dst_vaddr, uint64_t src_vaddr, uint64_t size);
+	void FillBuffer(CommandBuffer* command, uint64_t vaddr, uint64_t size, uint32_t value, bool dst_gds = false);
+	void CopyBuffer(CommandBuffer* command, uint64_t dst_vaddr, uint64_t src_vaddr, uint64_t size,
+	                bool dst_gds = false, bool src_gds = false);
 
 private:
 	static bool FaultThunk(void* context, PageFaultAccess access, uint64_t vaddr, uint64_t size,
