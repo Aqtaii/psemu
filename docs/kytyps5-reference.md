@@ -23,3 +23,12 @@ Upstream uses a newer value-based shader IR. Whole backend replacement has not b
 Prior read-only AGC audit found parameter-count differences requiring NID/ABI validation: DriverSubmitCommandBuffer (3 vs 2), GetIsTrinityMode (0 vs 1 output pointer), QueueEndOfPipeActionPatchData (4 vs 2). The generic VEH bridge accepts 10 integer arguments; CbBranch, CbReleaseMem and DcbDmaData require 12. Default native GOT dispatch bypasses that bridge.
 
 Earlier GDS DMA and append/consume offset fixes were informed by upstream compute tests. Record later adaptations and their validation here; upstream availability does not establish that an untested integration is correct.
+
+## Borrow-input subtraction
+
+Captured instruction at shader PC 0xB84: 54003080. Upstream has the exact raw word in VectorSubrevCoCiU32ExactRawOnGpu and covers masked-exec behavior nearby in tests/ShaderRecompilerComputeTests.cpp.
+Reference implementation: frontend/translate/Control.cpp, Translator::SUBB_U32, dispatched by frontend/translate/Vector.cpp.
+
+Adapted both V_SUB_CO_CI_U32 (0x29) and V_SUBREV_CO_CI_U32 (0x2A), including their VOP3 encodings. Reverse form swaps arithmetic inputs; both consume the lane's VCC bit and write the borrow mask. Result is lhs-rhs-borrow_in; outgoing borrow is (rhs>lhs) OR (borrow_in>partial). The existing two-input subtraction path remains supported. Register collection includes both dwords of the carry/borrow input mask.
+
+Regression covers exact captured decoding, production subtraction emitter, lanes 0/31/32/63, borrow on/off and unsigned wrap boundaries.

@@ -28,6 +28,7 @@ constexpr OpcodeMap VOP2_OPS[] = {
     {0x21u, Opcode::VMadakF32},      {0x22u, Opcode::VBcntU32B32},
     {0x23u, Opcode::VMbcntLoU32B32}, {0x24u, Opcode::VMbcntHiU32B32},
     {0x25u, Opcode::VAddNcU32},      {0x28u, Opcode::VAddcU32},
+    {0x29u, Opcode::VSubCoCiU32}, {0x2au, Opcode::VSubrevCoCiU32},
     {0x26u, Opcode::VSubNcU32},      {0x27u, Opcode::VSubrevNcU32},
     {0x2bu, Opcode::VMacF32},        {0x2cu, Opcode::VMadmkF32},
     {0x2du, Opcode::VMadakF32},      {0x2fu, Opcode::VCvtPkrtzF16F32},
@@ -921,6 +922,8 @@ bool FinalizeVop2Instruction(uint32_t pc, std::span<const uint32_t> code, uint32
 			inst->src2.kind = OperandKind::LiteralConstant;
 			inst->src_count = 3;
 			break;
+		case Opcode::VSubCoCiU32:
+		case Opcode::VSubrevCoCiU32:
 		case Opcode::VAddcU32:
 			inst->dst2.kind = OperandKind::VccLo;
 			inst->src2.kind = OperandKind::VccLo;
@@ -1582,7 +1585,9 @@ bool DecodeVop3(uint32_t pc, std::span<const uint32_t> code, uint32_t word_index
 	inst->opcode    = LookupVop3Opcode(opcode);
 	SetRawWords(inst, code, word_index, 2);
 
-	const bool addc                    = inst->opcode == Opcode::VAddcU32 && opcode == 0x128u;
+	const bool addc                    = (inst->opcode == Opcode::VAddcU32 && opcode == 0x128u) ||
+	    (inst->opcode == Opcode::VSubCoCiU32 && opcode == 0x129u) ||
+	    (inst->opcode == Opcode::VSubrevCoCiU32 && opcode == 0x12au);
 	const bool vop3b_carry_out         = IsVop3BCarryOutOpcode(inst->opcode);
 	const bool vop3b_mad_u64           = IsVop3BMadU64Opcode(inst->opcode);
 	const bool vop3b_uses_sdst         = addc || vop3b_carry_out || vop3b_mad_u64;

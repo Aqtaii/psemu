@@ -6,6 +6,12 @@
 using namespace Libs::Graphics::ShaderRecompiler::Decoder;
 static void Check(bool ok) {if(!ok) throw std::runtime_error("GDS decoder regression");}
 int main() {
+ const std::array<uint32_t,1> subrev{0x54003080};
+ Instruction subtract;std::string subtract_error;
+ Check(DecodeVop2(0xb84,subrev,0,&subtract,&subtract_error));
+ Check(subtract.opcode==Opcode::VSubrevCoCiU32 && subtract.src_count==3);
+ Check(subtract.src1.kind==OperandKind::Vgpr && subtract.src1.reg==24);
+ Check(subtract.src2.kind==OperandKind::VccLo && subtract.dst2.kind==OperandKind::VccLo);
  // Actual Astro Bot instruction; preserve scalar register-pair sources and VCC destination.
  const std::array<uint32_t,2> astro{0xd4e4006a,0x0001006a};
  Instruction compare;std::string compare_error;

@@ -267,6 +267,8 @@ enum class Opcode {
 	VMadMixhiF16,
 	VAddNcU32,
 	VAddcU32,
+	VSubCoCiU32,
+	VSubrevCoCiU32,
 	VSubNcU32,
 	VSubrevNcU32,
 	VAddNcU16,

@@ -579,15 +579,29 @@ void EmitIAddCarryU32(EmitterState* state, const IR::Instruction& inst) {
 	EmitLaneMaskPairFromBool(state, inst.dst2, carry_bool);
 }
 
+// KytyPS5 frontend/translate/Control.cpp SUBB_U32: two subtracts and OR of borrows.
 void EmitISubBorrowU32(EmitterState* state, const IR::Instruction& inst) {
-	const auto lhs    = EmitValueLoad(state, inst.src[0]);
-	const auto rhs    = EmitValueLoad(state, inst.src[1]);
-	const auto result = state->builder.AllocateId();
-	const auto borrow = state->builder.AllocateId();
-	state->builder.AddFunction({OpISub, state->uint_type, result, lhs, rhs});
-	state->builder.AddFunction({OpUGreaterThan, state->bool_type, borrow, rhs, lhs});
-	EmitStoreU32(state, inst.dst, result);
-	EmitLaneMaskPairFromBool(state, inst.dst2, borrow);
+ const auto lhs=EmitValueLoad(state,inst.src[0]);
+ const auto rhs=EmitValueLoad(state,inst.src[1]);
+ const auto partial=state->builder.AllocateId();
+ const auto borrow0=state->builder.AllocateId();
+ state->builder.AddFunction({OpISub,state->uint_type,partial,lhs,rhs});
+ state->builder.AddFunction({OpUGreaterThan,state->bool_type,borrow0,rhs,lhs});
+ auto result=partial;
+ auto borrow=borrow0;
+ if(inst.src_count==3) {
+  const auto active=EmitLaneMaskOperandActiveBool(state,inst.src[2]);
+  const auto borrow_in=state->builder.AllocateId();
+  state->builder.AddFunction({OpSelect,state->uint_type,borrow_in,active,ConstantU32(state,1),ConstantU32(state,0)});
+  result=state->builder.AllocateId();
+  const auto borrow1=state->builder.AllocateId();
+  borrow=state->builder.AllocateId();
+  state->builder.AddFunction({OpISub,state->uint_type,result,partial,borrow_in});
+  state->builder.AddFunction({OpUGreaterThan,state->bool_type,borrow1,borrow_in,partial});
+  state->builder.AddFunction({OpLogicalOr,state->bool_type,borrow,borrow0,borrow1});
+ }
+ EmitStoreU32(state,inst.dst,result);
+ EmitLaneMaskPairFromBool(state,inst.dst2,borrow);
 }
 
 void EmitScalarAddCarryU32(EmitterState* state, const IR::Instruction& inst) {

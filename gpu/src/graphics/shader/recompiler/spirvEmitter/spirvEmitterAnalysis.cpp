@@ -220,6 +220,9 @@ void CollectRegisters(const IR::Program& program, std::vector<RegisterBinding>* 
 			}
 			if (inst.op == IR::Opcode::IAddCarryU32 || inst.op == IR::Opcode::ISubBorrowU32) {
 				CollectSequentialRegisters(registers, inst.dst2, 2);
+				if (inst.src_count == 3) {
+					CollectSequentialRegisters(registers, inst.src[2], 2);
+				}
 			}
 			if (inst.op == IR::Opcode::UMadU64U32) {
 				CollectSequentialRegisters(registers, inst.dst, 2);
