@@ -1021,6 +1021,20 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 	auto       vk_buffer     = buffer->Handle();
 	const auto shader_stages = ShaderPipelineStages(vk_stage);
 
+	// A guest-memory fault may submit/reset this recording and release retained images.
+	// Abandon the partial descriptors before dereferencing any of those old bindings;
+	// the draw/dispatch caller retries with the new recording generation.
+	const auto recording_generation = buffer->GetRecordingGeneration();
+	auto recording_changed = [&] {
+		if (buffer->GetRecordingGeneration() == recording_generation) {
+			return false;
+		}
+		static std::atomic_uint reset_logs {0};
+		if (reset_logs.fetch_add(1, std::memory_order_relaxed) < 16) {
+			std::fprintf(stderr, "[DESCRIPTOR-RETRY] recording reset during resource preparation\n");
+		}
+		return true;
+	};
 	DescriptorCache::NativeDescriptors descriptors;
 	descriptors.buffers.reserve(program.info.buffers.size());
 	for (uint32_t i = 0; i < program.info.buffers.size(); i++) {
@@ -1028,6 +1042,9 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 		CopyNativeDescriptor(snapshot.buffers[i], descriptor.fields);
 		descriptors.buffers.push_back(
 		    NativeStorageBuffer(submit_id, buffer, descriptor, program.info.buffers[i]));
+		if (recording_changed()) {
+			return;
+		}
 	}
 	descriptors.images.reserve(program.info.images.size());
 	for (uint32_t i = 0; i < program.info.images.size(); i++) {
@@ -1039,20 +1056,32 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 		}
 		descriptors.images.push_back(
 		    NativeTexture(submit_id, buffer, program.info.images[i], snapshot.images[i]));
+		if (recording_changed()) {
+			return;
+		}
 	}
 	descriptors.samplers.reserve(program.info.samplers.size());
 	for (uint32_t i = 0; i < program.info.samplers.size(); i++) {
 		descriptors.samplers.push_back(NativeSampler(program, i, snapshot.samplers[i]));
+		if (recording_changed()) {
+			return;
+		}
 	}
 	descriptors.addresses.reserve(program.info.addresses.size());
 	for (uint32_t i = 0; i < program.info.addresses.size(); i++) {
 		descriptors.addresses.push_back(NativeAddressBuffer(
 		    submit_id, buffer, program.info.addresses[i], snapshot.addresses[i]));
+		if (recording_changed()) {
+			return;
+		}
 	}
 	if (ShaderRecompiler::IR::FindBinding(
 	        program.bindings, ShaderRecompiler::IR::DescriptorBindingKind::FlattenedSrt) !=
 	    nullptr) {
 		descriptors.flattened_srt = NativeUpload(buffer, snapshot.flattened_srt);
+		if (recording_changed()) {
+			return;
+		}
 	}
 
 	std::vector<uint32_t> user_data;
@@ -1063,6 +1092,9 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 	if (ShaderRecompiler::IR::FindBinding(
 	        program.bindings, ShaderRecompiler::IR::DescriptorBindingKind::UserData) != nullptr) {
 		descriptors.user_data = NativeUpload(buffer, user_data);
+		if (recording_changed()) {
+			return;
+		}
 	}
 	if (ShaderRecompiler::IR::FindBinding(
 	        program.bindings, ShaderRecompiler::IR::DescriptorBindingKind::Gds) != nullptr) {

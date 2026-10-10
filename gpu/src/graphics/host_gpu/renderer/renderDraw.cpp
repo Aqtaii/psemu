@@ -963,6 +963,9 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 		BindDescriptors(submit_id, buffer, vk::PipelineBindPoint::eGraphics,
 		                pipeline->pipeline_layout, state->vs_input_info.stage,
 		                vk::ShaderStageFlagBits::eVertex, DescriptorCache::Stage::Vertex);
+		if (buffer->GetRecordingGeneration() != recording_generation) {
+			continue;
+		}
 
 		if (state->ps_active) {
 			LogDrawPhase(draw.name, "BindDescriptorsPS");
