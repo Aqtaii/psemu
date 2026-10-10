@@ -9,7 +9,7 @@ namespace Libs::Graphics::ShaderRecompiler::Spirv {
 template<class B>
 uint32_t DefineGuestAddressRead(B& b, uint32_t u32, uint32_t u64, uint32_t boolean,
                                uint32_t pair, uint32_t physical_uint_ptr,
-                               uint32_t lookup) {
+                               uint32_t lookup, uint32_t report_fault = 0) {
  auto constant=[&](uint32_t n){auto id=b.AllocateId();b.AddType({43,u32,id,n});return id;};
  auto zero=constant(0),one=constant(1),two=constant(2),three=constant(3),
       four=constant(4),bits=constant(32);
@@ -27,7 +27,9 @@ uint32_t DefineGuestAddressRead(B& b, uint32_t u32, uint32_t u64, uint32_t boole
  auto guard=[&](uint32_t condition,uint32_t error) {
   auto next=b.AllocateId(),reject=b.AllocateId();
   b.AddFunction({247,next,0});b.AddFunction({250,condition,next,reject});
-  b.AddFunction({248,reject});b.AddFunction({254,error});b.AddFunction({248,next});
+  b.AddFunction({248,reject});
+  if(report_fault) op(57,u32,{report_fault,guest,extract(error,1)});
+  b.AddFunction({254,error});b.AddFunction({248,next});
  };
  auto lo=extract(guest,0);
  guard(op(170,boolean,{op(199,u32,{lo,three}),zero}),unaligned);

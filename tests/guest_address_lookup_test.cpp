@@ -1,3 +1,4 @@
+#include "graphics/shader/recompiler/spirvEmitter/guestAddressFault.h"
 #include "graphics/shader/recompiler/SrtPatcher.h"
 #include "graphics/shader/recompiler/spirvEmitter/scalarMemoryGroup.h"
 #include "graphics/shader/recompiler/spirvEmitter/guestAddressRead.h"
@@ -23,7 +24,9 @@ struct Recorder {
  void AddName(uint32_t,const char*){}
  uint64_t Run(uint64_t guest,uint32_t bytes,const std::vector<uint32_t>& memory,
   std::function<uint64_t(uint64_t,uint32_t)> lookup = {},
-  const std::unordered_map<uint64_t,uint32_t>* physical = nullptr, size_t* reads = nullptr) {
+  const std::unordered_map<uint64_t,uint32_t>* physical = nullptr, size_t* reads = nullptr,
+  std::function<void(uint64_t,uint32_t)> fault = {},
+  std::vector<uint32_t>* fault_words = nullptr) {
   std::unordered_set<uint32_t> physical_pointers;
   std::unordered_map<uint32_t,uint64_t> v;
   for(auto& x:types) {
@@ -51,8 +54,19 @@ struct Recorder {
     case 43:throw std::runtime_error("constant in function");
     case 68:v[x[2]]=memory.size();break;
     case 65:v[x[2]]=a(5);break;
-    case 57:if(!lookup)throw std::runtime_error("missing lookup function");
+    case 57:if(x[3]==100009) {
+              if(!fault)throw std::runtime_error("missing fault reporter");
+              fault(v.at(x[4]),a(5));v[x[2]]=a(5);break;
+            }
+            if(!lookup)throw std::runtime_error("missing lookup function");
             v[x[2]]=lookup(v.at(x[4]),a(5));break;
+    case 230:if(!fault_words || a(4)!=1 || a(5)!=0 || a(6)!=0)
+               throw std::runtime_error("invalid fault atomic");
+             v[x[2]]=fault_words->at(a(3));
+             if(v[x[2]]==a(8))fault_words->at(a(3))=a(7);
+             break;
+    case 62:if(!fault_words)throw std::runtime_error("fault store without backing");
+            fault_words->at(a(1))=a(2);break;
     case 120:v[x[2]]=v.at(x[3]);physical_pointers.insert(x[2]);break;
     case 61:if(physical_pointers.contains(x[3])) {
               if(!physical || x.size()!=6 || x[4]!=2 || x[5]!=4)
@@ -189,6 +203,36 @@ int main() {
     reader.Run(ranges[0].guest_base+1,4,{},lookup_call,&physical,&reads)!=(2ull<<32) ||
     reader.Run(ranges[0].guest_base,4,{},[](uint64_t,uint32_t){return 1ull;},&physical,&reads)!=(2ull<<32) ||
     reads!=before)throw std::runtime_error("rejected address was physically accessed");
+ // Exercise the actual first-fault helper and the reader's error callbacks.
+ Recorder reporter;
+ DefineGuestAddressFault(reporter,100000,100001,100002,100004,100010);
+ std::vector<uint32_t> fault_words(4);
+ auto report=[&](uint64_t guest,uint32_t status) {
+  reporter.Run(guest,status,{}, {},nullptr,nullptr,{},&fault_words);
+ };
+ report(0x123456789abcull,0);
+ if(fault_words!=std::vector<uint32_t>(4))throw std::runtime_error("success reported as fault");
+ report(0x123456789abcull,1);
+ report(0xabcdef123456ull,2);
+ if(fault_words!=std::vector<uint32_t>{1,0x56789abc,0x1234,0})
+  throw std::runtime_error("first fault overwritten or torn");
+ Recorder reporting_reader;
+ DefineGuestAddressRead(reporting_reader,100000,100006,100001,100002,100007,100008,100009);
+ size_t reports=0;
+ auto counted_report=[&](uint64_t guest,uint32_t status){++reports;report(guest,status);};
+ fault_words.assign(4,0);
+ reporting_reader.Run(ranges[0].guest_base+16380,4,{},lookup_call,&physical,&reads,counted_report);
+ if(reports || fault_words[0])throw std::runtime_error("valid zero payload reported");
+ auto missing_guest=ranges[0].guest_base+16384;
+ reporting_reader.Run(missing_guest,4,{},lookup_call,&physical,&reads,counted_report);
+ if(reports!=1 || fault_words[0]!=1 ||
+    (uint64_t(fault_words[1])|(uint64_t(fault_words[2])<<32))!=missing_guest)
+  throw std::runtime_error("missing read address not reported");
+ fault_words.assign(4,0);
+ reporting_reader.Run(missing_guest+1,4,{},lookup_call,&physical,&reads,counted_report);
+ if(reports!=2 || fault_words[0]!=2 ||
+    (uint64_t(fault_words[1])|(uint64_t(fault_words[2])<<32))!=missing_guest+1)
+  throw std::runtime_error("unaligned read address not reported");
  // Emit the same production helper into a real SPIR-V compute module.
  Builder b;
  auto u=b.AllocateId(),bo=b.AllocateId(),pair=b.AllocateId(),carry=b.AllocateId(),
@@ -208,7 +252,11 @@ int main() {
  const auto lookup=DefineGuestAddressLookup(b,u,bo,pair,carry,ptr,table);
  const auto u64=b.AllocateId(),physical_ptr=b.AllocateId();
  b.AddType({21,u64,64,0});b.AddType({32,physical_ptr,5349,u});
- const auto read=DefineGuestAddressRead(b,u,u64,bo,pair,physical_ptr,lookup);
+ const auto fault_buffer=b.AllocateId();
+ b.AddType({59,ptr_struct,fault_buffer,12});
+ b.AddAnnotation({71,fault_buffer,33,1});b.AddAnnotation({71,fault_buffer,34,0});
+ const auto report_fn=DefineGuestAddressFault(b,u,bo,pair,ptr,fault_buffer);
+ const auto read=DefineGuestAddressRead(b,u,u64,bo,pair,physical_ptr,lookup,report_fn);
  const auto z=b.AllocateId(),four=b.AllocateId(),input=b.AllocateId(),call=b.AllocateId();
  b.AddType({43,u,z,0});b.AddType({43,u,four,4});b.AddType({44,pair,input,z,z});
  b.AddFunction({54,vo,main,0,main_type});b.AddFunction({248,label});
