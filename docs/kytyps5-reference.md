@@ -146,10 +146,12 @@ Full CI run 38091137490 completed successfully; archive digest and all 19 manife
 
 ## Sparse GPU address snapshot foundation
 
-Reference KytyPS5 307fdcf7ad5d9d15b5966288fcc598ac9dbca188: src/graphics/host_gpu/cache/bufferCache.cpp::ChangeRegister and src/graphics/shader/recompiler/backend/spirv/spirvEmitterMemory.cpp::DefineGetBdaPointer (verify local paths when following up). The original implementation maintains page-to-BDA mapping; psemu uses sorted resident cache-owner ranges because full 48-bit dense mapping is unsuitable for its dynamic Windows guest addresses. No upstream source copied in this change.
+Reference KytyPS5 307fdcf7ad5d9d15b5966288fcc598ac9dbca188: src/graphics/host_gpu/renderer/cache/bufferCache.cpp::ChangeRegister and src/graphics/shader/recompiler/backend/spirv/spirvEmitterMemory.cpp::DefineGetBdaPointer. The original implementation maintains page-to-BDA mapping; psemu uses sorted resident cache-owner ranges because full 48-bit dense mapping is unsuitable for its dynamic Windows guest addresses. No upstream source copied in this change.
 
 New guestAddressTable.h defines a 32-byte SSBO entry (guest base, device base, size, reserved). Build is bounded to 65536 ranges, sorted, non-overlapping, validates guest/device arithmetic and publishes transactionally. Resolve requires the complete block to stay inside one owner; discontiguous backing must be resolved independently. Missing ranges fail explicitly.
 
 BufferCache::CaptureAddressSnapshot holds resource/cache locks in existing order and captures shared backing ownership, including device addresses. Snapshots do not synchronize CPU-dirty data or populate absent pages. Callers must prepare coherence and retain snapshots through fences before eventual dispatch integration. This API is not yet called by shader execution; no dynamic scalar fallback enabled.
 
 Regression tests/guest_address_table_test.cpp covers captured high guest-address shape, independently resolved 64-byte blocks around a 16KB boundary, unrelated device backing, overlap/overflow/missing ranges, null arguments, maximum entry count, and transactional invalid-input preservation.
+
+Validation: source commit 46d4d300bd4ce5c72d24160fbb924fcbeeb0e7cb, CI38092001848 all regressions and full Windows build succeeded. Downloaded outputs/psemu-windows-x64-astro-address-table.zip and extracted work/ci-astro-address-table under D:/proje/psemu-codex. Archive SHA256 digest plus all19 manifest entries verified. No runtime test because CaptureAddressSnapshot is not wired into dispatch yet; previous Astro dynamic scalar load blocker is unchanged. Next: table binding/physical SPIR-V lookup, coherence preparation/fence retention, then dynamic scalar reads preserving group base and missing-page diagnostics.
