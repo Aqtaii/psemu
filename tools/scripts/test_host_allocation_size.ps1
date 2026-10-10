@@ -45,7 +45,7 @@ int main() {
  _putenv_s("PSEMU_LEGACY_HOST_PADDING","1");
  CHECK(HostAllocationSize(48)==65584); CHECK(NativeMalloc(SIZE_MAX)==nullptr);
  _putenv_s("PSEMU_LEGACY_HOST_PADDING","0");
- CHECK(HostAllocationSize(48)==48);
+ CHECK(HostAllocationSize(48)==65584);
  CHECK(NativeCalloc(SIZE_MAX,2)==nullptr);
  auto zeros=static_cast<unsigned char*>(NativeCalloc(64,4)); CHECK(zeros);
  for(int i=0;i<256;i++) CHECK(zeros[i]==0);

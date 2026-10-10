@@ -1054,7 +1054,7 @@ static size_t HostAllocationSize(size_t n) {
     const char* legacy = std::getenv("PSEMU_LEGACY_HOST_PADDING");
     const bool legacy_padding = legacy && legacy[0] && legacy[0] != '0';
     return GuestHostAllocationSize(n, legacy_padding ||
-        (Game::Current().title_id != "PPSA21564" && Game::Current().title_id != "PPSA02929"));
+        Game::Current().title_id != "PPSA21564");
 }
 
 static PSEMU_SYSV void* NativeMalloc(size_t n) {
