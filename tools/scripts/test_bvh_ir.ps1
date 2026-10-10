@@ -10,6 +10,33 @@ if($begin -lt 0 -or $end -le $begin){throw 'BVH lowering extraction failed'}
 $file=Join-Path $out 'bvh_ir_production.cpp'
 $prefix='#include "graphics/shader/recompiler/ShaderIR.h"'+[Environment]::NewLine+'namespace Libs::Graphics::ShaderRecompiler::IR {'
 [IO.File]::WriteAllText($file,$prefix+$source.Substring($begin,$end-$begin)+'}',[Text.UTF8Encoding]::new($false))
+$analysis=[IO.File]::ReadAllText("$dir\spirvEmitter\spirvEmitterAnalysis.cpp")
+$collectBegin=$analysis.IndexOf('void CollectRegister(')
+$collectEnd=$analysis.IndexOf('bool HasOutput(',$collectBegin)
+$compareBegin=$analysis.IndexOf('bool IsCompareOpcode(IR::Opcode op) {')
+$compareEnd=$analysis.IndexOf(([string][char]10+'}'),$compareBegin)+3
+if($collectBegin -lt 0 -or $collectEnd -le $collectBegin -or $compareBegin -lt 0 -or $compareEnd -le $compareBegin){throw 'Register collection extraction failed'}
+$analysisPrefix=@'
+#include <algorithm>
+namespace BvhRegisterTest {
+namespace IR = Libs::Graphics::ShaderRecompiler::IR;
+namespace Decoder = Libs::Graphics::ShaderRecompiler::Decoder;
+struct RegisterBinding { IR::Register reg; uint32_t id; };
+struct EmitterState { uint32_t wave_size; };
+'@
+$analysisTail=@'
+}
+std::vector<Libs::Graphics::ShaderRecompiler::IR::Register> BvhCollected(const Libs::Graphics::ShaderRecompiler::IR::Instruction& inst) {
+ Libs::Graphics::ShaderRecompiler::IR::Program program;
+ program.blocks.resize(1);program.blocks[0].instructions.push_back(inst);
+ std::vector<BvhRegisterTest::RegisterBinding> bindings;
+ BvhRegisterTest::CollectRegisters(program,&bindings);
+ std::vector<Libs::Graphics::ShaderRecompiler::IR::Register> result;
+ for(const auto& binding:bindings)result.push_back(binding.reg);
+ return result;
+}
+'@
+[IO.File]::AppendAllText($file,([string][char]10)+$analysisPrefix+([string][char]10)+$analysis.Substring($collectBegin,$collectEnd-$collectBegin)+$analysis.Substring($compareBegin,$compareEnd-$compareBegin)+([string][char]10)+$analysisTail,[Text.UTF8Encoding]::new($false))
 Push-Location $out
 try {
  $sources=@($file,"$root\tests\bvh_ir_test.cpp")

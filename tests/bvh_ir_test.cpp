@@ -1,6 +1,7 @@
 #include "graphics/shader/recompiler/ShaderIR.h"
 #include "graphics/shader/recompiler/ImageOps.h"
 #include <array>
+#include <algorithm>
 #include <cstdio>
 #include <stdexcept>
 namespace IR = Libs::Graphics::ShaderRecompiler::IR;
@@ -8,6 +9,7 @@ namespace Decoder = Libs::Graphics::ShaderRecompiler::Decoder;
 namespace Libs::Graphics::ShaderRecompiler::IR {
 bool LowerBvhIntersect(const Decoder::Instruction&, BasicBlock*, std::string*);
 }
+std::vector<IR::Register> BvhCollected(const IR::Instruction&);
 static void Check(bool ok) { if (!ok) throw std::runtime_error("BVH IR regression"); }
 int main() {
  std::array<uint32_t,5> words{0xf1989f07,0x00040505,0x4442413d,0x4543403e,0x00004746};
@@ -29,6 +31,12 @@ int main() {
    const auto reg=nsa?(i<ray.size()?ray[i]:0u):5+i;
    Check(inst.bvh.ray[i].reg==IR::Register{IR::RegisterFile::Vector,reg});
   }
+  const auto collected=BvhCollected(inst);
+  auto has=[&](IR::RegisterFile file,uint32_t index){return std::find(collected.begin(),collected.end(),IR::Register{file,index})!=collected.end();};
+  for(uint32_t i=0;i<4;++i){Check(has(IR::RegisterFile::Scalar,16+i));Check(has(IR::RegisterFile::Vector,5+i));}
+  for(const auto& operand:inst.bvh.ray)Check(has(operand.reg.file,operand.reg.index));
+  Check(has(IR::RegisterFile::Exec,0) && has(IR::RegisterFile::Exec,1));
+  if(nsa)Check(!has(IR::RegisterFile::Vector,9));
   // Captured v5 is both an input and the first output: lowering must remain one op.
   Check(inst.bvh.ray.front().reg==inst.dst.reg);
   auto copy=inst;Check(copy==inst);copy.bvh.ray[1].reg.index^=1;Check(!(copy==inst));
