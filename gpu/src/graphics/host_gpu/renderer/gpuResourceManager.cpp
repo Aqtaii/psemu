@@ -61,6 +61,10 @@ bool GpuResourceManager::HandleFault(PageFaultAccess access, uint64_t fault_vadd
 	return m_page_manager.HandleFault(access, fault_vaddr);
 }
 
+bool GpuResourceManager::IsRegistered(uint64_t vaddr, uint64_t size) const noexcept {
+    return m_page_manager.IsRegistered(vaddr, size);
+}
+
 bool GpuResourceManager::IsMapped(uint64_t vaddr, uint64_t size) const noexcept {
 	return m_page_manager.IsMapped(vaddr, size);
 }

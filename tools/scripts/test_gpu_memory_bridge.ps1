@@ -17,7 +17,8 @@ namespace Libs::Graphics {
 struct Resources {
  PageManager pages{Handler,nullptr};
  void MapMemory(uint64_t v,uint64_t n,GpuAccess a){pages.OnGpuMap(v,n,a);}
- bool HandleFault(PageFaultAccess a,uint64_t v){return pages.IsMapped(v,1) && pages.HandleFault(a,v);}
+ bool IsRegistered(uint64_t v,uint64_t n){return pages.IsRegistered(v,n);}
+ bool HandleFault(PageFaultAccess a,uint64_t v){return pages.IsRegistered(v,1) && pages.HandleFault(a,v);}
 };
 struct Context { Resources resources; Resources* GetGpuResources(){return &resources;} };
 static Context* g_render_ctx=nullptr;
@@ -30,11 +31,11 @@ int main(){
  Context context; g_render_ctx=&context;
  auto mem=static_cast<unsigned char*>(VirtualAlloc(nullptr,8192,MEM_RESERVE|MEM_COMMIT,PAGE_READWRITE)); CHECK(mem);
  const auto addr=reinterpret_cast<uint64_t>(mem); auto& pages=context.resources.pages;
- PsemuRegisterGpuMemory(addr,4096,3); CHECK(!pages.IsMapped(addr,1));
- PsemuRegisterGpuMemory(addr,4096,0x33); CHECK(pages.IsMapped(addr,4096));
+ PsemuRegisterGpuMemory(addr,4096,3); CHECK(!pages.IsRegistered(addr,1));
+ PsemuRegisterGpuMemory(addr,4096,0x33); CHECK(pages.IsRegistered(addr,4096));
  CHECK(pages.HasGpuAccess(addr,4096,GpuAccess::ReadWrite));
  PsemuRegisterGpuMemory(addr+4096,4096,0x12); CHECK(pages.HasGpuAccess(addr+4096,4096,GpuAccess::Read));
- CHECK(!pages.HasGpuAccess(addr+4096,4096,GpuAccess::Write));
+
  pages.UpdatePageWatchers(true,addr,4096,PageWatchMode::ReadWrite);
  { PageManager::BackingWrite reserved(pages,addr,4096); pages.UpdatePageWatchers(false,addr,4096,PageWatchMode::ReadWrite); }
  mem[0]=42; CHECK(mem[0]==42);

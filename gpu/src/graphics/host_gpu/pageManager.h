@@ -37,6 +37,7 @@ public:
 
 	[[nodiscard]] uint64_t GetPageSize() const;
 	[[nodiscard]] bool     IsTracked(uint64_t vaddr) const noexcept;
+	[[nodiscard]] bool     IsRegistered(uint64_t vaddr, uint64_t size) const noexcept;
 	[[nodiscard]] bool     IsMapped(uint64_t vaddr, uint64_t size) const noexcept;
 	[[nodiscard]] bool HasGpuAccess(uint64_t vaddr, uint64_t size, GpuAccess access) const noexcept;
 

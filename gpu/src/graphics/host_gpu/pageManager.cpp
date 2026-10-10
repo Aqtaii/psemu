@@ -324,6 +324,20 @@ bool PageManager::IsTracked(uint64_t vaddr) const noexcept {
 	return page.write_watchers != 0 || page.access_watchers != 0;
 }
 
+bool PageManager::IsRegistered(uint64_t vaddr, uint64_t size) const noexcept {
+    if (g_in_fault_resolution || vaddr == 0 || size == 0 || vaddr >= ADDRESS_SIZE ||
+        size > ADDRESS_SIZE - vaddr) return false;
+    const auto end = PageEnd(vaddr, size);
+    for (auto address = PageStart(vaddr); address < end; address += PAGE_SIZE) {
+        auto* region = m_impl->FindRegion(address);
+        if (region == nullptr) return false;
+        auto& page = m_impl->GetPage(*region, address);
+        SpinGuard lock(page.lock);
+        if (page.mappings == 0) return false;
+    }
+    return true;
+}
+
 bool PageManager::IsMapped(uint64_t vaddr, uint64_t size) const noexcept {
 	if (g_in_fault_resolution || vaddr == 0 || size == 0 || vaddr >= ADDRESS_SIZE ||
 	    size > ADDRESS_SIZE - vaddr) {

@@ -133,7 +133,9 @@ extern "C" void PsemuRegisterGpuMemory(uint64_t vaddr, uint64_t size, uint32_t p
 
 extern "C" bool PsemuHandleGpuMemoryFault(uint64_t vaddr, bool write) {
     if (Libs::Graphics::g_render_ctx == nullptr) return false;
-    return Libs::Graphics::g_render_ctx->GetGpuResources()->HandleFault(
+    auto* resources = Libs::Graphics::g_render_ctx->GetGpuResources();
+    if (!resources->IsRegistered(vaddr, 1)) return false;
+    return resources->HandleFault(
         write ? Libs::Graphics::PageFaultAccess::Write : Libs::Graphics::PageFaultAccess::Read,
         vaddr);
 }
