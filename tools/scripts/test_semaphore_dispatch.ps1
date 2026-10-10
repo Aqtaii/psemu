@@ -64,6 +64,23 @@ int main() {
     CHECK(Invoke("sceKernelSignalSema", ctx) && ctx.Rax == 0);
     worker.join();
     CHECK(worker_result == WAIT_OBJECT_0);
+    uint32_t timeout_us = 1000;
+    ctx.Rdx = reinterpret_cast<uint64_t>(&timeout_us);
+    CHECK(Invoke("sceKernelWaitSema", ctx) && static_cast<int32_t>(ctx.Rax) == -2147352516);
+    ctx.Rdx = 0;
+    std::atomic<bool> started{false}, completed{false}, passed{false};
+    std::thread real_waiter([&] {
+        CONTEXT wait{}; wait.Rdi = handle; wait.Rsi = 1;
+        started.store(true);
+        passed.store(Invoke("sceKernelWaitSema", wait) && wait.Rax == 0);
+        completed.store(true);
+    });
+    while (!started.load()) Sleep(1);
+    Sleep(100);
+    const bool premature = completed.load();
+    CHECK(Invoke("sceKernelSignalSema", ctx) && ctx.Rax == 0);
+    real_waiter.join();
+    CHECK(!premature && completed.load() && passed.load());
     CHECK(CloseHandle(reinterpret_cast<HANDLE>(handle)));
     std::puts("PASS: six semaphore NIDs across four suffixes, actual signal/wait/poll handler and cross-thread wakeup");
 }

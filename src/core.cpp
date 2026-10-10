@@ -3967,21 +3967,20 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 } else if (readable_name == "sceKernelWaitSema") {
                     HANDLE          h  = reinterpret_cast<HANDLE>(ctx->Rdi);
                     const uint32_t* tp = reinterpret_cast<const uint32_t*>(ctx->Rdx);
-                    // GUVENLIK SINIRI: oyun bu semaforu hic sinyallemiyorsa
-                    // INFINITE beklemek kilitlenme demek. En fazla 50 ms bekleyip
-                    // basarili donuyoruz - eski davranisin (aninda basari)
-                    // korunmus ama saniyede 42.000 yerine en fazla 20 kez
-                    // calisan hali. Sinira kac kez carptigimizi sayiyoruz:
-                    // sifira yakinsa sinyalleme calisiyor demektir.
-                    DWORD ms = 50;
-                    bool  had_timeout_arg = false;
-                    if (tp != nullptr && SafeReadable(tp, 4)) {
+                    // A null timeout means wait for a real signal. Do not invent completion.
+                    DWORD ms = INFINITE;
+                    bool had_timeout_arg = false;
+                    if (tp != nullptr) {
+                        if (!SafeReadable(tp, 4)) {
+                            ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(-2147352554));
+                            ctx->Rip = *reinterpret_cast<uint64_t*>(ctx->Rsp);
+                            ctx->Rsp += 8;
+                            return EXCEPTION_CONTINUE_EXECUTION;
+                        }
                         had_timeout_arg = true;
-                        const uint32_t us = *tp;
-                        ms = static_cast<DWORD>(us / 1000u);
-                        if (ms > 50) ms = 50;
+                        ms = static_cast<DWORD>((static_cast<uint64_t>(*tp) + 999) / 1000);
                     }
-                    const DWORD wr = (h != nullptr) ? WaitForSingleObject(h, ms) : WAIT_TIMEOUT;
+                    const DWORD wr = (h != nullptr) ? WaitForSingleObject(h, ms) : WAIT_FAILED;
 
                     static std::atomic<uint64_t> s_w{0}, s_to{0};
                     const uint64_t wn = s_w.fetch_add(1) + 1;
@@ -3996,7 +3995,8 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                                static_cast<unsigned long long>(wn));
                         fflush(stdout);
                     }
-                    rc = 0; // zaman asiminda da basarili: eski davranis korunuyor
+                    rc = wr == WAIT_OBJECT_0 ? 0 :
+                        (wr == WAIT_TIMEOUT ? -2147352516 : -2147352554);
                 }
                 // DeleteSema/CancelSema: tutamaci kapatmiyoruz (baska thread
                 // hala bekliyor olabilir) - scePthreadMutexDestroy ile ayni yaklasim.
