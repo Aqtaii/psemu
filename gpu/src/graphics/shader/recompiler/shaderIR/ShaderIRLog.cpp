@@ -499,6 +499,7 @@ std::string InstructionToString(const Instruction& inst) {
 		case Opcode::DsReadAddtidB32: text += "DsReadAddtidB32"; break;
 		case Opcode::ImageGetResinfo: text += "ImageGetResinfo"; break;
 		case Opcode::ImageGetLod: text += "ImageGetLod"; break;
+		case Opcode::BvhIntersect: text += "BvhIntersect"; break;
 		case Opcode::ImageLoad: text += "ImageLoad"; break;
 		case Opcode::ImageStore: text += "ImageStore"; break;
 		case Opcode::ImageSample: text += "ImageSample"; break;
@@ -515,6 +516,14 @@ std::string InstructionToString(const Instruction& inst) {
 	for (uint32_t i = 0; i < inst.src_count; i++) {
 		text += i == 0 ? ", " : ", ";
 		text += OperandToString(inst.src[i]);
+	}
+	if (inst.op == Opcode::BvhIntersect) {
+		text += fmt::format(" node_dwords={} ray=[", inst.bvh.node_dwords);
+		for (uint32_t i = 0; i < inst.bvh.ray.size(); ++i) {
+			if (i != 0) text += ", ";
+			text += OperandToString(inst.bvh.ray[i]);
+		}
+		text += "] exec=masked";
 	}
 	text += MemoryInfoToString(inst.memory);
 	text += InputInfoToString(inst.op, inst.input_info);

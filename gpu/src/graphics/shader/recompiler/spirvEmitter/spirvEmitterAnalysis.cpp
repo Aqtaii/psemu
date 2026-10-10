@@ -199,6 +199,13 @@ void CollectRegisters(const IR::Program& program, std::vector<RegisterBinding>* 
 					CollectRegister(registers, inst.src[i].reg);
 				}
 			}
+			if (inst.op == IR::Opcode::BvhIntersect) {
+				CollectSequentialRegisters(registers, inst.dst, 4);
+				for (const auto& operand: inst.bvh.ray) {
+					if (operand.kind == IR::OperandKind::Register)
+						CollectRegister(registers, operand.reg);
+				}
+			}
 			if (IsPairDwordOpcode(inst.op)) {
 				CollectSequentialRegisters(registers, inst.dst, 2);
 				const uint32_t first_pair_src = inst.op == IR::Opcode::SelectU64 ? 1u : 0u;

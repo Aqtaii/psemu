@@ -84,3 +84,17 @@ Integration order:
 4. Run the above conformance cases and SPIR-V validation before installing
    a runtime build; then rerun Astro and record the next actual blocker.
 No constant-miss or null-output substitute constitutes intersection support.
+
+### BVH IR integration
+Dedicated BvhIntersect IR now stores four live SGPR descriptor sources and
+11/12 explicit ray operands in one instruction. Destination is a four-VGPR
+result; all inputs must be loaded before masked writes when registers overlap.
+Register collection includes every NSA ray operand and all four output VGPRs;
+the standard EXEC mask registers remain collected. Ordinary image resource
+tracking is bypassed. Existing scalar-source provenance tracks the four SGPRs.
+Production lowering tests cover captured raw decoding, NSA/sequential/wide
+forms, descriptor words, overlap, copying/equality, malformed register ranges
+and failure without partially appended IR. GPU EXEC/write semantics remain
+unverified until intersection emission is implemented.
+Emitter contract explicitly rejects BVH execution until GPU guest-address
+mapping and real intersection emission are available.

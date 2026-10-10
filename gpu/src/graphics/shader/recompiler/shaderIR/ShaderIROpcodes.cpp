@@ -405,6 +405,7 @@ constexpr LowerMap LOWER_OPS[] = {
     {Decoder::Opcode::DsReadAddtidB32, Opcode::DsReadAddtidB32},
     {Decoder::Opcode::ImageGetResinfo, Opcode::ImageGetResinfo},
     {Decoder::Opcode::ImageGetLod, Opcode::ImageGetLod},
+    {Decoder::Opcode::ImageBvhIntersectRay, Opcode::BvhIntersect},
     {Decoder::Opcode::ImageLoad, Opcode::ImageLoad},
     {Decoder::Opcode::ImageLoadMip, Opcode::ImageLoad},
     {Decoder::Opcode::ImageStore, Opcode::ImageStore},

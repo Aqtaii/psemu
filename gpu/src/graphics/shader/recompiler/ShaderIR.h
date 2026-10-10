@@ -345,6 +345,7 @@ enum class Opcode {
 	DsReadAddtidB32,
 	ImageGetResinfo,
 	ImageGetLod,
+	BvhIntersect,
 	ImageLoad,
 	ImageStore,
 	ImageSample,
@@ -464,6 +465,15 @@ struct InputInfo {
 
 enum class SaveexecMode { And, Orn2, Andn1 };
 
+// BVH descriptors are live SGPR values, not host image descriptors. Keeping
+// the ray operands together makes this a single operation even when dst overlaps
+// the input VGPRs. Emission must load all inputs before the four masked writes.
+struct BvhInfo {
+	std::vector<Operand> ray;
+	uint32_t node_dwords = 0;
+	bool operator==(const BvhInfo& other) const = default;
+};
+
 struct Instruction {
 	uint32_t     pc = 0;
 	Opcode       op = Opcode::MoveU32;
@@ -474,6 +484,7 @@ struct Instruction {
 	uint32_t     scalar_sources[4] = {};
 	uint32_t     scalar_value      = 0;
 	MemoryInfo   memory;
+	BvhInfo      bvh;
 	ExportInfo   export_info;
 	InputInfo    input_info;
 	SaveexecMode saveexec_mode = SaveexecMode::And;

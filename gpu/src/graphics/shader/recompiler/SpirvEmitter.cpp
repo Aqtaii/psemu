@@ -125,6 +125,9 @@ uint32_t BufferAddressOperandCount(const IR::Instruction& inst) {
 }
 
 bool ValidateInstructionContract(const IR::Instruction& inst, std::string* error) {
+	if (inst.op == IR::Opcode::BvhIntersect) {
+		return Fail(error, "BVH intersection requires GPU guest-address mapping and intersection emission");
+	}
 	if (inst.src_count > std::size(inst.src)) {
 		return Fail(error, "instruction source count exceeds fixed IR storage");
 	}

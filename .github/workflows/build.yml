@@ -65,6 +65,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_gds_append_decode.ps1
 
+      - name: Test captured Astro BVH IR lowering
+        shell: pwsh
+        run: ./tools/scripts/test_bvh_ir.ps1
+
       - name: Test unsigned 64-bit shader comparison emission
         shell: pwsh
         run: ./tools/scripts/test_u64_compare_emitter.ps1

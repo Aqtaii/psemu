@@ -426,6 +426,48 @@ bool LowerDsWrite2(const Decoder::Instruction& decoded, BasicBlock* block,
 	return true;
 }
 
+bool LowerBvhIntersect(const Decoder::Instruction& decoded, BasicBlock* block,
+                       std::string* error) {
+	auto fail = [&](const char* message) {
+		if (error != nullptr) *error = message;
+		return false;
+	};
+	const auto count = decoded.image_address_components;
+	if (block == nullptr || (count != 11u && count != 12u) ||
+	    !decoded.image_r128 || decoded.dmask != 15u || decoded.data_dwords != 4u ||
+	    (decoded.image_nsa_dwords != 0u && decoded.image_nsa_dwords != 3u) ||
+	    decoded.dst.kind != Decoder::OperandKind::Vgpr || decoded.dst.reg > 252u ||
+	    decoded.src0.kind != Decoder::OperandKind::Vgpr ||
+	    decoded.src1.kind != Decoder::OperandKind::Sgpr || decoded.src1.reg > 102u) {
+		return fail("invalid BVH operand contract");
+	}
+	Instruction inst;
+	inst.pc = decoded.pc;
+	inst.op = Opcode::BvhIntersect;
+	inst.dst.kind = OperandKind::Register;
+	inst.dst.reg = {RegisterFile::Vector, decoded.dst.reg};
+	inst.src_count = 4;
+	for (uint32_t i = 0; i < 4u; ++i) {
+		inst.src[i].kind = OperandKind::Register;
+		inst.src[i].reg = {RegisterFile::Scalar, decoded.src1.reg + i};
+	}
+	inst.bvh.node_dwords = count - 10u;
+	for (uint32_t i = 0; i < count; ++i) {
+		const auto reg = i == 0u ? decoded.src0.reg
+		    : decoded.image_nsa_dwords != 0u ? decoded.image_nsa_addr[i - 1u]
+		                                    : decoded.src0.reg + i;
+		if (reg > 255u) return fail("BVH ray VGPR is out of range");
+		Operand operand;
+		operand.kind = OperandKind::Register;
+		operand.reg = {RegisterFile::Vector, reg};
+		inst.bvh.ray.push_back(operand);
+	}
+	// EXEC is the implicit mask for the vector result, as for other vector ops.
+	inst.memory.data_dwords = 4;
+	block->instructions.push_back(std::move(inst));
+	return true;
+}
+
 bool LowerImageOperation(const Decoder::Instruction& decoded, BasicBlock* block,
                          std::string* error) {
 	Instruction inst;
@@ -474,6 +516,7 @@ bool LowerImageOperation(const Decoder::Instruction& decoded, BasicBlock* block,
 bool LowerMemoryInstruction(const Decoder::Instruction& decoded, BasicBlock* block,
                             std::string* error) {
 	switch (decoded.opcode) {
+		case Decoder::Opcode::ImageBvhIntersectRay: return LowerBvhIntersect(decoded, block, error);
 		case Decoder::Opcode::SLoadDword:
 		case Decoder::Opcode::SLoadDwordx2:
 		case Decoder::Opcode::SLoadDwordx4:
@@ -759,6 +802,7 @@ bool IsMemoryOpcode(Decoder::Opcode opcode) {
 		case Decoder::Opcode::DsWriteAddtidB32:
 		case Decoder::Opcode::DsReadAddtidB32:
 		case Decoder::Opcode::ImageGetResinfo:
+		case Decoder::Opcode::ImageBvhIntersectRay:
 		case Decoder::Opcode::ImageGetLod:
 		case Decoder::Opcode::ImageLoad:
 		case Decoder::Opcode::ImageLoadMip:
