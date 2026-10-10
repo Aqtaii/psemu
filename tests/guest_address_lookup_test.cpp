@@ -2,6 +2,8 @@
 #include "graphics/shader/recompiler/SrtPatcher.h"
 #include "graphics/shader/recompiler/spirvEmitter/scalarMemoryGroup.h"
 #include "graphics/shader/recompiler/spirvEmitter/guestAddressRead.h"
+#include "graphics/shader/recompiler/ResourceTracking.h"
+#include "graphics/shader/recompiler/spirvEmitter/guestScalarAddress.h"
 #include <functional>
 #include <unordered_set>
 #include "graphics/shader/recompiler/BindingLayout.h"
@@ -82,7 +84,7 @@ struct Recorder {
     case 199:v[x[2]]=a(3)&a(4);break;
     case 80:v[x[2]]=v.at(x[3])|(v.at(x[4])<<32);break;
     case 81:v[x[2]]=uint32_t(v.at(x[3])>>(32*x[4]));break;
-    case 128:v[x[2]]=uint32_t(a(3)+a(4));break;
+    case 128:v[x[2]]=x[1]==100006?v.at(x[3])+v.at(x[4]):uint32_t(a(3)+a(4));break;
     case 130:v[x[2]]=uint32_t(a(3)-a(4));break;
     case 132:v[x[2]]=uint32_t(a(3)*a(4));break;
     case 134:v[x[2]]=a(3)/a(4);break;
@@ -96,7 +98,7 @@ struct Recorder {
     case 171:v[x[2]]=a(3)!=a(4);break;
     case 176:v[x[2]]=a(3)<a(4);break;
     case 178:v[x[2]]=a(3)<=a(4);break;
-    case 194:v[x[2]]=a(3)>>a(4);break;
+    case 194:v[x[2]]=x[1]==100006?v.at(x[3])>>a(4):a(3)>>a(4);break;
     default:throw std::runtime_error("unexpected opcode");
    }
   }
@@ -152,6 +154,39 @@ int main() {
   if(inst.op!=IR::Opcode::SLoadDword || inst.scalar_memory_group.valid)
    throw std::runtime_error("group failure partially modified program");
 
+ partial.uses_guest_address_table=true;
+ if(!IR::TrackResources(&partial,&patch_error))throw std::runtime_error(patch_error);
+ if(!partial.uses_guest_address_table || !partial.info.addresses.empty() ||
+    !partial.blocks[0].instructions[1].memory.guest_address_read)
+  throw std::runtime_error("GPU scalar load incorrectly materialized as CPU descriptor");
+ auto rollback=group_plan(false);rollback.uses_guest_address_table=true;
+ if(!IR::PatchSrtReads(&rollback,&patch_error))throw std::runtime_error(patch_error);
+ rollback.blocks[0].instructions[2].memory.typed=true;
+ if(IR::TrackResources(&rollback,&patch_error))throw std::runtime_error("typed scalar fallback accepted");
+ for(auto& inst:rollback.blocks[0].instructions)
+  if(inst.memory.guest_address_read)throw std::runtime_error("tracking failure partially patched");
+ auto legacy=group_plan(false);
+ if(!IR::PatchSrtReads(&legacy,&patch_error))throw std::runtime_error(patch_error);
+ if(IR::TrackResources(&legacy,&patch_error))throw std::runtime_error("disabled fallback accepted unknown address");
+ auto address_check=[](uint64_t base,uint32_t offset,uint32_t component,uint64_t expected) {
+  Recorder address;
+  auto low=address.AllocateId(),high=address.AllocateId(),parameter=address.AllocateId(),
+       addend=address.AllocateId();
+  address.AddFunction({55,100002,parameter});
+  address.AddFunction({81,100000,low,parameter,0});
+  address.AddFunction({81,100000,high,parameter,1});
+  address.AddType({43,100000,addend,component});
+  auto dynamic=address.AllocateId();address.AddType({43,100000,dynamic,offset});
+  auto value=EmitGuestScalarAddress(address,100000,100006,100001,100002,
+                                    low,high,dynamic,addend);
+  address.AddFunction({254,value});
+  if(address.Run(base,4,{})!=expected)throw std::runtime_error("scalar address carry/overflow regression");
+ };
+ address_check(0x123fffffffcull,4,0,0x12400000000ull);
+ address_check(0x12300000000ull,UINT32_MAX,60,0x12400000038ull);
+ address_check(0x123fffffffcull,7,3,0x12400000000ull);
+ address_check(UINT64_MAX-3,8,0,UINT64_MAX-3);
+ address_check(GuestAddressLimit-4,4,0,GuestAddressLimit);
  Libs::Graphics::ShaderRecompiler::IR::Program plan;
  plan.user_data_count=0;plan.shader_info_complete=true;plan.uses_guest_address_table=true;
  Libs::Graphics::ShaderRecompiler::IR::BindingLayoutOptions options;
@@ -262,7 +297,8 @@ int main() {
  const auto z=b.AllocateId(),four=b.AllocateId(),input=b.AllocateId(),call=b.AllocateId();
  b.AddType({43,u,z,0});b.AddType({43,u,four,4});b.AddType({44,pair,input,z,z});
  b.AddFunction({54,vo,main,0,main_type});b.AddFunction({248,label});
- b.AddFunction({57,pair,call,read,input});
+ const auto scalar_address=EmitGuestScalarAddress(b,u,u64,bo,pair,z,z,four,z);
+ b.AddFunction({57,pair,call,read,scalar_address});
  b.AddFunction({253});b.AddFunction({56});
  const auto binary=b.Build();
  auto f=std::fopen("guest_address_lookup.spv","wb");if(!f)return 1;

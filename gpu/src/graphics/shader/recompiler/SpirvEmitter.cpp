@@ -303,7 +303,11 @@ bool ValidateNativeProgram(const IR::Program& program, std::string* error) {
 			const bool address =
 			    inst.op == IR::Opcode::SLoadDword || memory == IR::ResourceKind::Flat ||
 			    memory == IR::ResourceKind::Global || memory == IR::ResourceKind::Scratch;
-			if (address && (inst.memory.resource >= program.info.addresses.size() ||
+			if(inst.memory.guest_address_read && (!program.uses_guest_address_table ||
+			   inst.op!=IR::Opcode::SLoadDword || !inst.scalar_memory_group.valid)) {
+				return Fail(error,"invalid GPU scalar address read topology");
+			}
+			if (address && !inst.memory.guest_address_read && (inst.memory.resource >= program.info.addresses.size() ||
 			                program.info.addresses[inst.memory.resource].kind != memory)) {
 				return Fail(error, "address instruction has an invalid dense resource");
 			}

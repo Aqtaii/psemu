@@ -123,7 +123,7 @@ bool PatchSrtReads(Program* program, std::string* error) {
 	for (auto& block: program->blocks) {
 		for (size_t index = 0; index < block.instructions.size();) {
 			auto& first = block.instructions[index];
-			if (first.op != Opcode::SLoadDword || first.memory.component_count <= 1) {
+			if (first.op != Opcode::SLoadDword || first.memory.component_count == 0) {
 				++index;
 				continue;
 			}

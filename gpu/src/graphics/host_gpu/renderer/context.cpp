@@ -437,6 +437,7 @@ void CommandBuffer::WaitForFenceOnly() {
 	}
 	EXIT_NOT_IMPLEMENTED(result != vk::Result::eSuccess);
 	m_fence_waited = true;
+	m_fence_actions.Complete();
 }
 
 void CommandBuffer::WaitForFenceAndReset() {
@@ -447,8 +448,6 @@ void CommandBuffer::FinalizeFence(bool reset_recording) {
 	const bool was_executed = m_execute;
 	WaitForFenceOnly();
 	if (was_executed) {
-		// Read dedicated diagnostic backing before any stream reset/resource release.
-		m_fence_actions.Complete();
 		m_execute      = false;
 		m_fence_waited = false;
 		if (reset_recording) {

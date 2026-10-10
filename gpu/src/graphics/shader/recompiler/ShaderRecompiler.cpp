@@ -758,6 +758,8 @@ bool TryRecompile(std::span<const uint32_t> code, const CompileOptions& options,
 		ir.fallback_reason = dispatcher_reason;
 	}
 
+	ir.uses_guest_address_table = options.allow_guest_scalar_reads &&
+	                              options.stage == ShaderType::Compute;
 	if (!IR::PatchSrtReads(&ir, error) || !IR::TrackResources(&ir, error)) {
 		// Preserve the failing program before returning: successful-program dumps
 		// cannot explain unknown descriptor provenance at this phase.

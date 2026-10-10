@@ -1,3 +1,4 @@
+#include "graphics/shader/recompiler/spirvEmitter/guestScalarAddress.h"
 #include "graphics/shader/recompiler/spirvEmitter/spirvEmitterInternal.h"
 
 namespace Libs::Graphics::ShaderRecompiler::Spirv::Emitter {
@@ -1164,6 +1165,27 @@ void EmitAtomicU32(EmitterState* state, const IR::Instruction& inst, uint32_t op
 }
 
 void EmitSLoadDword(EmitterState* state, const IR::Instruction& inst) {
+ if(inst.memory.guest_address_read) {
+  const auto found=state->guest_scalar_group_values.find(inst.pc);
+  EXIT_IF(found==state->guest_scalar_group_values.end() || !state->guest_address_read_function);
+  const auto& values=found->second;
+  auto address=EmitGuestScalarAddress(state->builder,state->uint_type,state->guest_uint64_type,
+   state->bool_type,state->vec2_uint_type,values[0],values[1],values[2],
+   ConstantU32(state,inst.memory.offset));
+  auto result=state->builder.AllocateId(),value=state->builder.AllocateId(),
+       status=state->builder.AllocateId(),success=state->builder.AllocateId(),
+       selected=state->builder.AllocateId();
+  state->builder.AddFunction({57,state->vec2_uint_type,result,
+                              state->guest_address_read_function,address});
+  state->builder.AddFunction({OpCompositeExtract,state->uint_type,value,result,0});
+  state->builder.AddFunction({OpCompositeExtract,state->uint_type,status,result,1});
+  state->builder.AddFunction({OpIEqual,state->bool_type,success,status,ConstantU32(state,0)});
+  auto old=EmitValueLoad(state,inst.dst);
+  state->builder.AddFunction({OpSelect,state->uint_type,selected,success,value,old});
+  EmitStoreU32(state,inst.dst,selected);
+  return;
+ }
+
 	if (state->address_memory_variable == 0) {
 		ExitDescriptorBindingFailure(*state, IR::DescriptorBindingKind::AddressMemory,
 		                             inst.memory.resource,

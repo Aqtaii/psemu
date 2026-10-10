@@ -23,6 +23,7 @@ struct CompileOptions {
 	std::optional<uint64_t>       flat_memory_base;
 	uint32_t                      descriptor_set       = 0;
 	uint32_t                      push_constant_offset = 0;
+	bool                          allow_guest_scalar_reads = false;
 	bool                          dump_ir              = true;
 	bool                          early_dump           = false;
 	const char*                   dump_label           = nullptr;

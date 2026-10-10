@@ -179,6 +179,8 @@ public:
 			}
 		}
 		LinkImageAliases();
+		for(auto* inst:m_guest_reads) inst->memory.guest_address_read=true;
+		m_program.uses_guest_address_table=!m_guest_reads.empty();
 		m_program.info = std::move(m_info);
 		for (const auto& patch: m_patches) {
 			patch.inst->memory.resource        = patch.resource;
@@ -401,6 +403,18 @@ private:
 	}
 
 	bool Collect(Instruction* inst, std::string* error) {
+        if(m_program.uses_guest_address_table && inst->op==Opcode::SLoadDword) {
+         const auto& group=inst->scalar_memory_group;
+         if(!group.valid || group.base_sgpr>=127 || group.component_count==0 ||
+            group.component_count>16 || group.component_index>=group.component_count ||
+            inst->memory.kind!=ResourceKind::ScalarBuffer || inst->src_count!=1 ||
+            inst->memory.data_bits!=32 || inst->memory.data_dwords!=1 ||
+            inst->memory.typed || inst->memory.formatted) {
+          return Fail(inst->pc,error,"unsupported GPU scalar address read contract");
+         }
+         m_guest_reads.push_back(inst);
+         return true;
+        }
 		if (IsAddress(*inst)) {
 			const bool unbased = inst->memory.resource_source == ScalarProvenance::Unknown;
 			if ((!unbased && !ValidateSource(inst->memory.resource_source, 2, inst->pc, error)) ||
@@ -450,6 +464,7 @@ private:
 	Program&           m_program;
 	ShaderInfo         m_info;
 	std::vector<Patch> m_patches;
+	std::vector<Instruction*> m_guest_reads;
 };
 
 } // namespace
