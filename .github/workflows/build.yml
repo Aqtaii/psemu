@@ -57,6 +57,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_native_char_table.ps1
 
+      - name: Test secure SysV resource name formatting
+        shell: pwsh
+        run: ./tools/scripts/test_secure_format.ps1
+
       - name: Test host allocation ownership
         shell: pwsh
         run: ./tools/scripts/test_allocation_ownership.ps1

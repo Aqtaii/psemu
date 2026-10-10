@@ -223,6 +223,23 @@ static std::string FormatSysVPrintf(const char* fmt, uint8_t* va) {
     return out;
 }
 
+// Checked, bounded SysV vsprintf_s output. Resource names must not remain empty.
+static int GuestVsprintfSecure(char* buffer, size_t capacity, const char* format, uint8_t* args) {
+    if (buffer == nullptr || capacity == 0) return -1;
+    if (!SafeReadable(format, 1) || !SafeReadable(args, 24)) {
+        if (SafeWritable(buffer, 1)) buffer[0] = 0;
+        return -1;
+    }
+    const std::string text = FormatSysVPrintf(format, args);
+    if (text.size() >= capacity || text.size() > 0x7fffffffULL) {
+        if (SafeWritable(buffer, 1)) buffer[0] = 0;
+        return -1;
+    }
+    if (!SafeWritable(buffer, text.size() + 1)) return -1;
+    memcpy(buffer, text.c_str(), text.size() + 1);
+    return static_cast<int>(text.size());
+}
+
 // printf/fprintf gibi DOGRUDAN degisken argumanli (va_list almayan)
 // fonksiyonlar icin CONTEXT register'larindan SysV va_list sentezler.
 // named_gp = degisken olmayan GP arguman sayisi (printf=1 [fmt], fprintf=2).
@@ -6729,7 +6746,20 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             // Oyun kendi log mesajlarini bu fonksiyonlarla uretiyor. Eskiden
             // RAX=0 donup mesaji YUTUYORDUK; artik gercekten formatlayip
             // [GAME-LOG] olarak gosteriyoruz - oyun bize ne yaptigini soyler.
-            else if (readable_name == "vsnprintf") {
+            else if (readable_name == "vsprintf_s") {
+                // (buffer, capacity, format, SysV va_list): RDI, RSI, RDX, RCX.
+                const int result = GuestVsprintfSecure(reinterpret_cast<char*>(ctx->Rdi),
+                    static_cast<size_t>(ctx->Rsi), reinterpret_cast<const char*>(ctx->Rdx),
+                    reinterpret_cast<uint8_t*>(ctx->Rcx));
+                ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(result));
+                special_return_set = true;
+                static std::atomic<unsigned> samples{0};
+                if (samples.fetch_add(1, std::memory_order_relaxed) < 8) {
+                    LOG_INFO("[VSPRINTF-S] result=" + std::to_string(result) + " text=" +
+                        SafeReadCString(reinterpret_cast<const char*>(ctx->Rdi),
+                                        result >= 0 ? static_cast<size_t>(result) : 0));
+                }
+            } else if (readable_name == "vsnprintf") {
                 // vsnprintf(buf, size, fmt, va): RDI=buf, RSI=size, RDX=fmt, RCX=va
                 char* buf = reinterpret_cast<char*>(ctx->Rdi);
                 size_t size = static_cast<size_t>(ctx->Rsi);
