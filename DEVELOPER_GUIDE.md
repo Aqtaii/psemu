@@ -10,20 +10,20 @@ To prevent root directory clutter, maintain the following directory layout at al
 
 ```
 psemu/
-â”œâ”€â”€ src/                    # Core emulator source (CPU, kernel, SysV ABI, HLE hooks, loader)
-â”œâ”€â”€ gpu/                    # GPU subsystem (Vulkan host renderer, PM4 guest command processor, SPIR-V/Shaders)
-â”œâ”€â”€ include/                # Global headers and system-wide definitions
-â”œâ”€â”€ tools/                  # Workspace utility files (ORGANIZED)
-â”‚   â”œâ”€â”€ scripts/            # Python helper scripts (disasm, NID verification, brute force)
-â”‚   â”œâ”€â”€ dumps/              # Memory/register binary dumps (.bin)
-â”‚   â””â”€â”€ data/               # Reference text databases (NID tables, disassembly dumps)
-â”œâ”€â”€ PPSA02929-app0/         # Sample PS5 game app directory
-â”œâ”€â”€ _Shaders/               # Compiled Vulkan shader cache
-â”œâ”€â”€ CMakeLists.txt          # Root CMake build specification
-â”œâ”€â”€ cmbuild.bat             # Fast build script (ninja + MSVC x64)
-â”œâ”€â”€ run.bat                 # Game boot execution script
-â”œâ”€â”€ HANDOFF.md              # Previous task handoff notes
-â””â”€â”€ DEVELOPER_GUIDE.md      # This guide
+├── src/                    # Core emulator source (CPU, kernel, SysV ABI, HLE hooks, loader)
+├── gpu/                    # GPU subsystem (Vulkan host renderer, PM4 guest command processor, SPIR-V/Shaders)
+├── include/                # Global headers and system-wide definitions
+├── tools/                  # Workspace utility files (ORGANIZED)
+│   ├── scripts/            # Python helper scripts (disasm, NID verification, brute force)
+│   ├── dumps/              # Memory/register binary dumps (.bin)
+│   └── data/               # Reference text databases (NID tables, disassembly dumps)
+├── PPSA02929-app0/         # Sample PS5 game app directory
+├── _Shaders/               # Compiled Vulkan shader cache
+├── CMakeLists.txt          # Root CMake build specification
+├── cmbuild.bat             # Fast build script (ninja + MSVC x64)
+├── run.bat                 # Game boot execution script
+├── HANDOFF.md              # Previous task handoff notes
+└── DEVELOPER_GUIDE.md      # This guide
 ```
 
 ### Folder Rules for AI Assistants:
