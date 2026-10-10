@@ -158,6 +158,10 @@ jobs:
           }
           "VULKAN_SDK=$sdk" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      - name: Test GPU guest address lookup SPIR-V
+        shell: pwsh
+        run: ./tools/scripts/test_guest_address_lookup.ps1
+
       - name: Build complete emulator
         shell: cmd
         run: call cmbuild.bat
