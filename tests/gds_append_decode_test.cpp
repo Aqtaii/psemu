@@ -1,10 +1,18 @@
 #include "graphics/shader/recompiler/MemoryOps.h"
+#include "graphics/shader/recompiler/VectorAluOps.h"
 #include <array>
 #include <cstdio>
 #include <stdexcept>
 using namespace Libs::Graphics::ShaderRecompiler::Decoder;
 static void Check(bool ok) {if(!ok) throw std::runtime_error("GDS decoder regression");}
 int main() {
+ // Actual Astro Bot instruction; preserve scalar register-pair sources and VCC destination.
+ const std::array<uint32_t,2> astro{0xd4e4006a,0x0001006a};
+ Instruction compare;std::string compare_error;
+ Check(DecodeVop3(0x784,astro,0,&compare,&compare_error));
+ Check(compare.opcode==Opcode::VCmpGtU64 && compare.src_count==2);
+ Check(compare.dst.kind==OperandKind::VccLo && compare.src0.kind==OperandKind::VccLo);
+
  for(uint32_t opcode: {0x3du,0x3eu}) {
   for(uint32_t offset: {0u,4u,8u,0xffu,0x100u,0xc68u,0xffffu}) {
    const std::array<uint32_t,2> code{0xd8000000u|(opcode<<18u)|(1u<<17u)|offset,0};

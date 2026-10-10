@@ -10,20 +10,20 @@ To prevent root directory clutter, maintain the following directory layout at al
 
 ```
 psemu/
-├── src/                    # Core emulator source (CPU, kernel, SysV ABI, HLE hooks, loader)
-├── gpu/                    # GPU subsystem (Vulkan host renderer, PM4 guest command processor, SPIR-V/Shaders)
-├── include/                # Global headers and system-wide definitions
-├── tools/                  # Workspace utility files (ORGANIZED)
-│   ├── scripts/            # Python helper scripts (disasm, NID verification, brute force)
-│   ├── dumps/              # Memory/register binary dumps (.bin)
-│   └── data/               # Reference text databases (NID tables, disassembly dumps)
-├── PPSA02929-app0/         # Sample PS5 game app directory
-├── _Shaders/               # Compiled Vulkan shader cache
-├── CMakeLists.txt          # Root CMake build specification
-├── cmbuild.bat             # Fast build script (ninja + MSVC x64)
-├── run.bat                 # Game boot execution script
-├── HANDOFF.md              # Previous task handoff notes
-└── DEVELOPER_GUIDE.md      # This guide
+â”œâ”€â”€ src/                    # Core emulator source (CPU, kernel, SysV ABI, HLE hooks, loader)
+â”œâ”€â”€ gpu/                    # GPU subsystem (Vulkan host renderer, PM4 guest command processor, SPIR-V/Shaders)
+â”œâ”€â”€ include/                # Global headers and system-wide definitions
+â”œâ”€â”€ tools/                  # Workspace utility files (ORGANIZED)
+â”‚   â”œâ”€â”€ scripts/            # Python helper scripts (disasm, NID verification, brute force)
+â”‚   â”œâ”€â”€ dumps/              # Memory/register binary dumps (.bin)
+â”‚   â””â”€â”€ data/               # Reference text databases (NID tables, disassembly dumps)
+â”œâ”€â”€ PPSA02929-app0/         # Sample PS5 game app directory
+â”œâ”€â”€ _Shaders/               # Compiled Vulkan shader cache
+â”œâ”€â”€ CMakeLists.txt          # Root CMake build specification
+â”œâ”€â”€ cmbuild.bat             # Fast build script (ninja + MSVC x64)
+â”œâ”€â”€ run.bat                 # Game boot execution script
+â”œâ”€â”€ HANDOFF.md              # Previous task handoff notes
+â””â”€â”€ DEVELOPER_GUIDE.md      # This guide
 ```
 
 ### Folder Rules for AI Assistants:
@@ -85,3 +85,9 @@ Required: Windows x64, Visual Studio C++ tools, clang-cl, CMake, Ninja, and a Vu
 Visual Studio is discovered through vswhere. For a custom installation, set PSEMU_VCVARS64 to the full path of vcvars64.bat, or run from an x64 Developer Command Prompt. Additional build arguments are forwarded to cmake --build; for example: cmbuild.bat --verbose.
 
 The core source list is explicit in CMakeLists.txt; add new src/*.cpp files there. Core optimization remains disabled because the existing low-level runtime depends on it.
+
+## KytyPS5 reference workflow
+
+For Astro Bot and subsequent compatibility fixes, inspect https://github.com/KytyPS5/KytyPS5 before introducing an emulator workaround. Compare decoder, IR translation, SPIR-V emitter, PM4 handling, HLE ABI and upstream regression tests. Local checkout: D:/proje/psemu-codex/work/kytyps5-reference; include src/graphics, src/kernel, src/libs, src/loader, tests and docs in its sparse checkout.
+
+Record the upstream commit and exact source/test paths in docs/kytyps5-reference.md. Adapt to psemu's ownership, command recording and guest ABI contracts. Preserve copyright notices and applicable licenses for directly imported source. Add a regression based on captured guest instructions/commands and upstream edge cases. Build and test the integrated emulator before claiming runtime progress. Store downloads, extracted builds and diagnostics on D:.
