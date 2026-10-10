@@ -442,11 +442,8 @@ bool DecodeDs(uint32_t pc, std::span<const uint32_t> code, uint32_t word_index, 
 	     inst->opcode == Opcode::DsReadAddtidB32)) {
 		SetUnsupported(inst, Family::DS, opcode, "DS swizzle/addtid is available only for LDS");
 	}
-	if (inst->gds && (inst->opcode == Opcode::DsAppend || inst->opcode == Opcode::DsConsume) &&
-	    inst->offset != 0u) {
-		SetUnsupported(inst, Family::DS, opcode,
-		               "GDS append/consume requires a zero instruction offset");
-	}
+	// DS_APPEND/CONSUME address the counter at M0.base + the encoded byte offset.
+	// The IR and SPIR-V emitter preserve that offset; it is valid for GDS too.
 	if (inst->opcode == Opcode::DsWriteAddtidB32 && data1 != 0u) {
 		SetUnsupported(inst, Family::DS, opcode,
 		               "DS write addtid data1 operand is not implemented");

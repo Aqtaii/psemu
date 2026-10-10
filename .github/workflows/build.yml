@@ -61,6 +61,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_dma_bytes.ps1
 
+      - name: Test encoded GDS append and consume offsets
+        shell: pwsh
+        run: ./tools/scripts/test_gds_append_decode.ps1
+
       - name: Test R32Float depth storage readback
         shell: pwsh
         run: ./tools/scripts/test_depth_storage.ps1
