@@ -1,3 +1,4 @@
+#include "graphics/shader/recompiler/spirvEmitter/guestScalarBufferRead.h"
 #include "graphics/shader/recompiler/spirvEmitter/guestAddressFault.h"
 #include "graphics/shader/recompiler/SrtPatcher.h"
 #include "graphics/shader/recompiler/spirvEmitter/scalarMemoryGroup.h"
@@ -109,6 +110,7 @@ struct Recorder {
 #include "guest_bvh_semantic_test.h"
 int main() {
  TestGuestBvhSemantics();
+ TestGuestScalarBufferSemantics();
  namespace IR=Libs::Graphics::ShaderRecompiler::IR;
  auto group_plan=[](bool all_static) {
   IR::Program p;p.srt_plan_complete=true;p.blocks.resize(1);
@@ -168,6 +170,20 @@ int main() {
  if(IR::TrackResources(&rollback,&patch_error))throw std::runtime_error("typed scalar fallback accepted");
  for(auto& inst:rollback.blocks[0].instructions)
   if(inst.memory.guest_address_read)throw std::runtime_error("tracking failure partially patched");
+ auto sb=group_plan(false);sb.blocks[0].instructions.resize(1);sb.srt.reads.clear();
+ sb.blocks[0].instructions[0].op=IR::Opcode::SBufferLoadDword;
+ sb.blocks[0].instructions[0].memory.component_count=1;
+ sb.blocks[0].instructions[0].memory.resource=2;
+ sb.blocks[0].instructions[0].memory.resource_source=IR::ScalarProvenance::Unknown;
+ sb.uses_guest_address_table=true;
+ if(!IR::PatchSrtReads(&sb,&patch_error) || !IR::TrackResources(&sb,&patch_error) ||
+    !sb.blocks[0].instructions[0].memory.guest_buffer_read || !sb.info.buffers.empty())
+  throw std::runtime_error("runtime scalar buffer was not kept on GPU");
+ auto wide_sb=group_plan(false);wide_sb.srt.reads.clear();
+ for(auto& inst:wide_sb.blocks[0].instructions)inst.op=IR::Opcode::SBufferLoadDword;
+ wide_sb.uses_guest_address_table=true;
+ if(!IR::PatchSrtReads(&wide_sb,&patch_error) || IR::TrackResources(&wide_sb,&patch_error))
+  throw std::runtime_error("unsupported wide scalar descriptor fallback accepted");
  auto legacy=group_plan(false);
  if(!IR::PatchSrtReads(&legacy,&patch_error))throw std::runtime_error(patch_error);
  if(IR::TrackResources(&legacy,&patch_error))throw std::runtime_error("disabled fallback accepted unknown address");
@@ -302,6 +318,7 @@ int main() {
  b.AddType({22,float_type,32});b.AddType({23,vec2f,float_type,2});
  b.AddType({23,vec3f,float_type,3});b.AddType({23,vec4u,u,4});
  b.AddExtInstImport(glsl,"GLSL.std.450");
+ const auto scalar_buffer=DefineGuestScalarBufferRead(b,u,u64,bo,pair,vec4u,read);
  const auto bvh=Bvh::Define(b,u,float_type,bo,u64,pair,vec4u,vec2f,vec3f,
                             physical_ptr,glsl,lookup,report_fn);
  const auto z=b.AllocateId(),four=b.AllocateId(),input=b.AllocateId(),call=b.AllocateId();
@@ -314,6 +331,7 @@ int main() {
  b.AddType({44,vec4u,descriptor,z,z,z,z});b.AddType({43,u64,node,0,0});
  b.AddType({43,float_type,extent,0});b.AddType({44,vec3f,origin,extent,extent,extent});
  b.AddFunction({57,vec4u,bvh_call,bvh,descriptor,node,extent,origin,origin,origin});
+ auto sbcall=b.AllocateId();b.AddFunction({57,pair,sbcall,scalar_buffer,descriptor,z,z});
  b.AddFunction({253});b.AddFunction({56});
  const auto binary=b.Build();
  auto f=std::fopen("guest_address_lookup.spv","wb");if(!f)return 1;

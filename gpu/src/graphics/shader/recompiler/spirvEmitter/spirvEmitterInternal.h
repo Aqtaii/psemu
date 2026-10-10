@@ -317,6 +317,7 @@ struct EmitterState {
 	uint32_t                               guest_address_read_function    = 0;
 	uint32_t                               guest_address_fault_variable   = 0;
 	uint32_t                               guest_bvh_function             = 0;
+	uint32_t                               guest_scalar_buffer_function   = 0;
 	uint32_t                               uint_pair_type                 = 0;
 	uint32_t                               int_pair_type                  = 0;
 	uint32_t                               int_type                       = 0;
@@ -973,6 +974,7 @@ void EmitDeviceAtomicMemoryBarrier(EmitterState* state);
 
 void EmitAtomicU32(EmitterState* state, const IR::Instruction& inst, uint32_t opcode);
 
+void EmitGuestScalarBufferRead(EmitterState* state, const IR::Instruction& inst);
 void EmitBvhIntersect(EmitterState* state, const IR::Instruction& inst);
 void EmitSLoadDword(EmitterState* state, const IR::Instruction& inst);
 

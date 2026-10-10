@@ -1164,6 +1164,29 @@ void EmitAtomicU32(EmitterState* state, const IR::Instruction& inst, uint32_t op
 	EmitStoreU32(state, inst.dst, old);
 }
 
+void EmitGuestScalarBufferRead(EmitterState* s,const IR::Instruction& inst) {
+ EXIT_IF(!s->guest_scalar_buffer_function);
+ std::array<uint32_t,4> words;
+ for(unsigned i=0;i<4;++i) {
+  IR::Operand source;source.kind=IR::OperandKind::Register;
+  source.reg={IR::RegisterFile::Scalar,inst.memory.resource*4u+i};
+  words[i]=EmitValueLoad(s,source);
+ }
+ auto desc=s->builder.AllocateId();
+ s->builder.AddFunction({OpCompositeConstruct,s->vec4_uint_type,desc,words[0],words[1],words[2],words[3]});
+ auto offset=EmitValueLoad(s,inst.src[0]),result=s->builder.AllocateId(),
+      value=s->builder.AllocateId(),status=s->builder.AllocateId(),
+      success=s->builder.AllocateId(),selected=s->builder.AllocateId();
+ s->builder.AddFunction({57,s->vec2_uint_type,result,s->guest_scalar_buffer_function,
+                         desc,offset,ConstantU32(s,inst.memory.offset)});
+ s->builder.AddFunction({OpCompositeExtract,s->uint_type,value,result,0});
+ s->builder.AddFunction({OpCompositeExtract,s->uint_type,status,result,1});
+ s->builder.AddFunction({OpIEqual,s->bool_type,success,status,ConstantU32(s,0)});
+ auto old=EmitValueLoad(s,inst.dst);
+ s->builder.AddFunction({OpSelect,s->uint_type,selected,success,value,old});
+ EmitStoreU32(s,inst.dst,selected);
+}
+
 void EmitSLoadDword(EmitterState* state, const IR::Instruction& inst) {
  if(inst.memory.guest_address_read) {
   const auto found=state->guest_scalar_group_values.find(inst.pc);

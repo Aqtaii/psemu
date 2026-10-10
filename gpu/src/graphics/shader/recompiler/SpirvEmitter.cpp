@@ -294,7 +294,7 @@ bool ValidateNativeProgram(const IR::Program& program, std::string* error) {
 			const auto memory = inst.memory.kind;
 			if ((memory == IR::ResourceKind::Buffer || (memory == IR::ResourceKind::ScalarBuffer &&
 			                                            inst.op == IR::Opcode::SBufferLoadDword)) &&
-			    inst.memory.resource >= program.info.buffers.size()) {
+			    !inst.memory.guest_buffer_read && inst.memory.resource >= program.info.buffers.size()) {
 				return Fail(error, "buffer instruction has an invalid dense resource");
 			}
 			if ((memory == IR::ResourceKind::Image || memory == IR::ResourceKind::ImageUint ||
@@ -309,6 +309,9 @@ bool ValidateNativeProgram(const IR::Program& program, std::string* error) {
 			const bool address =
 			    inst.op == IR::Opcode::SLoadDword || memory == IR::ResourceKind::Flat ||
 			    memory == IR::ResourceKind::Global || memory == IR::ResourceKind::Scratch;
+			if(inst.memory.guest_buffer_read && (!program.uses_guest_address_table ||
+			 inst.op!=IR::Opcode::SBufferLoadDword || inst.memory.component_count!=1))
+			 return Fail(error,"invalid scalar buffer runtime read topology");
 			if(inst.memory.guest_address_read && (!program.uses_guest_address_table ||
 			   inst.op!=IR::Opcode::SLoadDword || !inst.scalar_memory_group.valid)) {
 				return Fail(error,"invalid GPU scalar address read topology");

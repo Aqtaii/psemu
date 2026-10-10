@@ -23,7 +23,8 @@ struct BvhRecorder {
  }
  V Run(const std::array<V,6>& args,std::unordered_map<uint64_t,uint32_t>& memory,
        const std::function<uint64_t(uint64_t,uint32_t)>& lookup,size_t& reads,
-       std::vector<std::pair<uint64_t,uint32_t>>& faults) {
+       std::vector<std::pair<uint64_t,uint32_t>>& faults,
+       std::function<V(uint64_t)> checked_read={}) {
   std::unordered_map<uint32_t,V> v;
   std::unordered_map<uint32_t,size_t> labels;
   for(auto& x:types) {
@@ -56,6 +57,9 @@ struct BvhRecorder {
       auto device=lookup(guest,uint32_t(a(5)));v[x[2]]={uint32_t(device),device>>32,0,0};
      } else if(x[3]==100011) {
       auto p=v.at(x[4]);faults.emplace_back(p[0]|(p[1]<<32),uint32_t(a(5)));set(a(5));
+      } else if(x[3]==100012) {
+      if(!checked_read)throw std::runtime_error("missing scalar checked read");
+      auto p=v.at(x[4]);v[x[2]]=checked_read(p[0]|(p[1]<<32));
      } else throw std::runtime_error("unexpected BVH external function");break;
     case 12:{auto op=x[4];auto fa=Float(a(5));
       if(op==4)set(Bits(std::fabs(fa)));
@@ -72,7 +76,7 @@ struct BvhRecorder {
     case 61:if(x.size()!=6 || x[4]!=2 || x[5]!=4)throw std::runtime_error("unaligned BVH read");
       set(memory.at(a(3)));++reads;break;
     case 128:set(x[1]==100003?a(3)+a(4):uint32_t(a(3)+a(4)));break;
-    case 132:set(uint32_t(a(3)*a(4)));break;
+    case 132:set(x[1]==100003?a(3)*a(4):uint32_t(a(3)*a(4)));break;
     case 127:set(Bits(-f(3)));break;
     case 129:set(Bits(f(3)+f(4)));break;
     case 131:set(Bits(f(3)-f(4)));break;
@@ -173,4 +177,35 @@ inline void TestGuestBvhSemantics() {
  auto halves=code.Run(args,memory,lookup,reads,faults);
  if(halves!=V{10,11,12,13})throw std::runtime_error("half boxes mismatch");
  std::puts("PASS: production BVH triangle hit/miss, invalid and NaN rays, full/half boxes, sorting, discontiguous backing and missing blocks");
+}
+
+inline void TestGuestScalarBufferSemantics() {
+ BvhRecorder code;
+ DefineGuestScalarBufferRead(code,100000,100003,100002,100004,100005,100012);
+ using V=BvhRecorder::V;
+ std::array<V,6> args{};
+ const uint64_t base=0x26500000000ull;
+ args[0]={uint32_t(base)|3,uint32_t(base>>32),8,0};
+ args[1][0]=7; // Offset aligns independently to 4.
+ size_t reads=0;std::vector<std::pair<uint64_t,uint32_t>> faults;
+ std::unordered_map<uint64_t,uint32_t> memory;
+ auto lookup=[](uint64_t,uint32_t){return uint64_t{0};};
+ uint64_t requested=0;unsigned calls=0;
+ auto checked=[&](uint64_t guest) -> V {requested=guest;++calls;return {0xabcdef12,0,0,0};};
+ if(code.Run(args,memory,lookup,reads,faults,checked)!=V{0xabcdef12,0,0,0} ||
+    calls!=1 || requested!=base+4)throw std::runtime_error("scalar buffer aligned read mismatch");
+ args[1][0]=8;
+ if(code.Run(args,memory,lookup,reads,faults,checked)!=V{} || calls!=1)
+  throw std::runtime_error("scalar buffer OOB touched backing");
+ args[0][1]|=16ull<<16;args[0][2]=UINT32_MAX;args[1][0]=UINT32_MAX;args[2][0]=60;
+ code.Run(args,memory,lookup,reads,faults,checked);
+ if(requested!=base+uint64_t(UINT32_MAX&~3u)+60)
+  throw std::runtime_error("scalar buffer large stride bounds or offset carry failed");
+ auto missing=[&](uint64_t guest)->V {requested=guest;return {0,1,0,0};};
+ if(code.Run(args,memory,lookup,reads,faults,missing)!=V{0,1,0,0})
+  throw std::runtime_error("scalar buffer missing backing became architectural OOB");
+ args[0][2]=0;
+ if(code.Run(args,memory,lookup,reads,faults,checked)!=V{})
+  throw std::runtime_error("empty scalar buffer was not OOB");
+ std::puts("PASS: indirect scalar buffer alignment, OOB, widened stride bounds, offset carry and explicit read status");
 }

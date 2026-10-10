@@ -1,3 +1,4 @@
+#include "graphics/shader/recompiler/spirvEmitter/guestScalarBufferRead.h"
 #include "graphics/shader/recompiler/spirvEmitter/guestBvhIntersect.h"
 #include "graphics/shader/recompiler/spirvEmitter/guestAddressFault.h"
 #include "graphics/shader/recompiler/spirvEmitter/guestAddressRead.h"
@@ -762,6 +763,9 @@ void EmitHeaderAndTypes(EmitterState* state) {
 		    state->builder, state->uint_type, state->guest_uint64_type, state->bool_type,
 		    state->vec2_uint_type, state->guest_physical_uint_ptr,
 		    state->guest_address_lookup_function, fault_fn);
+		state->guest_scalar_buffer_function=DefineGuestScalarBufferRead(state->builder,
+		 state->uint_type,state->guest_uint64_type,state->bool_type,state->vec2_uint_type,
+		 state->vec4_uint_type,state->guest_address_read_function);
         if(std::ranges::any_of(state->program->blocks,[](const auto& block) {
          return std::ranges::any_of(block.instructions,[](const auto& inst) {
           return inst.op==IR::Opcode::BvhIntersect;

@@ -734,6 +734,7 @@ void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
 		case IR::Opcode::BvhIntersect: EmitBvhIntersect(state,inst); break;
 		case IR::Opcode::SLoadDword: EmitSLoadDword(state, inst); break;
 		case IR::Opcode::SBufferLoadDword:
+			if(inst.memory.guest_buffer_read) {EmitGuestScalarBufferRead(state,inst);break;}
 			EmitMemoryLoadU32(state, inst, IR::ResourceKind::ScalarBuffer, 0, 1);
 			break;
 		case IR::Opcode::LoadSrtDword: EmitLoadSrtDword(state, inst); break;

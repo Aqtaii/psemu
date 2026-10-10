@@ -180,7 +180,8 @@ public:
 		}
 		LinkImageAliases();
 		for(auto* inst:m_guest_reads) inst->memory.guest_address_read=true;
-		m_program.uses_guest_address_table=!m_guest_reads.empty() ||
+		for(auto* inst:m_guest_buffers) inst->memory.guest_buffer_read=true;
+		m_program.uses_guest_address_table=!m_guest_reads.empty() || !m_guest_buffers.empty() ||
 		 (m_program.uses_guest_address_table && std::ranges::any_of(m_program.blocks,[](const auto& block) {
 		  return std::ranges::any_of(block.instructions,[](const auto& inst){return inst.op==Opcode::BvhIntersect;});
 		 }));
@@ -436,10 +437,20 @@ private:
 		if (!IsBuffer(*inst) && !IsImage(*inst)) {
 			return true;
 		}
-		if (!ValidateSource(inst->memory.resource_source, IsBuffer(*inst) ? 4u : 8u, inst->pc,
-		                    error)) {
-			return false;
-		}
+        std::string descriptor_error;
+        if (!ValidateSource(inst->memory.resource_source, IsBuffer(*inst) ? 4u : 8u,
+                            inst->pc,&descriptor_error)) {
+         if(m_program.uses_guest_address_table && inst->op==Opcode::SBufferLoadDword &&
+            inst->memory.kind==ResourceKind::ScalarBuffer && inst->src_count==1 &&
+            inst->memory.component_count==1 && inst->memory.component_index==0 &&
+            inst->memory.resource<26 && inst->memory.data_bits==32 &&
+            inst->memory.data_dwords==1 && !inst->memory.typed && !inst->memory.formatted &&
+            !inst->memory.glc && !inst->memory.slc) {
+          m_guest_buffers.push_back(inst);return true;
+         }
+         if(error) *error=std::move(descriptor_error);
+         return false;
+        }
 		Patch patch;
 		patch.inst     = inst;
 		patch.resource = IsBuffer(*inst) ? AddBuffer(*inst) : AddImage(*inst);
@@ -468,6 +479,7 @@ private:
 	ShaderInfo         m_info;
 	std::vector<Patch> m_patches;
 	std::vector<Instruction*> m_guest_reads;
+	std::vector<Instruction*> m_guest_buffers;
 };
 
 } // namespace

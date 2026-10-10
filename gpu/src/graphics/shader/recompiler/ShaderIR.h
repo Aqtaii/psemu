@@ -432,6 +432,7 @@ struct MemoryInfo {
 	uint32_t resource_source = 0;
 	uint32_t sampler_source  = 0;
 	bool     guest_address_read = false;
+	bool     guest_buffer_read = false;
 	bool     data_signed     = false;
 	bool     typed           = false;
 	bool     formatted       = false;

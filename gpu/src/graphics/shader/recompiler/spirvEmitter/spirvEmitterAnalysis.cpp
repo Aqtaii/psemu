@@ -246,7 +246,10 @@ void CollectRegisters(const IR::Program& program, std::vector<RegisterBinding>* 
 			}
 			if (inst.op == IR::Opcode::SBufferLoadDword &&
 			    inst.memory.kind == IR::ResourceKind::ScalarBuffer) {
-				CollectRegister(registers, {IR::RegisterFile::Scalar, inst.memory.resource * 4u});
+				if(inst.memory.guest_buffer_read) {
+				 for(unsigned i=0;i<4;++i)
+				  CollectRegister(registers,{IR::RegisterFile::Scalar,inst.memory.resource*4u+i});
+				} else CollectRegister(registers, {IR::RegisterFile::Scalar, inst.memory.resource * 4u});
 			}
 			if ((inst.op == IR::Opcode::ImageSample || inst.op == IR::Opcode::ImageGather4) &&
 			    inst.memory.image_address_components > 1u) {
