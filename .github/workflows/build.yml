@@ -69,6 +69,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_bvh_ir.ps1
 
+      - name: Test scalar 64-bit first-set-bit emission
+        shell: pwsh
+        run: ./tools/scripts/test_ff1_u64_emitter.ps1
+
       - name: Test unsigned 64-bit shader comparison emission
         shell: pwsh
         run: ./tools/scripts/test_u64_compare_emitter.ps1

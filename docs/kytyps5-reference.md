@@ -109,3 +109,19 @@ This is allocation infrastructure only: the guest GPU page table, descriptor
 bindings, fault resolution and intersection emission remain to be integrated.
 Unsupported hardware retains the ordinary buffer allocation path; BVH execution
 still fails explicitly rather than emitting an invalid physical-address shader.
+
+### Astro scalar first-set-bit after BVH decode
+Actual e0ea78f run progressed beyond the former MIMG0xe6 decode rejection,
+then rejected SOP1 0x14 at PC0x2280, exact word0xbeeb146a.
+Upstream ScalarAluOps.cpp identifies S_FF1_I32_B64; translate/Integer.cpp::S_FF_I32_B64
+reads both source halves before writing the result and preserves SCC.
+ShaderRecompilerComputeTests.cpp::ScalarBitfieldPack includes expected first-set
+positions 40 and5, and all-zero output0xffffffff.
+Added dedicated FindLsbU64 IR/emission using two FindILsb32 operations: prefer
+nonzero low half, otherwise high position+32, otherwise0xffffffff. Captured
+instruction reads VCC_LO/HI and overwrites VCC_HI; register collection includes
+both input halves and emission reads them before its single destination write.
+Tests compile the actual emitter with a SPIR-V operation evaluator, covering all
+64 bit positions, zero/all-ones, overlap ordering and10000 generated inputs.
+The new runtime test has not yet established BVH lowering/execution success;
+the previous run stopped in CFG decoding before those phases.

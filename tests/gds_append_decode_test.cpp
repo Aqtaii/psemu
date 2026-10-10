@@ -37,6 +37,12 @@ int main() {
  }
  Check(!DecodeMimg(0,std::span<const uint32_t>(bvh.data(),4),0,&ray,&ray_error));
 
+
+ const std::array<uint32_t,1> ff1_raw{0xbeeb146a};
+ Instruction ff1;std::string ff1_error;
+ Check(DecodeSop1(0x2280,ff1_raw,0,&ff1,&ff1_error));
+ Check(ff1.opcode==Opcode::SFf1I32B64 && ff1.src_count==1);
+ Check(ff1.src0.kind==OperandKind::VccLo && ff1.dst.kind==OperandKind::VccHi);
  // Astro's exact S_TRAP word: preserve immediate and fall-through classification.
  const std::array<uint32_t,1> trap_code{0xbf920001};
  Instruction trap;std::string trap_error;
