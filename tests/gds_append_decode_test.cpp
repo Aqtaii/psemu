@@ -1,4 +1,5 @@
 #include "graphics/shader/recompiler/MemoryOps.h"
+#include "graphics/shader/recompiler/ScalarAluOps.h"
 #include "graphics/shader/recompiler/VectorAluOps.h"
 #include <array>
 #include <cstdio>
@@ -6,6 +7,14 @@
 using namespace Libs::Graphics::ShaderRecompiler::Decoder;
 static void Check(bool ok) {if(!ok) throw std::runtime_error("GDS decoder regression");}
 int main() {
+ // Astro's exact S_TRAP word: preserve immediate and fall-through classification.
+ const std::array<uint32_t,1> trap_code{0xbf920001};
+ Instruction trap;std::string trap_error;
+ Check(DecodeSopp(0x1f80,trap_code,0,&trap,&trap_error));
+ Check(trap.opcode==Opcode::STrap && trap.src_count==1 && trap.src0.value==1);
+ Check(trap.pc==0x1f80 && trap.word_count==1 && trap.opcode_id==0x12);
+ Check(trap.opcode!=Opcode::SBranch && trap.opcode!=Opcode::SEndpgm);
+
  const std::array<uint32_t,1> subrev{0x54003080};
  Instruction subtract;std::string subtract_error;
  Check(DecodeVop2(0xb84,subrev,0,&subtract,&subtract_error));

@@ -32,3 +32,12 @@ Reference implementation: frontend/translate/Control.cpp, Translator::SUBB_U32, 
 Adapted both V_SUB_CO_CI_U32 (0x29) and V_SUBREV_CO_CI_U32 (0x2A), including their VOP3 encodings. Reverse form swaps arithmetic inputs; both consume the lane's VCC bit and write the borrow mask. Result is lhs-rhs-borrow_in; outgoing borrow is (rhs>lhs) OR (borrow_in>partial). The existing two-input subtraction path remains supported. Register collection includes both dwords of the carry/borrow input mask.
 
 Regression covers exact captured decoding, production subtraction emitter, lanes 0/31/32/63, borrow on/off and unsigned wrap boundaries.
+
+### Scalar trap with disabled trap handler
+Runtime after the borrow fix reached SOPP 0x12, exact word 0xbf920001 at PC 0x1f80.
+Upstream ScalarAluOps.cpp identifies S_TRAP; translate/Scalar.cpp emits ControlNop.
+ShaderRecompilerComputeTests.cpp::ScalarTrapDisabledFallsThroughExactRaw verifies that
+the identical word continues into the following V_MOV and store (expected 42).
+Our explicit STrap decoder preserves the immediate and lowers to existing ControlNop.
+This assumes no guest GPU trap handler is installed; it does not implement GPU debugger traps.
+Captured decoder regression checks its immediate and explicit trap opcode.

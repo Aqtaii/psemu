@@ -963,6 +963,8 @@ bool LowerControlMarker(const Decoder::Instruction& decoded, BasicBlock* block, 
 bool LowerControlInstruction(const Decoder::Instruction& decoded, BasicBlock* block,
                              std::string* error) {
 	switch (decoded.opcode) {
+		// No guest GPU trap handler is installed; S_TRAP falls through, as in KytyPS5.
+		case Decoder::Opcode::STrap:
 		case Decoder::Opcode::SNop:
 			return LowerControlMarker(decoded, block, Opcode::ControlNop, true, error);
 		case Decoder::Opcode::SWaitcnt:
@@ -1044,6 +1046,7 @@ bool LowerScalarSaveexec(const Decoder::Instruction& decoded, BasicBlock* block,
 bool IsControlOpcode(Decoder::Opcode opcode) {
 	switch (opcode) {
 		case Decoder::Opcode::SNop:
+		case Decoder::Opcode::STrap:
 		case Decoder::Opcode::SWaitcnt:
 		case Decoder::Opcode::SBarrier:
 		case Decoder::Opcode::SSendmsg:
