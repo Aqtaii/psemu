@@ -61,6 +61,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_secure_format.ps1
 
+      - name: Test PS5 stat boundaries and shared kernel file IO
+        shell: pwsh
+        run: ./tools/scripts/test_kernel_file_io.ps1
+
       - name: Test host allocation ownership
         shell: pwsh
         run: ./tools/scripts/test_allocation_ownership.ps1

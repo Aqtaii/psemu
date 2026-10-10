@@ -1,6 +1,9 @@
 #include "core.h"
 #include "native_atomic_guard.h"
 #include "guest_stub_memory.h"
+#include "guest_file_stat.h"
+#include <io.h>
+#include <unordered_map>
 #include "agc.h"
 #include "logger.h"
 #include "syscalls.h"
@@ -282,6 +285,7 @@ static std::map<FILE*, std::string> g_open_names;
 // "Failed loading image" deyip exit(1) ediyordu. Tum VFS islemlerini
 // serilestiriyoruz (yukleme darbogaz degil; dogruluk > hiz).
 static std::mutex g_vfs_mutex;
+static std::unordered_map<int, FILE*> g_kernel_files;
 
 // Guest yolunu host yoluna cevirir. PS4/PS5'te "/app0/" oyunun kendi
 // klasorudur; diger mutlak yollari da ayni koke baglariz.
@@ -5682,12 +5686,12 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 }
                 if (f) {
                     // Gercek dosya var: fd olarak FILE* saklayip dondur
-                    static int s_fd_counter = 100;
-                    int fd = s_fd_counter++;
+                    static std::atomic<int> s_fd_counter{100};
+                    int fd = s_fd_counter.fetch_add(1, std::memory_order_relaxed);
                     {
                         std::lock_guard<std::mutex> vlk(g_vfs_mutex);
                         // fd -> FILE* esleme tablosu
-                        static std::unordered_map<int, FILE*>& fd_map = *new std::unordered_map<int, FILE*>();
+                        auto& fd_map = g_kernel_files;
                         fd_map[fd] = f;
                     }
                     ctx->Rax = static_cast<uint64_t>(fd);
@@ -5705,25 +5709,22 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 int fd = static_cast<int>(ctx->Rdi);
                 void* buf = reinterpret_cast<void*>(ctx->Rsi);
                 size_t nbyte = static_cast<size_t>(ctx->Rdx);
-                FILE* f = nullptr;
-                {
-                    std::lock_guard<std::mutex> vlk(g_vfs_mutex);
-                    static std::unordered_map<int, FILE*>& fd_map = *new std::unordered_map<int, FILE*>();
-                    if (fd_map.count(fd)) f = fd_map[fd];
-                }
-                size_t bytes_read = 0;
-                if (f && buf && nbyte > 0 && SafeWritable(buf, nbyte)) {
-                    bytes_read = fread(buf, 1, nbyte, f);
-                } else if (buf && nbyte > 0 && SafeWritable(buf, nbyte)) {
-                    memset(buf, 0, nbyte);
-                    bytes_read = nbyte;
-                }
+                std::lock_guard<std::mutex> vlk(g_vfs_mutex);
+                const auto file = g_kernel_files.find(fd);
+                int64_t bytes_read = -1;
+                if (file != g_kernel_files.end() && (nbyte == 0 || SafeWritable(buf, nbyte)))
+                    bytes_read = static_cast<int64_t>(fread(buf, 1, nbyte, file->second));
                 ctx->Rax = static_cast<uint64_t>(bytes_read);
                 special_return_set = true;
             } else if (readable_name == "sceKernelWrite" || readable_name == "libc_write") {
                 // sceKernelWrite(fd, buf, nbyte): RDI=fd, RSI=buf, RDX=nbyte
-                size_t nbyte = static_cast<size_t>(ctx->Rdx);
-                ctx->Rax = static_cast<uint64_t>(nbyte);
+                const size_t nbyte = static_cast<size_t>(ctx->Rdx);
+                std::lock_guard<std::mutex> vlk(g_vfs_mutex);
+                const auto file = g_kernel_files.find(static_cast<int>(ctx->Rdi));
+                int64_t written = -1;
+                if (file != g_kernel_files.end() && (nbyte == 0 || SafeReadable(reinterpret_cast<void*>(ctx->Rsi), nbyte)))
+                    written = static_cast<int64_t>(fwrite(reinterpret_cast<void*>(ctx->Rsi), 1, nbyte, file->second));
+                ctx->Rax = static_cast<uint64_t>(written);
                 special_return_set = true;
             } else if (readable_name == "sceKernelClose" || readable_name == "libc_close" ||
                        func_name.find("UK2Tl2DWUns") != std::string::npos) {
@@ -5731,7 +5732,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 int fd = static_cast<int>(ctx->Rdi);
                 {
                     std::lock_guard<std::mutex> vlk(g_vfs_mutex);
-                    static std::unordered_map<int, FILE*>& fd_map = *new std::unordered_map<int, FILE*>();
+                    auto& fd_map = g_kernel_files;
                     if (fd_map.count(fd)) {
                         fclose(fd_map[fd]);
                         fd_map.erase(fd);
@@ -5741,12 +5742,28 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 special_return_set = true;
             } else if (readable_name == "sceKernelStat" || readable_name == "libc_stat" ||
                        func_name.find("eV9wAD2riIA") != std::string::npos) {
-                // sceKernelStat(path, buf): RDI=path, RSI=buf
-                void* sb = reinterpret_cast<void*>(ctx->Rsi);
-                if (sb && SafeWritable(sb, 128)) {
-                    memset(sb, 0, 128);
+                auto* sb = reinterpret_cast<GuestFileStat*>(ctx->Rsi);
+                int rc = -2147352554; // EINVAL
+                if (sb && SafeWritable(sb, sizeof(*sb)) && SafeReadable(reinterpret_cast<void*>(ctx->Rdi), 1)) {
+                    const std::string host = TranslateGuestPath(SafeReadCString(reinterpret_cast<const char*>(ctx->Rdi)));
+                    struct _stat64 info{};
+                    rc = _stat64(host.c_str(), &info) == 0 ? 0 : -2147352574; // ENOENT
+                    if (rc == 0) *sb = MakeGuestFileStat(info);
                 }
-                ctx->Rax = 0;
+                ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(rc));
+                special_return_set = true;
+            } else if (readable_name == "sceKernelFstat") {
+                auto* sb = reinterpret_cast<GuestFileStat*>(ctx->Rsi);
+                int rc = -2147352554;
+                if (sb && SafeWritable(sb, sizeof(*sb))) {
+                    std::lock_guard<std::mutex> vlk(g_vfs_mutex);
+                    const auto file = g_kernel_files.find(static_cast<int>(ctx->Rdi));
+                    struct _stat64 info{};
+                    rc = file != g_kernel_files.end() && _fstat64(_fileno(file->second), &info) == 0
+                        ? 0 : -2147352567; // EBADF
+                    if (rc == 0) *sb = MakeGuestFileStat(info);
+                }
+                ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(rc));
                 special_return_set = true;
             } else if (readable_name == "fopen") {
                 std::lock_guard<std::mutex> vlk(g_vfs_mutex);
