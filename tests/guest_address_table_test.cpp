@@ -57,5 +57,26 @@ int main() {
  CHECK(!ResolveGuestAddress(table,GuestAddressLimit-1,2,&out));
  CHECK(!ResolveGuestAddress(table,UINT64_MAX,2,&out));
  CHECK(BuildGuestAddressTable({},&table));CHECK(table.empty());
+ // A native buffer may contain both coherent BVH bytes and stale image-owned
+ // pixels. Publish only coherent fragments, retaining exact physical offsets.
+ const std::array shared{GuestAddressRange{base,0x80000000,32768,0}};
+ const std::array cut{GpuWrittenBytes{base+4096,8192}};
+ CHECK(ExcludeGuestAddressRanges(shared,cut,&table));
+ CHECK(table.size()==2 && table[0].size==4096);
+ CHECK(table[1].guest_base==base+12288 && table[1].device_base==0x80003000);
+ CHECK(ResolveGuestAddress(table,base+4092,4,&out));
+ CHECK(!ResolveGuestAddress(table,base+4092,8,&out));
+ CHECK(!ResolveGuestAddress(table,base+4096,4,&out));
+ CHECK(ResolveGuestAddress(table,base+12288,4,&out) && out==0x80003000);
+ const auto clipped=table;
+ const std::array invalid_cut{GpuWrittenBytes{GuestAddressLimit-1,2}};
+ CHECK(!ExcludeGuestAddressRanges(shared,invalid_cut,&table) && table==clipped);
+ const std::array covers{GpuWrittenBytes{base-1,32770}};
+ CHECK(ExcludeGuestAddressRanges(shared,covers,&table) && table.empty());
+ const std::array repeated{cut[0],GpuWrittenBytes{base+8192,8192},cut[0]};
+ CHECK(ExcludeGuestAddressRanges(shared,repeated,&table));
+ CHECK(table.size()==2 && table[1].guest_base==base+16384);
+ CHECK(ExcludeGuestAddressRanges(shared,{},&table));
+ CHECK(table.size()==1 && table[0]==shared[0]);
  std::puts("PASS: sparse guest address table, discontiguous pages, boundaries, overflow and transactional rejection");
 }

@@ -3001,6 +3001,27 @@ TextureCache::RegionInfo TextureCache::QueryRegion(uint64_t vaddr, uint64_t size
 	return result;
 }
 
+std::vector<GpuWrittenBytes> TextureCache::GetGpuOwnedAddressExclusions(uint64_t vaddr,
+                                                                        uint64_t size) {
+	EXIT_IF(!m_resource_mutex.IsOwnedByCurrentThread());
+	FaultSafeTextureLock lock(this, m_lock);
+	std::vector<GpuWrittenBytes> excluded;
+	for (const auto* cached: FindImagesInRegionLocked(vaddr, size, false)) {
+		if (!cached->gpu_modified) { continue; }
+		for (uint32_t range = 0; range < cached->RangeCount(); ++range) {
+			if (ImageRangeOverlaps(vaddr, size, cached->Address(range), cached->Size(range))) {
+				excluded.push_back({cached->Address(range), cached->Size(range)});
+			}
+		}
+	}
+	for (const auto& [address, metadata]: m_surface_metas) {
+		if (metadata.gpu_modified && ImageRangeOverlaps(vaddr, size, address, metadata.size)) {
+			excluded.push_back({address, metadata.size});
+		}
+	}
+	return excluded;
+}
+
 bool TextureCache::AreGpuBufferWritesOutsideImages(
     uint64_t vaddr, uint64_t size, std::span<const GpuWrittenBytes> writes) {
 	if (!m_resource_mutex.IsOwnedByCurrentThread() || writes.empty()) { return false; }

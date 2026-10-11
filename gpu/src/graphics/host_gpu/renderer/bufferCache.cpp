@@ -949,10 +949,32 @@ bool BufferCache::PrepareAddressSnapshot(CommandBuffer* command, GraphicContext*
  if(!command || command->IsInvalid() || command->IsExecute() || !ctx || !output ||
     !ctx->bvh_device_address_enabled) return false;
  const auto generation=command->GetRecordingGeneration();
+ const auto filter=[&](BufferAddressSnapshot* snapshot) {
+  std::lock_guard transaction(m_resource_mutex);
+  std::vector<GpuWrittenBytes> excluded;
+  for(const auto& range:snapshot->ranges) {
+   const auto owned=m_texture_cache->GetGpuOwnedAddressExclusions(range.guest_base,range.size);
+   excluded.insert(excluded.end(),owned.begin(),owned.end());
+  }
+  std::vector<GuestAddressRange> coherent;
+  if(!ExcludeGuestAddressRanges(snapshot->ranges,excluded,&coherent)) {
+   std::fprintf(stderr,"[GPU-ADDRESS-SNAPSHOT] invalid exclusion ranges=%zu cuts=%zu\n",
+                snapshot->ranges.size(),excluded.size());
+   return false;
+  }
+  static std::atomic_uint filter_logs{0};
+  if(!excluded.empty() && filter_logs.fetch_add(1,std::memory_order_relaxed)<8)
+   std::fprintf(stderr,"[GPU-ADDRESS-SNAPSHOT] resident=%zu coherent=%zu image_owned_cuts=%zu\n",
+                snapshot->ranges.size(),coherent.size(),excluded.size());
+  // Original backing owners remain retained even for split entries; device offsets
+  // refer to the same allocations. Image-owned gaps remain guarded lookup failures.
+  snapshot->ranges=std::move(coherent);
+  return true;
+ };
  // ObtainBuffer owns ResourceMutex itself; never nest it beneath snapshot locks.
  for(unsigned attempt=0;attempt<4;++attempt) {
   BufferAddressSnapshot before;
-  if(!CaptureAddressSnapshot(ctx,&before)) return false;
+  if(!CaptureAddressSnapshot(ctx,&before) || !filter(&before)) return false;
   for(const auto& range: before.ranges) {
    const auto alias=m_texture_cache->QueryRegion(range.guest_base,range.size);
    if(alias.gpu_image_bytes || alias.gpu_metadata_bytes) return false;
@@ -962,7 +984,7 @@ bool BufferCache::PrepareAddressSnapshot(CommandBuffer* command, GraphicContext*
    if(!resident.first || !resident.first->device_address) return false;
   }
   BufferAddressSnapshot prepared;
-  if(!CaptureAddressSnapshot(ctx,&prepared)) return false;
+  if(!CaptureAddressSnapshot(ctx,&prepared) || !filter(&prepared)) return false;
   bool current=true;
   for(const auto& range: prepared.ranges) {
    const auto alias=m_texture_cache->QueryRegion(range.guest_base,range.size);

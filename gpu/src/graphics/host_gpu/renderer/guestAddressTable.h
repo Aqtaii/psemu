@@ -1,4 +1,5 @@
 #pragma once
+#include "graphics/host_gpu/renderer/bufferImageReadRanges.h"
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -41,6 +42,42 @@ inline bool BuildGuestAddressTable(std::span<const GuestAddressRange> ranges,
  }
  *output = std::move(sorted);
  return true;
+}
+
+// Exclude bytes whose authoritative owner is a native image or virtual metadata.
+// Retained buffer fragments keep their original device offsets; a read into a gap
+// still fails normal address lookup and produces the existing GPU fault.
+inline bool ExcludeGuestAddressRanges(std::span<const GuestAddressRange> input,
+                                      std::span<const GpuWrittenBytes> excluded,
+                                      std::vector<GuestAddressRange>* output) {
+ if(!output) return false;
+ std::vector<GuestAddressRange> staged;
+ if(!BuildGuestAddressTable(input,&staged)) return false;
+ for(const auto& cut:excluded) {
+  if(!cut.address || cut.address>=GuestAddressLimit || !cut.size ||
+     cut.size>GuestAddressLimit-cut.address) return false;
+  std::vector<GuestAddressRange> next;
+  for(const auto& range:staged) {
+   const auto end=range.guest_base+range.size,cut_end=cut.address+cut.size;
+   if(cut.address>=end || range.guest_base>=cut_end) {
+    next.push_back(range);
+   } else {
+    if(cut.address>range.guest_base) {
+     auto prefix=range;prefix.size=cut.address-range.guest_base;next.push_back(prefix);
+    }
+    if(cut_end<end) {
+     auto suffix=range;
+     suffix.guest_base=cut_end;
+     suffix.device_base+=cut_end-range.guest_base;
+     suffix.size=end-cut_end;
+     next.push_back(suffix);
+    }
+   }
+   if(next.size()>GuestAddressMaxRanges) return false;
+  }
+  staged=std::move(next);
+ }
+ return BuildGuestAddressTable(staged,output);
 }
 
 // A block crossing an owner boundary must be split and resolved independently:
