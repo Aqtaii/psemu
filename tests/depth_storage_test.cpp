@@ -100,6 +100,19 @@ int main() {
   for(size_t i=0;i<expected.size();i++)Require(actual[i+1]==expected[i]);
  }
 
+ // Captured clean small target inside a differently shaped larger allocation.
+ {
+  RenderTargetInfo old{};old.address=0x1b86cb50000ull;old.size=0xc0000;
+  RenderTargetInfo next{};next.address=0x1b86c5e0000ull;next.size=0xff0000;
+  Require(CanRetireCleanRenderTargetForRenderTarget(old,false,false,false,true,true,next));
+  for(int bad=0;bad<5;bad++)
+   Require(!CanRetireCleanRenderTargetForRenderTarget(old,bad==0,bad==1,bad==2,bad!=3,bad!=4,next));
+  auto cross=old;cross.address=next.address+next.size-0x10000;
+  Require(!CanRetireCleanRenderTargetForRenderTarget(cross,false,false,false,true,true,next));
+  cross=old;cross.address++;
+  Require(!CanRetireCleanRenderTargetForRenderTarget(cross,false,false,false,true,true,next));
+ }
+
  Require(!CanMergeBufferCacheQueueMask(0x110,4));
  Require(CanMergeBufferCacheAfterDrain(0x110,4,0x110,true));
  Require(!CanMergeBufferCacheAfterDrain(0x110,4,0x10,true));

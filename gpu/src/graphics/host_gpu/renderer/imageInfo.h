@@ -1109,6 +1109,15 @@ CanRetireCleanRenderTargetForStorage(const RenderTargetInfo& cached, bool gpu_mo
 }
 
 [[nodiscard]] inline bool
+CanRetireCleanRenderTargetForRenderTarget(const RenderTargetInfo& cached,bool gpu,bool buffer,
+                                        bool tracker_gpu,bool same_context,bool coherent,
+                                        const RenderTargetInfo& requested) {
+ ImageInfo backing{};backing.address=requested.address;backing.size=requested.size;
+ return requested.levels==1 && requested.layers==1 &&
+        CanRetireCleanRenderTargetForStorage(cached,gpu,buffer,tracker_gpu,same_context,coherent,backing);
+}
+
+[[nodiscard]] inline bool
 CanRetireBufferOwnedRenderTarget(const RenderTargetInfo& cached, bool gpu_modified,
                                  bool buffer_modified, bool same_context,
                                  bool coherent_requested_backing,

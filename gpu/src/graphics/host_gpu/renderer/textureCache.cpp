@@ -1824,7 +1824,18 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 				}
 				break;
 			case CachedImage::Kind::RenderTarget:
-				if (CanRetireBufferOwnedRenderTarget(
+				if (CanRetireCleanRenderTargetForRenderTarget(cached.target,cached.gpu_modified,
+				        cached.buffer_modified,m_memory_tracker.IsRegionGpuModified(cached.Address(),cached.Size()),
+				        cached.ctx==ctx,IsCoherentGuestImageSource(target_source,info.address,info.size),info)) {
+					overlap=RenderTargetOverlap::RetireTarget;
+					command->RetainResourceUntilFence(entry);
+					static std::atomic_uint clean_retire_logs{0};
+					if(clean_retire_logs.fetch_add(1,std::memory_order_relaxed)<8) {
+						printf("[RT-CLEAN-RETIRE] old=0x%016" PRIx64 "+0x%016" PRIx64
+						       " requested=0x%016" PRIx64 "+0x%016" PRIx64 " backing_current=1\n",
+						       cached.Address(),cached.Size(),info.address,info.size);
+					}
+				} else if (CanRetireBufferOwnedRenderTarget(
 				        cached.target, cached.gpu_modified, cached.buffer_modified,
 				        cached.ctx == ctx,
 				        IsCoherentGuestImageSource(target_source, info.address, info.size), info)) {
