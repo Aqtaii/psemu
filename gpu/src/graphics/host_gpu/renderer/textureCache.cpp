@@ -1980,6 +1980,15 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 		}
 	}
 
+	if(!reconstructed_target_retire.empty() && m_buffer_cache.HasPageOverlap(info.address,info.size)) {
+		// Reconstruction published newer guest backing after the original source query.
+		// Refresh stale resident fragments before the new image claims GPU writes.
+		// Competing owners were rejected before reconstruction; retain that guard.
+		target_source=m_buffer_cache.ObtainBufferForImage(info.address,info.size);
+		if(!IsCoherentGuestImageSource(target_source,info.address,info.size))
+			EXIT("TextureCache: reconstructed target has incoherent refreshed buffer source\n");
+	}
+
 	for (auto* cached: buffer_owned_target_retire) {
 		// The coherent buffer backing owns the current bytes. Clear the stale-image marker only
 		// after coherence validation so normal retirement can remove the obsolete Vulkan shape.
