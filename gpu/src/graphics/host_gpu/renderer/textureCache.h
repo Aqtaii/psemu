@@ -41,6 +41,7 @@ public:
 		bool buffer_owned_image_bytes = false;
 		bool non_sampled_pages  = false;
 		bool metadata_pages     = false;
+		bool physical_metadata_pages = false;
 		bool metadata_bytes     = false;
 		bool gpu_metadata_bytes = false;
 	};

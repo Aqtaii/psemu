@@ -730,10 +730,11 @@ std::pair<VulkanBuffer*, uint64_t> BufferCache::ObtainBuffer(CommandBuffer*  com
 	}
 	// Cache allocations are tracker-page aligned, but byte-disjoint buffers and images may share
 	// an edge page. Clean read-only buffer and image views may coexist; Kyty retains a hard failure
-	// when either cache owns newer GPU bytes. Writable buffers delegate the ownership transition
+	// when an image still owns newer GPU bytes. A resident GPU buffer may be reread when every
+	// overlapping image has yielded ownership. Writable buffers delegate the ownership transition
 	// to TextureCache, which distinguishes raw texture-data writes from formatted target paths.
 	if (texture_pages.image_pages && texture_region.image_bytes) {
-        const bool buffer_gpu = m_memory_tracker.IsRegionGpuModified(vaddr, size);
+		const bool buffer_gpu = m_memory_tracker.IsRegionGpuModified(vaddr, size);
 		const bool coherent_read = IsCoherentBufferImageRead(
 		    is_read, is_written, buffer_gpu, texture_region.gpu_image_bytes,
 		    texture_region.buffer_owned_image_bytes);

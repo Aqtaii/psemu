@@ -2992,10 +2992,10 @@ TextureCache::RegionInfo TextureCache::QueryRegion(uint64_t vaddr, uint64_t size
 	    result.metadata_bytes && m_metadata_tracker.IsRegionGpuModified(vaddr, size);
 	for (const auto& cached: m_images) {
 		if (cached->dcc.address != 0) {
-			result.metadata_pages |= ImagePageRangesOverlap(vaddr, size, cached->dcc.address,
-			                                                  cached->dcc.layout.total_bytes);
-			result.metadata_bytes |= ImageRangeOverlaps(vaddr, size, cached->dcc.address,
-			                                               cached->dcc.layout.total_bytes);
+            // Consumed physical DCC keys are regular buffer bytes, not synthetic
+			// HTile metadata. BDA snapshots may retain their coherent resident buffer.
+			result.physical_metadata_pages |= ImagePageRangesOverlap(
+			    vaddr, size, cached->dcc.address, cached->dcc.layout.total_bytes);
 		}
 	}
 	return result;
