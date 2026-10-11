@@ -1452,24 +1452,24 @@ StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   com
 		m_memory_tracker.ForEachUploadRange(
 		    info.address, info.size, true, [](uint64_t, uint64_t) noexcept {},
 		    [&]() noexcept {
-		vk::ClearColorValue clear {};
-		for (uint32_t lane = 0; lane < 4; ++lane) {
-			clear.float32[lane] = initial_clear->color[lane];
-		}
-		auto vk_buffer = command->Handle();
-		GraphicsRenderColorImageBarrier(vk_buffer, cached->image,
-		                                vk::ImageLayout::eTransferDstOptimal);
-		const vk::ImageSubresourceRange range {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-		vk_buffer.clearColorImage(cached->image->image, cached->image->layout, &clear, 1, &range);
-		GraphicsRenderColorImageBarrier(vk_buffer, cached->image, RENDER_COLOR_IMAGE_LAYOUT);
+		    vk::ClearColorValue clear {};
+		    for (uint32_t lane = 0; lane < 4; ++lane) {
+			    clear.float32[lane] = initial_clear->color[lane];
+		    }
+		    auto vk_buffer = command->Handle();
+		    GraphicsRenderColorImageBarrier(vk_buffer, cached->image,
+		                                    vk::ImageLayout::eTransferDstOptimal);
+		    const vk::ImageSubresourceRange range {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+		    vk_buffer.clearColorImage(cached->image->image, cached->image->layout, &clear, 1, &range);
+		    GraphicsRenderColorImageBarrier(vk_buffer, cached->image, RENDER_COLOR_IMAGE_LAYOUT);
 		    });
 	} else {
-	m_memory_tracker.ForEachUploadRange(
-	    info.address, info.size, true, [](uint64_t, uint64_t) noexcept {},
-	    [&]() noexcept {
-		    m_tiler.DetileImage(cached->ctx, static_cast<GpuTextureVulkanImage*>(cached->image),
-		                        cached->info, source, false, true);
-	    });
+		m_memory_tracker.ForEachUploadRange(
+		    info.address, info.size, true, [](uint64_t, uint64_t) noexcept {},
+		    [&]() noexcept {
+			    m_tiler.DetileImage(cached->ctx, static_cast<GpuTextureVulkanImage*>(cached->image),
+			                        cached->info, source, false, true);
+		    });
 	}
 	cached->gpu_modified = true;
 	ImageOps::CreateTextureViews(ctx, static_cast<GpuTextureVulkanImage*>(cached->image), info,
