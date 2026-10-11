@@ -735,9 +735,29 @@ std::pair<VulkanBuffer*, uint64_t> BufferCache::ObtainBuffer(CommandBuffer*  com
 	// to TextureCache, which distinguishes raw texture-data writes from formatted target paths.
 	if (texture_pages.image_pages && texture_region.image_bytes) {
 		const bool buffer_gpu = m_memory_tracker.IsRegionGpuModified(vaddr, size);
-		const bool coherent_read = IsCoherentBufferImageRead(
+		bool coherent_read = IsCoherentBufferImageRead(
 		    is_read, is_written, buffer_gpu, texture_region.gpu_image_bytes,
 		    texture_region.buffer_owned_image_bytes);
+		if (!coherent_read && is_read && !is_written && buffer_gpu &&
+		    !texture_region.gpu_image_bytes) {
+			// A CPU-current sampled view can be published after a buffer was declared
+			// writable. Reestablish its stale-image marker before rereading the native
+			// GPU buffer; use the existing alias classifier rather than ignoring overlap.
+			// Unsupported layouts, competing GPU images and multiple owners still fail.
+			if (m_texture_cache->InvalidateMemoryFromGPU(vaddr, size, false)) {
+				const auto repaired = m_texture_cache->QueryRegion(vaddr, size);
+				coherent_read = IsCoherentBufferImageRead(
+				    is_read, is_written, buffer_gpu, repaired.gpu_image_bytes,
+				    repaired.buffer_owned_image_bytes);
+				static std::atomic_uint alias_read_logs {0};
+				if (coherent_read &&
+				    alias_read_logs.fetch_add(1, std::memory_order_relaxed) < 8) {
+					std::fprintf(stderr, "[BUFFER-ALIAS-READ] addr=0x%016" PRIx64
+					             " size=0x%016" PRIx64 " native_owner=1 image_invalidated=1\n",
+					             vaddr, size);
+				}
+			}
+		}
 		if (!coherent_read) {
 			if (!is_written) {
 				EXIT("BufferCache: unsupported buffer/image alias, addr=0x%016" PRIx64
