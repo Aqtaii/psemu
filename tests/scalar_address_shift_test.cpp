@@ -31,24 +31,24 @@ int main() {
  CHECK(!FoldScalarConstant(dynamic.provenance,dynamic.blocks[0].instructions[1].scalar_value,&result));
  CHECK(!FoldScalarConstant(dynamic.provenance,dynamic.blocks[0].instructions[2].scalar_value,&result));
 
- Program planned;planned.blocks.resize(1);planned.provenance.values.resize(4);
- for(uint32_t i=0;i<3;++i)planned.provenance.values[i].op=ScalarValueOp::Constant;
- planned.provenance.values[3].op=ScalarValueOp::ReadConst;
- planned.provenance.values[3].args={0,1,2};planned.provenance.values[3].imm=24;
- planned.provenance.values[3].pc=0x1f6c;
- Instruction standalone;standalone.op=Opcode::SLoadDword;standalone.scalar_value=3;
+ Program planned;planned.blocks.resize(1);planned.provenance.values.resize(6);
+ for(uint32_t i=2;i<5;++i)planned.provenance.values[i].op=ScalarValueOp::Constant;
+ planned.provenance.values[5].op=ScalarValueOp::ReadConst;
+ planned.provenance.values[5].args={2,3,4};planned.provenance.values[5].imm=24;
+ planned.provenance.values[5].pc=0x1f6c;
+ Instruction standalone;standalone.op=Opcode::SLoadDword;standalone.scalar_value=5;
  standalone.pc=0x1f6c;planned.blocks[0].instructions={standalone};
  CHECK(BuildSrtPlan(&planned,&error));CHECK(planned.srt.reads.size()==1);
  planned.uses_guest_address_table=true;
  CHECK(BuildSrtPlan(&planned,&error));CHECK(planned.srt.reads.empty());
  planned.provenance.descriptors.resize(1);
  planned.provenance.descriptors[0].dword_count=2;
- planned.provenance.descriptors[0].dwords[0]=3;
- planned.provenance.descriptors[0].dwords[1]=1;
+ planned.provenance.descriptors[0].dwords[0]=5;
+ planned.provenance.descriptors[0].dwords[1]=3;
  Instruction descriptor_use;descriptor_use.memory.resource_source=2;
  planned.blocks[0].instructions.push_back(descriptor_use);
  CHECK(BuildSrtPlan(&planned,&error));
- CHECK(planned.srt.reads.size()==1 && planned.srt.reads[0].value==3);
+ CHECK(planned.srt.reads.size()==1 && planned.srt.reads[0].value==5);
 
 #ifdef _WIN32
  Program read;read.srt_plan_complete=true;read.provenance.values.resize(4);
