@@ -1072,8 +1072,11 @@ CanReconstructRenderTargetForStorage(const RenderTargetInfo& target,bool gpu,boo
  return gpu && tracker_gpu && !buffer && !cpu && same_context && !buffers &&
         IsTiledRenderTarget(target) && IsSupportedStandard64RenderTarget(footprint) &&
         IsSupportedDepthStorageBacking(storage) &&
-        target.address==storage.address && target.size==storage.size &&
-        target.width==storage.width && target.height==storage.height && target.pitch==storage.pitch;
+        target.address != 0 && target.size != 0 && storage.address != 0 && storage.size != 0 &&
+        target.size <= UINT64_MAX - target.address && storage.size <= UINT64_MAX - storage.address &&
+        ((target.address | target.size | storage.address | storage.size) & (TRACKER_PAGE_SIZE - 1)) == 0 &&
+        storage.address >= target.address && storage.address - target.address <= target.size &&
+        storage.size <= target.size - (storage.address - target.address);
 }
 
 // Backing became authoritative after readback; do not discard any native-only pixels.

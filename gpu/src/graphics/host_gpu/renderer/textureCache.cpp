@@ -1088,7 +1088,7 @@ void TextureCache::ResolveStorageImageOverlaps(CommandBuffer* command, GraphicCo
 				    CanReconstructRenderTargetForStorage(cached->target,cached->gpu_modified,
 				        cached->buffer_modified,tracker_gpu,
 				        m_memory_tracker.IsRegionCpuModified(cached->Address(),cached->Size()),
-				        cached->ctx==ctx,m_buffer_cache.HasPageOverlap(requested.address,requested.size),requested)) {
+				        cached->ctx==ctx,m_buffer_cache.HasPageOverlap(cached->Address(),cached->Size()),requested)) {
 					retire.push_back(cached);
 					continue;
 				}
@@ -1452,13 +1452,12 @@ StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   com
 	{
 		std::lock_guard transaction(m_resource_mutex);
 		FaultSafeTextureLock lock(this,m_lock);
-		const bool buffers=m_buffer_cache.HasPageOverlap(info.address,info.size);
 		for (auto* cached:FindImagesInRegionLocked(info.address,info.size,true)) {
 			if (cached->kind==CachedImage::Kind::RenderTarget &&
 			    CanReconstructRenderTargetForStorage(cached->target,cached->gpu_modified,
 			        cached->buffer_modified,m_memory_tracker.IsRegionGpuModified(cached->Address(),cached->Size()),
 			        m_memory_tracker.IsRegionCpuModified(cached->Address(),cached->Size()),
-			        cached->ctx==ctx,buffers,info)) needs_target_drain=true;
+			        cached->ctx==ctx,m_buffer_cache.HasPageOverlap(cached->Address(),cached->Size()),info)) needs_target_drain=true;
 		}
 	}
 	if (needs_target_drain) {

@@ -33,6 +33,45 @@ int main() {
  }
 
 
+ // Captured storage subrange requires reconstruction of the entire native target.
+ {
+  RenderTargetInfo target{};target.address=0x1a4db0a0000ull;target.size=0x870000;
+  target.width=1920;target.height=1080;target.pitch=1920;target.bytes_per_element=4;
+  target.tile_mode=Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget);
+  auto sub=storage;sub.address=target.address+0x240000;sub.size=0xc0000;
+  sub.width=480;sub.height=270;sub.pitch=512;
+  auto accepted=[&](const ImageInfo& image) {
+   return CanReconstructRenderTargetForStorage(target,true,false,true,false,true,false,image);
+  };
+  Require(accepted(sub));
+  auto bad=sub;bad.address=target.address-0x10000;Require(!accepted(bad));
+  bad=sub;bad.address=target.address+target.size-0x10000;Require(!accepted(bad));
+  bad=sub;bad.address++;Require(!accepted(bad));
+  bad=sub;bad.size=0;Require(!accepted(bad));
+  bad=sub;bad.address=UINT64_MAX-0xffff;Require(!accepted(bad));
+  Require(!CanReconstructRenderTargetForStorage(target,true,false,true,false,true,true,sub));
+  auto overflow=target;overflow.address=UINT64_MAX-0xffff;
+  Require(!CanReconstructRenderTargetForStorage(overflow,true,false,true,false,true,false,sub));
+  std::vector<uint32_t> linear(target.size/4),expected(linear.size()),actual(linear.size()+2);
+  actual.front()=0x10203040;actual.back()=0x50607080;
+  for(size_t i=0;i<linear.size();i++){
+   linear[i]=static_cast<uint32_t>(i*17+7);
+   expected[i]=actual[i+1]=static_cast<uint32_t>(i*31+0xa5a5);
+  }
+  size_t outside_pixels=0;
+  for(uint32_t y=0;y<target.height;y++)for(uint32_t x=0;x<target.width;x++){
+   const uint64_t block=((y/128)*15+x/128)*16384;
+   const auto index=block+Gen5RenderTargetOffsetInBlock<uint32_t>(x%128,y%128)/4;
+   expected[index]=linear[y*target.pitch+x];
+   outside_pixels+=(index*4<0x240000 || index*4>=0x300000);
+  }
+  TileConvertLinearToTiledRenderTarget32PreservePadding(actual.data()+1,linear.data(),
+    target.width,target.height,target.pitch,target.size);
+  Require(outside_pixels>0);
+  Require(actual.front()==0x10203040 && actual.back()==0x50607080);
+  for(size_t i=0;i<expected.size();i++)Require(actual[i+1]==expected[i]);
+ }
+
  Require(!CanMergeBufferCacheQueueMask(0x110,4));
  Require(CanMergeBufferCacheAfterDrain(0x110,4,0x110,true));
  Require(!CanMergeBufferCacheAfterDrain(0x110,4,0x10,true));
