@@ -81,6 +81,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_depth_storage.ps1
 
+      - name: Test VideoOut buffer ownership refresh
+        shell: pwsh
+        run: ./tools/scripts/test_video_out_refresh.ps1
+
       - name: Test cyclic scalar provenance convergence
         shell: pwsh
         run: ./tools/scripts/test_scalar_provenance_loop.ps1

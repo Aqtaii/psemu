@@ -2366,22 +2366,17 @@ void TextureCache::RefreshVideoOut(VideoOutVulkanImage* image, bool render_targe
 		     static_cast<const void*>(image));
 	}
 	auto& cached = **it;
-	if (cached.gpu_modified || cached.kind == CachedImage::Kind::VideoOut) {
-		{ static std::atomic<uint64_t> c = 0; auto n = c.fetch_add(1);
-		  if (n < 40) std::fprintf(stderr, "[VO-REFRESH] addr=0x%016llx KEEP-GPU (VideoOut surface protected from black CPU reupload)\n",
-		                           static_cast<unsigned long long>(cached.video_out.address)); }
+	const auto& info = cached.video_out;
+	const bool image_dirty = m_memory_tracker.IsRegionCpuModified(info.address, info.size);
+	const bool buffer_dirty = cached.buffer_modified ||
+	                          m_buffer_cache.IsCachedRegionCpuModified(info.address, info.size) ||
+	                          m_buffer_cache.IsRegionGpuModified(info.address, info.size);
+	if (cached.gpu_modified) {
+		if (image_dirty || buffer_dirty) {
+			EXIT("TextureCache: video-out has competing native and guest/buffer owners\n");
+		}
 		return;
 	}
-	const auto& info         = cached.video_out;
-	const bool  image_dirty  = m_memory_tracker.IsRegionCpuModified(info.address, info.size);
-	const bool  buffer_dirty = cached.buffer_modified ||
-	                           m_buffer_cache.IsRegionCpuModified(info.address, info.size) ||
-	                           m_buffer_cache.IsRegionGpuModified(info.address, info.size);
-	{ static std::atomic<uint64_t> c = 0; auto n = c.fetch_add(1);
-	  if (n < 40) std::fprintf(stderr, "[VO-REFRESH] addr=0x%016llx %s (image_dirty=%d buffer_dirty=%d)\n",
-	                           static_cast<unsigned long long>(info.address),
-	                           (image_dirty || buffer_dirty) ? "GUEST-REUPLOAD(siyah riski)" : "clean-keep",
-	                           image_dirty, buffer_dirty); }
 	if (!image_dirty && !buffer_dirty) {
 		if (info.compression == VideoOutCompression::Uncompressed ||
 		    CanUseVideoOutNativeWithoutUpload(info.compression, render_target, false, false)) {
@@ -2406,11 +2401,16 @@ void TextureCache::RefreshVideoOut(VideoOutVulkanImage* image, bool render_targe
 			     info.address, info.size, static_cast<const void*>(source.buffer),
 			     source.cpu_current, source.address, source.size, cached.buffer_modified);
 		}
-		cached.buffer_modified = false;
 	}
 	m_memory_tracker.ForEachUploadRange(
 	    info.address, info.size, false, [](uint64_t, uint64_t) noexcept {},
 	    [&]() noexcept { ImageOps::UploadVideoOut(cached.ctx, image, info, true); });
+	cached.buffer_modified = false;
+	static std::atomic_uint refresh_logs {0};
+	if (refresh_logs.fetch_add(1, std::memory_order_relaxed) < 8) {
+		printf("[VO-BUFFER-REFRESH] addr=0x%016" PRIx64 " size=0x%016" PRIx64
+		       " buffer_source=%d\n", info.address, info.size, buffer_dirty);
+	}
 }
 
 void TextureCache::UnregisterVideoOutSurfaces(const std::vector<VideoOutVulkanImage*>& images) {
