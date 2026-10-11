@@ -8,6 +8,7 @@
 #include "graphics/host_gpu/rangeSet.h"
 #include "graphics/host_gpu/renderer/guestAddressTable.h"
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -81,6 +82,9 @@ public:
 	[[nodiscard]] bool IsRegionGpuModified(uint64_t vaddr, uint64_t size);
 	void               PublishImageBacking(uint64_t vaddr, uint64_t size);
 	void               PublishReconstructedImageBacking(uint64_t vaddr, uint64_t size);
+	// Validate ownership, reconstruct backing and dirty cached fragments under one cache lock.
+	void ReconstructImageBacking(uint64_t vaddr, uint64_t size,
+	                             const std::function<void()>& reconstruct, uint64_t pending_fault_page = 0);
 	void ValidateGpuAccess(uint64_t vaddr, uint64_t size, bool is_read, bool is_written) const;
 	void SetTextureCache(TextureCache& texture_cache);
 

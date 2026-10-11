@@ -1,3 +1,4 @@
+#include <functional>
 #include <map>
 #include <memory>
 #include <utility>
@@ -24,5 +25,6 @@ struct BufferCache {
  PublicationTracker m_memory_tracker;
  PublicationRanges m_gpu_modified_ranges;
  void PublishReconstructedImageBacking(uint64_t,uint64_t);
+ void ReconstructImageBacking(uint64_t,uint64_t,const std::function<void()>&,uint64_t pending_fault_page=0);
 };
 struct FaultSafeCacheLock {FaultSafeCacheLock(BufferCache*,int&){}};

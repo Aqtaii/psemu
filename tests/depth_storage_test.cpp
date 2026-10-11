@@ -20,13 +20,39 @@ int main() {
   cache.m_memory_tracker.gpu={{0x60000,0x10000}}; // adjacent GPU data must survive
   if(competing_gpu)cache.m_gpu_modified_ranges.dirty={{0x40000,0x1000}};
   if(competing_cpu)cache.m_memory_tracker.cpu={{0x40000,0x1000}};
-  bool rejected=false;
-  try {cache.PublishReconstructedImageBacking(0x10000,0x50000);}
+  bool rejected=false,reconstructed=false;
+  try {cache.ReconstructImageBacking(0x10000,0x50000,[&]{
+   Require(cache.m_memory_tracker.published.empty());
+   reconstructed=true;
+  });}
   catch(const std::runtime_error&){rejected=true;}
   Require(rejected==(competing_gpu || competing_cpu));
+  Require(reconstructed==!rejected);
   Require(cache.m_memory_tracker.published.size()==(rejected?0u:1u));
   if(!rejected)Require(cache.m_memory_tracker.published[0]==std::pair<uint64_t,uint64_t>{0x10000,0x50000});
   Require(cache.m_memory_tracker.gpu[0]==std::pair<uint64_t,uint64_t>{0x60000,0x10000});
+ }
+ // A read fault's active page must stay pending until Complete/Release, while
+ // all other cached fragments become dirty before submissions resume.
+ {
+  BufferCache cache;
+  cache.m_buffers.emplace(0x10000,std::make_unique<BufferCache::CachedBuffer>(BufferCache::CachedBuffer{0x50000}));
+  bool reconstructed=false;
+  cache.ReconstructImageBacking(0x10000,0x50000,[&]{reconstructed=true;},0x30000);
+  Require(reconstructed);
+  Require(cache.m_memory_tracker.published.size()==2);
+  Require(cache.m_memory_tracker.published[0]==std::pair<uint64_t,uint64_t>{0x10000,0x20000});
+  Require(cache.m_memory_tracker.published[1]==std::pair<uint64_t,uint64_t>{0x31000,0x2f000});
+  cache.PublishReconstructedImageBacking(0x30000,0x1000);
+  Require(cache.m_memory_tracker.published.back()==std::pair<uint64_t,uint64_t>{0x30000,0x1000});
+ }
+ // Invalid fault pages must not execute reconstruction or publish any bytes.
+ for(uint64_t fault:{uint64_t{0x10001},uint64_t{0xf000},uint64_t{0x60000}}) {
+  BufferCache cache;
+  bool called=false,rejected=false;
+  try {cache.ReconstructImageBacking(0x10000,0x50000,[&]{called=true;},fault);}
+  catch(const std::runtime_error&){rejected=true;}
+  Require(rejected && !called && cache.m_memory_tracker.published.empty());
  }
  // Captured formatted buffer starts within a GPU target and extends beyond its end.
  constexpr uint64_t image=0x19d6e170000ull,image_size=0xff0000;

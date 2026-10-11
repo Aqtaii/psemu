@@ -1449,6 +1449,12 @@ void BufferCache::PublishImageBacking(uint64_t vaddr, uint64_t size) {
 // Full authoritative image readback can cover several cached buffer fragments.
 // Publish only image bytes; reject competing CPU/GPU owners before refreshing them.
 void BufferCache::PublishReconstructedImageBacking(uint64_t vaddr, uint64_t size) {
+	ReconstructImageBacking(vaddr, size, [] {});
+}
+
+void BufferCache::ReconstructImageBacking(uint64_t vaddr, uint64_t size,
+                                          const std::function<void()>& reconstruct,
+                                          uint64_t pending_fault_page) {
 	FaultSafeCacheLock lock(this, m_mutex);
 	if (vaddr == 0 || size == 0 || size > UINT64_MAX - vaddr ||
 	    m_memory_tracker.IsRegionGpuModified(vaddr, size) ||
@@ -1462,7 +1468,25 @@ void BufferCache::PublishReconstructedImageBacking(uint64_t vaddr, uint64_t size
 			EXIT("BufferCache: reconstructed image conflicts with CPU buffer ownership\n");
 		}
 	}
-	m_memory_tracker.MarkRegionAsCpuModified(vaddr, size);
+	if (pending_fault_page != 0 &&
+	    (pending_fault_page % TRACKER_PAGE_SIZE != 0 || pending_fault_page < vaddr ||
+	     pending_fault_page + TRACKER_PAGE_SIZE > vaddr + size)) {
+		EXIT("BufferCache: invalid reconstructed image pending fault page\n");
+	}
+	// No backing bytes are replaced until competing owners have been rejected.
+	reconstruct();
+	if (pending_fault_page == 0) {
+		m_memory_tracker.MarkRegionAsCpuModified(vaddr, size);
+	} else {
+		// Its buffer tracker fault is still pending until the resolver completes.
+		if (pending_fault_page > vaddr) {
+			m_memory_tracker.MarkRegionAsCpuModified(vaddr, pending_fault_page - vaddr);
+		}
+		const auto end = pending_fault_page + TRACKER_PAGE_SIZE;
+		if (end < vaddr + size) {
+			m_memory_tracker.MarkRegionAsCpuModified(end, vaddr + size - end);
+		}
+	}
 }
 
 void BufferCache::ValidateGpuAccess(uint64_t vaddr, uint64_t size, bool is_read,

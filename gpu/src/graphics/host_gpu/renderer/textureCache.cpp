@@ -522,39 +522,55 @@ struct TextureCache::ReadbackWorker {
 		const auto slice_size     = info.size / layers;
 		const bool meta_overlap   = cache.HasMetaOverlapLocked(info.address, info.size);
 		const bool buffer_overlap = cache.m_buffer_cache.HasPageOverlap(info.address, info.size);
-		if (meta_overlap || buffer_overlap) {
+		if (meta_overlap || (buffer_overlap && (!target || access != PageFaultAccess::Read))) {
 			EXIT("TextureCache: color-image readback storage is unsupported, addr=0x%016" PRIx64
 			     " size=0x%016" PRIx64 " meta=%d buffer=%d kind=%u\n",
 			     info.address, info.size, meta_overlap, buffer_overlap,
 			     static_cast<uint32_t>(cached.kind));
 		}
-		download.resize(info.size);
-		std::fill(download.begin(), download.end(), 0);
-		const auto regions = Transfer::MakeLayeredImageBufferCopies(layers, slice_size, info.pitch,
-		                                                            info.width, info.height);
-		Transfer::DownloadImage(cached.ctx, download.data(), info.size, regions, cached.image,
-		                        cached.image->layout);
-		if (tiled_target || tiled_storage) {
-			guest.resize(info.size);
-			const RenderTargetInfo layout =
-			    target ? cached.target : RenderTargetInfo {info.address,
-			                                               info.size,
-			                                               info.format,
-			                                               info.width,
-			                                               info.height,
-			                                               info.pitch,
-			                                               info.bytes_per_element,
-			                                               info.tile_mode,
-			                                               info.levels,
-			                                               1};
-			if (storage) {
-				cache.m_tiler.TileImage(guest.data(), download.data(), cached.info);
+		const auto reconstruct = [&] {
+			download.resize(info.size);
+			std::fill(download.begin(), download.end(), 0);
+			const auto regions = Transfer::MakeLayeredImageBufferCopies(layers, slice_size, info.pitch,
+			                                                            info.width, info.height);
+			Transfer::DownloadImage(cached.ctx, download.data(), info.size, regions, cached.image,
+			                        cached.image->layout);
+			if (tiled_target || tiled_storage) {
+				guest.resize(info.size);
+				const RenderTargetInfo layout =
+				    target ? cached.target : RenderTargetInfo {info.address,
+				                                               info.size,
+				                                               info.format,
+				                                               info.width,
+				                                               info.height,
+				                                               info.pitch,
+				                                               info.bytes_per_element,
+				                                               info.tile_mode,
+				                                               info.levels,
+				                                               1};
+				if (storage) {
+					cache.m_tiler.TileImage(guest.data(), download.data(), cached.info);
+				} else {
+					cache.m_tiler.TileImage(guest.data(), download.data(), layout);
+				}
+				Libs::LibKernel::Memory::WriteBacking(info.address, guest.data(), info.size);
 			} else {
-				cache.m_tiler.TileImage(guest.data(), download.data(), layout);
+				Libs::LibKernel::Memory::WriteBacking(info.address, download.data(), info.size);
 			}
-			Libs::LibKernel::Memory::WriteBacking(info.address, guest.data(), info.size);
+		};
+		if (buffer_overlap) {
+			// Run holds the texture lock and pauses submissions. Keep buffer ownership stable
+			// through download, retile, backing replacement and cached-fragment publication.
+			cache.m_buffer_cache.ReconstructImageBacking(
+			    info.address, info.size, reconstruct, vaddr & ~(TRACKER_PAGE_SIZE - 1));
+			buffer_publication_pending = true;
+			static std::atomic_uint readback_logs {0};
+			if (readback_logs.fetch_add(1, std::memory_order_relaxed) < 8) {
+				printf("[RT-BUFFER-READBACK] image=0x%016" PRIx64 "+0x%016" PRIx64
+				       " full_backing=1\n", info.address, info.size);
+			}
 		} else {
-			Libs::LibKernel::Memory::WriteBacking(info.address, download.data(), info.size);
+			reconstruct();
 		}
 		return {info.address, info.size};
 	}
@@ -637,6 +653,12 @@ struct TextureCache::ReadbackWorker {
 				     "addr=0x%016" PRIx64 " size=0x%016" PRIx64 "\n",
 				     transfer.address, transfer.size);
 			}
+			if (buffer_publication_pending) {
+				// Buffer Complete/Release ran before texture Release. Its read-fault pending
+				// bit is now clear, so the final page can become dirty for the next upload.
+				cache.m_buffer_cache.PublishReconstructedImageBacking(fault_page, TRACKER_PAGE_SIZE);
+				buffer_publication_pending = false;
+			}
 			selected->gpu_modified = false;
 			submissions_prepaused  = false;
 			state.store(State::Idle, std::memory_order_release);
@@ -650,6 +672,7 @@ struct TextureCache::ReadbackWorker {
 	uint64_t             vaddr                 = 0;
 	uint64_t             size                  = 0;
 	bool                 submissions_prepaused = false;
+	bool                 buffer_publication_pending = false;
 	std::vector<uint8_t> download;
 	std::vector<uint8_t> guest;
 	std::thread          thread;
