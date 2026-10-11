@@ -1063,50 +1063,45 @@ CanReconstructStorageForRenderTarget(const ImageInfo& storage, bool gpu_modified
         target.levels == 1 && target.layers == 1;
 }
 
+[[nodiscard]] inline bool IsSupportedRenderTargetReconstructionFootprint(const RenderTargetInfo& t) {
+ if(IsSupportedStandard64RenderTarget(t)) return true;
+ if(t.tile_mode!=Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) ||
+    (t.bytes_per_element!=2 && t.bytes_per_element!=4 && t.bytes_per_element!=8) ||
+    t.address==0 || (t.address&0xffffu)!=0 || t.width==0 || t.height==0 || t.levels!=1 || t.layers!=1) return false;
+ const uint64_t bw=t.bytes_per_element==2 ? 256u : 128u,bh=t.bytes_per_element==8 ? 64u : 128u;
+ const uint64_t pitch=(static_cast<uint64_t>(t.width)+bw-1)&~(bw-1);
+ const uint64_t height=(static_cast<uint64_t>(t.height)+bh-1)&~(bh-1);
+ return t.pitch==pitch && pitch<=UINT64_MAX/height/t.bytes_per_element &&
+        t.size==pitch*height*t.bytes_per_element && t.size<=UINT32_MAX;
+}
 [[nodiscard]] inline bool
 CanReconstructRenderTargetForStorage(const RenderTargetInfo& target,bool gpu,bool buffer,
-                                    bool tracker_gpu,bool cpu,bool same_context,bool buffers,
-                                    const ImageInfo& storage) {
- auto footprint=target;
- footprint.tile_mode=Prospero::GpuEnumValue(Prospero::TileMode::kStandard64KB);
- const bool depth32=IsTiledRenderTarget(target) && IsSupportedStandard64RenderTarget(footprint) &&
-                    IsSupportedDepthStorageBacking(storage);
- const uint64_t padded_height=(static_cast<uint64_t>(target.height)+63u)&~uint64_t{63u};
- const bool rgba16=target.tile_mode==Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) &&
-     target.bytes_per_element==8 && target.width!=0 && target.height!=0 && target.levels==1 && target.layers==1 &&
-     target.pitch==((static_cast<uint64_t>(target.width)+127u)&~uint64_t{127u}) &&
-     target.pitch<=UINT64_MAX/padded_height/8u && target.size==target.pitch*padded_height*8u &&
-     storage.format==Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float) &&
-     storage.tile==target.tile_mode && storage.address==target.address && storage.size==target.size &&
-     storage.width==target.width && storage.height==target.height && storage.pitch==target.pitch &&
+                                    bool tracker_gpu,bool cpu,bool same_context,bool buffers,const ImageInfo& storage) {
+ RenderTargetInfo backing{};backing.address=storage.address;backing.size=storage.size;
+ backing.width=storage.width;backing.height=storage.height;backing.pitch=storage.pitch;
+ backing.bytes_per_element=8;backing.tile_mode=storage.tile;backing.levels=storage.levels;
+ const bool rgba16=storage.format==Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float) &&
      storage.type==Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) && storage.depth==1 &&
-     storage.base_level==0 && storage.levels==1 && storage.view_levels==1 && storage.base_array==0;
- return gpu && tracker_gpu && !buffer && !cpu && same_context && !buffers &&
-        (depth32 || rgba16) &&
-        target.address != 0 && target.size != 0 && storage.address != 0 && storage.size != 0 &&
-        target.size <= UINT64_MAX - target.address && storage.size <= UINT64_MAX - storage.address &&
-        ((target.address | target.size | storage.address | storage.size) & (TRACKER_PAGE_SIZE - 1)) == 0 &&
-        storage.address >= target.address && storage.address - target.address <= target.size &&
-        storage.size <= target.size - (storage.address - target.address);
+     storage.base_level==0 && storage.levels==1 && storage.view_levels==1 && storage.base_array==0 &&
+     IsSupportedRenderTargetReconstructionFootprint(backing);
+ if(!gpu || !tracker_gpu || buffer || cpu || !same_context || buffers ||
+    !IsSupportedRenderTargetReconstructionFootprint(target) || (!IsSupportedDepthStorageBacking(storage) && !rgba16) ||
+    target.size>UINT64_MAX-target.address || storage.size>UINT64_MAX-storage.address ||
+    ((target.address|target.size|storage.address|storage.size)&(TRACKER_PAGE_SIZE-1))!=0) return false;
+ const bool inside=storage.address>=target.address && storage.address-target.address<=target.size &&
+                   storage.size<=target.size-(storage.address-target.address);
+ const bool contains=target.address>=storage.address && target.address-storage.address<=storage.size &&
+                     target.size<=storage.size-(target.address-storage.address);
+ return inside || contains;
 }
-
-// Reconstruct the complete old allocation before interpreting any overlapping new shape.
 [[nodiscard]] inline bool
 CanReconstructRenderTargetForRenderTarget(const RenderTargetInfo& cached,bool gpu,bool buffer,
-                                         bool tracker_gpu,bool cpu,bool same_context,bool buffers,
-                                         const RenderTargetInfo& requested) {
- ImageInfo backing{};backing.address=cached.address;backing.size=cached.size;
- backing.width=cached.width;backing.height=cached.height;backing.pitch=cached.pitch;
- backing.depth=1;backing.levels=backing.view_levels=1;
- backing.type=Prospero::GpuEnumValue(Prospero::ImageType::kColor2D);
- backing.format=Prospero::GpuEnumValue(cached.bytes_per_element==8 ?
-     Prospero::BufferFormat::k16_16_16_16Float : Prospero::BufferFormat::k32Float);
- backing.tile=cached.bytes_per_element==8 ? cached.tile_mode : Prospero::GpuEnumValue(Prospero::TileMode::kDepth);
- return requested.address!=0 && requested.size!=0 && requested.size<=UINT64_MAX-requested.address &&
-        ((requested.address|requested.size)&(TRACKER_PAGE_SIZE-1))==0 &&
-        requested.levels==1 && requested.layers==1 &&
-        ImageRangeOverlaps(cached.address,cached.size,requested.address,requested.size) &&
-        CanReconstructRenderTargetForStorage(cached,gpu,buffer,tracker_gpu,cpu,same_context,buffers,backing);
+                                         bool tracker_gpu,bool cpu,bool same_context,bool buffers,const RenderTargetInfo& requested) {
+ return gpu && tracker_gpu && !buffer && !cpu && same_context && !buffers &&
+        IsSupportedRenderTargetReconstructionFootprint(cached) && cached.size<=UINT64_MAX-cached.address &&
+        requested.address!=0 && requested.size!=0 && requested.size<=UINT64_MAX-requested.address &&
+        ((requested.address|requested.size)&(TRACKER_PAGE_SIZE-1))==0 && requested.levels==1 && requested.layers==1 &&
+        ImageRangeOverlaps(cached.address,cached.size,requested.address,requested.size);
 }
 
 // Backing became authoritative after readback; do not discard any native-only pixels.

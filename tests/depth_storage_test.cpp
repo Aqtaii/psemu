@@ -141,6 +141,30 @@ int main() {
   Require(cache.m_memory_tracker.published[0]==std::pair<uint64_t,uint64_t>{old.address,old.size});
  }
 
+ // Captured old 16-bit target contained in larger RGBA16F storage backing.
+ {
+  RenderTargetInfo old{};old.address=0x1e168a50000ull;old.size=0x480000;
+  old.width=1920;old.height=1080;old.pitch=2048;old.bytes_per_element=2;
+  old.tile_mode=Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget);
+  auto image=storage;image.address=old.address;image.size=0x1a20000;
+  image.width=image.pitch=2432;image.height=1368;
+  image.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float);image.tile=old.tile_mode;
+  Require(CanReconstructRenderTargetForStorage(old,true,false,true,false,true,false,image));
+  Require(!CanReconstructRenderTargetForStorage(old,true,false,true,false,true,true,image));
+  std::vector<uint16_t> linear(old.size/2),expected(linear.size()),actual(linear.size()+2);
+  actual.front()=0x1234;actual.back()=0xabcd;
+  for(size_t i=0;i<linear.size();i++){
+   linear[i]=static_cast<uint16_t>(i*17+7);expected[i]=actual[i+1]=static_cast<uint16_t>(i*31+11);
+  }
+  for(uint32_t y=0;y<1080;y++)for(uint32_t x=0;x<1920;x++){
+   const auto index=((y/128)*8+x/256)*32768+Gen5RenderTargetOffsetInBlock<uint16_t>(x%256,y)/2;
+   expected[index]=linear[y*2048+x];
+  }
+  TileConvertLinearToTiledRenderTarget16PreservePadding(actual.data()+1,linear.data(),1920,1080,2048,old.size);
+  Require(actual.front()==0x1234 && actual.back()==0xabcd);
+  for(size_t i=0;i<expected.size();i++)Require(actual[i+1]==expected[i]);
+ }
+
  Require(!CanMergeBufferCacheQueueMask(0x110,4));
  Require(CanMergeBufferCacheAfterDrain(0x110,4,0x110,true));
  Require(!CanMergeBufferCacheAfterDrain(0x110,4,0x10,true));

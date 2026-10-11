@@ -44,6 +44,8 @@ void TileConvertTiledToLinearRenderTarget(void* dst, const void* src, uint32_t w
                                           uint32_t src_y = 0);
 void TileConvertLinearToTiledRenderTarget64PreservePadding(void* dst,const void* src,
                       uint32_t width,uint32_t height,uint32_t pitch,uint64_t size);
+void TileConvertLinearToTiledRenderTarget16PreservePadding(void* dst,const void* src,
+                      uint32_t width,uint32_t height,uint32_t pitch,uint64_t size);
 void TileConvertLinearToTiledRenderTarget32PreservePadding(void* dst,const void* src,
                       uint32_t width,uint32_t height,uint32_t pitch,uint64_t size);
 void TileConvertLinearToTiledRenderTarget(void* dst, const void* src, uint32_t width,

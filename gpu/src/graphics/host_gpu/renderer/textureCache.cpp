@@ -551,11 +551,13 @@ struct TextureCache::ReadbackWorker {
 				if (storage) {
 					cache.m_tiler.TileImage(guest.data(), download.data(), cached.info);
 				} else if (preserve_target_padding) {
-					if (!IsTiledRenderTarget(layout) || (layout.bytes_per_element != 4 && layout.bytes_per_element != 8) ||
+					if (!IsTiledRenderTarget(layout) || (layout.bytes_per_element != 2 && layout.bytes_per_element != 4 && layout.bytes_per_element != 8) ||
 					    !Libs::LibKernel::Memory::TryReadBacking(info.address, guest.data(), info.size)) {
 						EXIT("TextureCache: cannot preserve target reconstruction padding\n");
 					}
-					if (layout.tile_mode == Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) && layout.bytes_per_element == 8) {
+					if (layout.tile_mode == Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) && layout.bytes_per_element == 2) {
+						TileConvertLinearToTiledRenderTarget16PreservePadding(guest.data(),download.data(),info.width,info.height,info.pitch,info.size);
+					} else if (layout.tile_mode == Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) && layout.bytes_per_element == 8) {
 						TileConvertLinearToTiledRenderTarget64PreservePadding(
 						    guest.data(),download.data(),info.width,info.height,info.pitch,info.size);
 					} else if (layout.tile_mode == Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget)) {
@@ -1091,7 +1093,8 @@ void TextureCache::ResolveStorageImageOverlaps(CommandBuffer* command, GraphicCo
 				    CanReconstructRenderTargetForStorage(cached->target,cached->gpu_modified,
 				        cached->buffer_modified,tracker_gpu,
 				        m_memory_tracker.IsRegionCpuModified(cached->Address(),cached->Size()),
-				        cached->ctx==ctx,m_buffer_cache.HasPageOverlap(cached->Address(),cached->Size()),requested)) {
+				        cached->ctx==ctx,(m_buffer_cache.IsRegionGpuModified(cached->Address(),cached->Size()) ||
+			         m_buffer_cache.IsCachedRegionCpuModified(cached->Address(),cached->Size())),requested)) {
 					retire.push_back(cached);
 					continue;
 				}
@@ -1460,7 +1463,8 @@ StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   com
 			    CanReconstructRenderTargetForStorage(cached->target,cached->gpu_modified,
 			        cached->buffer_modified,m_memory_tracker.IsRegionGpuModified(cached->Address(),cached->Size()),
 			        m_memory_tracker.IsRegionCpuModified(cached->Address(),cached->Size()),
-			        cached->ctx==ctx,m_buffer_cache.HasPageOverlap(cached->Address(),cached->Size()),info)) needs_target_drain=true;
+			        cached->ctx==ctx,(m_buffer_cache.IsRegionGpuModified(cached->Address(),cached->Size()) ||
+			         m_buffer_cache.IsCachedRegionCpuModified(cached->Address(),cached->Size())),info)) needs_target_drain=true;
 		}
 	}
 	if (needs_target_drain) {
@@ -1622,6 +1626,10 @@ StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   com
 		ResolveStorageImageOverlaps(
 		    command, ctx, info, IsCoherentGuestImageSource(source, info.address, info.size));
 		if (command->GetRecordingGeneration() != generation) { return nullptr; }
+		if(needs_target_drain && buffer_overlap) {
+			source=m_buffer_cache.ObtainBufferForImage(info.address,info.size);
+			if(!IsCoherentGuestImageSource(source,info.address,info.size)) EXIT("TextureCache: reconstructed storage source is incoherent\n");
+		}
 		m_images.reserve(m_images.size() + 1);
 		auto cached  = std::make_shared<CachedImage>();
 		cached->kind = CachedImage::Kind::StorageTexture;

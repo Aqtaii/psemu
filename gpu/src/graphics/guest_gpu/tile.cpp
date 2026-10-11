@@ -2247,6 +2247,16 @@ void TileConvertLinearToTiledRenderTarget64PreservePadding(void* dst,const void*
                                          static_cast<const uint64_t*>(src),size);
 }
 
+void TileConvertLinearToTiledRenderTarget16PreservePadding(void* dst,const void* src,
+                      uint32_t width,uint32_t height,uint32_t pitch,uint64_t size) {
+ const uint64_t padded_width=(static_cast<uint64_t>(width)+255u)&~uint64_t{255u};
+ const uint64_t padded_height=(static_cast<uint64_t>(height)+127u)&~uint64_t{127u};
+ if(dst==nullptr || src==nullptr || width==0 || height==0 || pitch!=padded_width ||
+    padded_width>UINT64_MAX/padded_height/2u || size!=padded_width*padded_height*2u)
+  EXIT("invalid padding-preserving render-target16 conversion\n");
+ ConvertRenderTargetTyped<uint16_t,false>(width,height,pitch,static_cast<uint16_t*>(dst),static_cast<const uint16_t*>(src),size);
+}
+
 void TileConvertLinearToTiledRenderTarget(void* dst, const void* src, uint32_t width,
                                           uint32_t height, uint32_t pitch,
                                           uint32_t bytes_per_element, uint64_t size,
