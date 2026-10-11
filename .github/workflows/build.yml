@@ -89,6 +89,13 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_scalar_address_shift.ps1
 
+      - name: Test DCC color metadata layout and clear decoding
+        shell: cmd
+        run: |
+          clang-cl /nologo /std:c++20 /O2 /EHsc /MD /I gpu/src tests/dcc_metadata_test.cpp /Fe:build/native-atomic-tests/dcc_metadata_test.exe /Fo:build/native-atomic-tests/dcc_metadata_test.obj
+          if errorlevel 1 exit /b 1
+          build\\native-atomic-tests\\dcc_metadata_test.exe
+
       - name: Test sparse GPU guest address table
         shell: pwsh
         run: ./tools/scripts/test_guest_address_table.ps1
