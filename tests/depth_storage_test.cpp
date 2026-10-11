@@ -145,6 +145,18 @@ int main() {
   Require(tiled.front()==guard&&tiled.back()==guard&&back.front()==guard&&back.back()==guard);
   for(uint32_t y=0;y<height;++y)for(uint32_t x=0;x<width;++x)
    Require(back[1+static_cast<size_t>(y)*pitch+x]==linear[1+static_cast<size_t>(y)*pitch+x]);
+  // Reinterpreting the allocation must preserve padding not represented by Vulkan pixels.
+  std::vector<uint32_t> preserved(words+2,guard),mask(words,0);
+  TileConvertLinearToTiledDepthPreservePadding(preserved.data()+1,linear.data()+1,info.format,width,height,pitch,words*4);
+  std::vector<uint32_t> ones(words,1);
+  TileConvertLinearToTiledDepth(mask.data(),ones.data(),info.format,width,height,pitch,words*4);
+  size_t replaced=0;
+  for(size_t i=0;i<words;i++) {
+   if(mask[i]) {Require(preserved[i+1]==tiled[i+1]);replaced++;}
+   else Require(preserved[i+1]==guard);
+  }
+  Require(replaced==static_cast<size_t>(width)*height);
+  Require(preserved.front()==guard && preserved.back()==guard);
   bool rejected=false;
   try {TileConvertLinearToTiledDepth(tiled.data()+1,linear.data()+1,info.format,width,height,pitch,words*4-4);}
   catch(const std::runtime_error&) {rejected=true;}

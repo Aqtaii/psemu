@@ -65,6 +65,11 @@ void TileConvertTiledToLinearDepth(void* dst, const void* src, uint32_t format, 
                                    uint32_t height, uint32_t pitch, uint64_t size);
 void TileConvertLinearToTiledDepth(void* dst, const void* src, uint32_t format, uint32_t width,
                                    uint32_t height, uint32_t pitch, uint64_t size);
+// Destination must already contain the guest backing; only logical image pixels are replaced.
+void TileConvertLinearToTiledDepthPreservePadding(void* dst, const void* src, uint32_t format,
+                                                uint32_t width, uint32_t height,
+                                                uint32_t pitch, uint64_t size);
+
 void TileConvertTiledToLinearStandard4KB(void* dst, const void* src, uint32_t format,
                                          uint32_t width, uint32_t height, uint32_t pitch,
                                          uint64_t dst_size, uint64_t src_size, uint32_t src_x = 0,

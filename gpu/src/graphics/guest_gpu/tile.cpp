@@ -1840,7 +1840,8 @@ template <bool tiled_to_linear, typename T, size_t x_count, size_t y_count>
 static void TileConvertDepthTyped(void* dst, const void* src, uint32_t width, uint32_t height,
                                   uint32_t pitch, uint64_t size,
                                   const std::array<uint32_t, x_count>& x_words,
-                                  const std::array<uint32_t, y_count>& y_words) {
+                                  const std::array<uint32_t, y_count>& y_words,
+                                  bool preserve_padding = false) {
 	constexpr uint32_t block_width    = static_cast<uint32_t>(x_count);
 	constexpr uint32_t block_height   = static_cast<uint32_t>(y_count);
 	const uint32_t     block_columns  = 1u + (width - 1u) / block_width;
@@ -1894,7 +1895,9 @@ static void TileConvertDepthTyped(void* dst, const void* src, uint32_t width, ui
 
 	auto*       dst_typed = static_cast<T*>(dst);
 	const auto* src_typed = static_cast<const T*>(src);
-	std::memset(dst_typed, 0, static_cast<size_t>(size));
+	if (!preserve_padding) {
+		std::memset(dst_typed, 0, static_cast<size_t>(size));
+	}
 	const uint32_t split = block_rows / 2u;
 	ConvertParams  first {0,
 	                      split,
@@ -1923,7 +1926,8 @@ static void TileConvertDepthTyped(void* dst, const void* src, uint32_t width, ui
 
 template <bool tiled_to_linear>
 static void TileConvertDepth(void* dst, const void* src, uint32_t format, uint32_t width,
-                             uint32_t height, uint32_t pitch, uint64_t size) {
+                             uint32_t height, uint32_t pitch, uint64_t size,
+                             bool preserve_padding = false) {
 	KYTY_PROFILER_FUNCTION();
 	const uint32_t bytes_per_element = Prospero::NumBytesPerElement(format);
 	const bool     supported_bpe =
@@ -1948,15 +1952,15 @@ static void TileConvertDepth(void* dst, const void* src, uint32_t format, uint32
 	if (bytes_per_element == 1) {
 		static constexpr Depth64KB8Tables tables;
 		TileConvertDepthTyped<tiled_to_linear, uint8_t>(dst, src, width, height, pitch, size,
-		                                                tables.x_words, tables.y_words);
+		                                                tables.x_words, tables.y_words, preserve_padding);
 	} else if (bytes_per_element == 2) {
 		static constexpr Depth64KB16Tables tables;
 		TileConvertDepthTyped<tiled_to_linear, uint16_t>(dst, src, width, height, pitch, size,
-		                                                 tables.x_words, tables.y_words);
+		                                                 tables.x_words, tables.y_words, preserve_padding);
 	} else {
 		static constexpr Depth64KB32Tables tables;
 		TileConvertDepthTyped<tiled_to_linear, uint32_t>(dst, src, width, height, pitch, size,
-		                                                 tables.x_words, tables.y_words);
+		                                                 tables.x_words, tables.y_words, preserve_padding);
 	}
 }
 
@@ -1968,6 +1972,12 @@ void TileConvertTiledToLinearDepth(void* dst, const void* src, uint32_t format, 
 void TileConvertLinearToTiledDepth(void* dst, const void* src, uint32_t format, uint32_t width,
                                    uint32_t height, uint32_t pitch, uint64_t size) {
 	TileConvertDepth<false>(dst, src, format, width, height, pitch, size);
+}
+
+void TileConvertLinearToTiledDepthPreservePadding(void* dst, const void* src, uint32_t format,
+                                                uint32_t width, uint32_t height,
+                                                uint32_t pitch, uint64_t size) {
+ TileConvertDepth<false>(dst, src, format, width, height, pitch, size, true);
 }
 
 void TileConvertTiledToLinearStandard4KB(void* dst, const void* src, uint32_t format,

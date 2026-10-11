@@ -1833,7 +1833,7 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 		if (!needs_storage_drain) {
 			EXIT("TextureCache: storage reconstruction has no ordered producer drain\n");
 		}
-		SynchronizeColorImageToBufferLocked(*storage, storage->info.address, storage->info.size);
+		SynchronizeColorImageToBufferLocked(*storage, storage->info.address, storage->info.size, true);
 		storage->buffer_modified = false;
 		static std::atomic_uint reconstruction_logs {0};
 		if (reconstruction_logs.fetch_add(1, std::memory_order_relaxed) < 8) {
@@ -2714,7 +2714,7 @@ void TextureCache::PrepareHostWrite(uint64_t vaddr, uint64_t size) {
 }
 
 void TextureCache::SynchronizeColorImageToBufferLocked(CachedImage& cached, uint64_t write_address,
-                                                       uint64_t write_size) {
+                                                       uint64_t write_size, bool preserve_storage_padding) {
 	const bool       render_target = cached.kind == CachedImage::Kind::RenderTarget;
 	const bool       video_out     = cached.kind == CachedImage::Kind::VideoOut;
 	const bool       storage       = cached.kind == CachedImage::Kind::StorageTexture;
@@ -2829,8 +2829,20 @@ void TextureCache::SynchronizeColorImageToBufferLocked(CachedImage& cached, uint
 	                        cached.image, cached.image->layout);
 	if (storage) {
 		m_buffer_transition_guest.resize(target.size);
-		m_tiler.TileImage(m_buffer_transition_guest.data(), m_buffer_transition_linear.data(),
-		                  cached.info);
+		if (preserve_storage_padding) {
+			if (!depth_storage ||
+			    !LibKernel::Memory::TryReadBacking(target.address, m_buffer_transition_guest.data(),
+			                                      target.size)) {
+				EXIT("TextureCache: cannot preserve storage reconstruction padding\n");
+			}
+			TileConvertLinearToTiledDepthPreservePadding(
+			    m_buffer_transition_guest.data(), m_buffer_transition_linear.data(),
+			    cached.info.format, cached.info.width, cached.info.height, cached.info.pitch,
+			    cached.info.size);
+		} else {
+			m_tiler.TileImage(m_buffer_transition_guest.data(), m_buffer_transition_linear.data(),
+			                  cached.info);
+		}
 		Libs::LibKernel::Memory::WriteBacking(target.address, m_buffer_transition_guest.data(),
 		                                      target.size);
 	} else if (tiled) {

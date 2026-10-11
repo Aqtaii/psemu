@@ -161,7 +161,7 @@ private:
 	void RetireImages(const std::vector<CachedImage*>& retire,
 	                  const CachedImage*               native_image_source = nullptr);
 	void SynchronizeColorImageToBufferLocked(CachedImage& cached, uint64_t write_address,
-	                                         uint64_t write_size);
+	                                         uint64_t write_size, bool preserve_storage_padding = false);
 	void SynchronizeDepthImageToBufferLocked(CachedImage& cached, uint64_t write_address,
 	                                         uint64_t write_size);
 
