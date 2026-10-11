@@ -54,6 +54,33 @@ int main() {
   catch(const std::runtime_error&){rejected=true;}
   Require(rejected && !called && cache.m_memory_tracker.published.empty());
  }
+ // Captured R32Float depth-storage image fully inside a larger render target.
+ {
+  ImageInfo storage{};
+  storage.address=0x1d90e540000ull;storage.size=0xc0000;
+  storage.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float);
+  storage.width=480;storage.height=270;storage.pitch=512;
+  storage.depth=1;storage.levels=1;storage.view_levels=1;
+  storage.type=Prospero::GpuEnumValue(Prospero::ImageType::kColor2D);
+  storage.tile=Prospero::GpuEnumValue(Prospero::TileMode::kDepth);
+  RenderTargetInfo target{};
+  target.address=0x1d90e300000ull;target.size=0xff0000;target.levels=1;target.layers=1;
+  auto proof=[&](bool gpu=true,bool yielded=false,bool dirty=false,bool context=true,
+                bool coherent=true,bool buffers=false) {
+   return CanReconstructStorageForRenderTarget(storage,gpu,yielded,dirty,context,coherent,buffers,target);
+  };
+  Require(proof());
+  Require(!proof(false));Require(!proof(true,true));Require(!proof(true,false,true));
+  Require(!proof(true,false,false,false));Require(!proof(true,false,false,true,false));
+  Require(!proof(true,false,false,true,true,true));
+  auto captured=storage;
+  storage.address=target.address-0x1000;Require(!proof());storage=captured;
+  storage.size=target.size;Require(!proof());storage=captured;
+  storage.base_level=1;Require(!proof());storage=captured;
+  storage.depth=2;Require(!proof());storage=captured;
+  storage.address++;Require(!proof());storage=captured;
+  target.layers=2;Require(!proof());
+ }
  // Captured formatted buffer starts within a GPU target and extends beyond its end.
  constexpr uint64_t image=0x19d6e170000ull,image_size=0xff0000;
  auto classify=[&](uint64_t address,uint64_t size,bool gpu=true,bool yielded=false,bool formatted=true) {
@@ -106,7 +133,7 @@ int main() {
    case 7:bad.type=Prospero::GpuEnumValue(Prospero::ImageType::kColor2DArray);break;}
   Require(!IsSupportedDepthStorageBacking(bad));
  }
- for(auto extent:std::array<std::array<uint32_t,2>,3>{{{960,540},{129,131},{1,1}}}) {
+ for(auto extent:std::array<std::array<uint32_t,2>,4>{{{480,270},{960,540},{129,131},{1,1}}}) {
   auto width=extent[0],height=extent[1],pitch=(width+127)&~127u;
   auto words=static_cast<size_t>(pitch)*((height+127)&~127u);
   constexpr uint32_t guard=0xdeadbeef;

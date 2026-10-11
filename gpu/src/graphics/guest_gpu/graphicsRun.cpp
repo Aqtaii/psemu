@@ -1977,6 +1977,13 @@ CommandProcessor* GraphicsRunCurrentCommandProcessor() noexcept {
 	return g_current_run_cp;
 }
 
+void GraphicsRunSynchronizeCommandProcessors() {
+ if (g_current_run_cp == nullptr) {
+  EXIT("image transfer synchronization requires a command-processor thread\n");
+ }
+ g_current_run_cp->SynchronizeGpu();
+}
+
 void GraphicsRunFinishCommandProcessors() {
 	if (g_current_run_cp == nullptr) {
 		EXIT("GPU readback finish requires a command-processor thread\n");

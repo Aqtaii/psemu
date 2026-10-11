@@ -1635,6 +1635,32 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 		     " elements=0x%016" PRIx64 " bpe=%u\n",
 		     info.size, elements, info.bytes_per_element);
 	}
+	bool needs_storage_drain = false;
+	{
+		std::lock_guard transaction(m_resource_mutex);
+		FaultSafeTextureLock lock(this, m_lock);
+		const bool buffers = m_buffer_cache.HasPageOverlap(info.address, info.size);
+		for (const auto& entry: m_images) {
+			const auto& cached = *entry;
+			if (cached.kind == CachedImage::Kind::StorageTexture &&
+			    ClassifyStorageRenderTargetOverlap(
+			        cached.info, cached.image->format, cached.gpu_modified, cached.buffer_modified,
+			        cached.info.IsCpuDirty(), cached.ctx == ctx, info) == RenderTargetOverlap::Unsupported &&
+			    CanReconstructStorageForRenderTarget(
+			        cached.info, cached.gpu_modified, cached.buffer_modified,
+			        cached.info.IsCpuDirty() ||
+			            m_memory_tracker.IsRegionCpuModified(cached.info.address, cached.info.size),
+			        cached.ctx == ctx, true, buffers, info)) {
+				needs_storage_drain = true;
+				break;
+			}
+		}
+	}
+	if (needs_storage_drain) {
+		// waitIdle alone does not submit writes still being recorded. Drain all producer
+		// queues before taking cache locks, then revalidate ownership below.
+		GraphicsRunSynchronizeCommandProcessors();
+	}
 	std::lock_guard       transaction(m_resource_mutex);
 	BufferImageCopySource target_source {nullptr, 0, info.address, info.size, true};
 	const bool target_buffer_overlap = m_buffer_cache.HasPageOverlap(info.address, info.size);
@@ -1681,6 +1707,7 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 	}
 	std::vector<CachedImage*>    retire;
 	std::vector<CachedImage*>    buffer_owned_target_retire;
+	std::vector<CachedImage*>    reconstructed_storage_retire;
 	std::shared_ptr<CachedImage> native_image_source;
 	for (const auto& entry: m_images) {
 		auto& cached = *entry;
@@ -1699,6 +1726,18 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 				    cached.info.IsCpuDirty() ||
 				        m_memory_tracker.IsRegionCpuModified(cached.info.address, cached.info.size),
 				    cached.ctx == ctx, info);
+				if (overlap == RenderTargetOverlap::Unsupported &&
+				    CanReconstructStorageForRenderTarget(
+				        cached.info, cached.gpu_modified, cached.buffer_modified,
+				        cached.info.IsCpuDirty() ||
+				            m_memory_tracker.IsRegionCpuModified(cached.info.address, cached.info.size),
+				        cached.ctx == ctx,
+				        IsCoherentGuestImageSource(target_source, info.address, info.size),
+				        target_buffer_overlap, info)) {
+					overlap = RenderTargetOverlap::RetireTarget;
+					reconstructed_storage_retire.push_back(&cached);
+					command->RetainResourceUntilFence(entry);
+				}
 				break;
 			case CachedImage::Kind::RenderTarget:
 				if (CanRetireBufferOwnedRenderTarget(
@@ -1749,6 +1788,9 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 			case RenderTargetOverlap::RetireTarget:
 				supported =
 				    cached.kind == CachedImage::Kind::RenderTarget ||
+				    (cached.kind == CachedImage::Kind::StorageTexture &&
+				     std::find(reconstructed_storage_retire.begin(), reconstructed_storage_retire.end(),
+				               &cached) != reconstructed_storage_retire.end()) ||
 				    (cached.kind == CachedImage::Kind::DepthTarget && target_buffer_overlap &&
 				     IsCoherentGuestImageSource(target_source, info.address, info.size));
 				if (supported && cached.kind == CachedImage::Kind::DepthTarget) {
@@ -1773,6 +1815,34 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 		retire.push_back(&cached);
 	}
 	RequireRetirementIsolation(retire, "render target", info.address, info.size);
+	if (!reconstructed_storage_retire.empty() && native_image_source != nullptr) {
+		EXIT("TextureCache: storage reconstruction cannot mix with native target expansion\n");
+	}
+	for (size_t i = 0; i < reconstructed_storage_retire.size(); i++) {
+		for (size_t j = i + 1; j < reconstructed_storage_retire.size(); j++) {
+			const auto& left = reconstructed_storage_retire[i]->info;
+			const auto& right = reconstructed_storage_retire[j]->info;
+			if (ImagePageRangesOverlap(left.address, left.size, right.address, right.size)) {
+				EXIT("TextureCache: storage reconstruction has competing GPU image owners\n");
+			}
+		}
+	}
+	for (auto* storage: reconstructed_storage_retire) {
+		// All overlap/retirement proofs precede publication. The full storage image is
+		// downloaded using its original permutation, preserving bytes outside it.
+		if (!needs_storage_drain) {
+			EXIT("TextureCache: storage reconstruction has no ordered producer drain\n");
+		}
+		SynchronizeColorImageToBufferLocked(*storage, storage->info.address, storage->info.size);
+		storage->buffer_modified = false;
+		static std::atomic_uint reconstruction_logs {0};
+		if (reconstruction_logs.fetch_add(1, std::memory_order_relaxed) < 8) {
+			printf("[STORAGE-RT-RECONSTRUCT] storage=0x%016" PRIx64 "+0x%016" PRIx64
+			       " target=0x%016" PRIx64 "+0x%016" PRIx64 " full_backing=1\n",
+			       storage->info.address, storage->info.size, info.address, info.size);
+		}
+	}
+
 	for (auto* cached: buffer_owned_target_retire) {
 		// The coherent buffer backing owns the current bytes. Clear the stale-image marker only
 		// after coherence validation so normal retirement can remove the obsolete Vulkan shape.

@@ -48,7 +48,7 @@ $header+=([string][char]10)+'constexpr uint64_t TRACKER_PAGE_SIZE=4096;'+([strin
 $header+=Slice $info 'enum class BufferImageBinding' 'enum class StorageBufferRebind'
 $header+=Slice $info '[[nodiscard]] inline bool ImageRangeOverlaps(' '[[nodiscard]] inline SampledOverlap ClassifySampledOverlap('
 $header+=Slice $info '[[nodiscard]] inline BufferImageWrite' '[[nodiscard]] inline StorageBufferRebind'
-$header+=([string][char]10)+"[[nodiscard]] inline bool"+([string][char]10)+(Slice $info 'CanRetireBufferOwnedRenderTarget(' '[[nodiscard]] inline DepthOverlap ClassifyDepthTargetOverlap(')
+$header+=([string][char]10)+"[[nodiscard]] inline bool"+([string][char]10)+(Slice $info 'CanReconstructStorageForRenderTarget(' '[[nodiscard]] inline DepthOverlap ClassifyDepthTargetOverlap(')
 $header+=[IO.File]::ReadAllText("$root\tests\render_target_publication_fixture.h")
 $buffers=[IO.File]::ReadAllText("$root\gpu\src\graphics\host_gpu\renderer\bufferCache.cpp")
 $header+=Slice $buffers 'void BufferCache::PublishReconstructedImageBacking(' 'void BufferCache::ValidateGpuAccess('

@@ -28,6 +28,8 @@ int  GraphicsRunGetFrameNum();
 [[nodiscard]] bool              GraphicsRunIsCommandProcessorThread() noexcept;
 [[nodiscard]] CommandProcessor* GraphicsRunCurrentCommandProcessor() noexcept;
 void                            GraphicsRunFinishCommandProcessors();
+// Ordered image transfers call this outside resource/cache locks.
+void                            GraphicsRunSynchronizeCommandProcessors();
 [[nodiscard]] bool              GraphicsRunSubmissionLockHeld() noexcept;
 [[nodiscard]] bool              GraphicsRunGpuLockHeld() noexcept;
 } // namespace Libs::Graphics

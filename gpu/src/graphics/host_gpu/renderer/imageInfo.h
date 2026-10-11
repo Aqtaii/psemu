@@ -1041,6 +1041,23 @@ ClassifyRenderTargetOverlap(const RenderTargetInfo& cached, bool cached_gpu_modi
 	           : RenderTargetOverlap::Unsupported;
 }
 
+// A differently shaped storage image must publish guest-layout bytes before retirement.
+// Initially support only the captured single-mip depth-storage layout without buffer aliases.
+[[nodiscard]] inline bool
+CanReconstructStorageForRenderTarget(const ImageInfo& storage, bool gpu_modified,
+                                    bool buffer_modified, bool cpu_dirty, bool same_context,
+                                    bool coherent_target, bool target_buffer_overlap,
+                                    const RenderTargetInfo& target) {
+ return gpu_modified && !buffer_modified && !cpu_dirty && same_context &&
+        coherent_target && !target_buffer_overlap && IsSupportedDepthStorageBacking(storage) &&
+        storage.address % TRACKER_PAGE_SIZE == 0 && storage.size % TRACKER_PAGE_SIZE == 0 &&
+        target.address % TRACKER_PAGE_SIZE == 0 && target.size % TRACKER_PAGE_SIZE == 0 &&
+        storage.address >= target.address && storage.size != 0 &&
+        storage.address - target.address <= target.size &&
+        storage.size <= target.size - (storage.address - target.address) &&
+        target.levels == 1 && target.layers == 1;
+}
+
 [[nodiscard]] inline bool
 CanRetireBufferOwnedRenderTarget(const RenderTargetInfo& cached, bool gpu_modified,
                                  bool buffer_modified, bool same_context,
