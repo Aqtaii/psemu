@@ -52,6 +52,7 @@ $header+=([string][char]10)+"[[nodiscard]] inline bool"+([string][char]10)+(Slic
 $header+=[IO.File]::ReadAllText("$root\tests\render_target_publication_fixture.h")
 $buffers=[IO.File]::ReadAllText("$root\gpu\src\graphics\host_gpu\renderer\bufferCache.cpp")
 $header+=Slice $buffers 'void BufferCache::PublishReconstructedImageBacking(' 'void BufferCache::ValidateGpuAccess('
+$header+=Slice $buffers 'void BufferCache::RefreshCpuImageFragmentsLocked(' 'BufferImageCopySource BufferCache::ObtainBufferForImage('
 $source=Join-Path $out 'depth_storage_production.cpp'
 [IO.File]::WriteAllText($source,$header+"`n"+[IO.File]::ReadAllText("$root\tests\depth_storage_test.cpp"),[Text.UTF8Encoding]::new($false))
 Push-Location $out

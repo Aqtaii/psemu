@@ -2634,7 +2634,7 @@ void TextureCache::MarkGpuWritten(VulkanImage* image) {
 		for (uint32_t i = 0; i < cached->RangeCount(); i++) {
 			if (m_buffer_cache.HasPageOverlap(cached->Address(i), cached->Size(i))) {
 				const bool cpu_modified =
-				    m_buffer_cache.IsRegionCpuModified(cached->Address(i), cached->Size(i));
+				    m_buffer_cache.IsCachedRegionCpuModified(cached->Address(i), cached->Size(i));
 				const bool gpu_modified =
 				    m_buffer_cache.IsRegionGpuModified(cached->Address(i), cached->Size(i));
 				if (cpu_modified || gpu_modified) {

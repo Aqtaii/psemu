@@ -79,6 +79,8 @@ public:
 	                uint64_t src_vaddr, uint64_t size, bool dst_gds = false, bool src_gds = false);
 	[[nodiscard]] bool HasPageOverlap(uint64_t vaddr, uint64_t size);
 	[[nodiscard]] bool IsRegionCpuModified(uint64_t vaddr, uint64_t size);
+	// Only resident native-buffer fragments; tracker defaults in cache holes are not owners.
+	[[nodiscard]] bool IsCachedRegionCpuModified(uint64_t vaddr, uint64_t size);
 	[[nodiscard]] bool IsRegionGpuModified(uint64_t vaddr, uint64_t size);
 	void               PublishImageBacking(uint64_t vaddr, uint64_t size);
 	void               PublishReconstructedImageBacking(uint64_t vaddr, uint64_t size);
@@ -100,6 +102,7 @@ public:
  void ResetNullBuffer();
 
 private:
+	void RefreshCpuImageFragmentsLocked(uint64_t vaddr, uint64_t size);
 	struct CachedBuffer;
 	struct ReadbackWorker;
 

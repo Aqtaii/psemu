@@ -1045,6 +1045,79 @@ VulkanBuffer* BufferCache::ObtainNullBuffer(CommandBuffer* command, GraphicConte
 	return m_null_buffer.get();
 }
 
+// Resource transaction and buffer-cache lock are held by ObtainBufferForImage.
+void BufferCache::RefreshCpuImageFragmentsLocked(uint64_t vaddr, uint64_t size) {
+ if (vaddr == 0 || size == 0 || size > UINT64_MAX - vaddr ||
+     ((vaddr | size) & (TRACKER_PAGE_SIZE - 1)) != 0 ||
+     m_memory_tracker.IsRegionGpuModified(vaddr, size) ||
+     !m_gpu_modified_ranges.Intersections(vaddr, size).empty()) {
+  EXIT("BufferCache: image fragment upload conflicts with GPU ownership\n");
+ }
+ // Validate every owner before the first upload or tracker mutation.
+ for (const auto& [address, cached]: m_buffers) {
+  const auto begin = std::max(vaddr, address);
+  const auto end = std::min(vaddr + size, address + cached->size);
+  if (begin >= end) continue;
+  if (cached->ctx == nullptr || cached->buffer == nullptr ||
+      cached->buffer->buffer == nullptr ||
+      end - address > cached->buffer->buffer_size) {
+   EXIT("BufferCache: image fragment has invalid native backing\n");
+  }
+ }
+ uint32_t upload_count = 0;
+ uint64_t upload_bytes = 0;
+ for (const auto& [address, cached]: m_buffers) {
+  const auto begin = std::max(vaddr, address);
+  const auto end = std::min(vaddr + size, address + cached->size);
+  if (begin >= end || !m_memory_tracker.IsRegionCpuModified(begin, end - begin)) continue;
+  std::vector<std::pair<uint64_t, uint64_t>> uploads;
+  m_memory_tracker.ForEachUploadRange(
+      begin, end - begin, false,
+      [&](uint64_t upload_address, uint64_t bytes) noexcept {
+       uploads.emplace_back(upload_address, bytes);
+      },
+      [&]() noexcept {
+       for (const auto& [upload_address, bytes]: uploads) {
+        // Physical backing is authoritative after buffer readback. Avoid guest faults
+        // while the cache lock and upload tracker transaction are held.
+        std::vector<uint8_t> backing(bytes);
+        if (!Libs::LibKernel::Memory::TryReadBacking(upload_address, backing.data(), bytes)) {
+         EXIT("BufferCache: image fragment backing read failed\n");
+        }
+        Transfer::UploadBuffer(cached->ctx, Transfer::StagingBufferType::Vertex,
+                               cached->buffer.get(), upload_address - address,
+                               backing.data(), bytes);
+        upload_count++;
+        upload_bytes += bytes;
+       }
+      });
+  if (m_memory_tracker.IsRegionCpuModified(begin, end - begin)) {
+   EXIT("BufferCache: image fragment remained CPU-dirty after upload\n");
+  }
+ }
+ if (upload_count != 0) {
+  static std::atomic_uint fragment_logs {0};
+  if (fragment_logs.fetch_add(1, std::memory_order_relaxed) < 8) {
+   printf("[IMAGE-BUFFER-FRAGMENTS] image=0x%016" PRIx64 "+0x%016" PRIx64
+          " uploads=%u bytes=0x%016" PRIx64 "\n", vaddr, size, upload_count, upload_bytes);
+  }
+ }
+
+}
+
+bool BufferCache::IsCachedRegionCpuModified(uint64_t vaddr, uint64_t size) {
+ FaultSafeCacheLock lock(this, m_mutex);
+ if (vaddr == 0 || size == 0 || size > UINT64_MAX - vaddr) {
+  EXIT("BufferCache: invalid cached CPU ownership query\n");
+ }
+ for (const auto& [address, cached]: m_buffers) {
+  const auto begin = std::max(vaddr, address);
+  const auto end = std::min(vaddr + size, address + cached->size);
+  if (begin < end && m_memory_tracker.IsRegionCpuModified(begin, end - begin)) return true;
+ }
+ return false;
+}
+
 BufferImageCopySource BufferCache::ObtainBufferForImage(uint64_t vaddr, uint64_t size) {
 	if (vaddr == 0 || size == 0 || vaddr >= TRACKER_ADDRESS_SIZE ||
 	    size > TRACKER_ADDRESS_SIZE - vaddr || (vaddr & (TRACKER_PAGE_SIZE - 1)) != 0 ||
@@ -1125,6 +1198,8 @@ BufferImageCopySource BufferCache::ObtainBufferForImage(uint64_t vaddr, uint64_t
 		}
 		m_gpu_modified_ranges.Subtract(vaddr, size);
 	}
+	// Refresh every resident fragment even when no one buffer contains the whole image.
+	RefreshCpuImageFragmentsLocked(vaddr, size);
 	auto owner = m_buffers.upper_bound(vaddr);
 	if (owner == m_buffers.begin()) {
 		return {nullptr, 0, vaddr, size, true, cpu_modified};
@@ -1137,26 +1212,6 @@ BufferImageCopySource BufferCache::ObtainBufferForImage(uint64_t vaddr, uint64_t
 	}
 	if (cached.ctx == nullptr || cached.buffer == nullptr || cached.buffer->buffer == nullptr) {
 		EXIT("BufferCache: containing image source is inconsistent\n");
-	}
-	if (cpu_modified) {
-		std::vector<std::pair<uint64_t, uint64_t>> uploads;
-		m_memory_tracker.ForEachUploadRange(
-		    vaddr, size, false,
-		    [&](uint64_t address, uint64_t bytes) noexcept {
-			    uploads.emplace_back(address, bytes);
-		    },
-		    [&]() noexcept {
-			    for (const auto& [address, bytes]: uploads) {
-				    Transfer::UploadBuffer(cached.ctx, Transfer::StagingBufferType::Vertex,
-				                           cached.buffer.get(), address - cached.vaddr,
-				                           reinterpret_cast<const void*>(address), bytes);
-			    }
-		    });
-		if (uploads.empty()) {
-			EXIT("BufferCache: CPU-modified image source produced no uploads, addr=0x%016" PRIx64
-			     " size=0x%016" PRIx64 "\n",
-			     vaddr, size);
-		}
 	}
 	if (m_memory_tracker.IsRegionCpuModified(vaddr, size) ||
 	    m_memory_tracker.IsRegionGpuModified(vaddr, size) ||

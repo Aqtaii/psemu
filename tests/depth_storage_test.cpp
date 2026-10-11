@@ -101,6 +101,48 @@ int main() {
   storage.address=UINT64_MAX-0xfff;storage.size=0x2000;Require(!proof());storage=captured;
   target.layers=2;Require(!proof());
  }
+ // Production fragment refresh: partial native owners, cache holes and exterior bytes.
+ for(int conflict=0;conflict<4;conflict++) {
+  BufferCache cache;GraphicContext context;
+  Libs::LibKernel::Memory::fixture_base=0x10000;
+  auto& guest=Libs::LibKernel::Memory::fixture_backing;guest.resize(0x80000);
+  for(size_t i=0;i<guest.size();i++)guest[i]=static_cast<uint8_t>(i*13+7);
+  for(uint64_t address:{uint64_t{0x10000},uint64_t{0x60000}}) {
+   auto cached=std::make_unique<BufferCache::CachedBuffer>();
+   cached->size=0x30000;cached->ctx=&context;
+   cached->buffer=std::make_shared<VulkanBuffer>();
+   cached->buffer->buffer_size=0x30000;cached->buffer->bytes.assign(0x30000,0xaa);
+   cache.m_buffers.emplace(address,std::move(cached));
+  }
+  cache.m_memory_tracker.cpu={{0x10000,0x30000},{0x40000,0x20000},{0x60000,0x30000}};
+  cache.m_memory_tracker.gpu={{0x90000,0x10000}}; // exterior GPU data survives
+  if(conflict==1)cache.m_memory_tracker.gpu.emplace_back(0x60000,0x1000);
+  if(conflict==2)cache.m_gpu_modified_ranges.dirty={{0x60000,0x1000}};
+  if(conflict==3)cache.m_buffers.at(0x60000)->buffer->buffer=nullptr;
+  Transfer::fixture_uploads=0;
+  bool rejected=false;
+  try {cache.RefreshCpuImageFragmentsLocked(0x20000,0x50000);}
+  catch(const std::runtime_error&){rejected=true;}
+  Require(rejected==(conflict!=0));
+  Require(Transfer::fixture_uploads==(rejected?0u:2u));
+  for(const auto& [address,cached]:cache.m_buffers) {
+   for(size_t i=0;i<cached->buffer->bytes.size();i++) {
+    auto absolute=address+i;
+    bool replaced=!rejected && absolute>=0x20000 && absolute<0x70000;
+    Require(cached->buffer->bytes[i]==(replaced?guest[absolute-0x10000]:uint8_t{0xaa}));
+   }
+  }
+  if(!rejected) {
+   Require(!cache.IsCachedRegionCpuModified(0x20000,0x50000));
+   Require(cache.m_memory_tracker.IsRegionCpuModified(0x40000,0x20000));
+   Require(cache.IsCachedRegionCpuModified(0x10000,0x10000));
+   Require(cache.IsCachedRegionCpuModified(0x70000,0x20000));
+   Require(!cache.IsCachedRegionCpuModified(0x40000,0x20000));
+   cache.RefreshCpuImageFragmentsLocked(0x20000,0x50000);
+   Require(Transfer::fixture_uploads==2); // clean fragments must not upload again
+  }
+  Require(cache.m_memory_tracker.gpu.front()==std::pair<uint64_t,uint64_t>{0x90000,0x10000});
+ }
  // Captured formatted buffer starts within a GPU target and extends beyond its end.
  constexpr uint64_t image=0x19d6e170000ull,image_size=0xff0000;
  auto classify=[&](uint64_t address,uint64_t size,bool gpu=true,bool yielded=false,bool formatted=true) {
