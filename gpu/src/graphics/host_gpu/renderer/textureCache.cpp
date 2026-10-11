@@ -1089,10 +1089,19 @@ void TextureCache::ResolveStorageImageOverlaps(CommandBuffer* command, GraphicCo
 				}
 				EXIT("TextureCache: unsupported storage-image byte alias, requested=0x%016" PRIx64
 				     "+0x%016" PRIx64 " existing=0x%016" PRIx64 "+0x%016" PRIx64
-				     " kind=%u same_context=%d gpu=%d/%d buffer=%d\n",
+				     " kind=%u same_context=%d gpu=%d/%d buffer=%d"
+				     " requested=%ux%u pitch=%u tile=%u fmt=%u depth=%u levels=%u"
+				     " target=%ux%u pitch=%u tile=%u bpe=%u layers=%u levels=%u"
+				     " cpu=%d buffers=%d\n",
 				     requested.address, requested.size, cached->Address(), cached->Size(),
 				     static_cast<uint32_t>(cached->kind), cached->ctx == ctx, cached->gpu_modified,
-				     tracker_gpu, cached->buffer_modified);
+				     tracker_gpu, cached->buffer_modified,
+				     requested.width,requested.height,requested.pitch,requested.tile,requested.format,
+				     requested.depth,requested.levels,cached->target.width,cached->target.height,
+				     cached->target.pitch,cached->target.tile_mode,cached->target.bytes_per_element,
+				     cached->target.layers,cached->target.levels,
+				     m_memory_tracker.IsRegionCpuModified(cached->Address(),cached->Size()),
+				     m_buffer_cache.HasPageOverlap(requested.address,requested.size));
 		}
 	}
 	RequireRetirementIsolation(retire, "storage neighbor", requested.address, requested.size);
