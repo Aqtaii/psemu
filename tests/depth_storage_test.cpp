@@ -72,7 +72,7 @@ int main() {
   for(size_t i=0;i<expected.size();i++)Require(actual[i+1]==expected[i]);
  }
 
- // Captured exact RGBA16F alias: 128x64 blocks, preserve each 64-bit pixel and padding.
+ // Captured RGBA16F: 128x64 blocks; absolute Y includes the block-row bank XOR.
  {
   auto image=storage;image.address=0x28cb7980000ull;image.size=0xff0000;
   image.width=1920;image.height=1080;image.pitch=1920;
@@ -92,7 +92,7 @@ int main() {
    linear[i]=0xabcdef0100000000ull+i*17;expected[i]=actual[i+1]=0x1234567800000000ull+i*31;
   }
   for(uint32_t y=0;y<1080;y++)for(uint32_t x=0;x<1920;x++){
-   const auto index=((y/64)*15+x/128)*8192+Gen5RenderTargetOffsetInBlock<uint64_t>(x%128,y%64)/8;
+   const auto index=((y/64)*15+x/128)*8192+Gen5RenderTargetOffsetInBlock<uint64_t>(x%128,y)/8;
    expected[index]=linear[y*1920+x];
   }
   TileConvertLinearToTiledRenderTarget64PreservePadding(actual.data()+1,linear.data(),1920,1080,1920,image.size);
