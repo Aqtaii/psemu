@@ -733,14 +733,17 @@ std::pair<VulkanBuffer*, uint64_t> BufferCache::ObtainBuffer(CommandBuffer*  com
 	// when either cache owns newer GPU bytes. Writable buffers delegate the ownership transition
 	// to TextureCache, which distinguishes raw texture-data writes from formatted target paths.
 	if (texture_pages.image_pages && texture_region.image_bytes) {
-		const bool coherent_read = is_read && !is_written &&
-		                           !m_memory_tracker.IsRegionGpuModified(vaddr, size) &&
-		                           !texture_region.gpu_image_bytes;
+        const bool buffer_gpu = m_memory_tracker.IsRegionGpuModified(vaddr, size);
+		const bool coherent_read = IsCoherentBufferImageRead(
+		    is_read, is_written, buffer_gpu, texture_region.gpu_image_bytes,
+		    texture_region.buffer_owned_image_bytes);
 		if (!coherent_read) {
 			if (!is_written) {
 				EXIT("BufferCache: unsupported buffer/image alias, addr=0x%016" PRIx64
-				     " size=0x%016" PRIx64 " read=%d written=%d formatted=%d\n",
-				     vaddr, size, is_read, is_written, is_formatted);
+				     " size=0x%016" PRIx64
+				     " read=%d written=%d formatted=%d buffer_gpu=%d image_gpu=%d buffer_owned_images=%d\n",
+				     vaddr, size, is_read, is_written, is_formatted, buffer_gpu,
+				     texture_region.gpu_image_bytes, texture_region.buffer_owned_image_bytes);
 			}
 			(void)m_texture_cache->InvalidateMemoryFromGPU(vaddr, size, is_formatted);
 		}

@@ -725,6 +725,16 @@ ClassifyHostWriteOverlap(uint64_t write_address, uint64_t write_size, uint64_t i
 	           : HostWriteOverlap::Unsupported;
 }
 
+// A GPU-dirty resident buffer can be read without uploading stale guest backing
+// only when every overlapping image has explicitly yielded ownership to it.
+[[nodiscard]] inline bool IsCoherentBufferImageRead(bool is_read, bool is_written,
+                                                     bool buffer_gpu_modified,
+                                                     bool image_gpu_modified,
+                                                     bool all_images_buffer_owned) noexcept {
+	return is_read && !is_written && !image_gpu_modified &&
+	       (!buffer_gpu_modified || all_images_buffer_owned);
+}
+
 [[nodiscard]] inline BufferImageWrite
 ClassifyBufferImageWrite(uint64_t buffer_address, uint64_t buffer_size, uint64_t image_address,
                          uint64_t image_size, BufferImageBinding binding, bool image_gpu_modified,

@@ -1,5 +1,18 @@
 static void Require(bool ok) {if(!ok) throw std::runtime_error("regression failed");}
 int main() {
+ // Captured Astro failure: BDA snapshot rereads a resident 32 KiB buffer after
+ // its GPU write invalidated the overlapping image. Reuse the buffer, not backing.
+ Require(IsCoherentBufferImageRead(true,false,true,false,true));
+ // An image that did not yield, or a mixed set of yielded/current aliases, must reject.
+ Require(!IsCoherentBufferImageRead(true,false,true,false,false));
+ // Two GPU owners still conflict; image-only GPU ownership needs real readback.
+ Require(!IsCoherentBufferImageRead(true,false,true,true,true));
+ Require(!IsCoherentBufferImageRead(true,false,false,true,false));
+ // CPU-current overlapping read stays supported; writes use the transition path.
+ Require(IsCoherentBufferImageRead(true,false,false,false,false));
+ Require(!IsCoherentBufferImageRead(true,true,true,false,true));
+ Require(!IsCoherentBufferImageRead(false,false,true,false,true));
+
  Require(IsSupportedStorageSwizzle(Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16Float),0x22c));
  Require(!IsSupportedStorageSwizzle(Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16Float),DstSel(5,4,0,1)));
  Require(!IsSupportedStorageSwizzle(Prospero::GpuEnumValue(Prospero::BufferFormat::k16Float),0x22c));

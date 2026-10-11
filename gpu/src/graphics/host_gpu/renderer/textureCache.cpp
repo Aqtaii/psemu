@@ -2971,14 +2971,19 @@ TextureCache::RegionInfo TextureCache::QueryRegion(uint64_t vaddr, uint64_t size
 	}
 	FaultSafeTextureLock lock(this, m_lock);
 	RegionInfo           result;
+	bool all_images_buffer_owned = true;
 	const auto           candidates = FindImagesInRegionLocked(vaddr, size, true);
 	result.image_pages              = !candidates.empty();
 	for (const auto* cached: candidates) {
 		const bool bytes = cached->OverlapsRange(vaddr, size, false);
 		result.image_bytes |= bytes;
+		if (bytes) {
+			all_images_buffer_owned &= cached->buffer_modified && !cached->gpu_modified;
+		}
 		result.gpu_image_bytes |= bytes && cached->gpu_modified;
 		result.non_sampled_pages |= cached->kind != CachedImage::Kind::Texture;
 	}
+	result.buffer_owned_image_bytes = result.image_bytes && all_images_buffer_owned;
 	for (const auto& [address, metadata]: m_surface_metas) {
 		result.metadata_pages |= ImagePageRangesOverlap(vaddr, size, address, metadata.size);
 		result.metadata_bytes |= ImageRangeOverlaps(vaddr, size, address, metadata.size);

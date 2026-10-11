@@ -38,6 +38,7 @@ public:
 		bool image_pages        = false;
 		bool image_bytes        = false;
 		bool gpu_image_bytes    = false;
+		bool buffer_owned_image_bytes = false;
 		bool non_sampled_pages  = false;
 		bool metadata_pages     = false;
 		bool metadata_bytes     = false;
