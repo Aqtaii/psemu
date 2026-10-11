@@ -124,6 +124,23 @@ int main() {
   Require(!CanReconstructRenderTargetForRenderTarget(old,true,false,true,false,true,false,next));
  }
 
+ // Captured 2432x1368 RGBA16F overlaps a new target but also stale buffer pages outside it.
+ {
+  RenderTargetInfo old{};old.address=0x2a1e6300000ull;old.size=0x1a20000;
+  old.width=old.pitch=2432;old.height=1368;old.bytes_per_element=8;
+  old.tile_mode=Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget);
+  RenderTargetInfo next{};next.address=old.address-0xcf0000;next.size=0xff0000;
+  Require(CanReconstructRenderTargetForRenderTarget(old,true,false,true,false,true,false,next));
+  Require(!CanReconstructRenderTargetForRenderTarget(old,true,false,true,false,true,true,next));
+  BufferCache cache;
+  const auto tail=old.address+0x1000000;
+  cache.m_buffers.emplace(tail,std::make_unique<BufferCache::CachedBuffer>(BufferCache::CachedBuffer{0xa20000}));
+  bool published=false;
+  cache.ReconstructImageBacking(old.address,old.size,[&]{published=true;});
+  Require(published && cache.m_memory_tracker.published.size()==1);
+  Require(cache.m_memory_tracker.published[0]==std::pair<uint64_t,uint64_t>{old.address,old.size});
+ }
+
  Require(!CanMergeBufferCacheQueueMask(0x110,4));
  Require(CanMergeBufferCacheAfterDrain(0x110,4,0x110,true));
  Require(!CanMergeBufferCacheAfterDrain(0x110,4,0x10,true));

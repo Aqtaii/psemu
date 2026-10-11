@@ -522,7 +522,7 @@ struct TextureCache::ReadbackWorker {
 		const auto slice_size     = info.size / layers;
 		const bool meta_overlap   = cache.HasMetaOverlapLocked(info.address, info.size);
 		const bool buffer_overlap = cache.m_buffer_cache.HasPageOverlap(info.address, info.size);
-		if (meta_overlap || (buffer_overlap && (!target || access != PageFaultAccess::Read))) {
+		if (meta_overlap || (buffer_overlap && (!target || (!preserve_target_padding && access != PageFaultAccess::Read)))) {
 			EXIT("TextureCache: color-image readback storage is unsupported, addr=0x%016" PRIx64
 			     " size=0x%016" PRIx64 " meta=%d buffer=%d kind=%u\n",
 			     info.address, info.size, meta_overlap, buffer_overlap,
@@ -551,7 +551,7 @@ struct TextureCache::ReadbackWorker {
 				if (storage) {
 					cache.m_tiler.TileImage(guest.data(), download.data(), cached.info);
 				} else if (preserve_target_padding) {
-					if (!IsTiledRenderTarget(layout) || (layout.bytes_per_element != 4 && layout.bytes_per_element != 8) || buffer_overlap ||
+					if (!IsTiledRenderTarget(layout) || (layout.bytes_per_element != 4 && layout.bytes_per_element != 8) ||
 					    !Libs::LibKernel::Memory::TryReadBacking(info.address, guest.data(), info.size)) {
 						EXIT("TextureCache: cannot preserve target reconstruction padding\n");
 					}
@@ -577,8 +577,8 @@ struct TextureCache::ReadbackWorker {
 			// Run holds the texture lock and pauses submissions. Keep buffer ownership stable
 			// through download, retile, backing replacement and cached-fragment publication.
 			cache.m_buffer_cache.ReconstructImageBacking(
-			    info.address, info.size, reconstruct, vaddr & ~(TRACKER_PAGE_SIZE - 1));
-			buffer_publication_pending = true;
+			    info.address, info.size, reconstruct, preserve_target_padding ? 0 : vaddr & ~(TRACKER_PAGE_SIZE - 1));
+			buffer_publication_pending = !preserve_target_padding;
 			static std::atomic_uint readback_logs {0};
 			if (readback_logs.fetch_add(1, std::memory_order_relaxed) < 8) {
 				printf("[RT-BUFFER-READBACK] image=0x%016" PRIx64 "+0x%016" PRIx64
@@ -1730,7 +1730,8 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 			    CanReconstructRenderTargetForRenderTarget(cached.target,cached.gpu_modified,cached.buffer_modified,
 			        m_memory_tracker.IsRegionGpuModified(cached.Address(),cached.Size()),
 			        m_memory_tracker.IsRegionCpuModified(cached.Address(),cached.Size()),cached.ctx==ctx,
-			        m_buffer_cache.HasPageOverlap(cached.Address(),cached.Size()),info)) {
+			        (m_buffer_cache.IsRegionGpuModified(cached.Address(),cached.Size()) ||
+			         m_buffer_cache.IsCachedRegionCpuModified(cached.Address(),cached.Size())),info)) {
 				needs_storage_drain=true;
 				break;
 			}
@@ -1847,7 +1848,8 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 				} else if (CanReconstructRenderTargetForRenderTarget(cached.target,cached.gpu_modified,
 				        cached.buffer_modified,m_memory_tracker.IsRegionGpuModified(cached.Address(),cached.Size()),
 				        m_memory_tracker.IsRegionCpuModified(cached.Address(),cached.Size()),cached.ctx==ctx,
-				        m_buffer_cache.HasPageOverlap(cached.Address(),cached.Size()),info)) {
+				        (m_buffer_cache.IsRegionGpuModified(cached.Address(),cached.Size()) ||
+			         m_buffer_cache.IsCachedRegionCpuModified(cached.Address(),cached.Size())),info)) {
 					overlap=RenderTargetOverlap::RetireTarget;
 					reconstructed_target_retire.push_back(&cached);
 					command->RetainResourceUntilFence(entry);
@@ -1916,7 +1918,7 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 			     "+0x%016" PRIx64 " existing_kind=%u existing=0x%016" PRIx64 "+0x%016" PRIx64
 			     " gpu_modified=%d same_context=%d"
 			     " sampled_format=%u extent=%ux%ux%u pitch=%u levels=%u base_level=%u"
-			     " tile=%u type=%u base_array=%u old_target=%ux%u pitch=%u tile=%u bpe=%u tracker_gpu=%d cpu=%d buffers=%d\n",
+			     " tile=%u type=%u base_array=%u old_target=%ux%u pitch=%u tile=%u bpe=%u tracker_gpu=%d cpu=%d buffers=%d buffer_gpu=%d buffer_cpu=%d\n",
 			     info.address, info.size, static_cast<uint32_t>(cached.kind), cached.Address(),
 			     cached.Size(), cached.gpu_modified, cached.ctx == ctx, cached.info.format,
 			     cached.info.width, cached.info.height, cached.info.depth, cached.info.pitch,
@@ -1924,7 +1926,9 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 			     cached.info.base_array,cached.target.width,cached.target.height,cached.target.pitch,cached.target.tile_mode,
 			     cached.target.bytes_per_element,m_memory_tracker.IsRegionGpuModified(cached.Address(),cached.Size()),
 			     m_memory_tracker.IsRegionCpuModified(cached.Address(),cached.Size()),
-			     m_buffer_cache.HasPageOverlap(cached.Address(),cached.Size()));
+			     m_buffer_cache.HasPageOverlap(cached.Address(),cached.Size()),
+			     m_buffer_cache.IsRegionGpuModified(cached.Address(),cached.Size()),
+			     m_buffer_cache.IsCachedRegionCpuModified(cached.Address(),cached.Size()));
 		}
 		retire.push_back(&cached);
 	}
