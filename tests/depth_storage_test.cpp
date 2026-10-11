@@ -17,6 +17,21 @@ int main() {
  TileConvertLinearToTiledStandard64KB32PreservePadding(keep.data(),src.data(),960,540,1024,rt.size);
  size_t pixels=0;for(size_t i=0;i<keep.size();i++){Require(keep[i]==(mask[i]?tiled[i]:0xa5a5a5a5));pixels+=mask[i]!=0;}
  Require(pixels==960u*540u);
+ rt.tile_mode=Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget);
+ Require(CanReconstructRenderTargetForStorage(rt,true,false,true,false,true,false,storage));
+ std::fill(mask.begin(),mask.end(),0);
+ std::fill(keep.begin(),keep.end(),0xa5a5a5a5);
+ for(size_t i=0;i<src.size();i++)src[i]=static_cast<uint32_t>(i*17+7);
+ TileConvertLinearToTiledRenderTarget32PreservePadding(mask.data(),ones.data(),960,540,1024,rt.size);
+ TileConvertLinearToTiledRenderTarget32PreservePadding(keep.data(),src.data(),960,540,1024,rt.size);
+ pixels=0;for(size_t i=0;i<keep.size();i++){if(!mask[i])Require(keep[i]==0xa5a5a5a5);pixels+=mask[i]!=0;}
+ Require(pixels==960u*540u);
+ for(uint32_t y=0;y<540;y++)for(uint32_t x=0;x<960;x++){
+  const uint64_t block=((y/128)*8+x/128)*16384;
+  const auto index=block+Gen5RenderTargetOffsetInBlock<uint32_t>(x%128,y%128)/4;
+  Require(keep[index]==src[y*1024+x]);
+ }
+
 
  Require(!CanMergeBufferCacheQueueMask(0x110,4));
  Require(CanMergeBufferCacheAfterDrain(0x110,4,0x110,true));

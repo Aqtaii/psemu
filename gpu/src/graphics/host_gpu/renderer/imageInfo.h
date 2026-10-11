@@ -1067,8 +1067,11 @@ CanReconstructStorageForRenderTarget(const ImageInfo& storage, bool gpu_modified
 CanReconstructRenderTargetForStorage(const RenderTargetInfo& target,bool gpu,bool buffer,
                                     bool tracker_gpu,bool cpu,bool same_context,bool buffers,
                                     const ImageInfo& storage) {
+ auto footprint=target;
+ footprint.tile_mode=Prospero::GpuEnumValue(Prospero::TileMode::kStandard64KB);
  return gpu && tracker_gpu && !buffer && !cpu && same_context && !buffers &&
-        IsSupportedStandard64RenderTarget(target) && IsSupportedDepthStorageBacking(storage) &&
+        IsTiledRenderTarget(target) && IsSupportedStandard64RenderTarget(footprint) &&
+        IsSupportedDepthStorageBacking(storage) &&
         target.address==storage.address && target.size==storage.size &&
         target.width==storage.width && target.height==storage.height && target.pitch==storage.pitch;
 }
