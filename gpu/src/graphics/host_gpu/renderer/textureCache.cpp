@@ -114,6 +114,7 @@ struct TextureCache::CachedImage {
 	bool             buffer_modified     = false;
 	bool             stencil_initialized = false;
 	bool             registered          = false;
+	DccBinding       dcc {};
 
 	~CachedImage() {
 		if (ctx == nullptr || image == nullptr || registered) {
@@ -1309,13 +1310,21 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
 StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   command,
                                                             GraphicContext*  ctx,
                                                             const ImageInfo& info,
-                                                            const DccSlice* initial_clear) {
-	if (initial_clear != nullptr &&
-	    !CanInitializeDccClear(*initial_clear, info.levels, info.base_level, info.depth,
+                                                            const DccBinding* dcc) {
+	if (dcc != nullptr &&
+	    (!ValidRgba16fDccBinding(*dcc, info.width, info.height) ||
+	     info.tile != Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) ||
+	     info.swizzle != 0xfacu ||
+	     dcc->layout.total_bytes != dcc->layout.slice_bytes ||
+	     ImagePageRangesOverlap(info.address, info.size, dcc->address, dcc->layout.total_bytes) ||
+	     !CanInitializeDccClear({DccSliceKind::Clear, {}}, info.levels, info.base_level, info.depth,
 	                           info.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor2D),
-	                           info.format == Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float))) {
-		EXIT("TextureCache: unsupported initial DCC clear\n");
+	                           info.format == Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float)))) {
+		EXIT("TextureCache: unsupported DCC storage binding\n");
 	}
+	DccSlice clear_slice {};
+	const DccSlice* initial_clear = nullptr;
+	bool clear_recorded = false;
 	const auto generation = command->GetRecordingGeneration();
 	const bool supported_type =
 	    info.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) ||
@@ -1351,6 +1360,30 @@ StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   com
 	}
 
 	std::lock_guard       transaction(m_resource_mutex);
+	if (dcc != nullptr) {
+		// Ordered buffer readback must not hold the image lock.
+		const auto region = QueryRegion(dcc->address, dcc->layout.total_bytes);
+		if (region.image_pages || region.gpu_metadata_bytes) {
+			EXIT("TextureCache: DCC metadata aliases image or virtual GPU metadata\n");
+		}
+		if (m_buffer_cache.HasPageOverlap(dcc->address, dcc->layout.total_bytes)) {
+			const auto source = m_buffer_cache.ObtainBufferForImage(dcc->address, dcc->layout.total_bytes);
+			if (command->GetRecordingGeneration() != generation) { return nullptr; }
+			if (!IsCoherentGuestImageSource(source, dcc->address, dcc->layout.total_bytes)) {
+				EXIT("TextureCache: incoherent DCC metadata buffer\n");
+			}
+		}
+		std::vector<DccSlice> slices;
+		if (!ReadDccSlices(dcc->address, dcc->layout, dcc->alpha_msb,
+		                  [](uint64_t address, void* bytes, size_t size) {
+			                  return LibKernel::Memory::TryReadBacking(address, bytes, size);
+		                  }, &slices) ||
+		    slices.size() != 1 || slices.front().kind == DccSliceKind::Unsupported) {
+			EXIT("TextureCache: unsupported or unreadable DCC metadata\n");
+		}
+		clear_slice = slices.front();
+		if (clear_slice.kind == DccSliceKind::Clear) { initial_clear = &clear_slice; }
+	}
 	const bool            buffer_overlap = m_buffer_cache.HasPageOverlap(info.address, info.size);
 	BufferImageCopySource source {nullptr, 0, info.address, info.size, true};
 	if (buffer_overlap) {
@@ -1366,115 +1399,157 @@ StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   com
 	if (command->GetRecordingGeneration() != generation) {
 		return nullptr;
 	}
-	FaultSafeTextureLock lock(this, m_lock);
-	RequireNoMetaOverlapLocked(info.address, info.size);
-	if (supported_depth_tile && IsSupportedDepthStorageBacking(info)) {
-		RetireStorageDepthAliasLocked(ctx, info);
-	}
+	const auto record_clear = [&](VulkanImage* image) noexcept {
+		vk::ClearColorValue clear {};
+		for (uint32_t lane = 0; lane < 4; ++lane) { clear.float32[lane] = initial_clear->color[lane]; }
+		m_memory_tracker.ForEachUploadRange(
+		    info.address, info.size, true, [](uint64_t, uint64_t) noexcept {},
+		    [&]() noexcept {
+			    auto vk_buffer = command->Handle();
+			    GraphicsRenderColorImageBarrier(vk_buffer, image, vk::ImageLayout::eTransferDstOptimal);
+			    const vk::ImageSubresourceRange range {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+			    vk_buffer.clearColorImage(image->image, image->layout, &clear, 1, &range);
+			    GraphicsRenderColorImageBarrier(vk_buffer, image, RENDER_COLOR_IMAGE_LAYOUT);
+		    });
+		clear_recorded = true;
+	};
+	auto* result = [&]() -> StorageTextureVulkanImage* {
+		FaultSafeTextureLock lock(this, m_lock);
+		if (dcc != nullptr) {
+			for (const auto& [address, metadata]: m_surface_metas) {
+				if (ImagePageRangesOverlap(address, metadata.size, dcc->address, dcc->layout.total_bytes)) {
+					EXIT("TextureCache: physical DCC metadata overlaps virtual metadata\n");
+				}
+			}
+			for (const auto& cached: m_images) {
+				if (cached->dcc.address != 0 &&
+				    ImagePageRangesOverlap(cached->dcc.address, cached->dcc.layout.total_bytes,
+				                           dcc->address, dcc->layout.total_bytes) &&
+				    (!SameDccBinding(cached->dcc, *dcc) || !EqualStorageBacking(info, cached->info))) {
+					EXIT("TextureCache: DCC metadata has an incompatible color owner\n");
+				}
+			}
+		}
+		RequireNoMetaOverlapLocked(info.address, info.size);
+		if (supported_depth_tile && IsSupportedDepthStorageBacking(info)) {
+			RetireStorageDepthAliasLocked(ctx, info);
+		}
 
-	std::shared_ptr<CachedImage> match;
-	for (auto& cached: m_images) {
-		if (cached->kind != CachedImage::Kind::StorageTexture ||
-		    !EqualStorageBacking(info, cached->info)) {
-			continue;
+		std::shared_ptr<CachedImage> match;
+		for (auto& cached: m_images) {
+			if (cached->kind != CachedImage::Kind::StorageTexture ||
+			    !EqualStorageBacking(info, cached->info)) {
+				continue;
+			}
+			if (match != nullptr || cached->ctx != ctx || cached->info.IsCpuDirty()) {
+				EXIT("TextureCache: invalid exact storage-image cache match, addr=0x%016" PRIx64
+				     " size=0x%016" PRIx64 " duplicate=%d same_context=%d cpu_dirty=%d\n",
+				     info.address, info.size, match != nullptr, cached->ctx == ctx,
+				     cached->info.IsCpuDirty());
+			}
+			match = cached;
 		}
-		if (match != nullptr || cached->ctx != ctx || cached->info.IsCpuDirty()) {
-			EXIT("TextureCache: invalid exact storage-image cache match, addr=0x%016" PRIx64
-			     " size=0x%016" PRIx64 " duplicate=%d same_context=%d cpu_dirty=%d\n",
-			     info.address, info.size, match != nullptr, cached->ctx == ctx,
-			     cached->info.IsCpuDirty());
-		}
-		match = cached;
-	}
-	if (match != nullptr) {
-		if (initial_clear != nullptr) {
-			EXIT("TextureCache: initial DCC clear cannot replace an existing image owner\n");
-		}
-		const bool cpu_modified = m_memory_tracker.IsRegionCpuModified(info.address, info.size);
-		const bool gpu_modified = m_memory_tracker.IsRegionGpuModified(info.address, info.size);
-		const auto rebind       = ClassifyStorageBufferRebind(
-		    buffer_overlap, match->gpu_modified, match->buffer_modified, gpu_modified, cpu_modified,
-		    IsCoherentGuestImageSource(source, info.address, info.size));
-		if (rebind == StorageBufferRebind::Unsupported) {
-			EXIT("TextureCache: storage-image ownership is inconsistent, addr=0x%016" PRIx64
-			     " size=0x%016" PRIx64
-			     " cached_gpu_modified=%d buffer_modified=%d tracker_gpu_modified=%d "
-			     "cpu_modified=%d buffer_overlap=%d source_current=%d\n",
-			     info.address, info.size, match->gpu_modified, match->buffer_modified, gpu_modified,
-			     cpu_modified, buffer_overlap, source.cpu_current);
-		}
-		if (rebind == StorageBufferRebind::RefreshFromBacking) {
-			// The formatted buffer may cover only one page of a packed mip chain. The
-			// synchronization path published the complete tiled backing before that write,
-			// and ObtainBufferForImage has now folded its dirty subrange back into it.
-			m_memory_tracker.MarkRegionAsCpuModified(info.address, info.size);
-			m_memory_tracker.ForEachUploadRange(
-			    info.address, info.size, true, [](uint64_t, uint64_t) noexcept {},
-			    [&]() noexcept {
-				    m_tiler.DetileImage(match->ctx,
-				                        static_cast<GpuTextureVulkanImage*>(match->image),
-				                        match->info, source, true, true);
-			    });
-			match->buffer_modified = false;
-			match->gpu_modified    = true;
-		} else if (!gpu_modified) {
-			if (cpu_modified) {
+		if (match != nullptr) {
+			if (dcc != nullptr && match->dcc.address != 0 && !SameDccBinding(match->dcc, *dcc)) {
+				EXIT("TextureCache: DCC metadata association changed without retirement\n");
+			}
+			if (initial_clear != nullptr) {
+				record_clear(match->image);
+				match->gpu_modified = true;
+				match->buffer_modified = false;
+				match->dcc = *dcc;
+				command->RetainResourceUntilFence(match);
+				return static_cast<StorageTextureVulkanImage*>(match->image);
+			}
+			const bool cpu_modified = m_memory_tracker.IsRegionCpuModified(info.address, info.size);
+			const bool gpu_modified = m_memory_tracker.IsRegionGpuModified(info.address, info.size);
+			const auto rebind       = ClassifyStorageBufferRebind(
+			    buffer_overlap, match->gpu_modified, match->buffer_modified, gpu_modified, cpu_modified,
+			    IsCoherentGuestImageSource(source, info.address, info.size));
+			if (rebind == StorageBufferRebind::Unsupported) {
+				EXIT("TextureCache: storage-image ownership is inconsistent, addr=0x%016" PRIx64
+				     " size=0x%016" PRIx64
+				     " cached_gpu_modified=%d buffer_modified=%d tracker_gpu_modified=%d "
+				     "cpu_modified=%d buffer_overlap=%d source_current=%d\n",
+				     info.address, info.size, match->gpu_modified, match->buffer_modified, gpu_modified,
+				     cpu_modified, buffer_overlap, source.cpu_current);
+			}
+			if (rebind == StorageBufferRebind::RefreshFromBacking) {
+				// The formatted buffer may cover only one page of a packed mip chain. The
+				// synchronization path published the complete tiled backing before that write,
+				// and ObtainBufferForImage has now folded its dirty subrange back into it.
+				m_memory_tracker.MarkRegionAsCpuModified(info.address, info.size);
 				m_memory_tracker.ForEachUploadRange(
 				    info.address, info.size, true, [](uint64_t, uint64_t) noexcept {},
 				    [&]() noexcept {
-					    m_tiler.DetileImage(
-					        match->ctx, static_cast<GpuTextureVulkanImage*>(match->image),
-					        match->info, {nullptr, 0, match->info.address, match->info.size, true},
-					        true, true);
+					    m_tiler.DetileImage(match->ctx,
+					                        static_cast<GpuTextureVulkanImage*>(match->image),
+					                        match->info, source, true, true);
 				    });
-			} else {
-				// A readback leaves both copies current. Reclaim ownership without an unnecessary
-				// upload through the clean UpdateImage storage-binding path.
-				m_memory_tracker.MarkRegionAsGpuModified(info.address, info.size);
+				match->buffer_modified = false;
+				match->gpu_modified    = true;
+			} else if (!gpu_modified) {
+				if (cpu_modified) {
+					m_memory_tracker.ForEachUploadRange(
+					    info.address, info.size, true, [](uint64_t, uint64_t) noexcept {},
+					    [&]() noexcept {
+						    m_tiler.DetileImage(
+						        match->ctx, static_cast<GpuTextureVulkanImage*>(match->image),
+						        match->info, {nullptr, 0, match->info.address, match->info.size, true},
+						        true, true);
+					    });
+				} else {
+					// A readback leaves both copies current. Reclaim ownership without an unnecessary
+					// upload through the clean UpdateImage storage-binding path.
+					m_memory_tracker.MarkRegionAsGpuModified(info.address, info.size);
+				}
+				match->gpu_modified = true;
 			}
-			match->gpu_modified = true;
+			if (dcc != nullptr) { match->dcc = *dcc; }
+			command->RetainResourceUntilFence(match);
+			return static_cast<StorageTextureVulkanImage*>(match->image);
 		}
-		command->RetainResourceUntilFence(match);
-		return static_cast<StorageTextureVulkanImage*>(match->image);
-	}
 
-	ResolveStorageImageOverlaps(ctx, info);
-	m_images.reserve(m_images.size() + 1);
-	auto cached  = std::make_shared<CachedImage>();
-	cached->kind = CachedImage::Kind::StorageTexture;
-	cached->info = info;
-	cached->ctx  = ctx;
-	vk::ComponentMapping components {};
-	cached->image = ImageOps::CreateTexture(ctx, info, true, &components);
-	if (initial_clear != nullptr) {
-		// A DCC clear defines the pixels independently of stale compressed color backing.
-		// Record the transfer before publishing the image as the authoritative GPU owner.
-		m_memory_tracker.ForEachUploadRange(
-		    info.address, info.size, true, [](uint64_t, uint64_t) noexcept {},
-		    [&]() noexcept {
-		    vk::ClearColorValue clear {};
-		    for (uint32_t lane = 0; lane < 4; ++lane) {
-			    clear.float32[lane] = initial_clear->color[lane];
-		    }
-		    auto vk_buffer = command->Handle();
-		    GraphicsRenderColorImageBarrier(vk_buffer, cached->image,
-		                                    vk::ImageLayout::eTransferDstOptimal);
-		    const vk::ImageSubresourceRange range {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
-		    vk_buffer.clearColorImage(cached->image->image, cached->image->layout, &clear, 1, &range);
-		    GraphicsRenderColorImageBarrier(vk_buffer, cached->image, RENDER_COLOR_IMAGE_LAYOUT);
-		    });
-	} else {
-		m_memory_tracker.ForEachUploadRange(
-		    info.address, info.size, true, [](uint64_t, uint64_t) noexcept {},
-		    [&]() noexcept {
-			    m_tiler.DetileImage(cached->ctx, static_cast<GpuTextureVulkanImage*>(cached->image),
-			                        cached->info, source, false, true);
-		    });
+		ResolveStorageImageOverlaps(ctx, info);
+		if (command->GetRecordingGeneration() != generation) { return nullptr; }
+		m_images.reserve(m_images.size() + 1);
+		auto cached  = std::make_shared<CachedImage>();
+		cached->kind = CachedImage::Kind::StorageTexture;
+		cached->info = info;
+		cached->ctx  = ctx;
+		if (dcc != nullptr) { cached->dcc = *dcc; }
+		vk::ComponentMapping components {};
+		cached->image = ImageOps::CreateTexture(ctx, info, true, &components);
+		if (initial_clear != nullptr) {
+			record_clear(cached->image);
+		} else {
+			m_memory_tracker.ForEachUploadRange(
+			    info.address, info.size, true, [](uint64_t, uint64_t) noexcept {},
+			    [&]() noexcept {
+				    m_tiler.DetileImage(cached->ctx, static_cast<GpuTextureVulkanImage*>(cached->image),
+				                        cached->info, source, false, true);
+			    });
+		}
+		cached->gpu_modified = true;
+		ImageOps::CreateTextureViews(ctx, static_cast<GpuTextureVulkanImage*>(cached->image), info,
+		                             true, components);
+		return static_cast<StorageTextureVulkanImage*>(PublishImage(command, std::move(cached)));
+	}();
+	if (dcc != nullptr && clear_recorded) {
+		// The GPU image is authoritative. Invalidate cached metadata bytes before
+		// publishing expanded keys, after releasing the image lock.
+		m_buffer_cache.PublishImageBacking(dcc->address, dcc->layout.total_bytes);
+		std::vector<uint8_t> expanded(dcc->layout.total_bytes, uint8_t {0xff});
+		LibKernel::Memory::WriteBacking(dcc->address, expanded.data(), expanded.size());
+		static std::atomic_uint clear_logs {0};
+		if (clear_logs.fetch_add(1, std::memory_order_relaxed) < 8) {
+			std::fprintf(stderr, "[DCC-CLEAR] color=0x%016" PRIx64 " metadata=0x%016" PRIx64
+			             " bytes=%u native=1 consumed=1\n", info.address, dcc->address,
+			             dcc->layout.total_bytes);
+		}
 	}
-	cached->gpu_modified = true;
-	ImageOps::CreateTextureViews(ctx, static_cast<GpuTextureVulkanImage*>(cached->image), info,
-	                             true, components);
-	return static_cast<StorageTextureVulkanImage*>(PublishImage(command, std::move(cached)));
+	return result;
+
 }
 
 RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*          command,
@@ -2910,6 +2985,14 @@ TextureCache::RegionInfo TextureCache::QueryRegion(uint64_t vaddr, uint64_t size
 	}
 	result.gpu_metadata_bytes =
 	    result.metadata_bytes && m_metadata_tracker.IsRegionGpuModified(vaddr, size);
+	for (const auto& cached: m_images) {
+		if (cached->dcc.address != 0) {
+			result.metadata_pages |= ImagePageRangesOverlap(vaddr, size, cached->dcc.address,
+			                                                  cached->dcc.layout.total_bytes);
+			result.metadata_bytes |= ImageRangeOverlaps(vaddr, size, cached->dcc.address,
+			                                               cached->dcc.layout.total_bytes);
+		}
+	}
 	return result;
 }
 
@@ -3038,6 +3121,12 @@ bool TextureCache::IsMetaRange(uint64_t vaddr, uint64_t size) {
 }
 
 bool TextureCache::HasMetaOverlapLocked(uint64_t vaddr, uint64_t size) const {
+	for (const auto& cached: m_images) {
+		if (cached->dcc.address != 0 &&
+		    ImagePageRangesOverlap(vaddr, size, cached->dcc.address, cached->dcc.layout.total_bytes)) {
+			return true;
+		}
+	}
 	for (const auto& [address, meta]: m_surface_metas) {
 		if (ImagePageRangesOverlap(vaddr, size, address, meta.size)) {
 			return true;
@@ -3328,6 +3417,17 @@ void TextureCache::UnmapMemory(uint64_t vaddr, uint64_t size) {
 		}
 		m_metadata_tracker.UntrackMemory(it->first, it->second.size);
 		it = m_surface_metas.erase(it);
+	}
+	for (const auto& cached: m_images) {
+		if (cached->dcc.address != 0 &&
+		    ImagePageRangesOverlap(vaddr, size, cached->dcc.address, cached->dcc.layout.total_bytes)) {
+			if (vaddr > cached->dcc.address ||
+			    end < cached->dcc.address + cached->dcc.layout.total_bytes) {
+				EXIT("TextureCache: partial associated DCC metadata unmap is unsupported\n");
+			}
+			// Consumed keys can be unmapped independently of the native color owner.
+			cached->dcc = {};
+		}
 	}
 	m_memory_tracker.UntrackMemory(vaddr, size);
 	for (auto it = m_images.begin(); it != m_images.end();) {

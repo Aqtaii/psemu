@@ -585,12 +585,28 @@ static bool IsSupportedStorageTextureEncoding(const ShaderTextureResource& descr
 	       descriptor.fields[6] == 0 && descriptor.fields[7] == 0;
 }
 
+static bool IsCapturedDccStorageEncoding(const ShaderTextureResource& descriptor) {
+	if (descriptor.Format() != Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float) ||
+	    descriptor.TileMode() != Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) ||
+	    descriptor.Type() != Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) ||
+	    descriptor.BaseLevel() != 0 || descriptor.LastLevel() != 0 || descriptor.Depth() != 0 ||
+	    descriptor.DstSelXYZW() != 0xfacu ||
+	    descriptor.fields[4] != 0 || descriptor.fields[5] != 0x00700000u ||
+	    (descriptor.fields[6] & 0x00ffffffu) != 0x007b0000u || descriptor.MetaAddr() == 0) {
+		return false;
+	}
+	auto expanded = descriptor;
+	expanded.fields[6] = expanded.fields[7] = 0;
+	return IsSupportedStorageTextureEncoding(expanded);
+}
+
 void ValidateStorageTexture(const ShaderRecompiler::IR::ImageResource& resource,
                             const ShaderTextureResource& descriptor, uint64_t size) {
 	const auto format        = descriptor.Format();
 	const bool resource_ok   = IsSupportedStorageImageResource(resource);
 	const bool descriptor_ok = IsSupportedStorageTextureDescriptor(resource, descriptor);
-	const bool encoding_ok   = IsSupportedStorageTextureEncoding(descriptor);
+	const bool encoding_ok   = IsSupportedStorageTextureEncoding(descriptor) ||
+	                           IsCapturedDccStorageEncoding(descriptor);
 	const bool uint_resource =
 	    resource.kind == ShaderRecompiler::IR::ResourceKind::StorageImageUint;
 	const bool format_ok = Prospero::IsSupportedTextureFormat(format) &&
@@ -744,33 +760,32 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 	EXIT_NOT_IMPLEMENTED(size.size == 0 ||
 	                     (address & (static_cast<uint64_t>(size.align) - 1u)) != 0);
 	if (storage) {
-		// Inspect the captured Astro DCC encoding before deciding how to initialize
-		// a native image. This is diagnosis only: compressed bindings still reject.
-		if(descriptor.Format()==Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float) &&
-		   descriptor.TileMode()==Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) &&
-		   descriptor.fields[4]==0 && descriptor.fields[5]==0x00700000u &&
-		   (descriptor.fields[6]&0x00ffffffu)==0x007b0000u) {
-		 DccLayout layout;
-		 const auto generation=command_buffer->GetRecordingGeneration();
-		 std::vector<DccSlice> slices;
-		 const auto metadata=descriptor.MetaAddr()<<8u;
-		 if(!ComputeDccLayout(width,height,1,8,1,&layout) ||
-		    ImageRangeOverlaps(address,size.size,metadata,layout.total_bytes) ||
-		    !g_render_ctx->GetTextureCache()->CaptureDccMetadata(
-		     command_buffer,metadata,layout,descriptor.DccAlphaPos(),&slices)) {
-		  if(command_buffer->GetRecordingGeneration()!=generation) return {};
-		  EXIT("DCC metadata snapshot could not establish coherent backing\n");
-		 }
-		 static std::atomic_uint dcc_logs{0};
-		 if(dcc_logs.fetch_add(1,std::memory_order_relaxed)<8)
-		  std::fprintf(stderr,"[DCC-SNAPSHOT] addr=0x%016" PRIx64
-		   " bytes=%u slices=%zu first_kind=%u clear=%g,%g,%g,%g\n",
-		   metadata,layout.total_bytes,slices.size(),static_cast<unsigned>(slices.front().kind),
-		   slices.front().color[0],slices.front().color[1],slices.front().color[2],slices.front().color[3]);
-		}
 		ValidateStorageTexture(resource, descriptor, size.size);
 		g_render_ctx->GetBufferCache()->ValidateGpuAccess(address, size.size, resource.read,
 		                                                  resource.written);
+	}
+
+	if (storage && IsCapturedDccStorageEncoding(descriptor)) {
+		DccBinding dcc {};
+		dcc.address = descriptor.MetaAddr() << 8u;
+		dcc.alpha_msb = descriptor.DccAlphaPos();
+		if (!ComputeDccLayout(width, height, 1, 8, 1, &dcc.layout)) {
+			EXIT("Unsupported DCC storage footprint\n");
+		}
+		g_render_ctx->GetBufferCache()->ValidateGpuAccess(dcc.address, dcc.layout.total_bytes, true, true);
+		ImageInfo info {};
+		info.address = address; info.size = size.size; info.format = format;
+		info.width = width; info.height = height; info.pitch = pitch;
+		info.base_level = base_level; info.levels = levels; info.view_levels = view_levels;
+		info.tile = tile; info.swizzle = swizzle; info.depth = depth;
+		info.type = descriptor.Type(); info.base_array = descriptor.BaseArray5();
+		const auto generation = command_buffer->GetRecordingGeneration();
+		auto* cache = g_render_ctx->GetTextureCache();
+		auto* native = cache->FindStorageTexture(command_buffer, g_render_ctx->GetGraphicCtx(), info, &dcc);
+		if (command_buffer->GetRecordingGeneration() != generation) { return {}; }
+		EXIT_IF(native == nullptr);
+		auto native_view = cache->GetStorageTextureStorageView(g_render_ctx->GetGraphicCtx(), native, base_level);
+		return {native, VulkanImage::VIEW_DEFAULT, native_view};
 	}
 
 	VulkanImage*  image      = nullptr;
@@ -978,8 +993,10 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 		info.type        = descriptor.Type();
 		info.base_array  = descriptor.BaseArray5();
 		if (storage) {
+            const auto generation = command_buffer->GetRecordingGeneration();
 			image = texture_cache->FindStorageTexture(command_buffer, g_render_ctx->GetGraphicCtx(),
 			                                          info);
+			if (command_buffer->GetRecordingGeneration() != generation) { return {}; }
 			view  = VulkanImage::VIEW_DEFAULT;
 			image_view = texture_cache->GetStorageTextureStorageView(
 			    g_render_ctx->GetGraphicCtx(), static_cast<StorageTextureVulkanImage*>(image),

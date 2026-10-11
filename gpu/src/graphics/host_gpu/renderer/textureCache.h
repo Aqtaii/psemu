@@ -52,10 +52,10 @@ public:
 	[[nodiscard]] VulkanImage* FindTexture(CommandBuffer* command, GraphicContext* ctx,
 	                                       const ImageInfo& info, bool metadata_read);
 	[[nodiscard]] StorageTextureVulkanImage*
-	// Optional clear is only for a newly-created, single-level RGBA16F image.
-	// The caller must separately own and publish the associated DCC metadata.
+	// DCC is limited to coherent uniform clear/expanded metadata for one RGBA16F layer.
+	// Inspection, native clear and key consumption share the resource transaction.
 	FindStorageTexture(CommandBuffer* command, GraphicContext* ctx, const ImageInfo& info,
-	                   const DccSlice* initial_clear = nullptr);
+	                   const DccBinding* dcc = nullptr);
 	[[nodiscard]] RenderTextureVulkanImage*
 	FindRenderTarget(CommandBuffer* command, GraphicContext* ctx, const RenderTargetInfo& info);
 	[[nodiscard]] DepthStencilVulkanImage*

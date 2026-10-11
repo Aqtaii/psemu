@@ -70,5 +70,33 @@ int main() {
  CHECK(!CanInitializeDccClear(black,1,0,1,true,false));
  CHECK(!CanInitializeDccClear({DccSliceKind::Clear,{0.5f,0,0,0}},1,0,1,true,true));
  CHECK(!CanInitializeDccClear({DccSliceKind::Clear,{std::numeric_limits<float>::quiet_NaN(),0,0,0}},1,0,1,true,true));
+ // Captured color extent and metadata footprint must agree before native mutation.
+ DccBinding binding{0x18617918000ull,unchanged,true};
+ CHECK(ValidRgba16fDccBinding(binding,1920,1080));
+ CHECK(!ValidRgba16fDccBinding(binding,512,256));
+ auto altered=binding;altered.layout.total_bytes=4096;
+ CHECK(!ValidRgba16fDccBinding(altered,1920,1080));
+ altered=binding;altered.layout.block_height*=2;
+ CHECK(!ValidRgba16fDccBinding(altered,1920,1080));
+ CHECK(SameDccBinding(binding,binding));
+ altered=binding;altered.address+=4096;CHECK(!SameDccBinding(binding,altered));
+ altered=binding;altered.alpha_msb=false;CHECK(!SameDccBinding(binding,altered));
+ altered=binding;altered.layout.slice_bytes=4096;CHECK(!SameDccBinding(binding,altered));
+ // A fresh full snapshot observes a rewritten clear key; stale snapshots cannot be memoized.
+ std::vector<uint8_t> keys(unchanged.total_bytes,0);
+ auto key_reader=[&](uint64_t,void* out,size_t count) {
+  std::copy_n(keys.data(),count,static_cast<uint8_t*>(out));return true;
+ };
+ CHECK(ReadDccSlices(binding.address,binding.layout,true,key_reader,&snapshot));
+ CHECK(snapshot[0].kind==DccSliceKind::Clear);
+ std::fill(keys.begin(),keys.end(),0xff);
+ CHECK(ReadDccSlices(binding.address,binding.layout,true,key_reader,&snapshot));
+ CHECK(snapshot[0].kind==DccSliceKind::Expanded);
+ std::fill(keys.begin(),keys.end(),0x40);
+ CHECK(ReadDccSlices(binding.address,binding.layout,true,key_reader,&snapshot));
+ CHECK(snapshot[0].kind==DccSliceKind::Clear && snapshot[0].color[3]==1.f);
+ keys.back()=0xff;
+ CHECK(ReadDccSlices(binding.address,binding.layout,true,key_reader,&snapshot));
+ CHECK(snapshot[0].kind==DccSliceKind::Unsupported);
  std::puts("PASS: DCC footprints, range limits, complete-slice clears and expanded/mixed metadata");
 }

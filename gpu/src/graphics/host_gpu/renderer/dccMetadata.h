@@ -32,6 +32,24 @@ inline bool ValidDccRange(uint64_t address,const DccLayout& layout) {
         layout.slice_bytes && !(layout.slice_bytes&4095u) &&
         layout.total_bytes%layout.slice_bytes==0 && layout.total_bytes<=end-address;
 }
+struct DccBinding {
+ uint64_t address=0;
+ DccLayout layout{};
+ bool alpha_msb=true;
+};
+inline bool SameDccBinding(const DccBinding& a,const DccBinding& b) {
+ return a.address==b.address && a.layout.total_bytes==b.layout.total_bytes &&
+        a.layout.slice_bytes==b.layout.slice_bytes && a.alpha_msb==b.alpha_msb;
+}
+inline bool ValidRgba16fDccBinding(const DccBinding& binding,uint32_t width,uint32_t height) {
+ DccLayout expected;
+ return ValidDccRange(binding.address,binding.layout) &&
+        ComputeDccLayout(width,height,1,8,1,&expected) &&
+        binding.layout.block_width==expected.block_width &&
+        binding.layout.block_height==expected.block_height &&
+        binding.layout.slice_bytes==expected.slice_bytes &&
+        binding.layout.total_bytes==expected.total_bytes;
+}
 enum class DccSliceKind { Unsupported, Expanded, Clear };
 struct DccSlice {
  DccSliceKind kind=DccSliceKind::Unsupported;
