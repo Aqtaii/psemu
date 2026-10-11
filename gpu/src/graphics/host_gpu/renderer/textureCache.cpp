@@ -1308,7 +1308,15 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
 
 StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   command,
                                                             GraphicContext*  ctx,
-                                                            const ImageInfo& info) {
+                                                            const ImageInfo& info,
+                                                            const DccSlice* initial_clear) {
+	if (initial_clear != nullptr &&
+	    !CanInitializeDccClear(*initial_clear, info.levels, info.base_level, info.depth,
+	                           info.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor2D),
+	                           info.format == Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float))) {
+		EXIT("TextureCache: unsupported initial DCC clear\n");
+	}
+	const auto generation = command->GetRecordingGeneration();
 	const bool supported_type =
 	    info.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) ||
 	    info.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor2DArray) ||
@@ -1355,6 +1363,9 @@ StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   com
 			     source.size, source.cpu_current);
 		}
 	}
+	if (command->GetRecordingGeneration() != generation) {
+		return nullptr;
+	}
 	FaultSafeTextureLock lock(this, m_lock);
 	RequireNoMetaOverlapLocked(info.address, info.size);
 	if (supported_depth_tile && IsSupportedDepthStorageBacking(info)) {
@@ -1376,6 +1387,9 @@ StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   com
 		match = cached;
 	}
 	if (match != nullptr) {
+		if (initial_clear != nullptr) {
+			EXIT("TextureCache: initial DCC clear cannot replace an existing image owner\n");
+		}
 		const bool cpu_modified = m_memory_tracker.IsRegionCpuModified(info.address, info.size);
 		const bool gpu_modified = m_memory_tracker.IsRegionGpuModified(info.address, info.size);
 		const auto rebind       = ClassifyStorageBufferRebind(
@@ -1432,12 +1446,28 @@ StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   com
 	cached->ctx  = ctx;
 	vk::ComponentMapping components {};
 	cached->image = ImageOps::CreateTexture(ctx, info, true, &components);
+	if (initial_clear != nullptr) {
+		// A DCC clear defines the pixels independently of stale compressed color backing.
+		// Record the transfer before publishing the image as the authoritative GPU owner.
+		vk::ClearColorValue clear {};
+		for (uint32_t lane = 0; lane < 4; ++lane) {
+			clear.float32[lane] = initial_clear->color[lane];
+		}
+		auto vk_buffer = command->Handle();
+		GraphicsRenderColorImageBarrier(vk_buffer, cached->image,
+		                                vk::ImageLayout::eTransferDstOptimal);
+		const vk::ImageSubresourceRange range {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+		vk_buffer.clearColorImage(cached->image->image, cached->image->layout, &clear, 1, &range);
+		GraphicsRenderColorImageBarrier(vk_buffer, cached->image, RENDER_COLOR_IMAGE_LAYOUT);
+		m_memory_tracker.MarkRegionAsGpuModified(info.address, info.size);
+	} else {
 	m_memory_tracker.ForEachUploadRange(
 	    info.address, info.size, true, [](uint64_t, uint64_t) noexcept {},
 	    [&]() noexcept {
 		    m_tiler.DetileImage(cached->ctx, static_cast<GpuTextureVulkanImage*>(cached->image),
 		                        cached->info, source, false, true);
 	    });
+	}
 	cached->gpu_modified = true;
 	ImageOps::CreateTextureViews(ctx, static_cast<GpuTextureVulkanImage*>(cached->image), info,
 	                             true, components);

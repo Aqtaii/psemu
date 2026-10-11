@@ -37,6 +37,15 @@ struct DccSlice {
  DccSliceKind kind=DccSliceKind::Unsupported;
  std::array<float,4> color{};
 };
+// Native initialization is deliberately narrower than metadata inspection: no arrays,
+// mip chains, register clears, or arbitrary colors can reach the transfer-clear path.
+inline bool CanInitializeDccClear(const DccSlice& slice,uint32_t levels,uint32_t base_level,
+                                  uint32_t depth,bool color_2d,bool rgba16f) {
+ if(slice.kind!=DccSliceKind::Clear || levels!=1 || base_level || depth!=1 ||
+    !color_2d || !rgba16f) return false;
+ for(float lane:slice.color) if(lane!=0.f && lane!=1.f) return false;
+ return true;
+}
 // Inspect the entire slice, not only its first byte. Register clears (0x20)
 // require render-target clear registers and remain unsupported here.
 inline DccSlice InspectDccSlice(std::span<const uint8_t> bytes,uint32_t expected_bytes,

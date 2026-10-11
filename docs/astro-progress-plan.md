@@ -32,3 +32,10 @@ Dreaming Sarah takılmaları kullanıcı isteğiyle ertelendi. İndirilen paketl
 2026-10-11 DCC preparation: checked one-mip metadata footprint and full-slice clear/expanded interpretation added (sourcee289237, CI38130392021 all regressions/full build passed). Not connected to renderer; first-frame/storage-encoding blocker unchanged. Next integrate metadata owner lifetime, ordered snapshots outside texture locks, native clear versus expanded detile initialization, alias/unmap/CPU-write handling and coherent readback; then enable validated descriptor encoding and perform an actual Astro run.
 
 2026-10-11 DCC snapshot checkpoint: sourceb6fec13 CI38131069463 full regression/Windows build passed; package verified. Actual Astro metadata snapshot succeeded (81920-byte uniform black-clear slice), then stopped at unchanged compressed storage validation. Ordered snapshot path integrated, but native clear/expanded metadata publication and DCC image-owner lifecycle remain pending. First frame unchanged.
+
+
+### Native DCC clear initialization (staged, 2026-10-11)
+
+Added an optional initial clear to FindStorageTexture for newly-created single-level 2D RGBA16F images. It records transfer-destination barrier, Vulkan clearColorImage, and general-layout barrier instead of detiling stale compressed color backing; the image becomes GPU-modified and is retained through the fence. Existing owners reject this initialization. An ordered buffer readback that resets recording returns before image mutation.
+
+Reference: KytyPS5 307fdcf7ad5d9d15b5966288fcc598ac9dbca188, src/graphics/host_gpu/renderer/cache/textureCache.cpp::MaterializeColorClear. This native operation is staged: descriptor callers still use the original upload path and reject DCC encoding. Metadata association, expanded-key publication and mutation/unmap lifecycle remain required before enabling it. No runtime advancement or first frame is claimed. DCC regression covers clear-kind/color/format/dimension/mip restrictions.

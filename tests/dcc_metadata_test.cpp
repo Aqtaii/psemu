@@ -56,5 +56,19 @@ int main() {
  CHECK(!ReadDccSlices(0x18617918000ull,unchanged,true,
   [](uint64_t,void*,size_t){return false;},&snapshot));
  CHECK(snapshot.size()==1 && snapshot[0].kind==DccSliceKind::Expanded);
+ DccSlice black{DccSliceKind::Clear,{0,0,0,0}};
+ CHECK(CanInitializeDccClear(black,1,0,1,true,true));
+ for(auto color:std::vector<std::array<float,4>>{{1,1,1,0},{0,0,0,1},{1,1,1,1}}) {
+  CHECK(CanInitializeDccClear({DccSliceKind::Clear,color},1,0,1,true,true));
+ }
+ CHECK(!CanInitializeDccClear({DccSliceKind::Expanded,{}},1,0,1,true,true));
+ CHECK(!CanInitializeDccClear({},1,0,1,true,true));
+ CHECK(!CanInitializeDccClear(black,2,0,1,true,true));
+ CHECK(!CanInitializeDccClear(black,1,1,1,true,true));
+ CHECK(!CanInitializeDccClear(black,1,0,2,true,true));
+ CHECK(!CanInitializeDccClear(black,1,0,1,false,true));
+ CHECK(!CanInitializeDccClear(black,1,0,1,true,false));
+ CHECK(!CanInitializeDccClear({DccSliceKind::Clear,{0.5f,0,0,0}},1,0,1,true,true));
+ CHECK(!CanInitializeDccClear({DccSliceKind::Clear,{std::numeric_limits<float>::quiet_NaN(),0,0,0}},1,0,1,true,true));
  std::puts("PASS: DCC footprints, range limits, complete-slice clears and expanded/mixed metadata");
 }
