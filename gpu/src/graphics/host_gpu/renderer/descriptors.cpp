@@ -759,12 +759,12 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 		    !g_render_ctx->GetTextureCache()->CaptureDccMetadata(
 		     command_buffer,metadata,layout,descriptor.DccAlphaPos(),&slices)) {
 		  if(command_buffer->GetRecordingGeneration()!=generation) return {};
-		  EXIT("DCC metadata snapshot could not establish coherent backing\\n");
+		  EXIT("DCC metadata snapshot could not establish coherent backing\n");
 		 }
 		 static std::atomic_uint dcc_logs{0};
 		 if(dcc_logs.fetch_add(1,std::memory_order_relaxed)<8)
 		  std::fprintf(stderr,"[DCC-SNAPSHOT] addr=0x%016" PRIx64
-		   " bytes=%u slices=%zu first_kind=%u clear=%g,%g,%g,%g\\n",
+		   " bytes=%u slices=%zu first_kind=%u clear=%g,%g,%g,%g\n",
 		   metadata,layout.total_bytes,slices.size(),static_cast<unsigned>(slices.front().kind),
 		   slices.front().color[0],slices.front().color[1],slices.front().color[2],slices.front().color[3]);
 		}
