@@ -1090,6 +1090,25 @@ CanReconstructRenderTargetForStorage(const RenderTargetInfo& target,bool gpu,boo
         storage.size <= target.size - (storage.address - target.address);
 }
 
+// Reconstruct the complete old allocation before interpreting any overlapping new shape.
+[[nodiscard]] inline bool
+CanReconstructRenderTargetForRenderTarget(const RenderTargetInfo& cached,bool gpu,bool buffer,
+                                         bool tracker_gpu,bool cpu,bool same_context,bool buffers,
+                                         const RenderTargetInfo& requested) {
+ ImageInfo backing{};backing.address=cached.address;backing.size=cached.size;
+ backing.width=cached.width;backing.height=cached.height;backing.pitch=cached.pitch;
+ backing.depth=1;backing.levels=backing.view_levels=1;
+ backing.type=Prospero::GpuEnumValue(Prospero::ImageType::kColor2D);
+ backing.format=Prospero::GpuEnumValue(cached.bytes_per_element==8 ?
+     Prospero::BufferFormat::k16_16_16_16Float : Prospero::BufferFormat::k32Float);
+ backing.tile=cached.bytes_per_element==8 ? cached.tile_mode : Prospero::GpuEnumValue(Prospero::TileMode::kDepth);
+ return requested.address!=0 && requested.size!=0 && requested.size<=UINT64_MAX-requested.address &&
+        ((requested.address|requested.size)&(TRACKER_PAGE_SIZE-1))==0 &&
+        requested.levels==1 && requested.layers==1 &&
+        ImageRangeOverlaps(cached.address,cached.size,requested.address,requested.size) &&
+        CanReconstructRenderTargetForStorage(cached,gpu,buffer,tracker_gpu,cpu,same_context,buffers,backing);
+}
+
 // Backing became authoritative after readback; do not discard any native-only pixels.
 [[nodiscard]] inline bool
 CanRetireCleanRenderTargetForStorage(const RenderTargetInfo& cached, bool gpu_modified,

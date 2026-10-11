@@ -1726,6 +1726,14 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 		const bool buffers = m_buffer_cache.HasPageOverlap(info.address, info.size);
 		for (const auto& entry: m_images) {
 			const auto& cached = *entry;
+			if (cached.kind==CachedImage::Kind::RenderTarget &&
+			    CanReconstructRenderTargetForRenderTarget(cached.target,cached.gpu_modified,cached.buffer_modified,
+			        m_memory_tracker.IsRegionGpuModified(cached.Address(),cached.Size()),
+			        m_memory_tracker.IsRegionCpuModified(cached.Address(),cached.Size()),cached.ctx==ctx,
+			        m_buffer_cache.HasPageOverlap(cached.Address(),cached.Size()),info)) {
+				needs_storage_drain=true;
+				break;
+			}
 			if (cached.kind == CachedImage::Kind::StorageTexture &&
 			    ClassifyStorageRenderTargetOverlap(
 			        cached.info, cached.image->format, cached.gpu_modified, cached.buffer_modified,
@@ -1792,6 +1800,7 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 	std::vector<CachedImage*>    retire;
 	std::vector<CachedImage*>    buffer_owned_target_retire;
 	std::vector<CachedImage*>    reconstructed_storage_retire;
+	std::vector<CachedImage*>    reconstructed_target_retire;
 	std::shared_ptr<CachedImage> native_image_source;
 	for (const auto& entry: m_images) {
 		auto& cached = *entry;
@@ -1835,6 +1844,13 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 						       " requested=0x%016" PRIx64 "+0x%016" PRIx64 " backing_current=1\n",
 						       cached.Address(),cached.Size(),info.address,info.size);
 					}
+				} else if (CanReconstructRenderTargetForRenderTarget(cached.target,cached.gpu_modified,
+				        cached.buffer_modified,m_memory_tracker.IsRegionGpuModified(cached.Address(),cached.Size()),
+				        m_memory_tracker.IsRegionCpuModified(cached.Address(),cached.Size()),cached.ctx==ctx,
+				        m_buffer_cache.HasPageOverlap(cached.Address(),cached.Size()),info)) {
+					overlap=RenderTargetOverlap::RetireTarget;
+					reconstructed_target_retire.push_back(&cached);
+					command->RetainResourceUntilFence(entry);
 				} else if (CanRetireBufferOwnedRenderTarget(
 				        cached.target, cached.gpu_modified, cached.buffer_modified,
 				        cached.ctx == ctx,
@@ -1900,17 +1916,20 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 			     "+0x%016" PRIx64 " existing_kind=%u existing=0x%016" PRIx64 "+0x%016" PRIx64
 			     " gpu_modified=%d same_context=%d"
 			     " sampled_format=%u extent=%ux%ux%u pitch=%u levels=%u base_level=%u"
-			     " tile=%u type=%u base_array=%u\n",
+			     " tile=%u type=%u base_array=%u old_target=%ux%u pitch=%u tile=%u bpe=%u tracker_gpu=%d cpu=%d buffers=%d\n",
 			     info.address, info.size, static_cast<uint32_t>(cached.kind), cached.Address(),
 			     cached.Size(), cached.gpu_modified, cached.ctx == ctx, cached.info.format,
 			     cached.info.width, cached.info.height, cached.info.depth, cached.info.pitch,
 			     cached.info.levels, cached.info.base_level, cached.info.tile, cached.info.type,
-			     cached.info.base_array);
+			     cached.info.base_array,cached.target.width,cached.target.height,cached.target.pitch,cached.target.tile_mode,
+			     cached.target.bytes_per_element,m_memory_tracker.IsRegionGpuModified(cached.Address(),cached.Size()),
+			     m_memory_tracker.IsRegionCpuModified(cached.Address(),cached.Size()),
+			     m_buffer_cache.HasPageOverlap(cached.Address(),cached.Size()));
 		}
 		retire.push_back(&cached);
 	}
 	RequireRetirementIsolation(retire, "render target", info.address, info.size);
-	if (!reconstructed_storage_retire.empty() && native_image_source != nullptr) {
+	if ((!reconstructed_storage_retire.empty() || !reconstructed_target_retire.empty()) && native_image_source != nullptr) {
 		EXIT("TextureCache: storage reconstruction cannot mix with native target expansion\n");
 	}
 	for (size_t i = 0; i < reconstructed_storage_retire.size(); i++) {
@@ -1921,6 +1940,25 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 				EXIT("TextureCache: storage reconstruction has competing GPU image owners\n");
 			}
 		}
+	}
+	// No two native reconstruction owners may publish competing bytes.
+	std::vector<CachedImage*> reconstruction_owners=reconstructed_storage_retire;
+	reconstruction_owners.insert(reconstruction_owners.end(),reconstructed_target_retire.begin(),reconstructed_target_retire.end());
+	for(size_t i=0;i<reconstruction_owners.size();i++)for(size_t j=i+1;j<reconstruction_owners.size();j++) {
+		if(ImagePageRangesOverlap(reconstruction_owners[i]->Address(),reconstruction_owners[i]->Size(),
+		                          reconstruction_owners[j]->Address(),reconstruction_owners[j]->Size()))
+			EXIT("TextureCache: target reconstruction has competing native owners\n");
+	}
+	for(auto* old:reconstructed_target_retire) {
+		if(!needs_storage_drain) EXIT("TextureCache: target reconstruction has no producer drain\n");
+		const auto transfer=m_readback->DownloadColorImage(*old,true);
+		m_memory_tracker.ForEachDownloadRange<true>(transfer.address,transfer.size,[](uint64_t,uint64_t) noexcept {});
+		old->gpu_modified=false;
+		static std::atomic_uint rt_reconstruct_logs{0};
+		if(rt_reconstruct_logs.fetch_add(1,std::memory_order_relaxed)<8)
+			printf("[RT-RT-RECONSTRUCT] old=0x%016" PRIx64 "+0x%016" PRIx64
+			       " requested=0x%016" PRIx64 "+0x%016" PRIx64 " padding_preserved=1\n",
+			       transfer.address,transfer.size,info.address,info.size);
 	}
 	for (auto* storage: reconstructed_storage_retire) {
 		// All overlap/retirement proofs precede publication. The full storage image is

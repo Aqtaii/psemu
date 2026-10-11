@@ -113,6 +113,17 @@ int main() {
   Require(!CanRetireCleanRenderTargetForRenderTarget(cross,false,false,false,true,true,next));
  }
 
+ // Partial overlapping allocation must publish the whole old GPU owner.
+ {
+  auto old=rt;old.address=0x2735d470000ull;
+  RenderTargetInfo next{};next.address=old.address-0xcf0000;next.size=0xff0000;
+  Require(CanReconstructRenderTargetForRenderTarget(old,true,false,true,false,true,false,next));
+  for(int bad=0;bad<6;bad++)
+   Require(!CanReconstructRenderTargetForRenderTarget(old,bad!=0,bad==1,bad!=2,bad==3,bad!=4,bad==5,next));
+  next.address=old.address+old.size;
+  Require(!CanReconstructRenderTargetForRenderTarget(old,true,false,true,false,true,false,next));
+ }
+
  Require(!CanMergeBufferCacheQueueMask(0x110,4));
  Require(CanMergeBufferCacheAfterDrain(0x110,4,0x110,true));
  Require(!CanMergeBufferCacheAfterDrain(0x110,4,0x10,true));
