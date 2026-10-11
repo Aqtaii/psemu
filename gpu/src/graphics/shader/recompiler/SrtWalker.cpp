@@ -203,6 +203,10 @@ public:
 				}
 			}
 		}
+		// Descriptor dependencies above remain host materialized. Standalone
+		// scalar reads must execute under their original GPU control flow when
+		// checked guest-address reads are explicitly enabled.
+		if (m_program->uses_guest_address_table) return true;
 		for (const auto& block: m_program->blocks) {
 			for (const auto& inst: block.instructions) {
 				if (inst.op == Opcode::SLoadDword && inst.scalar_value < m_state.size() &&

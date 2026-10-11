@@ -745,6 +745,8 @@ bool TryRecompile(std::span<const uint32_t> code, const CompileOptions& options,
 	if (!IR::BuildScalarProvenance(&ir, error)) {
 		return false;
 	}
+	ir.uses_guest_address_table = options.allow_guest_scalar_reads &&
+	                              options.stage == ShaderType::Compute;
 	std::string srt_error;
 	if (!IR::BuildSrtPlan(&ir, &srt_error)) {
 		LOGF("%s SRT planning failed: %s\n", GetDumpLabel(options), srt_error.c_str());
@@ -758,8 +760,6 @@ bool TryRecompile(std::span<const uint32_t> code, const CompileOptions& options,
 		ir.fallback_reason = dispatcher_reason;
 	}
 
-	ir.uses_guest_address_table = options.allow_guest_scalar_reads &&
-	                              options.stage == ShaderType::Compute;
 	if (!IR::PatchSrtReads(&ir, error) || !IR::TrackResources(&ir, error)) {
 		// Preserve the failing program before returning: successful-program dumps
 		// cannot explain unknown descriptor provenance at this phase.
