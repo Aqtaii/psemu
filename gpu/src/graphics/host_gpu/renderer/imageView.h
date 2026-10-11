@@ -212,7 +212,8 @@ IsSupportedSampledDepthUintResource(const ShaderRecompiler::IR::ImageResource& r
 IsSupportedStorageImageResource(const ShaderRecompiler::IR::ImageResource& resource) noexcept {
 	return (resource.kind == ShaderRecompiler::IR::ResourceKind::StorageImage ||
 	        resource.kind == ShaderRecompiler::IR::ResourceKind::StorageImageUint) &&
-	       (resource.dimension == ShaderRecompiler::Decoder::ImageDimension::Dim2D ||
+	       ((resource.dimension == ShaderRecompiler::Decoder::ImageDimension::Dim1D && !resource.read) ||
+	        resource.dimension == ShaderRecompiler::Decoder::ImageDimension::Dim2D ||
 	        resource.dimension == ShaderRecompiler::Decoder::ImageDimension::Dim3D ||
 	        resource.dimension == ShaderRecompiler::Decoder::ImageDimension::Dim2DArray) &&
 	       resource.mip_mode == ShaderRecompiler::IR::ImageMipMode::None && resource.written &&

@@ -30,6 +30,7 @@ struct MimgAtomicInfo {
 
 constexpr ImageDimension DecodeImageDimension(uint32_t dim) {
 	switch (dim) {
+		case 0u: return ImageDimension::Dim1D;
 		case 1u: return ImageDimension::Dim2D;
 		case 2u: return ImageDimension::Dim3D;
 		case 3u: return ImageDimension::Dim2DArray;
@@ -42,6 +43,7 @@ constexpr ImageDimension DecodeImageDimension(uint32_t dim) {
 
 constexpr uint32_t ImageCoordComponents(ImageDimension dimension) {
 	switch (dimension) {
+		case ImageDimension::Dim1D: return 1u;
 		case ImageDimension::Dim3D:
 		case ImageDimension::Dim2DArray: return 3u;
 		default: return 2u;

@@ -30,6 +30,7 @@ bool ImageBinding(const IR::ImageResource& image, IR::DescriptorBindingKind& kin
 			case Dim::Dim2DArray:
 				kind = integer ? Kind::SampledUint2DArray : Kind::Sampled2DArray;
 				return true;
+			case Dim::Dim1D:
 			case Dim::Unknown: return false;
 		}
 	}
@@ -38,6 +39,7 @@ bool ImageBinding(const IR::ImageResource& image, IR::DescriptorBindingKind& kin
 		return false;
 	}
 	switch (image.dimension) {
+		case Dim::Dim1D:
 		case Dim::Dim2D: kind = uint_image ? Kind::StorageUint2D : Kind::Storage2D; return true;
 		case Dim::Dim3D: kind = uint_image ? Kind::StorageUint3D : Kind::Storage3D; return true;
 		case Dim::Dim2DArray:

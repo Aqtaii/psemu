@@ -42,6 +42,7 @@ bool ImageBinding(const ImageResource& image, DescriptorBindingKind& result) {
 			}
 		case ResourceKind::StorageImage:
 			switch (image.dimension) {
+				case Dimension::Dim1D:
 				case Dimension::Dim2D: result = Kind::Storage2D; return true;
 				case Dimension::Dim2DArray: result = Kind::Storage2DArray; return true;
 				case Dimension::Dim3D: result = Kind::Storage3D; return true;
@@ -49,6 +50,7 @@ bool ImageBinding(const ImageResource& image, DescriptorBindingKind& result) {
 			}
 		case ResourceKind::StorageImageUint:
 			switch (image.dimension) {
+				case Dimension::Dim1D:
 				case Dimension::Dim2D: result = Kind::StorageUint2D; return true;
 				case Dimension::Dim2DArray: result = Kind::StorageUint2DArray; return true;
 				case Dimension::Dim3D: result = Kind::StorageUint3D; return true;

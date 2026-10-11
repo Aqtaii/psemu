@@ -1326,7 +1326,10 @@ StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   com
 	const DccSlice* initial_clear = nullptr;
 	bool clear_recorded = false;
 	const auto generation = command->GetRecordingGeneration();
-	const bool supported_type =
+	const bool supported_1d = info.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor1D) &&
+	                          info.height == 1 && info.depth == 1 && info.base_level == 0 &&
+	                          info.levels == 1;
+	const bool supported_type = supported_1d ||
 	    info.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) ||
 	    info.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor2DArray) ||
 	    info.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor3D);

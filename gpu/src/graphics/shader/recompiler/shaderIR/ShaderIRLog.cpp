@@ -88,6 +88,7 @@ std::string ResourceKindToString(ResourceKind kind) {
 
 const char* ImageDimensionToString(Decoder::ImageDimension dimension) {
 	switch (dimension) {
+		case Decoder::ImageDimension::Dim1D: return "1d";
 		case Decoder::ImageDimension::Dim2D: return "2d";
 		case Decoder::ImageDimension::Dim3D: return "3d";
 		case Decoder::ImageDimension::Dim2DArray: return "2d_array";

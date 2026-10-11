@@ -11,7 +11,7 @@ namespace {
 
 constexpr uint64_t AddressMask = 0x0000ffffffffffffull;
 
-Decoder::ImageDimension DescriptorDimension(const DescriptorValue& descriptor) {
+Decoder::ImageDimension DescriptorDimension(const DescriptorValue& descriptor, ResourceKind kind) {
 	switch (static_cast<Prospero::ImageType>((descriptor.dwords[3] >> 28u) & 0xfu)) {
 		case Prospero::ImageType::kColor3D: return Decoder::ImageDimension::Dim3D;
 		case Prospero::ImageType::kCube:
@@ -19,6 +19,8 @@ Decoder::ImageDimension DescriptorDimension(const DescriptorValue& descriptor) {
 		case Prospero::ImageType::kColor2DArray:
 		case Prospero::ImageType::kColor2DMsaaArray: return Decoder::ImageDimension::Dim2DArray;
 		case Prospero::ImageType::kColor1D:
+			return kind == ResourceKind::StorageImage || kind == ResourceKind::StorageImageUint
+			           ? Decoder::ImageDimension::Dim1D : Decoder::ImageDimension::Dim2D;
 		case Prospero::ImageType::kColor2D:
 		case Prospero::ImageType::kColor2DMsaa: return Decoder::ImageDimension::Dim2D;
 		default: return Decoder::ImageDimension::Unknown;
@@ -149,7 +151,7 @@ bool ValidateResourceSpecialization(const Program& program, const ResourceSnapsh
 		if (NullImageDescriptor(descriptor)) {
 			continue;
 		}
-		const auto dimension = DescriptorDimension(descriptor);
+		const auto dimension = DescriptorDimension(descriptor, image.kind);
 		if (dimension == Decoder::ImageDimension::Unknown || dimension != image.dimension) {
 			if (error != nullptr) {
 				*error =
@@ -320,7 +322,7 @@ bool SpecializeResources(Program* program, const ResourceSnapshot& snapshot, std
 		if (NullImageDescriptor(descriptor)) {
 			continue;
 		}
-		const auto descriptor_dimension = DescriptorDimension(descriptor);
+		const auto descriptor_dimension = DescriptorDimension(descriptor, image.kind);
 		if (descriptor_dimension == Decoder::ImageDimension::Unknown) {
 			if (error != nullptr) {
 				*error = fmt::format(

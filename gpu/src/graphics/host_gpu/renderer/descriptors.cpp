@@ -539,6 +539,10 @@ static bool IsSupportedStorageTextureDescriptor(const ShaderRecompiler::IR::Imag
 	const auto width  = static_cast<uint32_t>(descriptor.Width5()) + 1u;
 	const auto height = static_cast<uint32_t>(descriptor.Height5()) + 1u;
 	const auto depth  = static_cast<uint32_t>(descriptor.Depth()) + 1u;
+	const bool is_1d = resource.dimension == ShaderRecompiler::Decoder::ImageDimension::Dim1D &&
+	                   !resource.read && descriptor.Type() == Prospero::GpuEnumValue(Prospero::ImageType::kColor1D) &&
+	                   height == 1 && depth == 1 && descriptor.BaseLevel() == 0 &&
+	                   descriptor.LastLevel() == 0 && descriptor.MaxMip() == 0;
 	const bool is_2d = resource.dimension == ShaderRecompiler::Decoder::ImageDimension::Dim2D &&
 	                   descriptor.Type() == Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) &&
 	                   descriptor.Depth() == 0;
@@ -561,7 +565,7 @@ static bool IsSupportedStorageTextureDescriptor(const ShaderRecompiler::IR::Imag
 	    IsSupportedStorageSwizzle(descriptor.Format(), descriptor.DstSelXYZW()) &&
 	    (descriptor.DstSelXYZW() == DstSel(4, 5, 6, 7) || !resource.read);
 	const bool supported_mip_view = descriptor.BaseLevel() == 0 || is_2d;
-	return (is_2d || is_2d_array || is_3d) && supported_tile && supported_mip_view &&
+	return (is_1d || is_2d || is_2d_array || is_3d) && supported_tile && supported_mip_view &&
 	       descriptor.BaseLevel() == descriptor.LastLevel() &&
 	       descriptor.LastLevel() <= descriptor.MaxMip() && descriptor.MinLod() == 0 &&
 	       descriptor.BaseArray5() == 0 && supported_swizzle && descriptor.BCSwizzle() == 0 &&

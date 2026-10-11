@@ -579,6 +579,7 @@ enum class ImageDimension : uint32_t {
 	Dim2D,
 	Dim3D,
 	Dim2DArray,
+	Dim1D,
 };
 
 constexpr uint32_t MaxInstructionRawWords       = 5u;

@@ -12,6 +12,14 @@ bool LowerBvhIntersect(const Decoder::Instruction&, BasicBlock*, std::string*);
 std::vector<IR::Register> BvhCollected(const IR::Instruction&);
 static void Check(bool ok) { if (!ok) throw std::runtime_error("BVH IR regression"); }
 int main() {
+ for (uint32_t dim: {0u,1u}) {
+  std::array<uint32_t,2> store{0xf0000000u | (8u<<18u) | (dim<<3u) | (15u<<8u),0x00040105u};
+  Decoder::Instruction decoded;std::string error;
+  Check(Decoder::DecodeMimg(0,store,0,&decoded,&error));
+  Check(decoded.opcode==Decoder::Opcode::ImageStore);
+  Check(decoded.image_dimension==(dim==0?Decoder::ImageDimension::Dim1D:Decoder::ImageDimension::Dim2D));
+  Check(decoded.image_address_components==(dim==0?1u:2u));
+ }
  std::array<uint32_t,5> words{0xf1989f07,0x00040505,0x4442413d,0x4543403e,0x00004746};
  constexpr std::array<uint32_t,11> ray{5,61,65,66,68,62,64,67,69,70,71};
  for (bool wide: {false,true}) for (bool nsa: {false,true}) {

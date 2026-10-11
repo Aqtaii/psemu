@@ -176,6 +176,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_guest_address_lookup.ps1
 
+      - name: Test captured 1D storage lowering
+        shell: pwsh
+        run: ./tools/scripts/test_storage_1d.ps1
+
       - name: Build complete emulator
         shell: cmd
         run: call cmbuild.bat

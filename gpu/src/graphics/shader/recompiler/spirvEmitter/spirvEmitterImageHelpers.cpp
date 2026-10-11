@@ -174,7 +174,9 @@ uint32_t EmitImageOffsetCoordF32(EmitterState* state, const IR::Instruction& ins
 
 uint32_t EmitImageCoordU32(EmitterState* state, const IR::Instruction& inst, ImageViewKind view) {
 	const auto x     = EmitImageAddressValueLoad(state, inst, inst.src[1], 0);
-	const auto y     = inst.memory.image_address_components > 1u
+	// 1D storage uses a height-one 2D backing; the next VGPR is not a y coordinate.
+	const auto y     = inst.memory.image_dimension != Decoder::ImageDimension::Dim1D &&
+	                       inst.memory.image_address_components > 1u
 	                       ? EmitImageAddressValueLoad(state, inst, inst.src[1], 1)
 	                       : ConstantU32(state, 0);
 	const auto coord = state->builder.AllocateId();
@@ -192,7 +194,9 @@ uint32_t EmitImageCoordU32(EmitterState* state, const IR::Instruction& inst, Ima
 uint32_t EmitImageLoadCoordU32(EmitterState* state, const IR::Instruction& inst,
                                ImageViewKind view) {
 	const auto x     = EmitImageAddressValueLoad(state, inst, inst.src[0], 0);
-	const auto y     = inst.memory.image_address_components > 1u
+	// 1D storage uses a height-one 2D backing; the next VGPR is not a y coordinate.
+	const auto y     = inst.memory.image_dimension != Decoder::ImageDimension::Dim1D &&
+	                       inst.memory.image_address_components > 1u
 	                       ? EmitImageAddressValueLoad(state, inst, inst.src[0], 1)
 	                       : ConstantU32(state, 0);
 	const auto coord = state->builder.AllocateId();
@@ -222,7 +226,9 @@ uint32_t EmitImageMipLodU32(EmitterState* state, const IR::Instruction& inst,
 uint32_t EmitImageQueryCoordF32(EmitterState* state, const IR::Instruction& inst,
                                 ImageViewKind view) {
 	const auto x     = EmitImageAddressFloatLoad(state, inst, inst.src[0], 0);
-	const auto y     = inst.memory.image_address_components > 1u
+	// 1D storage uses a height-one 2D backing; the next VGPR is not a y coordinate.
+	const auto y     = inst.memory.image_dimension != Decoder::ImageDimension::Dim1D &&
+	                       inst.memory.image_address_components > 1u
 	                       ? EmitImageAddressFloatLoad(state, inst, inst.src[0], 1)
 	                       : EmitZeroF32(state);
 	const auto coord = state->builder.AllocateId();
