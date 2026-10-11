@@ -39,6 +39,7 @@ $header+='uint32_t NumBytesPerElement(uint32_t format) {return format==GpuEnumVa
 $header+="`n"+(Slice $info 'struct ImageInfo {' '// Common image-to-buffer copy description.')
 $header+="`n[[nodiscard]] inline bool`n"+(Slice $info 'IsCoherentBufferImageRead(' '[[nodiscard]] inline BufferImageWrite')
 $header+="`n[[nodiscard]] inline constexpr bool`n"+(Slice $info 'IsSupportedStandard64RenderTarget(' '[[nodiscard]] inline constexpr bool IsTiledRenderTarget')
+$header+="`n"+(Slice $info '[[nodiscard]] inline constexpr bool IsTiledRenderTarget(' '[[nodiscard]] inline constexpr DepthTransitionSource')
 $header+="`n"+(Slice $tile 'static constexpr uint32_t GetStandard64KB32XPart(' 'struct Standard64KB16Tables')
 $header+="`n"+(Slice $tile 'static void TileConvertLinearToTiledStandard64KB32Impl(' 'void TileConvertTiledToLinearStandard64KB16(')
 $header+="`n#define EXIT_NOT_IMPLEMENTED(x) EXIT_IF(x)`n"
