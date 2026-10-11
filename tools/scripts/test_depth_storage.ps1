@@ -51,6 +51,7 @@ $header+=Slice $info '[[nodiscard]] inline BufferImageWrite' '[[nodiscard]] inli
 $header+=([string][char]10)+"[[nodiscard]] inline bool"+([string][char]10)+(Slice $info 'CanReconstructStorageForRenderTarget(' '[[nodiscard]] inline DepthOverlap ClassifyDepthTargetOverlap(')
 $header+=[IO.File]::ReadAllText("$root\tests\render_target_publication_fixture.h")
 $buffers=[IO.File]::ReadAllText("$root\gpu\src\graphics\host_gpu\renderer\bufferCache.cpp")
+$header+=Slice $buffers 'bool CanMergeBufferCacheQueueMask(' 'struct BufferCache::CachedBuffer'
 $header+=Slice $buffers 'void BufferCache::PublishReconstructedImageBacking(' 'void BufferCache::ValidateGpuAccess('
 $header+=Slice $buffers 'void BufferCache::RefreshCpuImageFragmentsLocked(' 'BufferImageCopySource BufferCache::ObtainBufferForImage('
 $source=Join-Path $out 'depth_storage_production.cpp'

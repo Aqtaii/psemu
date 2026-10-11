@@ -1,5 +1,13 @@
 static void Require(bool ok) {if(!ok) throw std::runtime_error("regression failed");}
 int main() {
+ Require(!CanMergeBufferCacheQueueMask(0x110,4));
+ Require(CanMergeBufferCacheAfterDrain(0x110,4,0x110,true));
+ Require(!CanMergeBufferCacheAfterDrain(0x110,4,0x10,true));
+ Require(!CanMergeBufferCacheAfterDrain(0x110,4,0x100,true));
+ Require(!CanMergeBufferCacheAfterDrain(0x110,4,0x110,false));
+ Require(!CanMergeBufferCacheAfterDrain(0x110,64,0x110,true));
+ Require(!CanMergeBufferCacheAfterDrain(0x310,4,0x110,true));
+
  RenderTargetInfo old_target{},new_target{};
  old_target.address=0x1c5e8a80000ull;old_target.size=0xff0000;
  new_target.address=0x1c5e9770000ull;new_target.size=0x480000;

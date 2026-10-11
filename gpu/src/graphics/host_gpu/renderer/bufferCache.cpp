@@ -174,6 +174,11 @@ bool CanMergeBufferCacheQueueMask(uint64_t queue_mask, uint32_t queue) noexcept 
 	return queue < 64 && (queue_mask & ~(uint64_t {1} << queue)) == 0;
 }
 
+bool CanMergeBufferCacheAfterDrain(uint64_t used, uint32_t queue,
+                                   uint64_t completed, bool same_family) noexcept {
+ return same_family && queue < 64 && (used & ~completed) == 0;
+}
+
 struct BufferCache::CachedBuffer {
 	uint64_t                      vaddr      = 0;
 	uint64_t                      size       = 0;
@@ -698,6 +703,49 @@ std::pair<VulkanBuffer*, uint64_t> BufferCache::ObtainBuffer(CommandBuffer*  com
 	ValidateGpuAccess(vaddr, size, is_read, is_written);
 	const auto      begin = AlignDown(vaddr);
 	const auto      end   = AlignUp(vaddr + size);
+	// Snapshot foreign producers before acquiring the resource transaction. Draining
+	// resets recordings, so callers must use the existing descriptor preparation retry.
+	std::vector<std::pair<std::shared_ptr<VulkanBuffer>, uint64_t>> drained_owners;
+	{
+		std::lock_guard transaction(m_resource_mutex);
+		FaultSafeCacheLock lock(this, m_mutex);
+		auto owner = m_buffers.upper_bound(vaddr);
+		bool contained = false;
+		if (owner != m_buffers.begin()) {
+			const auto& old = *std::prev(owner)->second;
+			const auto offset = vaddr - old.vaddr;
+			contained = offset <= old.size && size <= old.size - offset;
+		}
+		if (!contained) {
+			BufferCacheRange merged {begin, end - begin};
+			for (const auto& [address, old]: m_buffers) {
+				if (!MergeOverlappingBufferCacheRange(&merged, {address, old->size}) ||
+				    CanMergeBufferCacheQueueMask(old->queue_mask, queue)) continue;
+				if (old->ctx != ctx || old->buffer == nullptr || old->buffer->buffer == nullptr ||
+				    queue >= GraphicContext::QUEUES_NUM) {
+					EXIT("BufferCache: invalid cross-queue merge owner\n");
+				}
+				for (uint32_t producer = 0; producer < 64; producer++) {
+					if ((old->queue_mask & (uint64_t {1} << producer)) == 0) continue;
+					if (producer >= GraphicContext::QUEUES_NUM ||
+					    ctx->queues[producer].family == UINT32_MAX ||
+					    ctx->queues[producer].family != ctx->queues[queue].family) {
+						EXIT("BufferCache: cross-family buffer merge requires ownership transfer\n");
+					}
+				}
+				drained_owners.emplace_back(old->buffer, old->queue_mask);
+			}
+		}
+	}
+	if (!drained_owners.empty()) {
+		GraphicsRunSynchronizeCommandProcessors();
+		Transfer::WaitForGraphicsIdle(ctx);
+		static std::atomic_uint drain_logs {0};
+		if (drain_logs.fetch_add(1, std::memory_order_relaxed) < 8) {
+			printf("[BUFFER-QUEUE-DRAIN] addr=0x%016" PRIx64 " size=0x%016" PRIx64
+			       " owners=%zu queue=%u\n", vaddr, size, drained_owners.size(), queue);
+		}
+	}
 	std::lock_guard transaction(m_resource_mutex);
 	const auto      texture_region = m_texture_cache->QueryRegion(vaddr, size);
 	// Use the stream-buffer fast path before image/buffer alias handling. Clean image and metadata
@@ -832,7 +880,13 @@ std::pair<VulkanBuffer*, uint64_t> BufferCache::ObtainBuffer(CommandBuffer*  com
 					     old.vaddr, old.size, static_cast<const void*>(old.ctx),
 					     static_cast<const void*>(ctx), static_cast<const void*>(old.buffer.get()));
 				}
-				if (!CanMergeBufferCacheQueueMask(old.queue_mask, queue)) {
+				uint64_t completed_mask = 0;
+				for (const auto& [buffer, mask]: drained_owners) {
+					if (buffer == old.buffer) completed_mask = mask;
+				}
+				if (!CanMergeBufferCacheQueueMask(old.queue_mask, queue) &&
+				    !CanMergeBufferCacheAfterDrain(old.queue_mask, queue, completed_mask,
+				                                  completed_mask != 0)) {
 					EXIT("BufferCache: cross-queue overlap merge is unsupported, "
 					     "addr=0x%016" PRIx64 " size=0x%016" PRIx64 " used_queues=0x%016" PRIx64
 					     " requested_queue=%u\n",
