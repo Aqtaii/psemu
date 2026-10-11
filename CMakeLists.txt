@@ -43,6 +43,8 @@ target_include_directories(loader PRIVATE ${CMAKE_SOURCE_DIR}/include)
 
 if(MSVC)
     target_compile_options(loader PRIVATE /EHsc /utf-8 /bigobj)
+    # Preserve host symbol addresses for diagnosing native crashes in CI builds.
+    target_link_options(loader PRIVATE "/MAP:${CMAKE_BINARY_DIR}/loader.map")
     # psemu cekirdegi build.bat'te MSVC /Od (optimizasyonsuz) ile derleniyordu
     # ve oyunu tam boot ediyordu. clang-cl Release -O2 ise dusuk-seviye kodu
     # (VEH exception-skip, runtime trampolinler, FS-segment TLS hotfix,

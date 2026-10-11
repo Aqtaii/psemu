@@ -197,3 +197,11 @@ jobs:
           path: dist/
           if-no-files-found: error
           retention-days: 14
+
+      - name: Upload host symbol map
+        uses: actions/upload-artifact@v4
+        with:
+          name: psemu-windows-symbols
+          path: build/loader.map
+          if-no-files-found: error
+          retention-days: 14
