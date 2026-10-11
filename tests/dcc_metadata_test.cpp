@@ -44,5 +44,17 @@ int main() {
  CHECK(InspectDccSlice(data,81920,true).kind==DccSliceKind::Unsupported);
  CHECK(InspectDccSlice(data,4096,true).kind==DccSliceKind::Unsupported);
  CHECK(InspectDccSlice({},0,true).kind==DccSliceKind::Unsupported);
+ std::vector<DccSlice> snapshot{{DccSliceKind::Clear,{1,1,1,1}}};
+ unsigned reads=0;bool correct_address=true;
+ auto reader=[&](uint64_t address,void* out,size_t count) {
+  ++reads;correct_address=address==0x18617918000ull;
+  std::fill_n(static_cast<uint8_t*>(out),count,uint8_t(0xff));return true;
+ };
+ CHECK(ReadDccSlices(0x18617918000ull,unchanged,true,reader,&snapshot));
+ CHECK(correct_address && reads==1 && snapshot.size()==1 && snapshot[0].kind==DccSliceKind::Expanded);
+ CHECK(!ReadDccSlices(0,unchanged,true,reader,&snapshot));CHECK(reads==1);
+ CHECK(!ReadDccSlices(0x18617918000ull,unchanged,true,
+  [](uint64_t,void*,size_t){return false;},&snapshot));
+ CHECK(snapshot.size()==1 && snapshot[0].kind==DccSliceKind::Expanded);
  std::puts("PASS: DCC footprints, range limits, complete-slice clears and expanded/mixed metadata");
 }

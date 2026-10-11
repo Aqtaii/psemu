@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <limits>
 #include <span>
+#include <vector>
+#include <utility>
 
 namespace Libs::Graphics {
 // Original psemu adaptation of pinned KytyPS5 tile.cpp::TileGetDccSize
@@ -49,4 +51,19 @@ inline DccSlice InspectDccSlice(std::span<const uint8_t> bytes,uint32_t expected
  if(!alpha_msb) {color[0]=alpha;color[3]=rgb;}
  return {DccSliceKind::Clear,color};
 }
+template<class Reader>
+bool ReadDccSlices(uint64_t address,const DccLayout& layout,bool alpha_msb,
+                   Reader&& reader,std::vector<DccSlice>* output) {
+ if(!output || !ValidDccRange(address,layout)) return false;
+ std::vector<uint8_t> bytes(layout.total_bytes);
+ if(!reader(address,bytes.data(),bytes.size())) return false;
+ std::vector<DccSlice> staged;
+ staged.reserve(layout.total_bytes/layout.slice_bytes);
+ for(size_t offset=0;offset<bytes.size();offset+=layout.slice_bytes)
+  staged.push_back(InspectDccSlice(std::span<const uint8_t>(bytes).subspan(offset,layout.slice_bytes),
+                                  layout.slice_bytes,alpha_msb));
+ *output=std::move(staged);
+ return true;
+}
+
 }

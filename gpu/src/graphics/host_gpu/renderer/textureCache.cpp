@@ -2894,16 +2894,11 @@ bool TextureCache::CaptureDccMetadata(CommandBuffer* command, uint64_t address,
   if(command->GetRecordingGeneration()!=generation) return false;
   if(!IsCoherentGuestImageSource(source,address,layout.total_bytes)) return false;
  }
- std::vector<uint8_t> bytes(layout.total_bytes);
- if(!LibKernel::Memory::TryReadBacking(address,bytes.data(),bytes.size()) ||
-    command->GetRecordingGeneration()!=generation) return false;
- std::vector<DccSlice> staged;
- staged.reserve(layout.total_bytes/layout.slice_bytes);
- for(size_t offset=0;offset<bytes.size();offset+=layout.slice_bytes)
-  staged.push_back(InspectDccSlice(std::span<const uint8_t>(bytes).subspan(offset,layout.slice_bytes),
-                                  layout.slice_bytes,alpha_msb));
- *slices=std::move(staged);
- return true;
+ return ReadDccSlices(address,layout,alpha_msb,
+  [&](uint64_t vaddr,void* bytes,size_t size) {
+   return LibKernel::Memory::TryReadBacking(vaddr,bytes,size) &&
+          command->GetRecordingGeneration()==generation;
+  },slices);
 }
 
 void TextureCache::RegisterMeta(uint64_t vaddr, uint64_t size, uint32_t layers) {
