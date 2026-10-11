@@ -2880,6 +2880,32 @@ TextureCache::RegionInfo TextureCache::QueryRegion(uint64_t vaddr, uint64_t size
 	return result;
 }
 
+bool TextureCache::CaptureDccMetadata(CommandBuffer* command, uint64_t address,
+                                      const DccLayout& layout, bool alpha_msb,
+                                      std::vector<DccSlice>* slices) {
+ if(!command || !slices || !ValidDccRange(address,layout)) return false;
+ const auto generation=command->GetRecordingGeneration();
+ std::lock_guard transaction(m_resource_mutex);
+ // ObtainBufferForImage can wait/submit. Never hold the texture cache lock here.
+ const auto region=QueryRegion(address,layout.total_bytes);
+ if(region.image_bytes || region.gpu_metadata_bytes) return false;
+ if(m_buffer_cache.HasPageOverlap(address,layout.total_bytes)) {
+  const auto source=m_buffer_cache.ObtainBufferForImage(address,layout.total_bytes);
+  if(command->GetRecordingGeneration()!=generation) return false;
+  if(!IsCoherentGuestImageSource(source,address,layout.total_bytes)) return false;
+ }
+ std::vector<uint8_t> bytes(layout.total_bytes);
+ if(!LibKernel::Memory::TryReadBacking(address,bytes.data(),bytes.size()) ||
+    command->GetRecordingGeneration()!=generation) return false;
+ std::vector<DccSlice> staged;
+ staged.reserve(layout.total_bytes/layout.slice_bytes);
+ for(size_t offset=0;offset<bytes.size();offset+=layout.slice_bytes)
+  staged.push_back(InspectDccSlice(std::span<const uint8_t>(bytes).subspan(offset,layout.slice_bytes),
+                                  layout.slice_bytes,alpha_msb));
+ *slices=std::move(staged);
+ return true;
+}
+
 void TextureCache::RegisterMeta(uint64_t vaddr, uint64_t size, uint32_t layers) {
 	if (vaddr == 0 || size == 0 || vaddr >= TRACKER_ADDRESS_SIZE ||
 	    size > TRACKER_ADDRESS_SIZE - vaddr || (vaddr & 0x7fffu) != 0 || layers == 0 ||

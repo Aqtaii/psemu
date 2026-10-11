@@ -6,6 +6,7 @@
 #include "common/threads.h"
 #include "graphics/host_gpu/memoryTracker.h"
 #include "graphics/host_gpu/renderer/imageInfo.h"
+#include "graphics/host_gpu/renderer/dccMetadata.h"
 #include "graphics/host_gpu/renderer/multiLevelPageTable.h"
 #include "graphics/host_gpu/renderer/tiler.h"
 #include "graphics/host_gpu/vulkanCommon.h"
@@ -102,6 +103,10 @@ public:
 	FindDepthTargetByRange(CommandBuffer* command, uint64_t vaddr, uint64_t size,
 	                       bool allow_containing_sampled = false);
 	[[nodiscard]] RegionInfo QueryRegion(uint64_t vaddr, uint64_t size);
+	// Coherent, transactional metadata inspection; false also signals recording reset.
+	[[nodiscard]] bool CaptureDccMetadata(CommandBuffer* command, uint64_t address,
+	                                      const DccLayout& layout, bool alpha_msb,
+	                                      std::vector<DccSlice>* slices);
 	void                     RegisterMeta(uint64_t vaddr, uint64_t size, uint32_t layers = 1);
 	[[nodiscard]] bool       IsMeta(uint64_t vaddr);
 	[[nodiscard]] bool       IsMetaRange(uint64_t vaddr, uint64_t size);
