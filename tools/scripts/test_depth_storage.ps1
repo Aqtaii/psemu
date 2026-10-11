@@ -37,6 +37,7 @@ foreach($name in @('TileMode','ImageType','BufferFormat')) {
 }
 $header+='uint32_t NumBytesPerElement(uint32_t format) {return format==GpuEnumValue(BufferFormat::k8UInt)?1:format==GpuEnumValue(BufferFormat::k16UInt)?2:4;} }'
 $header+="`n"+(Slice $info 'struct ImageInfo {' '// Common image-to-buffer copy description.')
+$header+="`n[[nodiscard]] inline bool`n"+(Slice $info 'IsCoherentBufferImageRead(' '[[nodiscard]] inline BufferImageWrite')
 $header+="`n[[nodiscard]] inline constexpr bool`n"+(Slice $info 'IsSupportedStandard64RenderTarget(' '[[nodiscard]] inline constexpr bool IsTiledRenderTarget')
 $header+="`n"+(Slice $tile 'static constexpr uint32_t Depth64KB8XOffsetBytes' 'void TileConvertTiledToLinearStandard4KB(')
 $shader=[IO.File]::ReadAllText("$root\gpu\src\graphics\shader\shader.h")
