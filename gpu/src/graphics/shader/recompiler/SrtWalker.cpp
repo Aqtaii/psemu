@@ -5,6 +5,12 @@
 #include <algorithm>
 #include <cstring>
 #include <fmt/format.h>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace Libs::Graphics::ShaderRecompiler::IR {
 namespace {
@@ -505,7 +511,20 @@ private:
 			    error, fmt::format("ReadConst pc=0x{:08x} failed at 0x{:016x}", value.pc, address));
 		}
 		if (m_runtime.read_memory == nullptr) {
+#ifdef _WIN32
+			// Runtime-derived SRT pointers can be unresolved or unmapped. Do not
+			// dereference them in the host; retain a diagnostic and transactional output.
+			uint32_t staged = 0;
+			SIZE_T copied = 0;
+			if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(address),
+			                       &staged, sizeof(staged), &copied) || copied != sizeof(staged)) {
+				return Fail(error, fmt::format("ReadConst pc=0x{:08x} failed at 0x{:016x}",
+				                              value.pc, address));
+			}
+			*result = staged;
+#else
 			std::memcpy(result, reinterpret_cast<const void*>(address), sizeof(*result));
+#endif
 		}
 		return true;
 	}

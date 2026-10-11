@@ -30,5 +30,21 @@ int main() {
  std::string error;CHECK(BuildScalarProvenance(&dynamic,&error));uint32_t result=0;
  CHECK(!FoldScalarConstant(dynamic.provenance,dynamic.blocks[0].instructions[1].scalar_value,&result));
  CHECK(!FoldScalarConstant(dynamic.provenance,dynamic.blocks[0].instructions[2].scalar_value,&result));
+#ifdef _WIN32
+ Program read;read.srt_plan_complete=true;read.provenance.values.resize(4);
+ read.provenance.values[0].op=ScalarValueOp::Constant;read.provenance.values[0].imm=0x24;
+ read.provenance.values[1].op=ScalarValueOp::Constant;
+ read.provenance.values[2].op=ScalarValueOp::Constant;
+ read.provenance.values[3].op=ScalarValueOp::ReadConst;
+ read.provenance.values[3].args={0,1,2};read.provenance.values[3].pc=0x2150;
+ read.srt.reads.push_back({3,0,0x2150});
+ std::vector<uint32_t> flat{0xfeedface};SrtRuntime runtime;
+ CHECK(!WalkSrt(read,runtime,&flat,&error));
+ CHECK(flat==std::vector<uint32_t>{0xfeedface});
+ CHECK(error.find("0000000000000024")!=std::string::npos);
+ uint32_t word=0x12345678;auto address=reinterpret_cast<uint64_t>(&word);
+ read.provenance.values[0].imm=uint32_t(address);read.provenance.values[1].imm=uint32_t(address>>32);
+ CHECK(WalkSrt(read,runtime,&flat,&error));CHECK(flat==std::vector<uint32_t>{word});
+#endif
  std::puts("PASS: scalar address pair shifts, cross-word carries, overlapping registers, masked counts and unknown sources");
 }
