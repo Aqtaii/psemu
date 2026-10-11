@@ -1041,6 +1041,17 @@ ClassifyRenderTargetOverlap(const RenderTargetInfo& cached, bool cached_gpu_modi
 	           : RenderTargetOverlap::Unsupported;
 }
 
+[[nodiscard]] inline bool
+CanRetireBufferOwnedRenderTarget(const RenderTargetInfo& cached, bool gpu_modified,
+                                 bool buffer_modified, bool same_context,
+                                 bool coherent_requested_backing,
+                                 const RenderTargetInfo& requested) {
+	return !gpu_modified && buffer_modified && same_context && coherent_requested_backing &&
+	       ((cached.address | cached.size | requested.address | requested.size) &
+	        (TRACKER_PAGE_SIZE - 1)) == 0 &&
+	       ImageRangeOverlaps(cached.address, cached.size, requested.address, requested.size);
+}
+
 [[nodiscard]] inline DepthOverlap ClassifyDepthTargetOverlap(const DepthTargetInfo& cached,
                                                              bool cached_gpu_modified,
                                                              bool cached_buffer_modified,

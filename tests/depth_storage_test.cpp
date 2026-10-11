@@ -1,5 +1,17 @@
 static void Require(bool ok) {if(!ok) throw std::runtime_error("regression failed");}
 int main() {
+ RenderTargetInfo old_target{},new_target{};
+ old_target.address=0x1c5e8a80000ull;old_target.size=0xff0000;
+ new_target.address=0x1c5e9770000ull;new_target.size=0x480000;
+ Require(CanRetireBufferOwnedRenderTarget(old_target,false,true,true,true,new_target));
+ Require(!CanRetireBufferOwnedRenderTarget(old_target,true,true,true,true,new_target));
+ Require(!CanRetireBufferOwnedRenderTarget(old_target,false,false,true,true,new_target));
+ Require(!CanRetireBufferOwnedRenderTarget(old_target,false,true,false,true,new_target));
+ Require(!CanRetireBufferOwnedRenderTarget(old_target,false,true,true,false,new_target));
+ auto bad_target=new_target;bad_target.address++;
+ Require(!CanRetireBufferOwnedRenderTarget(old_target,false,true,true,true,bad_target));
+ bad_target=new_target;bad_target.address=old_target.address+old_target.size;
+ Require(!CanRetireBufferOwnedRenderTarget(old_target,false,true,true,true,bad_target));
  // Full reconstructed image publication spans multiple buffer fragments but not external bytes.
  for(bool competing_gpu:{false,true}) for(bool competing_cpu:{false,true}) {
   BufferCache cache;

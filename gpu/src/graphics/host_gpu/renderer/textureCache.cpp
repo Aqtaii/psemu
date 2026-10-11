@@ -1657,7 +1657,7 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 		return static_cast<RenderTextureVulkanImage*>(match->image);
 	}
 	std::vector<CachedImage*>    retire;
-	std::vector<CachedImage*>    buffer_owned_depth_retire;
+	std::vector<CachedImage*>    buffer_owned_target_retire;
 	std::shared_ptr<CachedImage> native_image_source;
 	for (const auto& entry: m_images) {
 		auto& cached = *entry;
@@ -1678,9 +1678,19 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 				    cached.ctx == ctx, info);
 				break;
 			case CachedImage::Kind::RenderTarget:
-				overlap =
-				    ClassifyRenderTargetOverlap(cached.target, cached.gpu_modified,
-				                                cached.buffer_modified, cached.ctx == ctx, info);
+				if (CanRetireBufferOwnedRenderTarget(
+				        cached.target, cached.gpu_modified, cached.buffer_modified,
+				        cached.ctx == ctx,
+				        IsCoherentGuestImageSource(target_source, info.address, info.size), info)) {
+					overlap = RenderTargetOverlap::RetireTarget;
+					buffer_owned_target_retire.push_back(&cached);
+					// Preserve the old Vulkan object for any recorded/in-flight references.
+					command->RetainResourceUntilFence(entry);
+				} else {
+					overlap =
+					    ClassifyRenderTargetOverlap(cached.target, cached.gpu_modified,
+					                                cached.buffer_modified, cached.ctx == ctx, info);
+				}
 				break;
 			case CachedImage::Kind::DepthTarget:
 				if (CanRetireBufferOwnedDepthForRenderTarget(
@@ -1719,7 +1729,7 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 				    (cached.kind == CachedImage::Kind::DepthTarget && target_buffer_overlap &&
 				     IsCoherentGuestImageSource(target_source, info.address, info.size));
 				if (supported && cached.kind == CachedImage::Kind::DepthTarget) {
-					buffer_owned_depth_retire.push_back(&cached);
+					buffer_owned_target_retire.push_back(&cached);
 				}
 				break;
 			case RenderTargetOverlap::None:
@@ -1740,8 +1750,8 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 		retire.push_back(&cached);
 	}
 	RequireRetirementIsolation(retire, "render target", info.address, info.size);
-	for (auto* cached: buffer_owned_depth_retire) {
-		// The exact formatted buffer owns the current bytes. Clear the stale-image marker only
+	for (auto* cached: buffer_owned_target_retire) {
+		// The coherent buffer backing owns the current bytes. Clear the stale-image marker only
 		// after coherence validation so normal retirement can remove the obsolete Vulkan shape.
 		cached->buffer_modified = false;
 	}
