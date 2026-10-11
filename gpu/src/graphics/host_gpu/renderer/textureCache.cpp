@@ -3001,6 +3001,24 @@ TextureCache::RegionInfo TextureCache::QueryRegion(uint64_t vaddr, uint64_t size
 	return result;
 }
 
+bool TextureCache::AreGpuBufferWritesOutsideImages(
+    uint64_t vaddr, uint64_t size, std::span<const GpuWrittenBytes> writes) {
+	if (!m_resource_mutex.IsOwnedByCurrentThread() || writes.empty()) { return false; }
+	FaultSafeTextureLock lock(this, m_lock);
+	bool found = false;
+	for (const auto* cached: FindImagesInRegionLocked(vaddr, size, false)) {
+		if (!cached->OverlapsRange(vaddr, size, false)) { continue; }
+		found = true;
+		if (cached->gpu_modified || cached->kind != CachedImage::Kind::Texture) { return false; }
+		for (uint32_t range = 0; range < cached->RangeCount(); ++range) {
+			if (!GpuWritesAreOutsideImage(cached->Address(range), cached->Size(range), writes)) {
+				return false;
+			}
+		}
+	}
+	return found;
+}
+
 bool TextureCache::CaptureDccMetadata(CommandBuffer* command, uint64_t address,
                                       const DccLayout& layout, bool alpha_msb,
                                       std::vector<DccSlice>* slices) {

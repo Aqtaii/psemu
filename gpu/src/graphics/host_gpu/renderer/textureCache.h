@@ -7,6 +7,7 @@
 #include "graphics/host_gpu/memoryTracker.h"
 #include "graphics/host_gpu/renderer/imageInfo.h"
 #include "graphics/host_gpu/renderer/dccMetadata.h"
+#include "graphics/host_gpu/renderer/bufferImageReadRanges.h"
 #include "graphics/host_gpu/renderer/multiLevelPageTable.h"
 #include "graphics/host_gpu/renderer/tiler.h"
 #include "graphics/host_gpu/vulkanCommon.h"
@@ -108,6 +109,9 @@ public:
 	FindDepthTargetByRange(CommandBuffer* command, uint64_t vaddr, uint64_t size,
 	                       bool allow_containing_sampled = false);
 	[[nodiscard]] RegionInfo QueryRegion(uint64_t vaddr, uint64_t size);
+	// Caller owns the resource transaction; exact dirty bytes distinguish shared edge pages.
+	[[nodiscard]] bool AreGpuBufferWritesOutsideImages(
+	    uint64_t vaddr, uint64_t size, std::span<const GpuWrittenBytes> writes);
 	// Coherent, transactional metadata inspection; false also signals recording reset.
 	[[nodiscard]] bool CaptureDccMetadata(CommandBuffer* command, uint64_t address,
 	                                      const DccLayout& layout, bool alpha_msb,

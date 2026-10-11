@@ -740,6 +740,24 @@ std::pair<VulkanBuffer*, uint64_t> BufferCache::ObtainBuffer(CommandBuffer*  com
 		    texture_region.buffer_owned_image_bytes);
 		if (!coherent_read && is_read && !is_written && buffer_gpu &&
 		    !texture_region.gpu_image_bytes) {
+			std::vector<GpuWrittenBytes> writes;
+			{
+				// Drop the buffer lock before querying image ownership.
+				FaultSafeCacheLock lock(this, m_mutex);
+				for (const auto& write: m_gpu_modified_ranges.Intersections(vaddr, size)) {
+					writes.push_back({write.address, write.size});
+				}
+			}
+			coherent_read = m_texture_cache->AreGpuBufferWritesOutsideImages(vaddr, size, writes);
+			static std::atomic_uint padding_read_logs {0};
+			if (coherent_read && padding_read_logs.fetch_add(1, std::memory_order_relaxed) < 8) {
+				std::fprintf(stderr, "[BUFFER-PADDING-READ] addr=0x%016" PRIx64
+				             " size=0x%016" PRIx64 " exact_writes=%zu images_unchanged=1\n",
+				             vaddr, size, writes.size());
+			}
+		}
+		if (!coherent_read && is_read && !is_written && buffer_gpu &&
+		    !texture_region.gpu_image_bytes) {
 			// A CPU-current sampled view can be published after a buffer was declared
 			// writable. Reestablish its stale-image marker before rereading the native
 			// GPU buffer; use the existing alias classifier rather than ignoring overlap.
