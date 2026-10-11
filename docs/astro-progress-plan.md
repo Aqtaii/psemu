@@ -25,3 +25,6 @@ Decoder regresyonları geçti; 38075191133 numaralı tam Windows derlemesi plan 
 Her aşamada commit, referans kaynak/test, geçen kontroller ve gerçek oyun sonucu kaydedilecek. Başarı sırası: BVH testleri → Astro dispatch → ilk kare → menü → kontrol edilebilir sahne → kararlılık. İlk görüntü için tarih veya yüzde vermek, BVH sonrasında hangi engellerin çıkacağı bilinmediğinden şu anda güvenilir değil.
 
 Dreaming Sarah takılmaları kullanıcı isteğiyle ertelendi. İndirilen paketler, çıkarılan derlemeler ve loglar D:/proje/psemu-codex altında tutulacak. Sarah'nın mevcut sınırsız FPS/doğrudan oyun başlangıcı ayarları korunacak.
+
+
+2026-10-11 checkpoint: sourcef35b622, CI38129457414 passed full Windows/regression/SPIR-V checks. Actual Astro run compiled the previously failing14KB compute/BVH shader after keeping standalone scalar reads under GPU control flow (PC0x1f6c host read removed). Software BVH shader compilation validated; actual intersection dispatch not yet confirmed. Runtime next stops at storage texture binding because DCC metadata words6/7 are unsupported (format71/tile27 is otherwise accepted). First frame remains step4 pending. Next: adapt upstream DCC metadata range/ownership/coherence and initialization before enabling compressed storage descriptor encoding.
