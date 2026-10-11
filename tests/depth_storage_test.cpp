@@ -72,6 +72,34 @@ int main() {
   for(size_t i=0;i<expected.size();i++)Require(actual[i+1]==expected[i]);
  }
 
+ // Captured exact RGBA16F alias: 128x64 blocks, preserve each 64-bit pixel and padding.
+ {
+  auto image=storage;image.address=0x28cb7980000ull;image.size=0xff0000;
+  image.width=1920;image.height=1080;image.pitch=1920;
+  image.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float);
+  image.tile=Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget);
+  RenderTargetInfo target{};target.address=image.address;target.size=image.size;
+  target.width=image.width;target.height=image.height;target.pitch=image.pitch;
+  target.bytes_per_element=8;target.tile_mode=image.tile;
+  Require(CanReconstructRenderTargetForStorage(target,true,false,true,false,true,false,image));
+  auto bad=image;bad.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float);
+  Require(!CanReconstructRenderTargetForStorage(target,true,false,true,false,true,false,bad));
+  bad=image;bad.address+=0x10000;
+  Require(!CanReconstructRenderTargetForStorage(target,true,false,true,false,true,false,bad));
+  std::vector<uint64_t> linear(image.size/8),expected(linear.size()),actual(linear.size()+2);
+  actual.front()=0x1122334455667788ull;actual.back()=0x8877665544332211ull;
+  for(size_t i=0;i<linear.size();i++){
+   linear[i]=0xabcdef0100000000ull+i*17;expected[i]=actual[i+1]=0x1234567800000000ull+i*31;
+  }
+  for(uint32_t y=0;y<1080;y++)for(uint32_t x=0;x<1920;x++){
+   const auto index=((y/64)*15+x/128)*8192+Gen5RenderTargetOffsetInBlock<uint64_t>(x%128,y%64)/8;
+   expected[index]=linear[y*1920+x];
+  }
+  TileConvertLinearToTiledRenderTarget64PreservePadding(actual.data()+1,linear.data(),1920,1080,1920,image.size);
+  Require(actual.front()==0x1122334455667788ull && actual.back()==0x8877665544332211ull);
+  for(size_t i=0;i<expected.size();i++)Require(actual[i+1]==expected[i]);
+ }
+
  Require(!CanMergeBufferCacheQueueMask(0x110,4));
  Require(CanMergeBufferCacheAfterDrain(0x110,4,0x110,true));
  Require(!CanMergeBufferCacheAfterDrain(0x110,4,0x10,true));

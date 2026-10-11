@@ -551,11 +551,14 @@ struct TextureCache::ReadbackWorker {
 				if (storage) {
 					cache.m_tiler.TileImage(guest.data(), download.data(), cached.info);
 				} else if (preserve_target_padding) {
-					if (!IsTiledRenderTarget(layout) || layout.bytes_per_element != 4 || buffer_overlap ||
+					if (!IsTiledRenderTarget(layout) || (layout.bytes_per_element != 4 && layout.bytes_per_element != 8) || buffer_overlap ||
 					    !Libs::LibKernel::Memory::TryReadBacking(info.address, guest.data(), info.size)) {
 						EXIT("TextureCache: cannot preserve target reconstruction padding\n");
 					}
-					if (layout.tile_mode == Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget)) {
+					if (layout.tile_mode == Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) && layout.bytes_per_element == 8) {
+						TileConvertLinearToTiledRenderTarget64PreservePadding(
+						    guest.data(),download.data(),info.width,info.height,info.pitch,info.size);
+					} else if (layout.tile_mode == Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget)) {
 						TileConvertLinearToTiledRenderTarget32PreservePadding(
 						    guest.data(),download.data(),info.width,info.height,info.pitch,info.size);
 					} else {

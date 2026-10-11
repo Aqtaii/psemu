@@ -1069,9 +1069,20 @@ CanReconstructRenderTargetForStorage(const RenderTargetInfo& target,bool gpu,boo
                                     const ImageInfo& storage) {
  auto footprint=target;
  footprint.tile_mode=Prospero::GpuEnumValue(Prospero::TileMode::kStandard64KB);
+ const bool depth32=IsTiledRenderTarget(target) && IsSupportedStandard64RenderTarget(footprint) &&
+                    IsSupportedDepthStorageBacking(storage);
+ const uint64_t padded_height=(static_cast<uint64_t>(target.height)+63u)&~uint64_t{63u};
+ const bool rgba16=target.tile_mode==Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) &&
+     target.bytes_per_element==8 && target.width!=0 && target.height!=0 && target.levels==1 && target.layers==1 &&
+     target.pitch==((static_cast<uint64_t>(target.width)+127u)&~uint64_t{127u}) &&
+     target.pitch<=UINT64_MAX/padded_height/8u && target.size==target.pitch*padded_height*8u &&
+     storage.format==Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float) &&
+     storage.tile==target.tile_mode && storage.address==target.address && storage.size==target.size &&
+     storage.width==target.width && storage.height==target.height && storage.pitch==target.pitch &&
+     storage.type==Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) && storage.depth==1 &&
+     storage.base_level==0 && storage.levels==1 && storage.view_levels==1 && storage.base_array==0;
  return gpu && tracker_gpu && !buffer && !cpu && same_context && !buffers &&
-        IsTiledRenderTarget(target) && IsSupportedStandard64RenderTarget(footprint) &&
-        IsSupportedDepthStorageBacking(storage) &&
+        (depth32 || rgba16) &&
         target.address != 0 && target.size != 0 && storage.address != 0 && storage.size != 0 &&
         target.size <= UINT64_MAX - target.address && storage.size <= UINT64_MAX - storage.address &&
         ((target.address | target.size | storage.address | storage.size) & (TRACKER_PAGE_SIZE - 1)) == 0 &&
