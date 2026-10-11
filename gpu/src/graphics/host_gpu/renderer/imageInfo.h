@@ -400,8 +400,13 @@ IsDepthUintTextureReinterpretation(vk::Format image_format, uint32_t guest_forma
 }
 
 [[nodiscard]] inline constexpr StorageSampledViewShape
-SelectStorageSampledViewShape(uint32_t type, uint32_t depth, uint32_t backing_layers) noexcept {
+SelectStorageSampledViewShape(uint32_t type, uint32_t depth, uint32_t backing_layers,
+                              uint32_t height, uint32_t backing_height) noexcept {
 	switch (static_cast<Prospero::ImageType>(type)) {
+		case Prospero::ImageType::kColor1D:
+			// Storage uses a single-row 2D backing; sampled descriptors use the same ABI.
+			return depth == 1 && backing_layers == 1 && height == 1 && backing_height == 1
+			           ? StorageSampledViewShape::Image2D : StorageSampledViewShape::Unsupported;
 		case Prospero::ImageType::kColor2D:
 			return depth == 1 && backing_layers == 1 ? StorageSampledViewShape::Image2D
 			                                         : StorageSampledViewShape::Unsupported;

@@ -11,10 +11,19 @@ $dir="$root\gpu\src\graphics\shader\recompiler"
 $source=[IO.File]::ReadAllText("$root\tests\storage_1d_lowering_test.cpp")
 $source+=Slice "$dir\ResourceMaterialization.cpp" 'Decoder::ImageDimension DescriptorDimension(' 'bool NullImageDescriptor('
 $source+=Slice "$dir\spirvEmitter\spirvEmitterImageHelpers.cpp" 'uint32_t EmitImageCoordU32(' 'uint32_t EmitImageLoadCoordU32('
+$infoPath="$root\gpu\src\graphics\host_gpu\renderer\imageInfo.h"
+$infoText=[IO.File]::ReadAllText($infoPath)
+$source+=[regex]::Match($infoText,'enum class StorageSampledViewShape : uint8_t \{[^}]+\};').Value
+$source+="[[nodiscard]] inline constexpr StorageSampledViewShape`n"+(Slice $infoPath 'SelectStorageSampledViewShape(' '[[nodiscard]] inline constexpr bool IsSupportedRenderTargetElementSize(')
 $source+='using IR::ImageResource;using IR::DescriptorBindingKind;'
 $source+=Slice "$dir\BindingLayout.cpp" 'bool ImageBinding(' 'bool CollectValue('
 $source+=@'
 int main() {
+ Check(SelectStorageSampledViewShape(8,1,1,1,1)==StorageSampledViewShape::Image2D);
+ for(auto values:{std::array<uint32_t,4>{2,1,1,1},{1,2,1,1},{1,1,2,1},{1,1,1,2},{1,1,1,0}})
+  Check(SelectStorageSampledViewShape(8,values[0],values[1],values[2],values[3])==StorageSampledViewShape::Unsupported);
+ Check(SelectStorageSampledViewShape(9,1,1,8,8)==StorageSampledViewShape::Image2D);
+
  DescriptorValue descriptor;
  descriptor.dwords={0x6e829200,0x04d00001,0,0x81b00fac,0,0x00700000,0,0};
  Check(DescriptorDimension(descriptor,ResourceKind::StorageImageUint)==Decoder::ImageDimension::Dim1D);

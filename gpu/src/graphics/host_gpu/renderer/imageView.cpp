@@ -371,7 +371,8 @@ vk::ImageView TextureCache::GetStorageTextureSampledView(GraphicContext*        
                                                          StorageTextureVulkanImage* image,
                                                          const ImageInfo&           info) {
 	const auto shape =
-	    SelectStorageSampledViewShape(info.type, info.depth, image != nullptr ? image->layers : 0);
+	    SelectStorageSampledViewShape(info.type, info.depth, image != nullptr ? image->layers : 0,
+                                 info.height, image != nullptr ? image->extent.height : 0);
 	if (ctx == nullptr || image == nullptr || image->image == nullptr ||
 	    shape == StorageSampledViewShape::Unsupported || info.base_array != 0 ||
 	    info.levels != image->mip_levels || info.base_level >= info.levels ||
