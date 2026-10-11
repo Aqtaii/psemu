@@ -148,7 +148,8 @@ private:
 	void                        RequireNoMetaOverlapLocked(uint64_t vaddr, uint64_t size) const;
 	void                        MarkSampledAliasesCpuDirtyLocked(uint64_t vaddr, uint64_t size);
 	void RetireSampledTargetAliases(GraphicContext* ctx, const ImageInfo& requested);
-	void ResolveStorageImageOverlaps(GraphicContext* ctx, const ImageInfo& requested);
+	void ResolveStorageImageOverlaps(CommandBuffer* command, GraphicContext* ctx,
+	                                 const ImageInfo& requested, bool coherent_requested_backing);
 	void RetireStorageDepthAliasLocked(GraphicContext* ctx, const ImageInfo& requested);
 	void RegisterImageLocked(CachedImage& image);
 	void UnregisterImageLocked(CachedImage& image, bool release_tracking);

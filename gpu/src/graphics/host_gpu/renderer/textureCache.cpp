@@ -1050,7 +1050,9 @@ void TextureCache::RetireSampledTargetAliases(GraphicContext* ctx, const ImageIn
 	RetireImages(retire);
 }
 
-void TextureCache::ResolveStorageImageOverlaps(GraphicContext* ctx, const ImageInfo& requested) {
+void TextureCache::ResolveStorageImageOverlaps(CommandBuffer* command, GraphicContext* ctx,
+                                               const ImageInfo& requested,
+                                               bool coherent_requested_backing) {
 	std::vector<CachedImage*> retire;
 	for (auto* cached: FindImagesInRegionLocked(requested.address, requested.size, true)) {
 		const bool tracker_gpu =
@@ -1063,6 +1065,13 @@ void TextureCache::ResolveStorageImageOverlaps(GraphicContext* ctx, const ImageI
 			case StorageImageOverlap::RetireSampled: retire.push_back(cached); continue;
 			case StorageImageOverlap::PageNeighbor: continue;
 			case StorageImageOverlap::Unsupported:
+				if (cached->kind == CachedImage::Kind::RenderTarget &&
+				    CanRetireCleanRenderTargetForStorage(
+				        cached->target, cached->gpu_modified, cached->buffer_modified, tracker_gpu,
+				        cached->ctx == ctx, coherent_requested_backing, requested)) {
+					retire.push_back(cached);
+					continue;
+				}
 				EXIT("TextureCache: unsupported storage-image byte alias, requested=0x%016" PRIx64
 				     "+0x%016" PRIx64 " existing=0x%016" PRIx64 "+0x%016" PRIx64
 				     " kind=%u same_context=%d gpu=%d/%d buffer=%d\n",
@@ -1072,6 +1081,25 @@ void TextureCache::ResolveStorageImageOverlaps(GraphicContext* ctx, const ImageI
 		}
 	}
 	RequireRetirementIsolation(retire, "storage neighbor", requested.address, requested.size);
+	for (auto* cached: retire) {
+		if (cached->kind != CachedImage::Kind::RenderTarget) {
+			continue;
+		}
+		const auto owner = std::find_if(m_images.begin(), m_images.end(),
+		                               [&](const auto& entry) { return entry.get() == cached; });
+		if (owner == m_images.end()) {
+			EXIT("TextureCache: clean target retirement has no retained cache record\n");
+		}
+		// Recorded commands may still reference the old Vulkan image or attachment views.
+		command->RetainResourceUntilFence(*owner);
+		static std::atomic_uint retirement_logs {0};
+		if (retirement_logs.fetch_add(1, std::memory_order_relaxed) < 8) {
+			printf("[RT-STORAGE-RETIRE] target=0x%016" PRIx64 "+0x%016" PRIx64
+			       " storage=0x%016" PRIx64 "+0x%016" PRIx64 " backing_current=1\n",
+			       cached->target.address, cached->target.size, requested.address, requested.size);
+		}
+	}
+
 	for (auto* cached: retire) {
 		if (!cached->gpu_modified) {
 			continue;
@@ -1536,7 +1564,8 @@ StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   com
 			return static_cast<StorageTextureVulkanImage*>(match->image);
 		}
 
-		ResolveStorageImageOverlaps(ctx, info);
+		ResolveStorageImageOverlaps(
+		    command, ctx, info, IsCoherentGuestImageSource(source, info.address, info.size));
 		if (command->GetRecordingGeneration() != generation) { return nullptr; }
 		m_images.reserve(m_images.size() + 1);
 		auto cached  = std::make_shared<CachedImage>();

@@ -81,6 +81,26 @@ int main() {
   storage.address++;Require(!proof());storage=captured;
   target.layers=2;Require(!proof());
  }
+ // Captured clean 0x480000 target becomes a larger 0x1a20000 storage allocation.
+ {
+  RenderTargetInfo target{};
+  target.address=0x1b0e61c0000ull;target.size=0x480000;target.levels=1;target.layers=1;
+  ImageInfo storage{};storage.address=target.address;storage.size=0x1a20000;
+  auto proof=[&](bool gpu=false,bool yielded=false,bool tracked_gpu=false,
+                bool context=true,bool coherent=true) {
+   return CanRetireCleanRenderTargetForStorage(target,gpu,yielded,tracked_gpu,context,coherent,storage);
+  };
+  Require(proof());
+  Require(!proof(true));Require(!proof(false,true));Require(!proof(false,false,true));
+  Require(!proof(false,false,false,false));Require(!proof(false,false,false,true,false));
+  auto captured=storage;
+  storage.size=0x470000;Require(!proof());storage=captured;
+  storage.address+=0x1000;Require(!proof());storage=captured;
+  storage.address++;Require(!proof());storage=captured;
+  storage.size=0;Require(!proof());storage=captured;
+  storage.address=UINT64_MAX-0xfff;storage.size=0x2000;Require(!proof());storage=captured;
+  target.layers=2;Require(!proof());
+ }
  // Captured formatted buffer starts within a GPU target and extends beyond its end.
  constexpr uint64_t image=0x19d6e170000ull,image_size=0xff0000;
  auto classify=[&](uint64_t address,uint64_t size,bool gpu=true,bool yielded=false,bool formatted=true) {

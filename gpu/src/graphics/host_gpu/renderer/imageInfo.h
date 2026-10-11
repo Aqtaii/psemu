@@ -1058,6 +1058,24 @@ CanReconstructStorageForRenderTarget(const ImageInfo& storage, bool gpu_modified
         target.levels == 1 && target.layers == 1;
 }
 
+// Backing became authoritative after readback; do not discard any native-only pixels.
+[[nodiscard]] inline bool
+CanRetireCleanRenderTargetForStorage(const RenderTargetInfo& cached, bool gpu_modified,
+                                    bool buffer_modified, bool tracker_gpu_modified,
+                                    bool same_context, bool coherent_requested_backing,
+                                    const ImageInfo& requested) {
+ return !gpu_modified && !buffer_modified && !tracker_gpu_modified && same_context &&
+        coherent_requested_backing && cached.address != 0 && cached.size != 0 &&
+        requested.address != 0 && requested.size != 0 &&
+        requested.size <= UINT64_MAX - requested.address &&
+        ((cached.address | cached.size | requested.address | requested.size) &
+         (TRACKER_PAGE_SIZE - 1)) == 0 &&
+        cached.address >= requested.address &&
+        cached.address - requested.address <= requested.size &&
+        cached.size <= requested.size - (cached.address - requested.address) &&
+        cached.levels == 1 && cached.layers == 1;
+}
+
 [[nodiscard]] inline bool
 CanRetireBufferOwnedRenderTarget(const RenderTargetInfo& cached, bool gpu_modified,
                                  bool buffer_modified, bool same_context,
