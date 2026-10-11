@@ -4619,6 +4619,15 @@ void GraphicsInitJmpTablesShIndirect() {
 		r2.shared_vgprs      = KYTY_PM4_GET(value, SPI_SHADER_PGM_RSRC2_VS, SHARED_VGPR_CNT);
 		cp->GetShCtx()->SetLsShaderResource2(r2);
 	};
+	// PS5 toolkit restores GS-front allocation at the legacy ES resource register.
+	// Preserve it independently; merged NGG shader allocation remains in GS RSRC1/2.
+	g_hw_sh_indirect_func[Pm4::SPI_SHADER_PGM_RSRC1_ES] = [](KYTY_HW_SH_INDIRECT_ARGS) {
+		cp->GetShCtx()->SetEsShaderResource1Raw(value);
+		static std::atomic<uint32_t> log_count {0};
+		if (log_count.fetch_add(1, std::memory_order_relaxed) < 8) {
+			printf("[ES-RSRC1] offset=0x%03x value=0x%08x preserved=1\n", cmd_offset, value);
+		}
+	};
 	g_hw_sh_indirect_func[Pm4::SPI_SHADER_PGM_LO_ES] = [](KYTY_HW_SH_INDIRECT_ARGS) {
 		auto base = cp->GetShCtx()->GetVs().es_regs.data_addr;
 		base &= 0xFFFFFF00000000FFull;

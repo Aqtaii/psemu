@@ -487,6 +487,7 @@ struct CsStageRegisters {
 
 struct EsStageRegisters {
 	uint64_t data_addr = 0;
+	uint32_t resource1_raw = 0;
 };
 
 struct LsStageRegisters {
@@ -984,6 +985,7 @@ public:
 	void Reset() { *this = Shader(); }
 
 	void SetEsShaderBase(uint64_t addr) { m_vs.es_regs.data_addr = addr; }
+	void SetEsShaderResource1Raw(uint32_t value) { m_vs.es_regs.resource1_raw = value; }
 	void SetLsShaderBase(uint64_t addr) { m_vs.ls_regs.data_addr = addr; }
 	void SetLsShaderResource1(const VsShaderResource1& rsrc1) { m_vs.ls_regs.rsrc1 = rsrc1; }
 	void SetLsShaderResource2(const VsShaderResource2& rsrc2) { m_vs.ls_regs.rsrc2 = rsrc2; }
