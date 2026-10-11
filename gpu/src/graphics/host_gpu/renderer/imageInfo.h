@@ -1063,6 +1063,16 @@ CanReconstructStorageForRenderTarget(const ImageInfo& storage, bool gpu_modified
         target.levels == 1 && target.layers == 1;
 }
 
+[[nodiscard]] inline bool
+CanReconstructRenderTargetForStorage(const RenderTargetInfo& target,bool gpu,bool buffer,
+                                    bool tracker_gpu,bool cpu,bool same_context,bool buffers,
+                                    const ImageInfo& storage) {
+ return gpu && tracker_gpu && !buffer && !cpu && same_context && !buffers &&
+        IsSupportedStandard64RenderTarget(target) && IsSupportedDepthStorageBacking(storage) &&
+        target.address==storage.address && target.size==storage.size &&
+        target.width==storage.width && target.height==storage.height && target.pitch==storage.pitch;
+}
+
 // Backing became authoritative after readback; do not discard any native-only pixels.
 [[nodiscard]] inline bool
 CanRetireCleanRenderTargetForStorage(const RenderTargetInfo& cached, bool gpu_modified,

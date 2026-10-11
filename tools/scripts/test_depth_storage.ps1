@@ -39,6 +39,8 @@ $header+='uint32_t NumBytesPerElement(uint32_t format) {return format==GpuEnumVa
 $header+="`n"+(Slice $info 'struct ImageInfo {' '// Common image-to-buffer copy description.')
 $header+="`n[[nodiscard]] inline bool`n"+(Slice $info 'IsCoherentBufferImageRead(' '[[nodiscard]] inline BufferImageWrite')
 $header+="`n[[nodiscard]] inline constexpr bool`n"+(Slice $info 'IsSupportedStandard64RenderTarget(' '[[nodiscard]] inline constexpr bool IsTiledRenderTarget')
+$header+="`n"+(Slice $tile 'static constexpr uint32_t GetStandard64KB32XPart(' 'struct Standard64KB16Tables')
+$header+="`n"+(Slice $tile 'static void TileConvertLinearToTiledStandard64KB32Impl(' 'void TileConvertTiledToLinearStandard64KB16(')
 $header+="`n"+(Slice $tile 'static constexpr uint32_t Depth64KB8XOffsetBytes' 'void TileConvertTiledToLinearStandard4KB(')
 $shader=[IO.File]::ReadAllText("$root\gpu\src\graphics\shader\shader.h")
 $views=[IO.File]::ReadAllText("$root\gpu\src\graphics\host_gpu\renderer\imageView.h")

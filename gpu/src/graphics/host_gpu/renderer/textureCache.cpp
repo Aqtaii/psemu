@@ -484,7 +484,7 @@ struct TextureCache::ReadbackWorker {
 		return {info.address, info.size};
 	}
 
-	[[nodiscard]] ReadbackRange DownloadColorImage(CachedImage& cached) {
+	[[nodiscard]] ReadbackRange DownloadColorImage(CachedImage& cached, bool preserve_target_padding = false) {
 		const bool storage = cached.kind == CachedImage::Kind::StorageTexture;
 		const bool target  = cached.kind == CachedImage::Kind::RenderTarget;
 		const auto info =
@@ -550,6 +550,13 @@ struct TextureCache::ReadbackWorker {
 				                                               1};
 				if (storage) {
 					cache.m_tiler.TileImage(guest.data(), download.data(), cached.info);
+				} else if (preserve_target_padding) {
+					if (!IsSupportedStandard64RenderTarget(layout) || buffer_overlap ||
+					    !Libs::LibKernel::Memory::TryReadBacking(info.address, guest.data(), info.size)) {
+						EXIT("TextureCache: cannot preserve target reconstruction padding\n");
+					}
+					TileConvertLinearToTiledStandard64KB32PreservePadding(
+					    guest.data(),download.data(),info.width,info.height,info.pitch,info.size);
 				} else {
 					cache.m_tiler.TileImage(guest.data(), download.data(), layout);
 				}
@@ -1072,6 +1079,14 @@ void TextureCache::ResolveStorageImageOverlaps(CommandBuffer* command, GraphicCo
 					retire.push_back(cached);
 					continue;
 				}
+				if (cached->kind == CachedImage::Kind::RenderTarget &&
+				    CanReconstructRenderTargetForStorage(cached->target,cached->gpu_modified,
+				        cached->buffer_modified,tracker_gpu,
+				        m_memory_tracker.IsRegionCpuModified(cached->Address(),cached->Size()),
+				        cached->ctx==ctx,m_buffer_cache.HasPageOverlap(requested.address,requested.size),requested)) {
+					retire.push_back(cached);
+					continue;
+				}
 				EXIT("TextureCache: unsupported storage-image byte alias, requested=0x%016" PRIx64
 				     "+0x%016" PRIx64 " existing=0x%016" PRIx64 "+0x%016" PRIx64
 				     " kind=%u same_context=%d gpu=%d/%d buffer=%d\n",
@@ -1095,8 +1110,9 @@ void TextureCache::ResolveStorageImageOverlaps(CommandBuffer* command, GraphicCo
 		static std::atomic_uint retirement_logs {0};
 		if (retirement_logs.fetch_add(1, std::memory_order_relaxed) < 8) {
 			printf("[RT-STORAGE-RETIRE] target=0x%016" PRIx64 "+0x%016" PRIx64
-			       " storage=0x%016" PRIx64 "+0x%016" PRIx64 " backing_current=1\n",
-			       cached->target.address, cached->target.size, requested.address, requested.size);
+			       " storage=0x%016" PRIx64 "+0x%016" PRIx64 " backing_current=%d\n",
+			       cached->target.address, cached->target.size, requested.address, requested.size,
+			       !cached->gpu_modified);
 		}
 	}
 
@@ -1104,10 +1120,15 @@ void TextureCache::ResolveStorageImageOverlaps(CommandBuffer* command, GraphicCo
 		if (!cached->gpu_modified) {
 			continue;
 		}
-		const auto transfer = m_readback->DownloadColorImage(*cached);
+		const auto transfer = m_readback->DownloadColorImage(*cached, cached->kind == CachedImage::Kind::RenderTarget);
 		m_memory_tracker.ForEachDownloadRange<true>(transfer.address, transfer.size,
 		                                            [](uint64_t, uint64_t) noexcept {});
 		cached->gpu_modified = false;
+		static std::atomic_uint reconstruct_logs {0};
+		if (reconstruct_logs.fetch_add(1,std::memory_order_relaxed)<8) {
+			printf("[RT-STORAGE-RECONSTRUCT] addr=0x%016" PRIx64 " size=0x%016" PRIx64
+			       " padding_preserved=1\n",transfer.address,transfer.size);
+		}
 	}
 	RetireImages(retire);
 }
@@ -1376,7 +1397,7 @@ StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   com
 	DccSlice clear_slice {};
 	const DccSlice* initial_clear = nullptr;
 	bool clear_recorded = false;
-	const auto generation = command->GetRecordingGeneration();
+	auto generation = command->GetRecordingGeneration();
 	const bool supported_1d = info.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor1D) &&
 	                          info.height == 1 && info.depth == 1 && info.base_level == 0 &&
 	                          info.levels == 1;
@@ -1413,6 +1434,24 @@ StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   com
 		     info.depth);
 	}
 
+	bool needs_target_drain = false;
+	{
+		std::lock_guard transaction(m_resource_mutex);
+		FaultSafeTextureLock lock(this,m_lock);
+		const bool buffers=m_buffer_cache.HasPageOverlap(info.address,info.size);
+		for (auto* cached:FindImagesInRegionLocked(info.address,info.size,true)) {
+			if (cached->kind==CachedImage::Kind::RenderTarget &&
+			    CanReconstructRenderTargetForStorage(cached->target,cached->gpu_modified,
+			        cached->buffer_modified,m_memory_tracker.IsRegionGpuModified(cached->Address(),cached->Size()),
+			        m_memory_tracker.IsRegionCpuModified(cached->Address(),cached->Size()),
+			        cached->ctx==ctx,buffers,info)) needs_target_drain=true;
+		}
+	}
+	if (needs_target_drain) {
+		GraphicsRunSynchronizeCommandProcessors();
+		// Continue preparation after reset; the caller observes the recording change and retries.
+		generation=command->GetRecordingGeneration();
+	}
 	std::lock_guard       transaction(m_resource_mutex);
 	if (dcc != nullptr) {
 		// Ordered buffer readback must not hold the image lock.

@@ -1484,8 +1484,8 @@ void TileConvertTiledToLinearStandard64KB32(void* dst, const void* src, uint32_t
 	    dst, src, width, height, pitch, size, src_size, src_x, src_y, GetStandard64KB32Tables());
 }
 
-void TileConvertLinearToTiledStandard64KB32(void* dst, const void* src, uint32_t width,
-                                            uint32_t height, uint32_t pitch, uint64_t size) {
+static void TileConvertLinearToTiledStandard64KB32Impl(void* dst, const void* src, uint32_t width,
+                                            uint32_t height, uint32_t pitch, uint64_t size, bool preserve_padding) {
 	KYTY_PROFILER_FUNCTION();
 
 	const auto rows           = static_cast<uint64_t>(height == 0 ? 0 : height - 1u);
@@ -1510,7 +1510,7 @@ void TileConvertLinearToTiledStandard64KB32(void* dst, const void* src, uint32_t
 	const auto* x_words = tables.x_words.data();
 	const auto* y_words = tables.y_words.data();
 
-	std::memset(dst32, 0, static_cast<size_t>(size));
+	if (!preserve_padding) std::memset(dst32, 0, static_cast<size_t>(size));
 	for (uint32_t block_y = 0; block_y < height; block_y += 128u) {
 		const uint32_t block_height = std::min(128u, height - block_y);
 		for (uint32_t block_x = 0; block_x < width; block_x += 128u) {
@@ -1543,6 +1543,15 @@ void TileConvertLinearToTiledStandard64KB32(void* dst, const void* src, uint32_t
 			}
 		}
 	}
+}
+
+void TileConvertLinearToTiledStandard64KB32(void* dst,const void* src,uint32_t width,
+                                            uint32_t height,uint32_t pitch,uint64_t size) {
+ TileConvertLinearToTiledStandard64KB32Impl(dst,src,width,height,pitch,size,false);
+}
+void TileConvertLinearToTiledStandard64KB32PreservePadding(void* dst,const void* src,uint32_t width,
+                                            uint32_t height,uint32_t pitch,uint64_t size) {
+ TileConvertLinearToTiledStandard64KB32Impl(dst,src,width,height,pitch,size,true);
 }
 
 void TileConvertTiledToLinearStandard64KB16(void* dst, const void* src, uint32_t width,

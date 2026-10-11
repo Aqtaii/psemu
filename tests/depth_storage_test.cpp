@@ -1,5 +1,23 @@
 static void Require(bool ok) {if(!ok) throw std::runtime_error("regression failed");}
 int main() {
+ ImageInfo storage{};storage.address=0x247db190000;storage.size=0x280000;
+ storage.width=960;storage.height=540;storage.pitch=1024;storage.depth=1;
+ storage.type=Prospero::GpuEnumValue(Prospero::ImageType::kColor2D);
+ storage.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float);
+ storage.tile=Prospero::GpuEnumValue(Prospero::TileMode::kDepth);
+ storage.levels=storage.view_levels=1;
+ RenderTargetInfo rt{};rt.address=storage.address;rt.size=storage.size;rt.width=960;rt.height=540;
+ rt.pitch=1024;rt.bytes_per_element=4;rt.tile_mode=Prospero::GpuEnumValue(Prospero::TileMode::kStandard64KB);
+ Require(CanReconstructRenderTargetForStorage(rt,true,false,true,false,true,false,storage));
+ for(int bad=0;bad<6;bad++)Require(!CanReconstructRenderTargetForStorage(rt,bad!=0,bad==1,bad!=2,bad==3,bad!=4,bad==5,storage));
+ auto wrong=storage;wrong.pitch=960;Require(!CanReconstructRenderTargetForStorage(rt,true,false,true,false,true,false,wrong));
+ std::vector<uint32_t> src(rt.size/4,0x12345678),tiled(src.size(),0),keep(src.size(),0xa5a5a5a5),mask(src.size(),0),ones(src.size(),1);
+ TileConvertLinearToTiledStandard64KB32(tiled.data(),src.data(),960,540,1024,rt.size);
+ TileConvertLinearToTiledStandard64KB32(mask.data(),ones.data(),960,540,1024,rt.size);
+ TileConvertLinearToTiledStandard64KB32PreservePadding(keep.data(),src.data(),960,540,1024,rt.size);
+ size_t pixels=0;for(size_t i=0;i<keep.size();i++){Require(keep[i]==(mask[i]?tiled[i]:0xa5a5a5a5));pixels+=mask[i]!=0;}
+ Require(pixels==960u*540u);
+
  Require(!CanMergeBufferCacheQueueMask(0x110,4));
  Require(CanMergeBufferCacheAfterDrain(0x110,4,0x110,true));
  Require(!CanMergeBufferCacheAfterDrain(0x110,4,0x10,true));
