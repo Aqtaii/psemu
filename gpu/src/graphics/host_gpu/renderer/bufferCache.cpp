@@ -1446,6 +1446,25 @@ void BufferCache::PublishImageBacking(uint64_t vaddr, uint64_t size) {
 	m_memory_tracker.MarkRegionAsCpuModified(vaddr, size);
 }
 
+// Full authoritative image readback can cover several cached buffer fragments.
+// Publish only image bytes; reject competing CPU/GPU owners before refreshing them.
+void BufferCache::PublishReconstructedImageBacking(uint64_t vaddr, uint64_t size) {
+	FaultSafeCacheLock lock(this, m_mutex);
+	if (vaddr == 0 || size == 0 || size > UINT64_MAX - vaddr ||
+	    m_memory_tracker.IsRegionGpuModified(vaddr, size) ||
+	    !m_gpu_modified_ranges.Intersections(vaddr, size).empty()) {
+		EXIT("BufferCache: reconstructed image conflicts with GPU buffer ownership\n");
+	}
+	for (const auto& [address, cached]: m_buffers) {
+		const auto begin = std::max(vaddr, address);
+		const auto end = std::min(vaddr + size, address + cached->size);
+		if (begin < end && m_memory_tracker.IsRegionCpuModified(begin, end - begin)) {
+			EXIT("BufferCache: reconstructed image conflicts with CPU buffer ownership\n");
+		}
+	}
+	m_memory_tracker.MarkRegionAsCpuModified(vaddr, size);
+}
+
 void BufferCache::ValidateGpuAccess(uint64_t vaddr, uint64_t size, bool is_read,
                                     bool is_written) const {
 	if ((!is_read && !is_written) || vaddr == 0 || size == 0 || size > UINT64_MAX - vaddr) {

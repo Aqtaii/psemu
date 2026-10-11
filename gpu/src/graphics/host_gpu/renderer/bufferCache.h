@@ -80,6 +80,7 @@ public:
 	[[nodiscard]] bool IsRegionCpuModified(uint64_t vaddr, uint64_t size);
 	[[nodiscard]] bool IsRegionGpuModified(uint64_t vaddr, uint64_t size);
 	void               PublishImageBacking(uint64_t vaddr, uint64_t size);
+	void               PublishReconstructedImageBacking(uint64_t vaddr, uint64_t size);
 	void ValidateGpuAccess(uint64_t vaddr, uint64_t size, bool is_read, bool is_written) const;
 	void SetTextureCache(TextureCache& texture_cache);
 

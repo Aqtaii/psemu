@@ -2676,9 +2676,12 @@ void TextureCache::SynchronizeColorImageToBufferLocked(CachedImage& cached, uint
 		     video_out ? static_cast<uint32_t>(cached.video_out.compression) : 0,
 		     cached.gpu_modified, cached.buffer_modified);
 	}
-	if (write_address < target.address || write_size == 0 ||
-	    write_address - target.address > target.size ||
-	    write_size > target.size - (write_address - target.address)) {
+	const bool valid_write_overlap =
+	    render_target ? ImageRangeOverlaps(write_address, write_size, target.address, target.size)
+	                  : write_address >= target.address && write_size != 0 &&
+	                        write_address - target.address <= target.size &&
+	                        write_size <= target.size - (write_address - target.address);
+	if (!valid_write_overlap) {
 		EXIT("TextureCache: image synchronization write is outside backing, "
 		     "write=0x%016" PRIx64 "+0x%016" PRIx64 " image=0x%016" PRIx64 "+0x%016" PRIx64 "\n",
 		     write_address, write_size, target.address, target.size);
@@ -2739,10 +2742,19 @@ void TextureCache::SynchronizeColorImageToBufferLocked(CachedImage& cached, uint
 	}
 	m_memory_tracker.ForEachDownloadRange<true>(target.address, target.size,
 	                                            [](uint64_t, uint64_t) noexcept {});
-	// Only the impending buffer-write range needs publication into BufferCache ownership. The
-	// complete image backing was reconstructed above so a later partial-buffer rebind can detile
-	// the coherent mip chain without requiring one cached buffer to contain the whole image.
-	m_buffer_cache.PublishImageBacking(write_address, write_size);
+	if (render_target) {
+		// The complete target was reconstructed: refresh all cached fragments of this image,
+		// including pixels outside the impending write. Never publish bytes beyond the image.
+		m_buffer_cache.PublishReconstructedImageBacking(target.address, target.size);
+		static std::atomic_uint sync_logs {0};
+		if (sync_logs.fetch_add(1, std::memory_order_relaxed) < 8) {
+			printf("[RT-BUFFER-SYNC] image=0x%016" PRIx64 "+0x%016" PRIx64
+			       " write=0x%016" PRIx64 "+0x%016" PRIx64 " full_backing=1\n",
+			       target.address, target.size, write_address, write_size);
+		}
+	} else {
+		m_buffer_cache.PublishImageBacking(write_address, write_size);
+	}
 	cached.gpu_modified    = false;
 	cached.buffer_modified = true;
 }

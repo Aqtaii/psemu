@@ -765,7 +765,8 @@ ClassifyBufferImageWrite(uint64_t buffer_address, uint64_t buffer_size, uint64_t
 			return image_gpu_modified ? BufferImageWrite::SynchronizeVideoOut
 			                          : BufferImageWrite::InvalidateVideoOut;
 		case BufferImageBinding::RenderTarget:
-			if (!exact || !buffer_page_aligned || !buffer_formatted) {
+			if (!ImageRangeOverlaps(buffer_address, buffer_size, image_address, image_size) ||
+			    !buffer_page_aligned || !image_page_aligned || !buffer_formatted) {
 				return BufferImageWrite::Unsupported;
 			}
 			if (image_gpu_modified && !image_buffer_modified) {

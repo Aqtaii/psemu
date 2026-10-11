@@ -1,5 +1,39 @@
 static void Require(bool ok) {if(!ok) throw std::runtime_error("regression failed");}
 int main() {
+ // Full reconstructed image publication spans multiple buffer fragments but not external bytes.
+ for(bool competing_gpu:{false,true}) for(bool competing_cpu:{false,true}) {
+  BufferCache cache;
+  cache.m_buffers.emplace(0x10000,std::make_unique<BufferCache::CachedBuffer>(BufferCache::CachedBuffer{0x10000}));
+  cache.m_buffers.emplace(0x40000,std::make_unique<BufferCache::CachedBuffer>(BufferCache::CachedBuffer{0x20000}));
+  cache.m_memory_tracker.gpu={{0x60000,0x10000}}; // adjacent GPU data must survive
+  if(competing_gpu)cache.m_gpu_modified_ranges.dirty={{0x40000,0x1000}};
+  if(competing_cpu)cache.m_memory_tracker.cpu={{0x40000,0x1000}};
+  bool rejected=false;
+  try {cache.PublishReconstructedImageBacking(0x10000,0x50000);}
+  catch(const std::runtime_error&){rejected=true;}
+  Require(rejected==(competing_gpu || competing_cpu));
+  Require(cache.m_memory_tracker.published.size()==(rejected?0u:1u));
+  if(!rejected)Require(cache.m_memory_tracker.published[0]==std::pair<uint64_t,uint64_t>{0x10000,0x50000});
+  Require(cache.m_memory_tracker.gpu[0]==std::pair<uint64_t,uint64_t>{0x60000,0x10000});
+ }
+ // Captured formatted buffer starts within a GPU target and extends beyond its end.
+ constexpr uint64_t image=0x19d6e170000ull,image_size=0xff0000;
+ auto classify=[&](uint64_t address,uint64_t size,bool gpu=true,bool yielded=false,bool formatted=true) {
+  return ClassifyBufferImageWrite(address,size,image,image_size,BufferImageBinding::RenderTarget,gpu,formatted,yielded);
+ };
+ Require(classify(0x19d6ee60000ull,0x480000)==BufferImageWrite::SynchronizeRenderTarget);
+ Require(classify(image-0x10000,0x20000)==BufferImageWrite::SynchronizeRenderTarget);
+ Require(classify(image-0x10000,image_size+0x20000)==BufferImageWrite::SynchronizeRenderTarget);
+ Require(classify(image,image_size)==BufferImageWrite::SynchronizeRenderTarget);
+ Require(classify(image+image_size,0x1000)==BufferImageWrite::None);
+ Require(classify(image+1,0x1000)==BufferImageWrite::Unsupported);
+ Require(classify(image,0x1000,true,false,false)==BufferImageWrite::Unsupported);
+ Require(classify(image,0x1000,true,true)==BufferImageWrite::Unsupported);
+ Require(classify(image,0x1000,false,false)==BufferImageWrite::Unsupported);
+ Require(classify(image,0x1000,false,true)==BufferImageWrite::InvalidateRenderTarget);
+ // Expanding render-target support must not expand the exact video/depth contract.
+ for(auto kind:{BufferImageBinding::VideoOut,BufferImageBinding::DepthTarget})
+  Require(ClassifyBufferImageWrite(0x19d6ee60000ull,0x480000,image,image_size,kind,true,true)==BufferImageWrite::Unsupported);
  // Captured Astro failure: BDA snapshot rereads a resident 32 KiB buffer after
  // its GPU write invalidated the overlapping image. Reuse the buffer, not backing.
  Require(IsCoherentBufferImageRead(true,false,true,false,true));

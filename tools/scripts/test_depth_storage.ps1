@@ -44,6 +44,13 @@ $shader=[IO.File]::ReadAllText("$root\gpu\src\graphics\shader\shader.h")
 $views=[IO.File]::ReadAllText("$root\gpu\src\graphics\host_gpu\renderer\imageView.h")
 $header+="`n"+(Slice $shader 'constexpr uint32_t DstSel(' 'inline uint8_t GetDstSel(')
 $header+="`n"+(Slice $views '[[nodiscard]] inline bool IsSupportedStorageSwizzle(' '[[nodiscard]] inline bool IsSupportedStorageDepthTile(')
+$header+=([string][char]10)+'constexpr uint64_t TRACKER_PAGE_SIZE=4096;'+([string][char]10)
+$header+=Slice $info 'enum class BufferImageBinding' 'enum class StorageBufferRebind'
+$header+=Slice $info '[[nodiscard]] inline bool ImageRangeOverlaps(' '[[nodiscard]] inline SampledOverlap ClassifySampledOverlap('
+$header+=Slice $info '[[nodiscard]] inline BufferImageWrite' '[[nodiscard]] inline StorageBufferRebind'
+$header+=[IO.File]::ReadAllText("$root\tests\render_target_publication_fixture.h")
+$buffers=[IO.File]::ReadAllText("$root\gpu\src\graphics\host_gpu\renderer\bufferCache.cpp")
+$header+=Slice $buffers 'void BufferCache::PublishReconstructedImageBacking(' 'void BufferCache::ValidateGpuAccess('
 $source=Join-Path $out 'depth_storage_production.cpp'
 [IO.File]::WriteAllText($source,$header+"`n"+[IO.File]::ReadAllText("$root\tests\depth_storage_test.cpp"),[Text.UTF8Encoding]::new($false))
 Push-Location $out
