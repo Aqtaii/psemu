@@ -497,14 +497,21 @@ bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst) {
    if(inst.dst.kind!=IR::OperandKind::Register || inst.dst.reg.file!=IR::RegisterFile::Vector ||
       inst.dst2.kind!=IR::OperandKind::Null || !plain(inst.dst) ||
       inst.src_count!=(inst.op==IR::Opcode::ShiftLeftAddU32 ? 3u : 2u)) return false;
-   for(uint32_t i=0;i<inst.src_count;++i)
-    if((inst.src[i].kind!=IR::OperandKind::Register && inst.src[i].kind!=IR::OperandKind::ImmediateU32) ||
-       !plain(inst.src[i])) return false;
+   for(uint32_t i=0;i<inst.src_count;++i) {
+    auto source=inst.src[i];
+    // Astro packs primitive indices by selecting bytes before shifting.
+    // The normal value loader applies SDWA after the raw two-bank snapshot.
+    if(inst.op==IR::Opcode::ShiftLeftLogicalU32 && source.sdwa_sel<=6 && !source.sdwa_sext) source.sdwa_sel=6;
+    if((source.kind!=IR::OperandKind::Register && source.kind!=IR::OperandKind::ImmediateU32) ||
+       !plain(source)) return false;
+   }
   }
 		// Add opcode families only with tests for their cross-half dependencies.
 		switch (inst.op) {
 			case IR::Opcode::MoveU32: case IR::Opcode::MoveF32Bits:
 			case IR::Opcode::IAddU32: case IR::Opcode::CompareEqU32:
+   case IR::Opcode::CompareGtU32: case IR::Opcode::CompareNeU32:
+   case IR::Opcode::CompareLeU32: case IR::Opcode::CompareLtI32:
    case IR::Opcode::ShiftLeftAddU32: case IR::Opcode::ShiftLeftLogicalU32: case IR::Opcode::BitwiseAndU32:
 			case IR::Opcode::SelectMaskU32: case IR::Opcode::SelectMaskF32Bits:
 			case IR::Opcode::MaskedBitCountLowU32: case IR::Opcode::MaskedBitCountHighU32:

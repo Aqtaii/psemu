@@ -66,6 +66,8 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  CollectRegister(&state.registers,{IR::RegisterFile::Scalar,28});
  for(uint32_t reg=14;reg<=16;++reg) CollectRegister(&state.registers,{IR::RegisterFile::Vector,reg});
  CollectRegister(&state.registers,{IR::RegisterFile::Scalar,29});
+ CollectRegister(&state.registers,{IR::RegisterFile::Scalar,46});
+ CollectRegister(&state.registers,{IR::RegisterFile::Scalar,47});
  CollectRegister(&state.registers,SccRegister());
  CollectRegister(&state.registers,{IR::RegisterFile::Vector,17});
  for(uint32_t reg=18;reg<=20;++reg) CollectRegister(&state.registers,{IR::RegisterFile::Vector,reg});
@@ -359,6 +361,22 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
    Require(EmitGuestInstruction(&state,cmp));
    const uint32_t wanted=op==IR::Opcode::CompareMaskEqU32?2u:op==IR::Opcode::CompareMaskNeU32?0xfffffffdu:op==IR::Opcode::CompareMaskLtU32?1u:0xfffffffcu;
    check(EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,0}),wanted);check(EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,1}),wanted);
+  }
+  // VOPC may write an SGPR pair, including one of its own scalar sources.
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Scalar,46),ConstantU32(&state,2));
+  IR::Instruction alias;alias.op=IR::Opcode::CompareGtU32;alias.execution=IR::InstructionExecution::Vector;
+  alias.dst=Reg(IR::RegisterFile::Scalar,46);alias.src_count=2;alias.src[0]=alias.dst;alias.src[1]=v;
+  Require(EmitGuestInstruction(&state,alias));check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,46}),3);
+  check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,47}),3);
+  for(const auto op: {IR::Opcode::CompareNeU32,IR::Opcode::CompareLeU32,IR::Opcode::CompareLtI32}) {
+   alias.op=op;alias.dst=Reg(IR::RegisterFile::Vcc,0);alias.src[0]=v;alias.src[1]=Imm(1);
+   Require(EmitGuestInstruction(&state,alias));const uint32_t want=op==IR::Opcode::CompareNeU32?0xfffffffdu:op==IR::Opcode::CompareLeU32?3u:1u;
+   check(EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,0}),want);check(EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,1}),want);
+  }
+  for(uint32_t byte=0;byte<3;++byte) {
+   banks(0x12345678,0x9abcdef0);auto selected=v;selected.sdwa_sel=byte;
+   run(IR::Opcode::ShiftLeftLogicalU32,{selected,Imm(2)});
+   expect(((0x12345678u>>(byte*8))&255)*4,((0x9abcdef0u>>(byte*8))&255)*4);
   }
   banks(0x3f800000,0x40400000);
   IR::Instruction cmp;cmp.op=IR::Opcode::CompareMaskLtF32;cmp.execution=IR::InstructionExecution::Vector;

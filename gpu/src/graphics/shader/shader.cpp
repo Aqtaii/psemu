@@ -1102,7 +1102,7 @@ static std::span<const uint32_t> AddShaderProgramPermutation(const char* stage,
 	return spirv;
 }
 
-static void DumpShaderRecompilerSpirv(const char*,uint64_t,std::span<const uint32_t>);
+static void DumpShaderRecompilerSpirv(const char*,uint64_t,const std::vector<uint32_t>&);
 
 bool ShaderCompileInfoMesh(const HW::VertexShaderInfo& regs,const ShaderMeshInputInfo& mesh,
  uint32_t primitive_group,uint32_t vertex_group,uint32_t vertices_per_primitive,
