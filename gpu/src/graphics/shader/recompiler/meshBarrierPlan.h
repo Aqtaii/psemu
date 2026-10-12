@@ -4,9 +4,17 @@
 #include <utility>
 
 namespace Libs::Graphics::ShaderRecompiler {
+struct MeshBarrierSegment {
+ uint32_t block_id=0, instruction_begin=0, instruction_end=0, phase=0;
+ // Barrier-ending segments resume at this segment in the next uniform phase.
+ uint32_t continuation=UINT32_MAX;
+ bool ends_at_barrier=false;
+};
 struct MeshBarrierPlan {
  std::vector<uint32_t> barrier_pcs;
  std::vector<uint32_t> block_entry_phases;
+ std::vector<uint32_t> block_first_segments;
+ std::vector<MeshBarrierSegment> segments;
 };
 // Restricted static phase plan: every reachable path must encounter the same
 // barriers in increasing PC order. Barrier-free loops are allowed; loops that
@@ -64,6 +72,22 @@ inline bool PlanMeshBarrierPhases(const IR::Program& program, MeshBarrierPlan* o
   for(auto target:next) pending.emplace_back(target,after);
  }
  if(!has_return) return false;
+ // Preserve instruction ranges and registers; never restart a block after a barrier.
+ plan.block_first_segments.assign(program.blocks.size(),UINT32_MAX);
+ for(uint32_t id=0;id<program.blocks.size();++id) {
+  if(!reachable[id]) continue;
+  plan.block_first_segments[id]=static_cast<uint32_t>(plan.segments.size());
+  const auto& instructions=program.blocks[id].instructions;
+  auto phase=plan.block_entry_phases[id];
+  uint32_t begin=0;
+  for(uint32_t i=0;i<instructions.size();++i) if(instructions[i].op==IR::Opcode::Barrier) {
+   const auto continuation=static_cast<uint32_t>(plan.segments.size()+1);
+   plan.segments.push_back({id,begin,i,phase,continuation,true});
+   begin=i+1;++phase;
+  }
+  // An empty tail retains the original branch/return after a block-ending barrier.
+  plan.segments.push_back({id,begin,static_cast<uint32_t>(instructions.size()),phase,UINT32_MAX,false});
+ }
  *output=std::move(plan);
  return true;
 }

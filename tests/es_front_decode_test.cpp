@@ -56,7 +56,21 @@ int main(int argc,char** argv) {
   Libs::Graphics::ShaderRecompiler::MeshBarrierPlan phases;
   Require(Libs::Graphics::ShaderRecompiler::PlanMeshBarrierPhases(captured_ir,&phases));
   Require(phases.barrier_pcs==std::vector<uint32_t>({0xe0,0x864,0x8f8,0x970,0xa48}));
-  std::printf("[MESH-BARRIERS] phases=%zu static-order=passed convergence=not-executed\n",phases.barrier_pcs.size());
+  Require(phases.segments.size()==69);
+  size_t non_barrier=0, segmented=0, boundaries=0;
+  for(const auto& block:captured_ir.blocks) for(const auto& inst:block.instructions)
+   if(inst.op!=Libs::Graphics::ShaderRecompiler::IR::Opcode::Barrier) ++non_barrier;
+  for(const auto& segment:phases.segments) {
+   segmented+=segment.instruction_end-segment.instruction_begin;
+   if(segment.ends_at_barrier) {
+    ++boundaries;Require(segment.continuation<phases.segments.size());
+    const auto& next=phases.segments[segment.continuation];
+    Require(next.block_id==segment.block_id && next.phase==segment.phase+1 &&
+            next.instruction_begin==segment.instruction_end+1);
+   }
+  }
+  Require(non_barrier==segmented && boundaries==5);
+  std::printf("[MESH-BARRIERS] phases=%zu segments=%zu static-order=passed convergence=not-executed\n",phases.barrier_pcs.size(),phases.segments.size());
   std::printf("[MESH-REPLAY] instructions=%zu blocks=%zu dispatcher=%u IR=passed GPU=not-executed\n",
       captured.instructions.size(),captured_ir.blocks.size(),unsigned(!structured));
  }
@@ -74,6 +88,11 @@ int main(int argc,char** argv) {
   barrier.pc=20;phases.blocks[2].instructions.push_back(barrier);
   MeshBarrierPlan plan;
   Require(PlanMeshBarrierPhases(phases,&plan));Require(plan.barrier_pcs==std::vector<uint32_t>({16,20}));
+  Require(plan.segments.size()==5 && plan.block_first_segments[2]==2);
+  Require(plan.segments[2].ends_at_barrier && plan.segments[2].continuation==3);
+  Require(plan.segments[3].ends_at_barrier && plan.segments[3].continuation==4);
+  Require(!plan.segments[4].ends_at_barrier && plan.segments[4].phase==2 &&
+          plan.segments[4].instruction_begin==plan.segments[4].instruction_end);
   const auto saved=plan.barrier_pcs;
   phases.blocks[1].terminator.kind=CFG::TerminatorKind::Return;
   Require(!PlanMeshBarrierPhases(phases,&plan));Require(plan.barrier_pcs==saved);
