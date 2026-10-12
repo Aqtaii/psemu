@@ -398,8 +398,15 @@ bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst) {
 			case IR::Opcode::Export: break;
 			default: return false;
 		}
-		if (inst.dst.dpp || inst.dst2.dpp) return false;
-		for (uint32_t i=0;i<inst.src_count;++i) if(inst.src[i].dpp) return false;
+		if (inst.dst2.dpp) return false;
+		auto SupportedDpp = [&](const IR::Operand& operand) {
+			if (!operand.dpp) return true;
+			return (inst.op == IR::Opcode::MoveU32 || inst.op == IR::Opcode::IAddU32) &&
+			       operand.kind == IR::OperandKind::Register && operand.reg.file == IR::RegisterFile::Vector &&
+			       (operand.dpp_ctrl == 0x111u || operand.dpp_ctrl == 0x112u);
+		};
+		if (!SupportedDpp(inst.dst)) return false;
+		for (uint32_t i=0;i<inst.src_count;++i) if(!SupportedDpp(inst.src[i])) return false;
 	}
 	const auto saved_half = state->lane_half;
 	if (inst.execution == IR::InstructionExecution::Scalar) {

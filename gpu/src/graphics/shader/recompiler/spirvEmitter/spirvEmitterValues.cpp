@@ -144,7 +144,7 @@ DppTargetLane EmitDppMirrorTargetLane(EmitterState* state, uint32_t subid, bool 
 }
 
 DppTargetLane EmitDppTargetLane(EmitterState* state, uint32_t control) {
-	const auto subid = EmitSubgroupLocalInvocationId(state);
+	const auto subid = EmitGuestSubgroupLocalInvocationId(state);
 	if (control <= 0xffu) {
 		return EmitDppQuadPermTargetLane(state, subid, control);
 	}
@@ -173,8 +173,11 @@ uint32_t EmitDppValueU32(EmitterState* state, const IR::Operand& operand, uint32
 
 	const auto target   = EmitDppTargetLane(state, operand.dpp_ctrl);
 	const auto shuffled = state->builder.AllocateId();
+	// Supported virtual DPP controls stay inside a 16-lane row in the same bank.
+	const auto host_lane = state->lanes_per_invocation == 2
+	    ? EmitBinaryU32(state, OpBitwiseAnd, target.lane, ConstantU32(state, 31)) : target.lane;
 	state->builder.AddFunction({OpGroupNonUniformShuffle, state->uint_type, shuffled,
-	                            ConstantU32(state, ScopeSubgroup), value, target.lane});
+	                            ConstantU32(state, ScopeSubgroup), value, host_lane});
 	if (operand.dpp_fetch_inactive) {
 		return shuffled;
 	}

@@ -9,7 +9,7 @@ uint32_t EmitDppWriteActiveBool(EmitterState* state, const IR::Operand& dst) {
 		return exec_active;
 	}
 
-	const auto subid       = EmitSubgroupLocalInvocationId(state);
+	const auto subid       = EmitGuestSubgroupLocalInvocationId(state);
 	const auto bank_shift  = state->builder.AllocateId();
 	const auto row_shift   = state->builder.AllocateId();
 	const auto bank        = state->builder.AllocateId();

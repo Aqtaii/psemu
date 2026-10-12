@@ -156,6 +156,27 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  Require(EmitGuestInstruction(&state,paired));
  check(EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,0}),0xffffffff);
  check(EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,1}),0xffffffff);
+ // DPP row shifts must honor guest rows2/3 and snapshot overlapping sources.
+ for(uint32_t half=0;half<2;++half){
+  state.lane_half=half;
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,13),EmitGuestSubgroupLocalInvocationId(&state));
+ }
+ state.lane_half=0;
+ IR::Instruction dpp;dpp.op=IR::Opcode::IAddU32;dpp.execution=IR::InstructionExecution::Vector;
+ dpp.src_count=2;dpp.dst=Reg(IR::RegisterFile::Vector,13);
+ dpp.dst.dpp=true;dpp.dst.dpp_ctrl=0x111;dpp.dst.dpp_row_mask=0xc;
+ dpp.src[0]=dpp.dst;dpp.src[1]=Imm(3);
+ Require(EmitGuestInstruction(&state,dpp));
+ read_check(13,1,1);read_check(13,17,17); // lower rows masked out
+ read_check(13,32,32);read_check(13,48,48); // invalid row predecessor preserves destination
+ read_check(13,33,35);read_check(13,63,65);
+ dpp.dst.dpp_ctrl=0x112;dpp.dst.dpp_row_mask=0xf;dpp.dst.dpp_bank_mask=2;
+ dpp.src[0]=dpp.dst;
+ Require(EmitGuestInstruction(&state,dpp));
+ read_check(13,4,5);read_check(13,20,21);read_check(13,36,39);
+ read_check(13,33,35); // bank0 masked out, upper previous value survives
+ dpp.dst.dpp_ctrl=0x130;dpp.src[0]=dpp.dst;
+ Require(!EmitGuestInstruction(&state,dpp)); // cross-row controls still unsupported
  paired.execution=IR::InstructionExecution::Unknown;Require(!EmitGuestInstruction(&state,paired));
  paired.execution=IR::InstructionExecution::Scalar;paired.op=IR::Opcode::Barrier;
  Require(!EmitGuestInstruction(&state,paired));
