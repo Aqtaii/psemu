@@ -23,6 +23,7 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  EmitterState state;state.builder=Spirv::Builder(0x00010400u);
  state.program=&program;state.resources=&resources;state.vertex_input_info=&info;
  state.stage=ShaderType::Mesh;state.wave_size=32;state.lanes_per_invocation=2;
+ state.exact_subgroup_operations=Spirv::ProgramRequiresExactSubgroupSize(program);
  CollectRegisters(program,&state.registers);
  const IR::Register value{IR::RegisterFile::Vector,9};
  const IR::Register shared{IR::RegisterFile::Scalar,24};
