@@ -23,5 +23,20 @@ int main() {
  bad=code; bad[2]=0xbf88000du; Require(!DecodeFrontProgram(bad,&front,&error)); // Branch into data.
  bad=code; bad[2]=0xbf880000u; Require(DecodeFrontProgram(bad,&front,&error)); // Valid next instruction.
  bad=code; bad[2]=0xbf880001u; Require(!DecodeFrontProgram(bad,&front,&error)); // Middle of a 2-DWORD op.
+ // Fused ES/GS keeps one register/LDS lifetime and relocates GS branches.
+ std::vector<uint32_t> joined; Program fused;
+ std::array<uint32_t,3> back {0xbf820001u,0xbf800000u,0xbf810000u};
+ Require(DecodeFusedProgram(code,back,&joined,&fused,&error));
+ Require(joined.size()==19 && fused.code.data()==joined.data());
+ Require(fused.instructions[10].opcode==Opcode::SBranch && fused.instructions[10].branch_target==64);
+ Require(fused.instructions[11].pc==64 && fused.instructions[11].branch_target==72);
+ Require(fused.instructions.back().pc==72);
+ back[0]=0xbf82ffffu; Require(DecodeFusedProgram(code,back,&joined,&fused,&error)); // GS-local loop.
+ Require(fused.instructions[11].branch_target==64);
+ back[0]=0xbf82fffeu; Require(!DecodeFusedProgram(code,back,&joined,&fused,&error)); // Cannot jump into ES.
+ back[0]=0xbe801f00u; Require(!DecodeFusedProgram(code,back,&joined,&fused,&error)); // Needs GS guest base.
+ std::array<uint32_t,4> middle {0xbf820001u,0xd7650005u,0x000100c1u,0xbf810000u};
+ Require(!DecodeFusedProgram(code,middle,&joined,&fused,&error));
+ Require(!DecodeFusedProgram(code,{},&joined,&fused,&error));
  std::puts("Captured ES handoff, inline data, branch boundaries and ordinary decoder passed");
 }

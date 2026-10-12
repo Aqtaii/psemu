@@ -443,6 +443,42 @@ bool DecodeFrontProgram(std::span<const uint32_t> code, Program* program, std::s
 	return DecodeProgramImpl(code, program, error, true);
 }
 
+bool DecodeFusedProgram(std::span<const uint32_t> front, std::span<const uint32_t> back,
+                        std::vector<uint32_t>* joined_code, Program* program, std::string* error) {
+	if (joined_code == nullptr || program == nullptr || back.empty()) {
+		SetError(error, "invalid fused shader output or empty GS stage");
+		return false;
+	}
+	Program front_program, back_program;
+	if (!DecodeFrontProgram(front, &front_program, error) ||
+	    !DecodeProgram(back, &back_program, error)) {
+		return false;
+	}
+	std::set<uint32_t> boundaries;
+	for (const auto& inst: back_program.instructions) { boundaries.insert(inst.pc); }
+	for (const auto& inst: back_program.instructions) {
+		if (inst.opcode == Opcode::SGetpcB64 || inst.opcode == Opcode::SSetpcB64) {
+			SetError(error, "GS PC-relative data or indirect handoff requires its own code base");
+			return false;
+		}
+		if (IsControlFlowBranch(inst.opcode)) {
+			if (!boundaries.contains(inst.branch_target)) {
+				SetError(error, "GS branch does not target a back-stage instruction boundary");
+				return false;
+			}
+		}
+	}
+	if (front_program.code.size() > UINT32_MAX / sizeof(uint32_t) - back.size()) {
+		SetError(error, "fused shader exceeds decoder PC range");
+		return false;
+	}
+	joined_code->assign(front_program.code.begin(), front_program.code.end());
+	joined_code->back() = 0xbf820000u; // s_branch 0 connects ES and GS register/LDS lifetime.
+	joined_code->insert(joined_code->end(), back_program.code.begin(), back_program.code.end());
+	// Decoding the combined stream relocates PCs and relative branch targets together.
+	return DecodeProgram(*joined_code, program, error);
+}
+
 std::string FamilyToString(Family family) {
 	switch (family) {
 		case Family::SOP1: return "SOP1";

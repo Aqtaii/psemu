@@ -1394,6 +1394,7 @@ static void DumpShaderRecompilerOriginal(const char* type, uint64_t shader_hash,
 void ShaderDumpSkippedGe(const HW::VertexShaderInfo& regs) {
 	const uint64_t addresses[] = {regs.es_regs.data_addr, regs.gs_regs.data_addr};
 	const char* names[] = {"es", "gs"};
+	std::span<const uint32_t> stage_code[2];
 	for (uint32_t i = 0; i < 2; i++) {
 		ShaderMappedData mapped;
 		if (addresses[i] == 0 || !ShaderGetMappedData(addresses[i], &mapped) ||
@@ -1403,6 +1404,7 @@ void ShaderDumpSkippedGe(const HW::VertexShaderInfo& regs) {
 			continue;
 		}
 		const auto code = ShaderGetMappedCode(addresses[i], "GE diagnostic", addresses[i]);
+		stage_code[i] = code;
 		const auto base = std::filesystem::path("tools/dumps/astro_ge") /
 		                  fmt::format("{}_{:016x}", names[i], addresses[i]);
 		Common::File::CreateDirectories(base.parent_path());
@@ -1433,6 +1435,25 @@ void ShaderDumpSkippedGe(const HW::VertexShaderInfo& regs) {
 		printf("[GE-CAPTURE] %s addr=0x%016llx bytes=%u decoded=%d\n", names[i],
 		       static_cast<unsigned long long>(addresses[i]), mapped.code_size_bytes, success);
 	}
+	if (!stage_code[0].empty() && !stage_code[1].empty()) {
+		std::vector<uint32_t> joined;
+		ShaderRecompiler::Decoder::Program fused;
+		std::string error;
+		const bool success = ShaderRecompiler::Decoder::DecodeFusedProgram(
+		    stage_code[0], stage_code[1], &joined, &fused, &error);
+		Common::File text;
+		const auto path = std::filesystem::path("tools/dumps/astro_ge") /
+		                  fmt::format("fused_{:016x}_{:016x}.rdna2", addresses[0], addresses[1]);
+		text.Create(path);
+		if (!text.IsInvalid()) {
+			text.Printf("%s\n%s", error.c_str(),
+			            ShaderRecompiler::Decoder::ProgramToString(fused).c_str());
+			text.Close();
+		}
+		printf("[GE-FUSED] decoded=%d instructions=%zu error=%s\n", success,
+		       fused.instructions.size(), error.c_str());
+	}
+
 }
 
 bool ShaderCompileSpirvVS(const HW::VertexShaderInfo* regs, const HW::ShaderRegisters* sh,
