@@ -6,9 +6,9 @@ $dir=Join-Path $root 'gpu\src\graphics\shader\recompiler'
 Push-Location $out
 try {
  $sources=@("$root\tests\native_mesh_emitter_test.cpp")
- foreach($name in @('SpirvEmitter','SpirvBuilder','BindingLayout','ResourceMaterialization','SrtWalker','ScalarProvenance','ShaderCFG','ShaderDecoder','ScalarAluOps','VectorAluOps','MemoryOps','ImageOps','ExportOps')) {$sources+="$dir\$name.cpp"}
+ foreach($name in @('SpirvEmitter','SpirvBuilder','BindingLayout','ResourceMaterialization','SrtWalker','SrtPatcher','ResourceTracking','ShaderInfoCollection','ScalarProvenance','ShaderCFG','ShaderDecoder','ScalarAluOps','VectorAluOps','MemoryOps','ImageOps','ExportOps')) {$sources+="$dir\$name.cpp"}
  $sources+=(Get-ChildItem -LiteralPath "$dir\spirvEmitter" -Filter '*.cpp').FullName
- $sources+="$dir\shaderIR\ShaderIRLog.cpp"
+ foreach($name in @('ShaderIR','ShaderIRMemory','ShaderIROpcodes','ShaderIRLog')) {$sources+="$dir\shaderIR\$name.cpp"}
  $sources+="$root\gpu\src\graphics\guest_gpu\gpu_format.cpp"
  & clang-cl /nologo /std:c++20 /O2 /Gy /EHsc /MD /DFMT_HEADER_ONLY=1 "/I$root\gpu\src" "/I$root\gpu\generated" "/I$root\gpu\3rdparty\SPIRV-Headers\include" "/I$root\gpu\3rdparty\fmt\include" "/I$root\gpu\3rdparty\magic_enum\include" @sources /Fe:native_mesh_emitter_test.exe /link /OPT:REF
  if($LASTEXITCODE -ne 0){throw 'Native Mesh emitter compilation failed'}
@@ -18,6 +18,8 @@ try {
  if($LASTEXITCODE -ne 0){throw 'Native Mesh two-lane backing SPIR-V validation failed'}
  & "$env:VULKAN_SDK\Bin\spirv-val.exe" --target-env vulkan1.2 .\native_mesh_upper_outputs.spv
  if($LASTEXITCODE -ne 0){throw 'Native Mesh upper-half output SPIR-V validation failed'}
+ & "$env:VULKAN_SDK\Bin\spirv-val.exe" --target-env vulkan1.2 .\native_mesh_full_adapter.spv
+ if($LASTEXITCODE -ne 0){throw 'Full Mesh ABI/phase adapter validation failed'}
  & .\native_mesh_emitter_test.exe multiwave
  if($LASTEXITCODE -ne 0){throw 'Native Mesh multiwave regression failed'}
  & "$env:VULKAN_SDK\Bin\spirv-val.exe" --target-env vulkan1.2 .\native_mesh_buffer_reads.spv

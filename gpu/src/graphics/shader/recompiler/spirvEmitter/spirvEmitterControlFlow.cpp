@@ -509,7 +509,15 @@ bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst) {
 			case IR::Opcode::SelectMaskU32: case IR::Opcode::SelectMaskF32Bits:
 			case IR::Opcode::MaskedBitCountLowU32: case IR::Opcode::MaskedBitCountHighU32:
 			case IR::Opcode::Export: case IR::Opcode::DsReadB32: case IR::Opcode::DsWriteB32:
-   case IR::Opcode::BufferLoadDword: break;
+   case IR::Opcode::BufferLoadDword:
+   case IR::Opcode::FMadF32: case IR::Opcode::FMulF32: case IR::Opcode::FSubF32:
+   case IR::Opcode::RcpF32: case IR::Opcode::InverseSqrtF32: case IR::Opcode::SinF32:
+   case IR::Opcode::IMulU32: case IR::Opcode::UMulU24U32: case IR::Opcode::UMaxU32:
+   case IR::Opcode::ShiftLeftOrU32: case IR::Opcode::ShiftRightLogicalU32:
+   case IR::Opcode::BitReverseU32: case IR::Opcode::PackLowLowU16:
+   case IR::Opcode::CompareMaskEqU32: case IR::Opcode::CompareMaskNeU32:
+   case IR::Opcode::CompareMaskLtU32: case IR::Opcode::CompareMaskGtU32:
+   case IR::Opcode::CompareMaskLtF32: break;
 			default: return false;
 		}
 		if (inst.dst2.dpp) return false;
@@ -1247,7 +1255,7 @@ void EmitDispatcherBlocks(EmitterState* state, const IR::Program& program) {
 		}
 		state->builder.AddFunction({OpLabel, BlockLabel(*state, block.id)});
 		for (const auto& inst: block.instructions) {
-			EXIT_IF(!EmitGuestInstruction(state, inst));
+			if(!EmitGuestInstruction(state, inst)) return false;
 		}
 		EmitDispatcherTerminator(state, block.terminator);
 	}
@@ -1301,7 +1309,11 @@ bool EmitMeshPhasedDispatcher(EmitterState* state, const IR::Program& program) {
 			const auto& block = program.blocks[segment.block_id];
 			b.AddFunction({OpLabel, labels[i]});
 			for (uint32_t inst = segment.instruction_begin; inst < segment.instruction_end; ++inst)
-				if (!EmitGuestInstruction(state, block.instructions[inst])) return false;
+    if (!EmitGuestInstruction(state, block.instructions[inst])) {
+     if(state->mesh_emit_error) *state->mesh_emit_error=fmt::format("merged Mesh unsupported PC=0x{:x} opcode={}",
+      block.instructions[inst].pc,uint32_t(block.instructions[inst].op));
+     return false;
+    }
 			uint32_t target = 0;
 			if (segment.ends_at_barrier) {
 				target = ConstantU32(state, segment.continuation);
@@ -1343,7 +1355,7 @@ void EmitDispatcherFunction(EmitterState* state, const IR::Program& program) {
 	EmitDispatcherLoopTail(state);
 }
 
-void EmitFunction(EmitterState* state, const IR::Program& program) {
+bool EmitFunction(EmitterState* state, const IR::Program& program, const MeshAssemblyPlan* merged_point) {
 	state->builder.AddFunction(
 	    {OpFunction, state->void_type, state->stage==ShaderType::Mesh ? state->mesh_guest_func : state->main_func, FunctionControlNone, state->func_type});
 	state->builder.AddFunction({OpLabel, state->entry_label});
@@ -1352,7 +1364,9 @@ void EmitFunction(EmitterState* state, const IR::Program& program) {
 	EmitComputeInputRegisters(state);
 	EmitPixelInputRegisters(state);
 	EmitVertexInputRegisters(state);
- if(state->stage==ShaderType::Mesh) {
+ if(merged_point != nullptr) {
+  if(!EmitMeshPointPushInputRegisters(state,*merged_point)) return false;
+ } else if(state->stage==ShaderType::Mesh) {
   const auto saved_half=state->lane_half;
   for(uint32_t half=0;half<state->lanes_per_invocation;++half) {
    state->lane_half=half;
@@ -1362,10 +1376,13 @@ void EmitFunction(EmitterState* state, const IR::Program& program) {
   state->lane_half=saved_half;
  }
 	if (state->dispatcher_fallback) {
-		EmitDispatcherFunction(state, program);
+  if(merged_point != nullptr) {
+   if(!EmitMeshPhasedDispatcher(state,program)) return false;
+   EmitReturn(state);
+  } else EmitDispatcherFunction(state, program);
 		state->builder.AddFunction({OpFunctionEnd});
   if(state->stage==ShaderType::Mesh) EmitNativeMeshEntryPoint(state);
-		return;
+		return true;
 	}
 
 	const auto entry_block_label = BlockLabel(*state, 0);
@@ -1388,6 +1405,7 @@ void EmitFunction(EmitterState* state, const IR::Program& program) {
 
 	state->builder.AddFunction({OpFunctionEnd});
  if(state->stage==ShaderType::Mesh) EmitNativeMeshEntryPoint(state);
+ return true;
 }
 
 } // namespace Libs::Graphics::ShaderRecompiler::Spirv::Emitter

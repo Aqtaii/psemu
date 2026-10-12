@@ -6,8 +6,12 @@
 #include "graphics/shader/recompiler/ResourceMaterialization.h"
 
 #include <vector>
+#include "graphics/shader/meshAssembly.h"
 
 namespace Libs::Graphics::ShaderRecompiler::Spirv {
+
+bool EmitMergedPointMeshProgram(const IR::Program&, const IR::ResourceSnapshot&,
+ const ShaderVertexInputInfo&, const MeshAssemblyPlan&, std::vector<uint32_t>*, std::string*);
 
 bool ProgramRequiresExactSubgroupSize(const IR::Program& program);
 

@@ -435,6 +435,7 @@ struct EmitterState {
 	uint32_t                               pixel_valid_mask_variable                     = 0;
 	bool                                   dispatcher_fallback                           = false;
 	uint32_t                               dispatch_pc_variable                          = 0;
+ std::string* mesh_emit_error = nullptr;
 	uint32_t                               mesh_phase_done_variable                      = 0;
 	uint32_t                               dispatch_header_label                         = 0;
 	uint32_t                               dispatch_select_label                         = 0;
@@ -1545,7 +1546,7 @@ bool EmitMeshPointInputRegisters(EmitterState* state, const Libs::Graphics::Mesh
                                  const MeshPointGroupInputIds& inputs);
 bool EmitMeshPhasedDispatcher(EmitterState* state, const IR::Program& program);
 
-void EmitFunction(EmitterState* state, const IR::Program& program);
+bool EmitFunction(EmitterState* state, const IR::Program& program, const MeshAssemblyPlan* merged_point=nullptr);
 
 // These templates accept local lambdas from several emitter translation units.
 template <typename Fn>

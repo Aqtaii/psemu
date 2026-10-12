@@ -51,6 +51,9 @@ bool ValidateOptions(const Program& program, const ShaderInfoOptions& options, s
 		return false;
 	};
 	switch (program.stage) {
+		case ShaderType::Mesh:
+			return (options.vertex != nullptr && options.vertex->mesh.invocations != 0) ||
+			       Fail("Mesh shader info requires invocation metadata");
 		case ShaderType::Vertex:
 			if (options.vertex == nullptr) {
 				return Fail("vertex shader info requires vertex metadata");
@@ -211,6 +214,7 @@ bool CollectShaderInfo(Program* program, const ShaderInfoOptions& options, std::
 	next.inputs.clear();
 	next.outputs.clear();
 	switch (program->stage) {
+		case ShaderType::Mesh: AddInput(&next, StageInputKind::LocalInvocationIndex, 0, 1, "gl_LocalInvocationIndex"); break;
 		case ShaderType::Vertex: CollectVertexInputs(*program, options.vertex, &next); break;
 		case ShaderType::Pixel: CollectPixelInputs(options.pixel, &next); break;
 		case ShaderType::Compute: CollectComputeInputs(*program, options.compute, &next); break;

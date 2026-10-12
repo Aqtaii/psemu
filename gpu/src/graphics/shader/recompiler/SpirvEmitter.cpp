@@ -1,6 +1,7 @@
 #include "graphics/shader/recompiler/SpirvEmitter.h"
 
 #include "graphics/shader/recompiler/SrtWalker.h"
+#include "graphics/shader/recompiler/BindingLayout.h"
 #include "graphics/shader/recompiler/spirvEmitter/spirvEmitterInternal.h"
 
 #include <algorithm>
@@ -250,7 +251,8 @@ bool ValidateNativeProgram(const IR::Program& program, std::string* error) {
 	if (!program.srt.reads.empty()) {
 		Expect(Kind::FlattenedSrt);
 	}
-	if (!program.bindings.user_data_registers.empty() && program.bindings.push_constant_size == 0) {
+	if (!program.bindings.user_data_registers.empty() &&
+     (program.bindings.push_constant_size == 0 || IR::FindBinding(program.bindings,Kind::UserData) != nullptr)) {
 		Expect(Kind::UserData);
 	}
 
@@ -275,9 +277,10 @@ bool ValidateNativeProgram(const IR::Program& program, std::string* error) {
 		}
 	}
 	const auto has_user_storage = present[static_cast<size_t>(Kind::UserData)];
+ const uint32_t point_bytes=program.bindings.mesh_point_input_dword==IR::BindingLayout::NoMeshPointInputs ? 0u : 20u;
 	if ((!has_user_storage &&
-	     program.bindings.push_constant_size != program.bindings.user_data_registers.size() * 4u) ||
-	    (has_user_storage && program.bindings.push_constant_size != 0) ||
+	     program.bindings.push_constant_size != program.bindings.user_data_registers.size() * 4u + point_bytes) ||
+	    (has_user_storage && program.bindings.push_constant_size != point_bytes) ||
 	    !std::is_sorted(program.bindings.user_data_registers.begin(),
 	                    program.bindings.user_data_registers.end()) ||
 	    std::adjacent_find(program.bindings.user_data_registers.begin(),
@@ -429,7 +432,7 @@ bool ProgramRequiresExactSubgroupSize(const IR::Program& program) {
 	return false;
 }
 
-bool EmitProgram(const IR::Program& program, const IR::ResourceSnapshot& resources,
+static bool EmitProgramImpl(const MeshAssemblyPlan* merged_point, const IR::Program& program, const IR::ResourceSnapshot& resources,
                  const ShaderVertexInputInfo*  vertex_input_info,
                  const ShaderPixelInputInfo*   pixel_input_info,
                  const ShaderComputeInputInfo* compute_input_info, std::vector<uint32_t>* spirv,
@@ -461,16 +464,16 @@ bool EmitProgram(const IR::Program& program, const IR::ResourceSnapshot& resourc
 	}
 
  if(program.stage==ShaderType::Mesh) {
-  if(program.bindings.mesh_point_input_dword!=IR::BindingLayout::NoMeshPointInputs) {
+  if(merged_point==nullptr && program.bindings.mesh_point_input_dword!=IR::BindingLayout::NoMeshPointInputs) {
    SetError(error,"merged point draw ABI is internal until virtual wave64 activation");return false;
   }
   if(vertex_input_info==nullptr) {SetError(error,"Mesh input metadata missing");return false;}
   const auto& mesh=vertex_input_info->mesh;
-  if(program.wave_size!=32 || mesh.host_subgroup_size!=32 ||
+  if((program.wave_size!=(merged_point ? 64u : 32u)) || mesh.host_subgroup_size!=32 ||
      program.lane_mask_mode!=ShaderLaneMaskMode::NativeWave ||
      mesh.invocations==0 || mesh.invocations>1024 || mesh.invocations%32!=0 ||
-     mesh.max_vertices==0 || mesh.max_vertices>1023 || mesh.max_vertices>mesh.invocations ||
-     mesh.max_primitives==0 || mesh.max_primitives>1024 || mesh.max_primitives>mesh.invocations ||
+     mesh.max_vertices==0 || mesh.max_vertices>1023 || mesh.max_vertices>mesh.invocations*(merged_point ? 2u : 1u) ||
+     mesh.max_primitives==0 || mesh.max_primitives>1024 || mesh.max_primitives>mesh.invocations*(merged_point ? 2u : 1u) ||
      mesh.lds_dwords>32767) {
    SetError(error,"Mesh requires validated native wave32 metadata; virtual wave64 is pending");return false;
   }
@@ -498,7 +501,7 @@ bool EmitProgram(const IR::Program& program, const IR::ResourceSnapshot& resourc
    }
   }
   for(const auto& block:program.blocks) for(const auto& inst:block.instructions) {
-   if(inst.op==IR::Opcode::Barrier) {
+   if(inst.op==IR::Opcode::Barrier && merged_point==nullptr) {
     SetError(error,"Mesh guest barrier uniformity is not validated");return false;
    }
    if(inst.op==IR::Opcode::Sendmsg && (inst.src_count!=2 ||
@@ -517,6 +520,8 @@ bool EmitProgram(const IR::Program& program, const IR::ResourceSnapshot& resourc
 	state.compute_input_info   = compute_input_info;
 	state.stage                = program.stage;
 	state.wave_size            = program.wave_size;
+ state.lanes_per_invocation = merged_point ? 2u : 1u;
+ state.mesh_emit_error=error;
 	state.per_invocation_masks = program.lane_mask_mode == ShaderLaneMaskMode::PerInvocation;
 	state.exact_subgroup_operations =
 	    !state.per_invocation_masks && ProgramRequiresExactSubgroupSize(program);
@@ -526,6 +531,10 @@ bool EmitProgram(const IR::Program& program, const IR::ResourceSnapshot& resourc
 	state.interface_variables.reserve(InitialEmitterVectorReserve);
 	state.reachable_blocks.reserve(InitialEmitterVectorReserve);
 	CollectRegisters(program, &state.registers);
+ if(merged_point) {
+  for(uint32_t n: {0u,1u,3u,8u}) CollectRegister(&state.registers,{IR::RegisterFile::Scalar,n});
+  for(uint32_t n: {0u,1u,5u,8u}) CollectRegister(&state.registers,{IR::RegisterFile::Vector,n});
+ }
 	CopyProgramInputsAndOutputs(&state, program);
 	state.needs_subgroup_ballot              = ProgramNeedsSubgroupBallot(program);
 	state.needs_subgroup_shuffle             = ProgramNeedsSubgroupShuffle(program);
@@ -542,7 +551,11 @@ bool EmitProgram(const IR::Program& program, const IR::ResourceSnapshot& resourc
 	AllocateRegisterVariables(&state);
 	AllocateBlockLabels(&state, program);
 	AllocateDispatcherState(&state, program);
-	EmitFunction(&state, program);
+ if(merged_point) state.mesh_phase_done_variable=state.builder.AllocateId();
+ if(!EmitFunction(&state, program, merged_point)) {
+  if(error && error->empty()) *error="merged Mesh ABI/phase emission failed";
+  return false;
+ }
 
 	ReportReserveExceeded(program, "registers", state.registers.size());
 	ReportReserveExceeded(program, "inputs", state.inputs.size());
@@ -559,4 +572,22 @@ bool EmitProgram(const IR::Program& program, const IR::ResourceSnapshot& resourc
 	return true;
 }
 
+bool EmitProgram(const IR::Program& program, const IR::ResourceSnapshot& resources,
+ const ShaderVertexInputInfo* vertex, const ShaderPixelInputInfo* pixel,
+ const ShaderComputeInputInfo* compute, std::vector<uint32_t>* spirv, std::string* error) {
+ return EmitProgramImpl(nullptr,program,resources,vertex,pixel,compute,spirv,error);
+}
+// Deliberately separate from automatic stage selection. Runtime draws must opt in explicitly.
+bool EmitMergedPointMeshProgram(const IR::Program& program, const IR::ResourceSnapshot& resources,
+ const ShaderVertexInputInfo& vertex, const MeshAssemblyPlan& assembly,
+ std::vector<uint32_t>* spirv, std::string* error) {
+ if(program.stage!=ShaderType::Mesh || program.wave_size!=64 || !program.mesh_gs_user_data ||
+    !program.dispatcher_fallback || program.lane_mask_mode!=ShaderLaneMaskMode::NativeWave ||
+    !assembly.primitives_per_group || assembly.logical_invocations!=vertex.mesh.invocations*2 ||
+    assembly.max_vertices!=vertex.mesh.max_vertices || assembly.max_primitives!=vertex.mesh.max_primitives ||
+    program.bindings.mesh_point_input_dword==IR::BindingLayout::NoMeshPointInputs) {
+  return Fail(error,"invalid merged point Mesh runtime contract");
+ }
+ return EmitProgramImpl(&assembly,program,resources,&vertex,nullptr,nullptr,spirv,error);
+}
 } // namespace Libs::Graphics::ShaderRecompiler::Spirv

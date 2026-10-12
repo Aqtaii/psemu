@@ -228,6 +228,7 @@ jobs:
             build/native-atomic-tests/native_mesh_phased_dispatcher.spv
             build/native-atomic-tests/native_mesh_point_push.spv
             build/native-atomic-tests/native_mesh_buffer_reads.spv
+            build/native-atomic-tests/native_mesh_full_adapter.spv
             build/native-atomic-tests/native_mesh_emitter.spvasm
             build/native-atomic-tests/native_mesh_emitter_test.exe
             build/native-atomic-tests/mesh_fragment.spv
@@ -303,6 +304,7 @@ jobs:
             build/native-atomic-tests/native_mesh_phased_dispatcher.spv
             build/native-atomic-tests/native_mesh_point_push.spv
             build/native-atomic-tests/native_mesh_buffer_reads.spv
+            build/native-atomic-tests/native_mesh_full_adapter.spv
             build/native-atomic-tests/mesh_outputs.spv
             build/native-atomic-tests/mesh_fragment.spv
             build/native-atomic-tests/mesh_gpu_smoke.exe

@@ -2,6 +2,12 @@
 #include "graphics/shader/recompiler/spirvEmitter/spirvEmitterInternal.h"
 #include "common/assert.h"
 #include "graphics/shader/recompiler/BindingLayout.h"
+#include "graphics/shader/recompiler/ShaderDecoder.h"
+#include "graphics/shader/recompiler/ShaderCFG.h"
+#include "graphics/shader/recompiler/MergedMeshResources.h"
+#include "graphics/shader/recompiler/ShaderInfoCollection.h"
+#include <array>
+#include <fstream>
 #include <cstdio>
 #include <cstdlib>
 using namespace Libs::Graphics;
@@ -312,6 +318,65 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
   rejected=load;rejected.src[0].dpp=true;Require(!EmitGuestInstruction(&state,rejected));
   Require(state.instruction_register_values.empty() && state.lane_half==0);
  }
+ // Full-shader ALU families: distinct bank values, in-place destinations and sparse EXEC.
+ {
+  const auto old_low=EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,0});
+  const auto old_high=EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,1});
+  auto run=[&](IR::Opcode op,std::initializer_list<IR::Operand> sources) {
+   IR::Instruction i;i.op=op;i.execution=IR::InstructionExecution::Vector;
+   i.dst=Reg(IR::RegisterFile::Vector,20);for(const auto& s:sources)i.src[i.src_count++]=s;
+   Require(EmitGuestInstruction(&state,i));
+  };
+  auto banks=[&](uint32_t low,uint32_t high) {
+   for(uint32_t half=0;half<2;++half){state.lane_half=half;
+    EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,20),ConstantU32(&state,half ? high : low));}
+   state.lane_half=0;
+  };
+  auto expect=[&](uint32_t low,uint32_t high) {
+   for(uint32_t half=0;half<2;++half){state.lane_half=half;check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,20}),half?high:low);}
+   state.lane_half=0;
+  };
+  const auto v=Reg(IR::RegisterFile::Vector,20);
+  banks(0x40000000,0x40800000);run(IR::Opcode::FMadF32,{v,Imm(0x40400000),Imm(0x3f800000)});expect(0x40e00000,0x41500000); // 7,13
+  auto negative=v;negative.negate=true;
+  run(IR::Opcode::FMulF32,{negative,Imm(0x40000000)});expect(0xc1600000,0xc1d00000); // -14,-26
+  run(IR::Opcode::FSubF32,{v,Imm(0x3f800000)});expect(0xc1700000,0xc1d80000); // -15,-27
+  banks(0x40000000,0x40800000);run(IR::Opcode::RcpF32,{v});expect(0x3f000000,0x3e800000);
+  banks(0x40800000,0x41800000);run(IR::Opcode::InverseSqrtF32,{v});expect(0x3f000000,0x3e800000);
+  banks(0,0);run(IR::Opcode::SinF32,{v});expect(0,0);
+  banks(0xff000003,0xab000007);run(IR::Opcode::UMulU24U32,{v,Imm(0xcd000005)});expect(15,35);
+  run(IR::Opcode::IMulU32,{v,Imm(0xffffffff)});expect(uint32_t(-15),uint32_t(-35));
+  banks(1,2);run(IR::Opcode::ShiftLeftOrU32,{v,Imm(4),Imm(3)});expect(19,35);
+  run(IR::Opcode::ShiftRightLogicalU32,{v,Imm(1)});expect(9,17);
+  banks(0x00000001,0x00000002);run(IR::Opcode::BitReverseU32,{v});expect(0x80000000,0x40000000);
+  banks(0xaaaa1234,0xbbbb5678);run(IR::Opcode::PackLowLowU16,{v,Imm(0xcccc9876)});expect(0x98761234,0x98765678);
+  banks(7,13);run(IR::Opcode::UMaxU32,{v,Imm(10)});expect(10,13);
+  for(uint32_t half=0;half<2;++half){state.lane_half=half;EmitStoreU32(&state,v,EmitSubgroupLocalInvocationId(&state));}
+  state.lane_half=0;
+  for(const auto op: {IR::Opcode::CompareMaskEqU32,IR::Opcode::CompareMaskNeU32,IR::Opcode::CompareMaskLtU32,IR::Opcode::CompareMaskGtU32}) {
+   IR::Instruction cmp;cmp.op=op;cmp.execution=IR::InstructionExecution::Vector;
+   cmp.dst=Reg(IR::RegisterFile::Vcc,0);cmp.src_count=2;cmp.src[0]=v;cmp.src[1]=Imm(1);
+   Require(EmitGuestInstruction(&state,cmp));
+   const uint32_t wanted=op==IR::Opcode::CompareMaskEqU32?2u:op==IR::Opcode::CompareMaskNeU32?0xfffffffdu:op==IR::Opcode::CompareMaskLtU32?1u:0xfffffffcu;
+   check(EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,0}),wanted);check(EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,1}),wanted);
+  }
+  banks(0x3f800000,0x40400000);
+  IR::Instruction cmp;cmp.op=IR::Opcode::CompareMaskLtF32;cmp.execution=IR::InstructionExecution::Vector;
+  cmp.dst=Reg(IR::RegisterFile::Vcc,0);cmp.src_count=2;cmp.src[0]=v;cmp.src[1]=Imm(0x40000000);
+  Require(EmitGuestInstruction(&state,cmp));check(EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,0}),0xffffffff);check(EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,1}),0);
+  banks(0x40000000,0x40800000);
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,2));
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,4));
+  run(IR::Opcode::FMadF32,{v,Imm(0x40400000),Imm(0x3f800000)});
+  for(uint32_t half=0;half<2;++half){state.lane_half=half;const auto active=state.builder.AllocateId();
+   state.builder.AddFunction({OpIEqual,state.bool_type,active,EmitSubgroupLocalInvocationId(&state),ConstantU32(&state,half?2u:1u)});
+   abi_check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,20}),EmitSelectU32Value(&state,active,
+    ConstantU32(&state,half?0x41500000:0x40e00000),ConstantU32(&state,half?0x40800000:0x40000000)));}
+  state.lane_half=0;
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,0xffffffff));
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,0xffffffff));
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Vcc,0),old_low);EmitStoreU32(&state,Reg(IR::RegisterFile::Vcc,1),old_high);
+ }
  // Restore the triangle fixture's local vertex ID after checking the merged entry ABI.
  EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,5),EmitSubgroupLocalInvocationId(&state));
  check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,24}),0x3f800000);
@@ -573,8 +638,40 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  Require(std::fwrite(words.data(),sizeof(uint32_t),words.size(),file)==words.size());
  Require(std::fclose(file)==0);
 }
+void WriteCapturedMesh(const char* es_path,const char* gs_path) {
+ auto read=[](const char* path){std::ifstream f(path,std::ios::binary|std::ios::ate);Require(f.is_open());
+  const auto n=f.tellg();Require(n>0 && n<=128*1024 && n%4==0);std::vector<uint32_t> w(size_t(n)/4);
+  f.seekg(0);Require(bool(f.read(reinterpret_cast<char*>(w.data()),n)));return w;};
+ const auto es=read(es_path),gs=read(gs_path);std::string error;std::vector<uint32_t> joined;
+ Decoder::Program decoded;Require(Decoder::DecodeFusedProgram(es,gs,&joined,&decoded,&error),error);
+ CFG::Graph graph;Require(CFG::BuildGraph(decoded,&graph,&error),error);
+ IR::Program program;Require(IR::LowerProgram(decoded,graph,ShaderType::Mesh,64,&program,&error),error);
+ program.dispatcher_fallback=true;Require(IR::BuildMergedMeshResourcePlan(&program,16,&error),error);
+ IR::SrtRuntime runtime;std::array<uint32_t,16> userdata{};runtime.user_data=userdata;
+ runtime.mesh_gs_user_data_address=0x123450000ull;runtime.shader_base=0x123400000ull;
+ runtime.read_memory=[](void*,uint64_t addr,uint32_t* word){
+  if(addr<0x123450000ull || addr>=0x123450040ull || addr%4) return false;
+  const uint32_t offset=uint32_t(addr-0x123450000ull);
+  const uint32_t descriptor[]={0x40000000u+(offset/16)*0x10000u,16u<<16,4096u,0u};
+  *word=descriptor[(offset/4)%4];return true;};
+ IR::ResourceSnapshot resources;Require(IR::MaterializeResources(program,runtime,&resources,&error),error);
+ Require(IR::SpecializeResources(&program,resources,&error),error);
+ MeshAssemblyPlan assembly;Require(PlanPointMeshAssembly(3,24,72,216,64,&assembly));
+ ShaderVertexInputInfo info{};info.mesh={216,210,128,32,8192};
+ IR::ShaderInfoOptions opts;opts.vertex=&info;Require(IR::CollectShaderInfo(&program,opts,&error),error);
+ IR::BindingLayoutOptions bindings;bindings.mesh_point_inputs=true;Require(IR::AllocateBindings(&program,bindings,&error),error);
+ // Only compile here: synthetic descriptor contents cannot prove a game framebuffer.
+ std::vector<uint32_t> words;error.clear();
+ const bool emitted=Spirv::EmitMergedPointMeshProgram(program,resources,info,assembly,&words,&error);
+ std::printf("[ASTRO-FULL-MESH] decoded=%zu blocks=%zu buffers=%zu emitted=%u words=%zu resources=synthetic GPU=not-executed error=%s\n",
+  decoded.instructions.size(),program.blocks.size(),program.info.buffers.size(),emitted,words.size(),error.c_str());
+ Require(emitted,error);
+ auto* f=std::fopen("astro_full_mesh.spv","wb");Require(f!=nullptr);
+ Require(std::fwrite(words.data(),4,words.size(),f)==words.size());Require(std::fclose(f)==0);
+}
 int main(int argc,char** argv){
- Require(argc==1 || argc==2);
+ Require(argc==1 || argc==2 || argc==3);
+ if(argc==3){WriteCapturedMesh(argv[1],argv[2]);return 0;}
  {
   IR::Program plan;plan.stage=ShaderType::Mesh;plan.shader_info_complete=true;
   IR::BindingLayoutOptions options;options.mesh_point_inputs=true;
@@ -654,6 +751,17 @@ int main(int argc,char** argv){
  Require(std::fwrite(words.data(),sizeof(uint32_t),words.size(),file)==words.size());Require(std::fclose(file)==0);
  if(argc==1){WriteLaneBackingFixture(p,info,resources);WriteLaneBackingFixture(p,info,resources,true);}
  else {WriteLaneBackingFixture(p,info,resources,true);WriteLaneBackingFixture(p,info,resources,false,true);auto point_info=info;point_info.mesh.invocations=128;WriteLaneBackingFixture(p,point_info,resources,true,false,true);WriteLaneBackingFixture(p,point_info,resources,true,false,true,true);}
+ {
+  auto merged=p;merged.wave_size=64;merged.mesh_gs_user_data=true;merged.user_data_base=8;
+  merged.dispatcher_fallback=true;merged.bindings.mesh_point_input_dword=0;merged.bindings.push_constant_size=20;
+  for(auto& i:merged.blocks[0].instructions) i.execution=(i.op==IR::Opcode::Sendmsg ||
+   (i.dst.kind==IR::OperandKind::Register && i.dst.reg.file==IR::RegisterFile::M0)) ? IR::InstructionExecution::Scalar : IR::InstructionExecution::Vector;
+  auto merged_info=info;merged_info.mesh.invocations=32;
+  MeshAssemblyPlan assembly;Require(PlanPointMeshAssembly(1,1,3,3,64,&assembly));
+  Require(Spirv::EmitMergedPointMeshProgram(merged,resources,merged_info,assembly,&words,&error),error);
+  auto* f=std::fopen("native_mesh_full_adapter.spv","wb");Require(f!=nullptr);
+  Require(std::fwrite(words.data(),4,words.size(),f)==words.size());Require(std::fclose(f)==0);
+ }
  info.mesh.invocations=31;Require(!Spirv::EmitProgram(p,resources,&info,nullptr,nullptr,&words,&error));
  info.mesh.invocations=invocations;
  auto duplicate=p.info.outputs.back();p.info.outputs.push_back(duplicate);
