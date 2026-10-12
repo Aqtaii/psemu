@@ -461,6 +461,9 @@ bool EmitProgram(const IR::Program& program, const IR::ResourceSnapshot& resourc
 	}
 
  if(program.stage==ShaderType::Mesh) {
+  if(program.bindings.mesh_point_input_dword!=IR::BindingLayout::NoMeshPointInputs) {
+   SetError(error,"merged point draw ABI is internal until virtual wave64 activation");return false;
+  }
   if(vertex_input_info==nullptr) {SetError(error,"Mesh input metadata missing");return false;}
   const auto& mesh=vertex_input_info->mesh;
   if(program.wave_size!=32 || mesh.host_subgroup_size!=32 ||

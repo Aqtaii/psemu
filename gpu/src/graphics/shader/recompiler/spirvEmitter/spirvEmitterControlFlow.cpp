@@ -138,7 +138,7 @@ bool UserDataDwordIndex(const EmitterState& state, IR::Register reg, uint32_t& d
 }
 
 uint32_t EmitVsharpDwordLoad(EmitterState* state, uint32_t dword_index) {
-	if (state->push_constant_variable != 0) {
+	if (state->push_constant_variable != 0 && state->vsharp_storage_variable == 0) {
 		const auto pointer = state->builder.AllocateId();
 		const auto value   = state->builder.AllocateId();
 		state->builder.AddFunction({OpAccessChain, state->ptr_push_constant_uint, pointer,
@@ -381,6 +381,27 @@ void EmitVertexInputRegisters(EmitterState* state) {
 		state->builder.AddFunction({OpStore, instance_index,
 		                            EmitInputScalarU32(state, IR::StageInputKind::InstanceIndex)});
 	}
+}
+
+bool EmitMeshPointPushInputRegisters(EmitterState* state,const MeshAssemblyPlan& assembly) {
+ MeshPointInitialRegisters probe;
+ if(state==nullptr || state->program==nullptr || state->push_constant_variable==0 ||
+    state->stage!=ShaderType::Mesh || state->vertex_input_info==nullptr ||
+    state->wave_size!=64 || state->lanes_per_invocation!=2 ||
+    uint64_t(state->vertex_input_info->mesh.invocations)*2!=assembly.logical_invocations ||
+    !PlanMeshPointInitialRegisters(assembly,64,{},0,&probe)) return false;
+ const auto& layout=state->program->bindings;
+ if(layout.mesh_point_input_dword==IR::BindingLayout::NoMeshPointInputs ||
+    uint64_t(layout.mesh_point_input_dword)+5!=layout.push_constant_size/4) return false;
+ auto load=[&](uint32_t field) {
+  const uint32_t index=layout.mesh_point_input_dword+field;
+  const auto pointer=state->builder.AllocateId(),value=state->builder.AllocateId();
+  state->builder.AddFunction({OpAccessChain,state->ptr_push_constant_uint,pointer,
+   state->push_constant_variable,ConstantU32(state,0),ConstantU32(state,index/4),ConstantU32(state,index%4)});
+  state->builder.AddFunction({OpLoad,state->uint_type,value,pointer});return value;
+ };
+ const MeshPointGroupInputIds inputs {load(0),load(1),load(2),load(3),load(4)};
+ return EmitMeshPointInputRegisters(state,assembly,inputs);
 }
 
 // Internal merged ABI adapter. The dynamic draw/resource IDs come from the caller;

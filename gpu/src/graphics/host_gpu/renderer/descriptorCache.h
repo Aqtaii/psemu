@@ -17,6 +17,7 @@ namespace Libs::Graphics {
 
 namespace ShaderRecompiler::IR {
 struct Program;
+struct MeshPointGroupPayload;
 }
 
 class CommandBuffer;
@@ -101,7 +102,7 @@ private:
 void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
                      vk::PipelineBindPoint pipeline_bind_point, vk::PipelineLayout layout,
                      const ShaderStageRuntime& runtime, vk::ShaderStageFlags vk_stage,
-                     DescriptorCache::Stage stage);
+                     DescriptorCache::Stage stage, const ShaderRecompiler::IR::MeshPointGroupPayload* point=nullptr);
 
 } // namespace Libs::Graphics
 

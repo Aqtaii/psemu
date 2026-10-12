@@ -207,6 +207,10 @@ bool AllocateBindings(Program* program, const BindingLayoutOptions& options, std
 		return false;
 	}
 
+ if(options.mesh_point_inputs && program->stage!=ShaderType::Mesh) {
+  if(error) *error="point draw payload requires Mesh stage";
+  return false;
+ }
 	BindingLayout next;
 	next.descriptor_set       = options.descriptor_set;
 	next.push_constant_offset = options.push_constant_offset;
@@ -276,11 +280,19 @@ bool AllocateBindings(Program* program, const BindingLayoutOptions& options, std
 
 	const auto available_push_dwords = (MaxPushConstantBytes - options.push_constant_offset) / 4u;
 	const auto push_limit            = std::min(options.max_push_dwords, available_push_dwords);
-	if (next.user_data_registers.size() <= push_limit) {
-		next.push_constant_size = static_cast<uint32_t>(next.user_data_registers.size() * 4u);
-	} else {
-		AddBinding(&next, DescriptorBindingKind::UserData);
-	}
+ const uint32_t draw_dwords=options.mesh_point_inputs ? 5u : 0u;
+ if(draw_dwords>push_limit) {
+  if(error) *error="point draw payload exceeds available push constants";
+  return false;
+ }
+ if(next.user_data_registers.size()<=push_limit-draw_dwords) {
+  next.push_constant_size=uint32_t(next.user_data_registers.size()+draw_dwords)*4u;
+  if(options.mesh_point_inputs) next.mesh_point_input_dword=uint32_t(next.user_data_registers.size());
+ } else {
+  AddBinding(&next,DescriptorBindingKind::UserData);
+  next.push_constant_size=draw_dwords*4u;
+  if(options.mesh_point_inputs) next.mesh_point_input_dword=0;
+ }
 
 	program->bindings                = std::move(next);
 	program->binding_layout_complete = true;

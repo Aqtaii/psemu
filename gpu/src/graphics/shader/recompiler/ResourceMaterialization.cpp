@@ -1,4 +1,5 @@
 #include "graphics/shader/recompiler/ResourceMaterialization.h"
+#include "graphics/shader/recompiler/BindingLayout.h"
 
 #include "graphics/guest_gpu/gpu_format.h"
 #include "graphics/shader/shaderBindings.h"
@@ -55,6 +56,35 @@ uint64_t AddressSpecialization(const AddressResource&           resource,
 }
 
 } // namespace
+
+bool BuildPushConstantPayload(const Program& program, const ResourceSnapshot& snapshot,
+                              const MeshPointGroupPayload* point, std::vector<uint32_t>* output,
+                              std::string* error) {
+ auto fail=[&](const char* message){if(error) *error=message;return false;};
+ if(output==nullptr || !program.binding_layout_complete) return fail("push payload layout is not ready");
+ const auto& layout=program.bindings;
+ const bool has_point=layout.mesh_point_input_dword!=BindingLayout::NoMeshPointInputs;
+ if(has_point!=(point!=nullptr) || (has_point && (program.stage!=ShaderType::Mesh || point->vertex_count>64)))
+  return fail("invalid or missing Mesh point draw payload");
+ if(layout.push_constant_offset%4 || layout.push_constant_size%4 ||
+    uint64_t(layout.push_constant_offset)+layout.push_constant_size>128) return fail("invalid push payload range");
+ std::vector<uint32_t> words;
+ if(FindBinding(layout,DescriptorBindingKind::UserData)==nullptr) {
+  for(const auto reg:layout.user_data_registers) {
+   if(reg<program.user_data_base || reg-program.user_data_base>=snapshot.user_data.size())
+    return fail("push payload is missing ES user data");
+   words.push_back(snapshot.user_data[reg-program.user_data_base]);
+  }
+ }
+ if(has_point) {
+  if(layout.mesh_point_input_dword!=words.size()) return fail("point draw payload overlaps ES data");
+  words.insert(words.end(),{point->vertex_count,point->first_vertex,point->instance,
+                           point->gs_user_data_low,point->gs_user_data_high});
+ }
+ if(words.size()*4!=layout.push_constant_size) return fail("push payload does not match layout");
+ *output=std::move(words);
+ return true;
+}
 
 bool ValidateResourceSnapshot(const Program& program, const ResourceSnapshot& snapshot,
                               std::string* error) {

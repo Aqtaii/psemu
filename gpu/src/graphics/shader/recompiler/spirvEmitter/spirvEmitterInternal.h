@@ -1540,6 +1540,7 @@ struct MeshPointGroupInputIds {
  uint32_t vertex_count=0, first_vertex=0, instance=0;
  uint32_t gs_user_data_low=0, gs_user_data_high=0;
 };
+bool EmitMeshPointPushInputRegisters(EmitterState* state, const Libs::Graphics::MeshAssemblyPlan& assembly);
 bool EmitMeshPointInputRegisters(EmitterState* state, const Libs::Graphics::MeshAssemblyPlan& assembly,
                                  const MeshPointGroupInputIds& inputs);
 bool EmitMeshPhasedDispatcher(EmitterState* state, const IR::Program& program);

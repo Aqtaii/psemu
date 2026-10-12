@@ -23,6 +23,15 @@ struct ResourceSnapshot {
 	std::vector<uint32_t>        user_data;
 };
 
+struct MeshPointGroupPayload {
+ uint32_t vertex_count=0, first_vertex=0, instance=0;
+ uint32_t gs_user_data_low=0, gs_user_data_high=0;
+};
+// Build per-draw bytes without changing immutable shader specialization or ES register ordering.
+bool BuildPushConstantPayload(const Program& program, const ResourceSnapshot& snapshot,
+                              const MeshPointGroupPayload* point, std::vector<uint32_t>* output,
+                              std::string* error);
+
 bool ValidateResourceSnapshot(const Program& program, const ResourceSnapshot& snapshot,
                               std::string* error);
 bool ValidateResourceSpecialization(const Program& program, const ResourceSnapshot& snapshot,

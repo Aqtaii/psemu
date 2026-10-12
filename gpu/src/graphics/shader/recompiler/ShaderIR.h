@@ -737,6 +737,8 @@ struct DescriptorBinding {
 };
 
 struct BindingLayout {
+ static constexpr uint32_t NoMeshPointInputs=~0u;
+ uint32_t mesh_point_input_dword=NoMeshPointInputs;
 	uint32_t                       descriptor_set       = 0;
 	uint32_t                       push_constant_offset = 0;
 	uint32_t                       push_constant_size   = 0;

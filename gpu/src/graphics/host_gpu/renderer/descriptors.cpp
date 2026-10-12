@@ -1098,12 +1098,17 @@ static BufferView NativeGuestAddressFault(CommandBuffer* command) {
 void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
                      vk::PipelineBindPoint pipeline_bind_point, vk::PipelineLayout layout,
                      const ShaderStageRuntime& runtime, vk::ShaderStageFlags vk_stage,
-                     DescriptorCache::Stage stage) {
+                     DescriptorCache::Stage stage, const ShaderRecompiler::IR::MeshPointGroupPayload* point) {
 	KYTY_PROFILER_FUNCTION();
 	EXIT_IF(buffer == nullptr || !runtime);
 	const auto& program  = *runtime.program;
 	const auto& snapshot = *runtime.resources;
 	std::string error;
+ std::vector<uint32_t> push_data;
+ if(!ShaderRecompiler::IR::BuildPushConstantPayload(program,snapshot,point,&push_data,&error))
+  EXIT("invalid native shader push payload: %s\n",error.c_str());
+ if(point!=nullptr && (vk_stage & vk::ShaderStageFlagBits::eMeshEXT)==vk::ShaderStageFlags{})
+  EXIT("point draw payload requires Vulkan Mesh stage visibility\n");
 	if (!ShaderRecompiler::IR::ValidateResourceSpecialization(program, snapshot, &error)) {
 		EXIT("invalid native shader runtime snapshot: %s\n", error.c_str());
 	}
@@ -1252,9 +1257,9 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 		buffer->RecycleDescriptorAfterFence(set);
 	}
 	if (program.bindings.push_constant_size != 0) {
-		EXIT_IF(program.bindings.push_constant_size != user_data.size() * sizeof(uint32_t));
+		EXIT_IF(program.bindings.push_constant_size != push_data.size() * sizeof(uint32_t));
 		vk_buffer.pushConstants(layout, vk_stage, program.bindings.push_constant_offset,
-		                        program.bindings.push_constant_size, user_data.data());
+		                        program.bindings.push_constant_size, push_data.data());
 	}
 }
 
