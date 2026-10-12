@@ -44,8 +44,16 @@ int main(){
  mem[0]=42; CHECK(mem[0]==42);
  pages.UpdatePageWatchers(true,addr,4096,PageWatchMode::ReadWrite);
  CHECK(PsemuHandleGpuMemoryFault(addr,false)); CHECK(phases==3); CHECK(mem[0]==42);
+ // After one real read resolution, repeated delayed reads must retain write watchers.
  pages.UpdatePageWatchers(true,addr,4096,PageWatchMode::Write);
- CHECK(PsemuHandleGpuMemoryFault(addr,true)); CHECK(phases==6); mem[0]=7;
+ pages.UpdatePageWatchers(true,addr,4096,PageWatchMode::ReadWrite);
+ CHECK(PsemuHandleGpuMemoryFault(addr,false)); CHECK(phases==6);
+ MEMORY_BASIC_INFORMATION delayed{};
+ CHECK(VirtualQuery(mem,&delayed,sizeof(delayed)) && delayed.Protect==PAGE_READONLY);
+ for(int i=0;i<4;i++) CHECK(PsemuHandleGpuMemoryFault(addr,false));
+ CHECK(phases==6);
+ CHECK(VirtualQuery(mem,&delayed,sizeof(delayed)) && delayed.Protect==PAGE_READONLY);
+ CHECK(PsemuHandleGpuMemoryFault(addr,true)); CHECK(phases==9); mem[0]=7;
  CHECK(mem[0]==7 && !PsemuHandleGpuMemoryFault(addr+16384,true));
  DWORD previous=0; CHECK(VirtualProtect(mem+4096,4096,PAGE_EXECUTE_READWRITE,&previous));
  pages.UpdatePageWatchers(true,addr,8192,PageWatchMode::Write);

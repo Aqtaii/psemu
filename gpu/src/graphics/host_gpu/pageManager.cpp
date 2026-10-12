@@ -631,6 +631,11 @@ bool PageManager::HandleFault(PageFaultAccess access, uint64_t fault_vaddr) noex
 			waited = true;
 			continue;
 		}
+		// Multiple CPUs can trap before a no-access page becomes read-only. The first
+		// delayed read consumes late_read_pending, but later reads must also resume
+		// while write-only watchers remain and the mapped page already allows reads.
+		if (access==PageFaultAccess::Read && page.access_watchers==0 && page.write_watchers!=0 &&
+		    Impl::AllowsAccess(fault_vaddr,access)) return true;
 		if (page.write_watchers == 0 && page.access_watchers == 0) {
 			if (access != PageFaultAccess::Read && access != PageFaultAccess::Write) {
 				return false;
@@ -650,6 +655,8 @@ bool PageManager::HandleFault(PageFaultAccess access, uint64_t fault_vaddr) noex
 		}
 		if ((access != PageFaultAccess::Read && access != PageFaultAccess::Write) ||
 		    (access == PageFaultAccess::Read && page.access_watchers == 0)) {
+			std::fprintf(stderr,"[PAGE-FAULT-STATE] addr=0x%016" PRIx64 " access=%u write_watchers=%u access_watchers=%u allowed=%d\n",
+			             fault_vaddr,static_cast<unsigned>(access),page.write_watchers,page.access_watchers,Impl::AllowsAccess(fault_vaddr,access));
 			FailFast("fault access is incompatible with active page watchers");
 		}
 		page.resolving            = true;
