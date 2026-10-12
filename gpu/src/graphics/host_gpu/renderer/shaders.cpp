@@ -537,12 +537,15 @@ void CreatePipelineInternal(PipelineCache::GraphicsPipeline* pipeline, vk::Rende
 	vert_shader_stage_info.sType               = vk::StructureType::ePipelineShaderStageCreateInfo;
 	vert_shader_stage_info.pNext               = nullptr;
 	vert_shader_stage_info.flags               = {};
-	vert_shader_stage_info.stage               = vk::ShaderStageFlagBits::eVertex;
+ const bool is_mesh=vs_input_info->stage.program && vs_input_info->stage.program->stage==ShaderType::Mesh;
+ const auto vertex_stage=is_mesh ? vk::ShaderStageFlagBits::eMeshEXT : vk::ShaderStageFlagBits::eVertex;
+ const auto vertex_cache_stage=is_mesh ? DescriptorCache::Stage::Mesh : DescriptorCache::Stage::Vertex;
+	vert_shader_stage_info.stage               = vertex_stage;
 	vert_shader_stage_info.module              = vert_shader_module;
 	vert_shader_stage_info.pName               = "main";
 	vert_shader_stage_info.pSpecializationInfo = nullptr;
 	EXIT_IF(!vs_input_info->stage);
-	ConfigureSubgroupSize(gctx, vk::ShaderStageFlagBits::eVertex, *vs_input_info->stage.program,
+	ConfigureSubgroupSize(gctx, vertex_stage, *vs_input_info->stage.program,
 	                      &vert_subgroup_size, &vert_shader_stage_info);
 
 	vk::PipelineShaderStageCreateInfo                     frag_shader_stage_info {};
@@ -856,8 +859,8 @@ void CreatePipelineInternal(PipelineCache::GraphicsPipeline* pipeline, vk::Rende
 
 	EXIT_IF(!vs_input_info->stage);
 	CreateLayout(set_layouts, &set_layouts_num, push_constant_info, &push_constant_info_num,
-	             *vs_input_info->stage.program, vk::ShaderStageFlagBits::eVertex,
-	             DescriptorCache::Stage::Vertex);
+	             *vs_input_info->stage.program, vertex_stage,
+	             vertex_cache_stage);
 	if (ps_active) {
 		EXIT_IF(!ps_input_info->stage);
 		CreateLayout(set_layouts, &set_layouts_num, push_constant_info, &push_constant_info_num,
@@ -938,8 +941,8 @@ void CreatePipelineInternal(PipelineCache::GraphicsPipeline* pipeline, vk::Rende
 	pipeline_info.flags               = {};
 	pipeline_info.stageCount          = shader_stage_count;
 	pipeline_info.pStages             = shader_stages;
-	pipeline_info.pVertexInputState   = &vertex_input_info;
-	pipeline_info.pInputAssemblyState = &input_assembly;
+	pipeline_info.pVertexInputState   = is_mesh ? nullptr : &vertex_input_info;
+	pipeline_info.pInputAssemblyState = is_mesh ? nullptr : &input_assembly;
 	pipeline_info.pTessellationState  = nullptr;
 	pipeline_info.pViewportState      = &viewport_state;
 	pipeline_info.pRasterizationState = &rasterizer;

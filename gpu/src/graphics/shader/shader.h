@@ -221,6 +221,9 @@ struct ShaderMappedData {
 
 void ShaderInit();
 void ShaderDumpSkippedGe(const HW::VertexShaderInfo& regs);
+bool ShaderCompileInfoMesh(const HW::VertexShaderInfo&, const ShaderMeshInputInfo&,
+ uint32_t primitive_group,uint32_t vertex_group,uint32_t vertices_per_primitive,
+ ShaderVertexInputInfo*,std::span<const uint32_t>*,std::string*);
 void ShaderMapUserData(uint64_t addr, const ShaderMappedData& data);
 
 void     ShaderDbgDumpInputInfo(const ShaderVertexInputInfo* info);

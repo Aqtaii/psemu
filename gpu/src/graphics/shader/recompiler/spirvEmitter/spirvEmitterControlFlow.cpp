@@ -1255,7 +1255,7 @@ void EmitDispatcherBlocks(EmitterState* state, const IR::Program& program) {
 		}
 		state->builder.AddFunction({OpLabel, BlockLabel(*state, block.id)});
 		for (const auto& inst: block.instructions) {
-			if(!EmitGuestInstruction(state, inst)) return false;
+			EXIT_IF(!EmitGuestInstruction(state, inst));
 		}
 		EmitDispatcherTerminator(state, block.terminator);
 	}
@@ -1398,7 +1398,7 @@ bool EmitFunction(EmitterState* state, const IR::Program& program, const MeshAss
 		}
 		state->builder.AddFunction({OpLabel, BlockLabel(*state, block.id)});
 		for (const auto& inst: block.instructions) {
-			EXIT_IF(!EmitGuestInstruction(state, inst));
+			if(!EmitGuestInstruction(state, inst)) return false;
 		}
 		EmitTerminator(state, block.terminator);
 	}

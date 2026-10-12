@@ -517,7 +517,26 @@ static bool ShouldSkipGeShader(const HW::Context* ctx, const HW::UserConfig* ucf
 	return false;
 }
 
+// Opt-in first-frame path: only the captured non-indexed merged wave64 point assembly.
+static bool IsAstroMeshDraw(const HW::Context* ctx,const HW::UserConfig* ucfg,const HW::Shader* sh) {
+ const char* flag=std::getenv("PSEMU_ASTRO_MESH");
+ if(!flag || flag[0]=='0' || ctx->GetShaderStages()!=0x2030 || uint32_t(ucfg->GetPrimType())!=1) return false;
+ const auto& regs=ctx->GetShaderRegisters();const auto& ge=ucfg->GetGeControl();const auto& v=sh->GetVs();
+ auto* gctx=g_render_ctx->GetGraphicCtx();
+ if(!gctx->mesh_shader_enabled || regs.m_vgtGsOutPrimType!=2 || !v.es_regs.data_addr || !v.gs_regs.data_addr) return false;
+ MeshAssemblyPlan plan;
+ if(!PlanPointMeshAssembly(ge.primitive_group_size,ge.vertex_group_size,regs.m_vgtGsMaxVertOut,
+     regs.m_geMaxOutputPerSubgroup,64,&plan)) return false;
+ const auto& limits=gctx->mesh_shader_properties;
+ return plan.max_vertices<=limits.maxMeshOutputVertices && plan.max_primitives<=limits.maxMeshOutputPrimitives &&
+  plan.logical_invocations/2<=limits.maxMeshWorkGroupInvocations &&
+  uint64_t(v.gs_regs.rsrc2.lds_size)*512+8<=limits.maxMeshSharedMemorySize;
+}
 struct DrawRenderState {
+ bool merged_mesh=false;
+ MeshAssemblyPlan mesh_assembly;
+ uint32_t mesh_primitive_group=0,mesh_vertex_group=0;
+ uint64_t gs_root=0;
 	RenderDepthInfo           depth_info;
 	RenderColorInfo           color_info[RENDER_COLOR_ATTACHMENTS_MAX] = {};
 	uint32_t                  color_count                              = 0;
@@ -743,7 +762,16 @@ static void RefreshShaders(HW::Context* ctx, HW::Shader* sh_ctx, const DrawCallI
 	if (log_phases) {
 		LogDrawPhase(draw.name, "ShaderCompileInfoVS");
 	}
-	if (!ShaderCompileInfoVS(&vertex_shader_info, &shader_regs, lane_mask_mode,
+ if(state->merged_mesh) {
+  std::string error;const auto& ge=ctx->GetShaderRegisters();
+  const auto& group=state->mesh_assembly;
+  const ShaderMeshInputInfo mesh{group.max_vertices,group.max_primitives,group.logical_invocations/2,32,
+   uint32_t(vertex_shader_info.gs_regs.rsrc2.lds_size)*128};
+  if(!ShaderCompileInfoMesh(vertex_shader_info,mesh,state->mesh_primitive_group,
+      state->mesh_vertex_group,ge.m_vgtGsMaxVertOut,&state->vs_input_info,&state->vs_shader,&error)) {
+   EXIT("Astro Mesh compilation failed: %s\n",error.c_str());
+  }
+ } else if (!ShaderCompileInfoVS(&vertex_shader_info, &shader_regs, lane_mask_mode,
 	                         &state->vs_input_info, &state->vs_shader)) {
 		EXIT("ShaderCompileInfoVS failed for draw %s\n", draw.name);
 	}
@@ -994,9 +1022,14 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 		if (set_auto_debug) {
 			SetDrawDebugPhase(buffer, submit_id, draw, 0x200u);
 		}
+  ShaderRecompiler::IR::MeshPointGroupPayload point;
+  if(state->merged_mesh) point={std::min(draw.index_count,state->mesh_assembly.vertices_per_group),emit.first_vertex,
+   draw.first_instance,uint32_t(state->gs_root),uint32_t(state->gs_root>>32)};
 		BindDescriptors(submit_id, buffer, vk::PipelineBindPoint::eGraphics,
 		                pipeline->pipeline_layout, state->vs_input_info.stage,
-		                vk::ShaderStageFlagBits::eVertex, DescriptorCache::Stage::Vertex);
+   state->merged_mesh ? vk::ShaderStageFlagBits::eMeshEXT : vk::ShaderStageFlagBits::eVertex,
+   state->merged_mesh ? DescriptorCache::Stage::Mesh : DescriptorCache::Stage::Vertex,
+   state->merged_mesh ? &point : nullptr);
 		if (buffer->GetRecordingGeneration() != recording_generation) {
 			continue;
 		}
@@ -1032,7 +1065,23 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 			SetDrawDebugPhase(buffer, submit_id, draw, 0x500u);
 		}
 
-		EmitDrawPrimitives(ucfg, state->vk_buffer, state->vs_input_info, draw, emit);
+  if(state->merged_mesh) {
+   std::vector<uint32_t> payload;std::string error;
+   for(uint32_t instance=0;instance<draw.instance_count;++instance) {
+    for(uint32_t first=0;first<draw.index_count;) {
+     point.vertex_count=std::min(draw.index_count-first,state->mesh_assembly.vertices_per_group);
+     point.first_vertex=emit.first_vertex+first;point.instance=draw.first_instance+instance;
+     EXIT_IF(!ShaderRecompiler::IR::BuildPushConstantPayload(*state->vs_input_info.stage.program,
+      *state->vs_input_info.stage.resources,&point,&payload,&error));
+     const auto& binding=state->vs_input_info.stage.program->bindings;
+     state->vk_buffer.pushConstants(pipeline->pipeline_layout,vk::ShaderStageFlagBits::eMeshEXT,
+      binding.push_constant_offset,uint32_t(payload.size()*4),payload.data());
+     state->vk_buffer.drawMeshTasksEXT(1,1,1);first+=point.vertex_count;
+    }
+   }
+   static std::atomic_uint mesh_draw_log{0};if(mesh_draw_log.fetch_add(1)<16)
+    printf("[ASTRO-MESH-DRAW] points=%u instances=%u framebuffer=guest submitted=command-buffer\n",draw.index_count,draw.instance_count);
+  } else EmitDrawPrimitives(ucfg, state->vk_buffer, state->vs_input_info, draw, emit);
 
 		if (set_auto_debug) {
 			SetDrawDebugPhase(buffer, submit_id, draw, 0x600u);
@@ -1041,7 +1090,7 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 		FlushBounceCopies(state->vk_buffer, true);
 		vk::PipelineStageFlags shader_write_stages = {};
 		if (HasShaderBufferWrites(state->vs_input_info.stage)) {
-			shader_write_stages |= vk::PipelineStageFlagBits::eVertexShader;
+			shader_write_stages |= state->merged_mesh ? vk::PipelineStageFlagBits::eMeshShaderEXT : vk::PipelineStageFlagBits::eVertexShader;
 		}
 		if (state->ps_active) {
 			if (HasShaderBufferWrites(state->ps_input_info.stage)) {
@@ -1288,7 +1337,8 @@ void RenderDrawIndexAuto(uint64_t submit_id, CommandBuffer* buffer, HW::Context*
 		return;
 	}
 
-	if (ShouldSkipGeShader(ctx, ucfg, sh_ctx)) {
+	const bool merged_mesh=IsAstroMeshDraw(ctx,ucfg,sh_ctx);
+	if (!merged_mesh && ShouldSkipGeShader(ctx, ucfg, sh_ctx)) {
 		return;
 	}
 
@@ -1323,6 +1373,15 @@ void RenderDrawIndexAuto(uint64_t submit_id, CommandBuffer* buffer, HW::Context*
 	                         instance_count,  first_instance};
 
 	DrawRenderState state {};
+ state.merged_mesh=merged_mesh;
+ if(merged_mesh) {
+  const auto& ge=ucfg->GetGeControl();const auto& regs=ctx->GetShaderRegisters();
+  EXIT_IF(!PlanPointMeshAssembly(ge.primitive_group_size,ge.vertex_group_size,regs.m_vgtGsMaxVertOut,
+   regs.m_geMaxOutputPerSubgroup,64,&state.mesh_assembly));
+  state.mesh_primitive_group=ge.primitive_group_size;state.mesh_vertex_group=ge.vertex_group_size;
+  state.gs_root=sh_ctx->GetVs().gs_regs.user_data_addr;
+ }
+
 	if (!PrepareDrawRenderState(submit_id, buffer, ctx, ucfg, sh_ctx, draw,
 	                            render_target_slice_offset, true, false, &state)) {
 		return;
