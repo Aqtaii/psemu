@@ -15,6 +15,7 @@
 #include "graphics/shader/recompiler/ShaderDecoder.h"
 #include "graphics/shader/recompiler/ShaderCFG.h"
 #include "graphics/shader/recompiler/ShaderRecompiler.h"
+#include "graphics/shader/recompiler/MergedMeshResources.h"
 #include "graphics/shader/shaderVertexMetadata.h"
 #include "libs/errno.h"
 #include "spirv-tools/libspirv.h"
@@ -1471,6 +1472,19 @@ void ShaderDumpSkippedGe(const HW::VertexShaderInfo& regs) {
 				ir.dispatcher_fallback = !structured;
 				printf("[GE-FUSED-IR] lowered=%d dispatcher=%d blocks=%zu error=%s\n",
 				       lowered, ir.dispatcher_fallback, ir.blocks.size(), error.c_str());
+                if (lowered) {
+                    ShaderRecompiler::IR::ResourceSnapshot resources;
+                    const auto es_count=std::max<uint32_t>(regs.gs_regs.rsrc2.user_sgpr,16u);
+                    const bool planned=ShaderRecompiler::IR::BuildMergedMeshResourcePlan(&ir,es_count,&error);
+                    ShaderRecompiler::IR::SrtRuntime runtime;
+                    runtime.user_data=std::span<const uint32_t>(regs.gs_user_sgpr.value,es_count);
+                    runtime.shader_base=addresses[0];
+                    runtime.mesh_gs_user_data_address=regs.gs_regs.user_data_addr;
+                    const bool materialized=planned && ShaderRecompiler::IR::MaterializeResources(ir,runtime,&resources,&error);
+                    printf("[GE-FUSED-RESOURCES] planned=%d materialized=%d gs_root=0x%016llx buffers=%zu srt=%zu GPU=not-executed error=%s\n",
+                           planned,materialized,static_cast<unsigned long long>(regs.gs_regs.user_data_addr),
+                           ir.info.buffers.size(),resources.flattened_srt.size(),error.c_str());
+                }
 				Common::File ir_text;
 				auto ir_path = path;
 				ir_path += ".ir";

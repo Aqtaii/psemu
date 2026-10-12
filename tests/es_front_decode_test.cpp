@@ -1,6 +1,8 @@
 #include "graphics/shader/recompiler/ShaderDecoder.h"
 #include "graphics/shader/recompiler/ShaderCFG.h"
 #include "graphics/shader/recompiler/ShaderIR.h"
+#include "graphics/shader/recompiler/MergedMeshResources.h"
+#include "graphics/shader/recompiler/ResourceMaterialization.h"
 #include "common/assert.h"
 #include <array>
 #include <fstream>
@@ -54,6 +56,21 @@ int main(int argc,char** argv) {
       inst.op==Libs::Graphics::ShaderRecompiler::IR::Opcode::ReadFirstLaneU32)
     Require(inst.execution==InstructionExecution::Scalar);
   }
+  // Run the real captured shader through the same resource planner as live GE capture.
+  auto resource_ir=captured_ir;
+  if(!Libs::Graphics::ShaderRecompiler::IR::BuildMergedMeshResourcePlan(&resource_ir,16,&diagnostic)) {
+   std::fprintf(stderr,"Captured Mesh resource plan failed: %s\n",diagnostic.c_str());Require(false);
+  }
+  size_t vector_buffers=0,scalar_buffers=0,root_reads=0;
+  for(const auto& block:resource_ir.blocks) for(const auto& inst:block.instructions) {
+   using namespace Libs::Graphics::ShaderRecompiler::IR;
+   if(inst.op==Libs::Graphics::ShaderRecompiler::IR::Opcode::BufferLoadDword) ++vector_buffers;
+   if(inst.op==Libs::Graphics::ShaderRecompiler::IR::Opcode::SBufferLoadDword) ++scalar_buffers;
+   if(inst.pc==0x68 && inst.scalar_memory_group.valid) ++root_reads;
+  }
+  Require(vector_buffers==14 && root_reads==16);
+  std::printf("[MESH-RESOURCES] GS-root=separate ES-base=8 vector-buffer-components=%zu scalar-buffer-components=%zu root-components=%zu buffers=%zu plan=passed GPU=not-executed\n",
+              vector_buffers,scalar_buffers,root_reads,resource_ir.info.buffers.size());
   Libs::Graphics::ShaderRecompiler::MeshBarrierPlan phases;
   Require(Libs::Graphics::ShaderRecompiler::PlanMeshBarrierPhases(captured_ir,&phases));
   Require(phases.barrier_pcs==std::vector<uint32_t>({0xe0,0x864,0x8f8,0x970,0xa48}));
@@ -74,6 +91,47 @@ int main(int argc,char** argv) {
   std::printf("[MESH-BARRIERS] phases=%zu segments=%zu static-order=passed convergence=not-executed\n",phases.barrier_pcs.size(),phases.segments.size());
   std::printf("[MESH-REPLAY] instructions=%zu blocks=%zu dispatcher=%u IR=passed GPU=not-executed\n",
       captured.instructions.size(),captured_ir.blocks.size(),unsigned(!structured));
+ }
+
+ // Materialize a GS-table-derived buffer through the same production plan as live capture.
+ {
+  namespace R=Libs::Graphics::ShaderRecompiler::IR;
+  R::Program mesh;mesh.stage=Libs::Graphics::ShaderType::Mesh;mesh.wave_size=64;mesh.blocks.resize(1);
+  for(uint32_t c=0;c<4;++c) {
+   R::Instruction load;load.op=R::Opcode::SLoadDword;load.pc=0x68;
+   load.execution=R::InstructionExecution::Scalar;load.dst.kind=R::OperandKind::Register;
+   load.dst.reg={R::RegisterFile::Scalar,8+c};load.src_count=1;
+   load.src[0].kind=R::OperandKind::ImmediateU32;load.memory.kind=R::ResourceKind::ScalarBuffer;
+   load.memory.resource=0;load.memory.offset=4*c;load.memory.data_bits=32;load.memory.data_dwords=1;
+   load.memory.component_count=4;load.memory.component_index=c;mesh.blocks[0].instructions.push_back(load);
+  }
+  R::Instruction buffer;buffer.op=R::Opcode::BufferLoadDword;buffer.pc=0xf8;
+  buffer.execution=R::InstructionExecution::Vector;buffer.dst.kind=R::OperandKind::Register;
+  buffer.dst.reg={R::RegisterFile::Vector,0};buffer.src_count=2;
+  buffer.src[0].kind=R::OperandKind::Register;buffer.src[0].reg={R::RegisterFile::Vector,9};
+  buffer.src[1].kind=R::OperandKind::ImmediateU32;
+  buffer.memory.kind=R::ResourceKind::Buffer;buffer.memory.resource=2;buffer.memory.idxen=true;
+  buffer.memory.data_bits=32;buffer.memory.data_dwords=1;buffer.memory.component_count=1;
+  mesh.blocks[0].instructions.push_back(buffer);
+  std::string error;Require(R::BuildMergedMeshResourcePlan(&mesh,16,&error));
+  Require(mesh.info.buffers.size()==1 && mesh.info.addresses.empty());
+  std::array<uint32_t,16> es_words{};es_words[0]=0x87654321;
+  R::SrtRuntime runtime;runtime.user_data=es_words;runtime.mesh_gs_user_data_address=0x123450000ull;
+  runtime.read_memory=[](void*,uint64_t address,uint32_t* word) {
+   const uint64_t root=address&~uint64_t(0xffff);
+   if((root!=0x123450000ull && root!=0x123460000ull) || address-root>=16 || address%4) return false;
+   const uint32_t header[]={root==0x123450000ull?0x40000000u:0x42000000u,16u<<16,256,0};
+   *word=header[(address-root)/4];return true;
+  };
+  R::ResourceSnapshot snapshot;Require(R::MaterializeResources(mesh,runtime,&snapshot,&error));
+  Require(snapshot.buffers.size()==1 && snapshot.buffers[0].dwords[0]==0x40000000u);
+  Require(snapshot.user_data==std::vector<uint32_t>(es_words.begin(),es_words.end()));
+  runtime.mesh_gs_user_data_address=0x123460000ull;
+  Require(R::MaterializeResources(mesh,runtime,&snapshot,&error));Require(snapshot.buffers[0].dwords[0]==0x42000000u);
+  const auto saved=snapshot;runtime.mesh_gs_user_data_address.reset();
+  Require(!R::MaterializeResources(mesh,runtime,&snapshot,&error));
+  Require(snapshot.buffers==saved.buffers && snapshot.flattened_srt==saved.flattened_srt && snapshot.user_data==saved.user_data);
+  std::puts("[MESH-RESOURCES] production GS-root buffer materialization refresh missing-root rollback=passed");
  }
 
  // Static phase analysis must reject bypasses, repeated barriers and early exit.

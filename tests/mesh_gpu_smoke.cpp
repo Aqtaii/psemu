@@ -51,7 +51,8 @@ int main(int argc,char** argv){try{
  const char* extension=VK_EXT_MESH_SHADER_EXTENSION_NAME;VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};dci.pNext=&mesh;
  dci.queueCreateInfoCount=1;dci.pQueueCreateInfos=&qci;dci.enabledExtensionCount=1;dci.ppEnabledExtensionNames=&extension;
  VkDevice device;VK_CHECK(vkCreateDevice(gpu,&dci,nullptr,&device));VkQueue queue;vkGetDeviceQueue(device,family,0,&queue);
- const bool point_push=argc==4 && std::string(argv[3])=="point-push";
+ const bool buffer_reads=argc==4 && std::string(argv[3])=="buffer-reads";
+ const bool point_push=buffer_reads || (argc==4 && std::string(argv[3])=="point-push");
  if(argc==4 && !point_push) throw std::runtime_error("Unknown Mesh GPU test mode");
  auto draw=reinterpret_cast<PFN_vkCmdDrawMeshTasksEXT>(vkGetDeviceProcAddr(device,"vkCmdDrawMeshTasksEXT"));if(!draw)throw std::runtime_error("Mesh draw entry unavailable");
  constexpr uint32_t width=32,height=32,bytes=width*height*4;
@@ -84,8 +85,31 @@ int main(int argc,char** argv){try{
  VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};ms.rasterizationSamples=VK_SAMPLE_COUNT_1_BIT;
  VkPipelineColorBlendAttachmentState blend{};blend.colorWriteMask=VK_COLOR_COMPONENT_R_BIT|VK_COLOR_COMPONENT_G_BIT|VK_COLOR_COMPONENT_B_BIT|VK_COLOR_COMPONENT_A_BIT;
  VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};cb.attachmentCount=1;cb.pAttachments=&blend;
+ VkDescriptorSetLayout storage_layout=VK_NULL_HANDLE;VkDescriptorPool storage_pool=VK_NULL_HANDLE;
+ VkDescriptorSet storage_set=VK_NULL_HANDLE;VkBuffer input_buffer=VK_NULL_HANDLE;VkDeviceMemory input_memory=VK_NULL_HANDLE;
+ if(buffer_reads) {
+  VkDescriptorSetLayoutBinding binding{};binding.binding=0;binding.descriptorCount=1;
+  binding.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;binding.stageFlags=VK_SHADER_STAGE_MESH_BIT_EXT;
+  VkDescriptorSetLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+  layout_info.bindingCount=1;layout_info.pBindings=&binding;VK_CHECK(vkCreateDescriptorSetLayout(device,&layout_info,nullptr,&storage_layout));
+  VkBufferCreateInfo input_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};input_info.size=4096;input_info.usage=VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+  VK_CHECK(vkCreateBuffer(device,&input_info,nullptr,&input_buffer));VkMemoryRequirements input_req;vkGetBufferMemoryRequirements(device,input_buffer,&input_req);
+  VkMemoryAllocateInfo input_alloc{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};input_alloc.allocationSize=input_req.size;
+  input_alloc.memoryTypeIndex=MemoryType(gpu,input_req.memoryTypeBits,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+  VK_CHECK(vkAllocateMemory(device,&input_alloc,nullptr,&input_memory));VK_CHECK(vkBindBufferMemory(device,input_buffer,input_memory,0));
+  void* mapped;VK_CHECK(vkMapMemory(device,input_memory,0,4096,0,&mapped));
+  for(uint32_t i=0;i<1024;++i) static_cast<uint32_t*>(mapped)[i]=0x2000+i;
+  vkUnmapMemory(device,input_memory);
+  VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1};VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+  pool_info.maxSets=1;pool_info.poolSizeCount=1;pool_info.pPoolSizes=&pool_size;VK_CHECK(vkCreateDescriptorPool(device,&pool_info,nullptr,&storage_pool));
+  VkDescriptorSetAllocateInfo set_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};set_info.descriptorPool=storage_pool;
+  set_info.descriptorSetCount=1;set_info.pSetLayouts=&storage_layout;VK_CHECK(vkAllocateDescriptorSets(device,&set_info,&storage_set));
+  VkDescriptorBufferInfo buffer_info{input_buffer,0,4096};VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+  write.dstSet=storage_set;write.dstBinding=0;write.descriptorCount=1;write.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;write.pBufferInfo=&buffer_info;
+  vkUpdateDescriptorSets(device,1,&write,0,nullptr);
+ }
  VkPushConstantRange push_range{VK_SHADER_STAGE_MESH_BIT_EXT,0,24};
- VkPipelineLayoutCreateInfo li{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};if(point_push){li.pushConstantRangeCount=1;li.pPushConstantRanges=&push_range;}VkPipelineLayout layout;VK_CHECK(vkCreatePipelineLayout(device,&li,nullptr,&layout));
+ VkPipelineLayoutCreateInfo li{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};if(point_push){li.pushConstantRangeCount=1;li.pPushConstantRanges=&push_range;}if(buffer_reads){li.setLayoutCount=1;li.pSetLayouts=&storage_layout;}VkPipelineLayout layout;VK_CHECK(vkCreatePipelineLayout(device,&li,nullptr,&layout));
  VkGraphicsPipelineCreateInfo pi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};pi.stageCount=2;pi.pStages=stages;pi.pViewportState=&vp;pi.pRasterizationState=&raster;pi.pMultisampleState=&ms;pi.pColorBlendState=&cb;pi.layout=layout;pi.renderPass=render_pass;
  VkPipeline pipeline;VK_CHECK(vkCreateGraphicsPipelines(device,VK_NULL_HANDLE,1,&pi,nullptr,&pipeline));
  VkCommandPoolCreateInfo ci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};ci.queueFamilyIndex=family;ci.flags=VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;VkCommandPool pool;VK_CHECK(vkCreateCommandPool(device,&ci,nullptr,&pool));
@@ -96,6 +120,7 @@ int main(int argc,char** argv){try{
  VK_CHECK(vkBeginCommandBuffer(cmd,&begin));
  VkClearValue clear{};clear.color.float32[3]=1;VkRenderPassBeginInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};rp.renderPass=render_pass;rp.framebuffer=framebuffer;rp.renderArea=scissor;rp.clearValueCount=1;rp.pClearValues=&clear;
  vkCmdBeginRenderPass(cmd,&rp,VK_SUBPASS_CONTENTS_INLINE);vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline);
+ if(buffer_reads) vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,layout,0,1,&storage_set,0,nullptr);
  if(point_push) {
   const uint32_t payload[6]={0x87654321u,point_case?2u:1u,point_case?41u:25u,point_case?43u:27u,point_case?0xabcdef11u:0xabcdef01u,0x12345678u};
   vkCmdPushConstants(cmd,layout,VK_SHADER_STAGE_MESH_BIT_EXT,0,sizeof(payload),payload);
@@ -117,6 +142,10 @@ int main(int argc,char** argv){try{
  vkDestroyFence(device,fence,nullptr);
  }
 
+ if(buffer_reads) {
+  vkDestroyDescriptorPool(device,storage_pool,nullptr);vkDestroyDescriptorSetLayout(device,storage_layout,nullptr);
+  vkDestroyBuffer(device,input_buffer,nullptr);vkFreeMemory(device,input_memory,nullptr);
+ }
  vkDestroyCommandPool(device,pool,nullptr);vkDestroyPipeline(device,pipeline,nullptr);vkDestroyPipelineLayout(device,layout,nullptr);
  vkDestroyShaderModule(device,mesh_shader,nullptr);vkDestroyShaderModule(device,fragment_shader,nullptr);vkDestroyFramebuffer(device,framebuffer,nullptr);vkDestroyRenderPass(device,render_pass,nullptr);
  vkDestroyImageView(device,view,nullptr);vkDestroyImage(device,image,nullptr);vkFreeMemory(device,image_memory,nullptr);vkDestroyBuffer(device,buffer,nullptr);vkFreeMemory(device,buffer_memory,nullptr);vkDestroyDevice(device,nullptr);vkDestroyInstance(instance,nullptr);

@@ -740,7 +740,8 @@ bool TryRecompile(std::span<const uint32_t> code, const CompileOptions& options,
 		return false;
 	}
 	ir.uses_guest_address_table = options.allow_guest_scalar_reads &&
-	                              options.stage == ShaderType::Compute;
+	                              (options.stage == ShaderType::Compute ||
+                               (options.stage == ShaderType::Mesh && options.mesh_gs_user_data));
 	std::string srt_error;
 	if (!IR::BuildSrtPlan(&ir, &srt_error)) {
 		LOGF("%s SRT planning failed: %s\n", GetDumpLabel(options), srt_error.c_str());

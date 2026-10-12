@@ -468,6 +468,23 @@ bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst) {
 	}
 
 	if (inst.execution == IR::InstructionExecution::Vector) {
+  if(inst.op==IR::Opcode::BufferLoadDword) {
+   const auto& mem=inst.memory;
+   auto plain=[](const IR::Operand& o) {
+    return !o.dpp && o.sdwa_sel==6 && !o.sdwa_sext && !o.op_sel && !o.op_sel_hi &&
+     !o.negate && !o.negate_hi && !o.absolute && !o.clamp && o.omod==0;
+   };
+   if(mem.kind!=IR::ResourceKind::Buffer || mem.data_bits!=32 || mem.data_dwords!=1 ||
+      mem.typed || mem.formatted || mem.glc || mem.slc || mem.guest_buffer_read ||
+      mem.component_count<1 || mem.component_count>4 || mem.component_index>=mem.component_count ||
+      mem.resource>=state->program->info.buffers.size() ||
+      inst.src_count!=1u+uint32_t(mem.idxen)+uint32_t(mem.offen) ||
+      inst.dst.kind!=IR::OperandKind::Register || inst.dst.reg.file!=IR::RegisterFile::Vector ||
+      inst.dst2.kind!=IR::OperandKind::Null || !plain(inst.dst)) return false;
+   for(uint32_t i=0;i<inst.src_count;++i)
+    if((inst.src[i].kind!=IR::OperandKind::Register && inst.src[i].kind!=IR::OperandKind::ImmediateU32) ||
+       !plain(inst.src[i])) return false;
+  }
   const bool address_alu=inst.op==IR::Opcode::ShiftLeftAddU32 ||
    inst.op==IR::Opcode::ShiftLeftLogicalU32 || inst.op==IR::Opcode::BitwiseAndU32;
   if(address_alu) {
@@ -491,7 +508,8 @@ bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst) {
    case IR::Opcode::ShiftLeftAddU32: case IR::Opcode::ShiftLeftLogicalU32: case IR::Opcode::BitwiseAndU32:
 			case IR::Opcode::SelectMaskU32: case IR::Opcode::SelectMaskF32Bits:
 			case IR::Opcode::MaskedBitCountLowU32: case IR::Opcode::MaskedBitCountHighU32:
-			case IR::Opcode::Export: case IR::Opcode::DsReadB32: case IR::Opcode::DsWriteB32: break;
+			case IR::Opcode::Export: case IR::Opcode::DsReadB32: case IR::Opcode::DsWriteB32:
+   case IR::Opcode::BufferLoadDword: break;
 			default: return false;
 		}
 		if (inst.dst2.dpp) return false;

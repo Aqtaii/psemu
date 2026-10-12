@@ -19,7 +19,7 @@ void Require(bool ok,const std::string& error={}){if(!ok){std::fprintf(stderr,"M
 // Exercise the production register allocator/load/store emitter without enabling public wave64.
 // A render readback must distinguish upper/lower VGPR values while seeing a shared scalar write.
 void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInputInfo& info,
-                             const IR::ResourceSnapshot& resources, bool upper_outputs=false, bool phased=false, bool point_push=false) {
+                             const IR::ResourceSnapshot& resources, bool upper_outputs=false, bool phased=false, bool point_push=false, bool buffer_reads=false) {
  using namespace Spirv::Emitter;
  EmitterState state;state.builder=Spirv::Builder(0x00010400u);
  auto mesh_info=info;
@@ -31,6 +31,14 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
   fixture_program.bindings.push_constant_size=24;
   fixture_program.bindings.mesh_point_input_dword=1;
   fixture_resources.user_data={0x87654321u};
+ }
+ if(buffer_reads) {
+  IR::BufferResource buffer;buffer.packed_stride=16;buffer.max_byte_extent=4096;buffer.read=true;buffer.scalar=true;
+  fixture_program.info.buffers.push_back(buffer);
+  IR::DescriptorBinding binding;binding.kind=IR::DescriptorBindingKind::Buffers;binding.resources={0};binding.binding=0;
+  fixture_program.bindings.descriptors.push_back(binding);
+  IR::DescriptorValue descriptor;descriptor.dword_count=4;descriptor.dwords={0x40000000u,16u<<16,256,0};
+  fixture_resources.buffers.push_back(descriptor);
  }
  mesh_info.mesh.lds_dwords=2*info.mesh.invocations;
  const uint32_t upper_base=2*info.mesh.invocations-32;
@@ -55,6 +63,10 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  CollectRegister(&state.registers,SccRegister());
  CollectRegister(&state.registers,{IR::RegisterFile::Vector,17});
  for(uint32_t reg=18;reg<=20;++reg) CollectRegister(&state.registers,{IR::RegisterFile::Vector,reg});
+ if(buffer_reads) {
+  for(uint32_t reg=21;reg<=24;++reg) CollectRegister(&state.registers,{IR::RegisterFile::Vector,reg});
+  for(uint32_t reg=48;reg<=63;++reg) CollectRegister(&state.registers,{IR::RegisterFile::Scalar,reg});
+ }
  for(uint32_t reg: {0u,1u,3u,8u}) CollectRegister(&state.registers,{IR::RegisterFile::Scalar,reg});
  for(uint32_t reg: {0u,1u,5u,8u}) CollectRegister(&state.registers,{IR::RegisterFile::Vector,reg});
  CopyProgramInputsAndOutputs(&state,program);
@@ -231,6 +243,75 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,0xffffffff));
  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,0xffffffff));
  abi_check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,28}),abi_wave);
+ if(buffer_reads) {
+  // Real SSBO reads: x1/x2/x3/x4 groups alias their index register on component zero.
+  IR::Instruction load;load.op=IR::Opcode::BufferLoadDword;load.execution=IR::InstructionExecution::Vector;
+  load.src_count=2;load.src[0]=Reg(IR::RegisterFile::Vector,21);load.src[1]=Imm(0);
+  load.memory.kind=IR::ResourceKind::Buffer;load.memory.resource=0;load.memory.idxen=true;
+  load.memory.data_bits=32;load.memory.data_dwords=1;
+  for(uint32_t width=1;width<=4;++width) for(uint32_t repeat=0;repeat<2;++repeat) {
+   for(uint32_t half=0;half<2;++half) {
+    state.lane_half=half;
+    const auto guest=EmitMeshGuestLocalInvocationIndex(&state);
+    const auto record=repeat==0 ? guest : EmitBinaryU32(&state,OpISub,ConstantU32(&state,255),guest);
+    EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,21),record);
+   }
+   state.lane_half=0;load.pc=0xd000+width*16;load.memory.component_count=width;
+   for(uint32_t c=0;c<width;++c) {
+    load.dst=Reg(IR::RegisterFile::Vector,21+c);load.memory.component_index=c;load.memory.offset=c*4;
+    Require(EmitGuestInstruction(&state,load));
+   }
+   for(uint32_t half=0;half<2;++half) {
+    state.lane_half=half;const auto guest=EmitMeshGuestLocalInvocationIndex(&state);
+    const auto record=repeat==0 ? guest : EmitBinaryU32(&state,OpISub,ConstantU32(&state,255),guest);
+    for(uint32_t c=0;c<width;++c)
+     abi_check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,21+c}),
+      EmitBinaryU32(&state,OpIAdd,EmitBinaryU32(&state,OpIMul,record,ConstantU32(&state,4)),ConstantU32(&state,0x2000+c)));
+   }
+   state.lane_half=0;
+  }
+  // Scalar buffer x1/x2/x4/x8/x16 uses the same bound descriptor once per guest wave.
+  IR::Instruction scalar;scalar.op=IR::Opcode::SBufferLoadDword;scalar.execution=IR::InstructionExecution::Scalar;
+  scalar.src_count=1;scalar.src[0]=Imm(0);scalar.memory.kind=IR::ResourceKind::ScalarBuffer;
+  scalar.memory.resource=0;scalar.memory.data_bits=32;scalar.memory.data_dwords=1;
+  for(uint32_t width: {1u,2u,4u,8u,16u}) {
+   scalar.memory.component_count=width;
+   for(uint32_t c=0;c<width;++c) {
+    scalar.dst=Reg(IR::RegisterFile::Scalar,48+c);scalar.memory.component_index=c;scalar.memory.offset=c*4;
+    Require(EmitGuestInstruction(&state,scalar));check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,48+c}),0x2000+c);
+   }
+  }
+  // Distinct EXEC words preserve inactive destinations; address overlap stays snapshot-safe.
+  for(uint32_t half=0;half<2;++half) {
+   state.lane_half=half;EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,21),EmitMeshGuestLocalInvocationIndex(&state));
+   for(uint32_t c=1;c<4;++c) EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,21+c),ConstantU32(&state,0xdeadbeef));
+  }
+  state.lane_half=0;EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,2));
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,4));
+  load.pc=0xd080;load.memory.component_count=4;
+  for(uint32_t c=0;c<4;++c) {
+   load.dst=Reg(IR::RegisterFile::Vector,21+c);load.memory.component_index=c;load.memory.offset=c*4;
+   Require(EmitGuestInstruction(&state,load));
+  }
+  for(uint32_t half=0;half<2;++half) {
+   state.lane_half=half;const auto guest=EmitMeshGuestLocalInvocationIndex(&state),active=state.builder.AllocateId();
+   state.builder.AddFunction({OpIEqual,state.bool_type,active,EmitSubgroupLocalInvocationId(&state),ConstantU32(&state,half==0?1u:2u)});
+   for(uint32_t c=0;c<4;++c) {
+    const auto expected=EmitBinaryU32(&state,OpIAdd,EmitBinaryU32(&state,OpIMul,guest,ConstantU32(&state,4)),ConstantU32(&state,0x2000+c));
+    abi_check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,21+c}),EmitSelectU32Value(&state,active,expected,c==0?guest:ConstantU32(&state,0xdeadbeef)));
+   }
+  }
+  state.lane_half=0;EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,0xffffffff));
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,0xffffffff));
+  load.pc=0xd100;load.memory.component_count=1;load.memory.component_index=0;load.memory.offset=0;
+  load.src[0]=Imm(256);load.dst=Reg(IR::RegisterFile::Vector,21);Require(EmitGuestInstruction(&state,load));
+  for(uint32_t half=0;half<2;++half) {state.lane_half=half;check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,21}),0);}
+  state.lane_half=0;
+  auto rejected=load;rejected.memory.formatted=true;Require(!EmitGuestInstruction(&state,rejected));
+  rejected=load;rejected.memory.component_count=5;Require(!EmitGuestInstruction(&state,rejected));
+  rejected=load;rejected.src[0].dpp=true;Require(!EmitGuestInstruction(&state,rejected));
+  Require(state.instruction_register_values.empty() && state.lane_half==0);
+ }
  // Restore the triangle fixture's local vertex ID after checking the merged entry ABI.
  EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,5),EmitSubgroupLocalInvocationId(&state));
  check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,24}),0x3f800000);
@@ -488,7 +569,7 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  state.builder.AddFunction({OpReturn});state.builder.AddFunction({OpFunctionEnd});
  EmitNativeMeshEntryPoint(&state);
  const auto words=state.builder.Build();
- auto* file=std::fopen(point_push ? "native_mesh_point_push.spv" : phased ? "native_mesh_phased_dispatcher.spv" : upper_outputs ? (info.mesh.invocations==64 ? "native_mesh_upper_outputs_multiwave.spv" : "native_mesh_upper_outputs.spv") : "native_mesh_lane_backing.spv","wb");Require(file!=nullptr);
+ auto* file=std::fopen(buffer_reads ? "native_mesh_buffer_reads.spv" : point_push ? "native_mesh_point_push.spv" : phased ? "native_mesh_phased_dispatcher.spv" : upper_outputs ? (info.mesh.invocations==64 ? "native_mesh_upper_outputs_multiwave.spv" : "native_mesh_upper_outputs.spv") : "native_mesh_lane_backing.spv","wb");Require(file!=nullptr);
  Require(std::fwrite(words.data(),sizeof(uint32_t),words.size(),file)==words.size());
  Require(std::fclose(file)==0);
 }
@@ -572,7 +653,7 @@ int main(int argc,char** argv){
  auto* file=std::fopen(argc==2 ? "native_mesh_emitter_multiwave.spv" : "native_mesh_emitter.spv","wb");Require(file!=nullptr);
  Require(std::fwrite(words.data(),sizeof(uint32_t),words.size(),file)==words.size());Require(std::fclose(file)==0);
  if(argc==1){WriteLaneBackingFixture(p,info,resources);WriteLaneBackingFixture(p,info,resources,true);}
- else {WriteLaneBackingFixture(p,info,resources,true);WriteLaneBackingFixture(p,info,resources,false,true);auto point_info=info;point_info.mesh.invocations=128;WriteLaneBackingFixture(p,point_info,resources,true,false,true);}
+ else {WriteLaneBackingFixture(p,info,resources,true);WriteLaneBackingFixture(p,info,resources,false,true);auto point_info=info;point_info.mesh.invocations=128;WriteLaneBackingFixture(p,point_info,resources,true,false,true);WriteLaneBackingFixture(p,point_info,resources,true,false,true,true);}
  info.mesh.invocations=31;Require(!Spirv::EmitProgram(p,resources,&info,nullptr,nullptr,&words,&error));
  info.mesh.invocations=invocations;
  auto duplicate=p.info.outputs.back();p.info.outputs.push_back(duplicate);
