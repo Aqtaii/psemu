@@ -447,8 +447,8 @@ int main(int argc,char** argv){
   limited=fresh();limited.stage=ShaderType::Vertex;Require(!IR::AllocateBindings(&limited,options,&error));
   limited=fresh();limited.user_data_base=8;limited.blocks.resize(1);
   IR::ScalarValue user;user.op=IR::ScalarValueOp::UserData;user.imm=8;
-  limited.provenance.values.push_back(user);
-  IR::Instruction source;source.src_count=1;source.scalar_sources[0]=0;
+  limited.provenance.values.resize(2);limited.provenance.values.push_back(user);
+  IR::Instruction source;source.src_count=1;source.scalar_sources[0]=2;
   limited.blocks[0].instructions.push_back(source);
   options.push_constant_offset=0;options.max_push_dwords=5;
   Require(IR::AllocateBindings(&limited,options,&error));
