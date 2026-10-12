@@ -259,6 +259,7 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  Require(!EmitGuestInstruction(&state,paired));
  Require(state.instruction_register_values.empty() && state.lane_half==0);
  if(phased) {
+  EmitBarrier(&state,barrier); // Complete earlier LDS checks before reusing their shared words.
   init_lds_registers(1000);
   for(uint32_t half=0;half<2;++half) {
    state.lane_half=half;
