@@ -545,13 +545,22 @@ bool ProgramNeedsSubgroupLocalInvocationId(const IR::Program& program) {
 	return false;
 }
 
-uint32_t PointerForRegister(const EmitterState& state, IR::Register reg) {
+uint32_t PointerForRegisterHalf(const EmitterState& state, IR::Register reg, uint32_t half) {
+	if (half >= state.lanes_per_invocation || half > 1) {
+		return 0;
+	}
 	for (const auto& binding: state.registers) {
 		if (binding.reg == reg) {
-			return binding.pointer_id;
+			// Scalar registers and both words of EXEC/VCC belong to the whole guest wave.
+			return reg.file == IR::RegisterFile::Vector && half == 1
+			           ? binding.upper_lane_pointer_id : binding.pointer_id;
 		}
 	}
 	return 0;
+}
+
+uint32_t PointerForRegister(const EmitterState& state, IR::Register reg) {
+	return PointerForRegisterHalf(state, reg, state.lane_half);
 }
 
 uint32_t          ConstantU32(EmitterState* state, uint32_t value);

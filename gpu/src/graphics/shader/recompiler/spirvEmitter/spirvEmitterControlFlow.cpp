@@ -193,6 +193,10 @@ void EmitRegisterVariables(EmitterState* state) {
 	for (const auto& binding: state->registers) {
 		state->builder.AddFunction(
 		    {OpVariable, state->ptr_func_uint, binding.pointer_id, StorageClassFunction});
+		if (binding.upper_lane_pointer_id != 0) {
+			state->builder.AddFunction({OpVariable, state->ptr_func_uint,
+			                            binding.upper_lane_pointer_id, StorageClassFunction});
+		}
 	}
 	if (state->dispatcher_fallback) {
 		state->builder.AddFunction(
@@ -205,8 +209,11 @@ void EmitRegisterVariables(EmitterState* state) {
 		    {OpStore, state->pixel_valid_mask_variable, ConstantU32(state, 1)});
 	}
 	for (const auto& binding: state->registers) {
-		state->builder.AddFunction(
-		    {OpStore, binding.pointer_id, EmitInitialRegisterValue(state, binding.reg)});
+		const auto initial = EmitInitialRegisterValue(state, binding.reg);
+		state->builder.AddFunction({OpStore, binding.pointer_id, initial});
+		if (binding.upper_lane_pointer_id != 0) {
+			state->builder.AddFunction({OpStore, binding.upper_lane_pointer_id, initial});
+		}
 	}
 }
 

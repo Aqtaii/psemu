@@ -266,6 +266,7 @@ enum : uint32_t {
 struct RegisterBinding {
 	IR::Register reg;
 	uint32_t     pointer_id = 0;
+	uint32_t     upper_lane_pointer_id = 0;
 };
 
 struct InputBinding {
@@ -314,6 +315,9 @@ struct EmitterState {
 	const ShaderComputeInputInfo*          compute_input_info             = nullptr;
 	ShaderType                             stage                          = ShaderType::Unknown;
 	uint32_t                               wave_size                      = 64;
+	// Internal backing only: public Mesh wave64 remains gated until mask/shuffle semantics are ready.
+	uint32_t                               lanes_per_invocation           = 1;
+	uint32_t                               lane_half                      = 0;
 	bool                                   exact_subgroup_operations      = false;
 	bool                                   per_invocation_masks           = false;
 	uint32_t                               void_type                      = 0;
@@ -618,6 +622,7 @@ bool IsCompareOpcode(IR::Opcode op);
 
 bool ProgramNeedsSubgroupLocalInvocationId(const IR::Program& program);
 
+uint32_t PointerForRegisterHalf(const EmitterState& state, IR::Register reg, uint32_t half);
 uint32_t PointerForRegister(const EmitterState& state, IR::Register reg);
 
 uint32_t ConstantU32(EmitterState* state, uint32_t value);

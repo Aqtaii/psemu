@@ -930,6 +930,10 @@ void AllocateRegisterVariables(EmitterState* state) {
 		binding.pointer_id = state->builder.AllocateId();
 		const auto name    = IR::RegisterToString(binding.reg);
 		state->builder.AddName(binding.pointer_id, name.c_str());
+		if (state->lanes_per_invocation == 2 && binding.reg.file == IR::RegisterFile::Vector) {
+			binding.upper_lane_pointer_id = state->builder.AllocateId();
+			state->builder.AddName(binding.upper_lane_pointer_id, (name + "_upper_lane").c_str());
+		}
 	}
 }
 
