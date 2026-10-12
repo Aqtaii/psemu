@@ -35,6 +35,28 @@ MeshOutputLayout DefineMeshOutputs(Builder& b,uint32_t u32,uint32_t boolean,
  b.AddAnnotation({spv::OpDecorate,out.cull,spv::DecorationPerPrimitiveEXT});
  return out;
 }
+struct MeshParameterOutput {
+ uint32_t variable=0, pointer=0;
+};
+// Vertex attributes use the same locations as the linked fragment inputs.
+template<class Constant>
+MeshParameterOutput DefineMeshParameterOutput(Builder& b,uint32_t vec4,
+                                              uint32_t vertices,uint32_t location,Constant constant) {
+ const auto array_type=b.AllocateId(), array_pointer=b.AllocateId();
+ b.AddType({spv::OpTypeArray,array_type,vec4,constant(vertices)});
+ b.AddType({spv::OpTypePointer,array_pointer,spv::StorageClassOutput,array_type});
+ MeshParameterOutput out{b.AllocateId(),b.AllocateId()};
+ b.AddType({spv::OpTypePointer,out.pointer,spv::StorageClassOutput,vec4});
+ b.AddType({spv::OpVariable,array_pointer,out.variable,spv::StorageClassOutput});
+ b.AddAnnotation({spv::OpDecorate,out.variable,spv::DecorationLocation,location});
+ return out;
+}
+inline void StoreMeshParameter(Builder& b,const MeshParameterOutput& output,
+                               uint32_t index,uint32_t value) {
+ const auto pointer=b.AllocateId();
+ b.AddFunction({spv::OpAccessChain,output.pointer,pointer,output.variable,index});
+ b.AddFunction({spv::OpStore,pointer,value});
+}
 // Uniform entry-point allocation after all guest waves have completed.
 template<class Constant>
 void SetMeshOutputsFromPacked(Builder& b,const MeshOutputLayout& layout,uint32_t allocation,Constant constant) {
