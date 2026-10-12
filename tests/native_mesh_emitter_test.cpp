@@ -26,10 +26,11 @@ int main(){
   for(const auto& operand:src)i.src[i.src_count++]=operand;block.instructions.push_back(i);
  };
  const auto vector=[](uint32_t index){return Reg(IR::RegisterFile::Vector,index);};
- instruction(IR::Opcode::CompareEqU32,vector(0),{vector(5),Imm(1)});
- instruction(IR::Opcode::SelectU32,vector(1),{vector(0),Imm(0x40400000),Imm(0xbf800000)});
- instruction(IR::Opcode::CompareEqU32,vector(0),{vector(5),Imm(2)});
- instruction(IR::Opcode::SelectU32,vector(2),{vector(0),Imm(0x40400000),Imm(0xbf800000)});
+ const auto mask=Reg(IR::RegisterFile::Vcc,0);
+ instruction(IR::Opcode::CompareEqU32,mask,{vector(5),Imm(1)});
+ instruction(IR::Opcode::SelectMaskU32,vector(1),{mask,Imm(0x40400000),Imm(0xbf800000)});
+ instruction(IR::Opcode::CompareEqU32,mask,{vector(5),Imm(2)});
+ instruction(IR::Opcode::SelectMaskU32,vector(2),{mask,Imm(0x40400000),Imm(0xbf800000)});
  instruction(IR::Opcode::MoveU32,Reg(IR::RegisterFile::M0,0),{Imm(3|(1<<12))});
  instruction(IR::Opcode::Sendmsg,{}, {Imm(9),Reg(IR::RegisterFile::M0,0)});
  auto output=[&](IR::ExportTargetKind kind,uint32_t index,std::initializer_list<IR::Operand> src){
