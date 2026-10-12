@@ -71,6 +71,15 @@ jobs:
       - name: Test captured ES front-stage GS handoff
         shell: pwsh
         run: ./tools/scripts/test_es_front_decode.ps1
+
+      - name: Upload fused Mesh resource replay tool
+        uses: actions/upload-artifact@v4
+        with:
+          name: psemu-shader-resource-replay
+          path: build/native-atomic-tests/es_front_decode_test.exe
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Test NGG vertex wave ABI
         shell: pwsh
         run: ./tools/scripts/test_ngg_vertex_abi.ps1

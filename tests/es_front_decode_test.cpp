@@ -66,11 +66,21 @@ int main(int argc,char** argv) {
    using namespace Libs::Graphics::ShaderRecompiler::IR;
    if(inst.op==Libs::Graphics::ShaderRecompiler::IR::Opcode::BufferLoadDword) ++vector_buffers;
    if(inst.op==Libs::Graphics::ShaderRecompiler::IR::Opcode::SBufferLoadDword) ++scalar_buffers;
-   if(inst.pc==0x68 && inst.scalar_memory_group.valid) ++root_reads;
+   if(inst.pc==0x68 && (inst.op==Libs::Graphics::ShaderRecompiler::IR::Opcode::SLoadDword ||
+                       inst.op==Libs::Graphics::ShaderRecompiler::IR::Opcode::LoadSrtDword)) {
+    Require(inst.scalar_value<resource_ir.provenance.values.size());
+    const auto& value=resource_ir.provenance.values[inst.scalar_value];Require(value.op==ScalarValueOp::ReadConst);
+    for(uint32_t word=0;word<2;++word) {
+     Require(value.args[word]<resource_ir.provenance.values.size());
+     const auto& root=resource_ir.provenance.values[value.args[word]];
+     Require(root.op==ScalarValueOp::MeshGsUserData && root.imm==word);
+    }
+    ++root_reads;
+   }
   }
-  Require(vector_buffers==14 && root_reads==16);
   std::printf("[MESH-RESOURCES] GS-root=separate ES-base=8 vector-buffer-components=%zu scalar-buffer-components=%zu root-components=%zu buffers=%zu plan=passed GPU=not-executed\n",
               vector_buffers,scalar_buffers,root_reads,resource_ir.info.buffers.size());
+  Require(vector_buffers==14 && root_reads==16);
   Libs::Graphics::ShaderRecompiler::MeshBarrierPlan phases;
   Require(Libs::Graphics::ShaderRecompiler::PlanMeshBarrierPhases(captured_ir,&phases));
   Require(phases.barrier_pcs==std::vector<uint32_t>({0xe0,0x864,0x8f8,0x970,0xa48}));
