@@ -1102,6 +1102,8 @@ static std::span<const uint32_t> AddShaderProgramPermutation(const char* stage,
 	return spirv;
 }
 
+static void DumpShaderRecompilerSpirv(const char*,uint64_t,std::span<const uint32_t>);
+
 bool ShaderCompileInfoMesh(const HW::VertexShaderInfo& regs,const ShaderMeshInputInfo& mesh,
  uint32_t primitive_group,uint32_t vertex_group,uint32_t vertices_per_primitive,
  ShaderVertexInputInfo* info,std::span<const uint32_t>* spirv,std::string* error) {
@@ -1110,7 +1112,7 @@ bool ShaderCompileInfoMesh(const HW::VertexShaderInfo& regs,const ShaderMeshInpu
  *info={};*spirv={};info->mesh=mesh;
  MeshAssemblyPlan assembly;
  if(!PlanPointMeshAssembly(primitive_group,vertex_group,vertices_per_primitive,mesh.max_vertices,64,&assembly)) return false;
- const auto es=ShaderGetMappedCode(regs.es_regs.data_addr,"Merged Mesh ES",regs.es_regs.chksum);
+ const auto es=ShaderGetMappedCode(regs.es_regs.data_addr,"Merged Mesh ES",regs.es_regs.data_addr);
  const auto gs=ShaderGetMappedCode(regs.gs_regs.data_addr,"Merged Mesh GS",regs.gs_regs.chksum);
  const auto user_count=std::max<uint32_t>(regs.gs_regs.rsrc2.user_sgpr,16u);
  if(user_count>std::size(regs.gs_user_sgpr.value)) return false;
@@ -1774,7 +1776,7 @@ ShaderId ShaderGetIdVS(const HW::VertexShaderInfo* regs, const ShaderVertexInput
 	ret.crc32 = vs_chksum & 0xffffffffu;
 
  if(input_info->stage.program && input_info->stage.program->stage==ShaderType::Mesh) {
-  ret.ids.push_back(0x4d455348u);ret.ids.push_back(uint32_t(regs->es_regs.chksum));ret.ids.push_back(uint32_t(regs->es_regs.chksum>>32));
+  ret.ids.push_back(0x4d455348u);ret.ids.push_back(uint32_t(regs->es_regs.data_addr));ret.ids.push_back(uint32_t(regs->es_regs.data_addr>>32));
   ret.ids.push_back(input_info->mesh.max_vertices);ret.ids.push_back(input_info->mesh.max_primitives);
   ret.ids.push_back(input_info->mesh.invocations);ret.ids.push_back(input_info->mesh.lds_dwords);
  }
