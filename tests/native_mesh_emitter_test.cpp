@@ -121,9 +121,15 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  state.lane_half=1;
  Require(point_push ? EmitMeshPointPushInputRegisters(&state,abi_assembly) : EmitMeshPointInputRegisters(&state,abi_assembly,abi_inputs));
  Require(state.lane_half==1);state.lane_half=0;
- const auto abi_count=point_push ? EmitVsharpDwordLoad(&state,1) : ConstantU32(&state,1);
- const auto abi_first=point_push ? EmitVsharpDwordLoad(&state,2) : ConstantU32(&state,25);
- const auto abi_instance=point_push ? EmitVsharpDwordLoad(&state,3) : ConstantU32(&state,27);
+ auto fixture_push=[&](uint32_t dword) {
+  const auto pointer=state.builder.AllocateId(),value=state.builder.AllocateId();
+  state.builder.AddFunction({OpAccessChain,state.ptr_push_constant_uint,pointer,state.push_constant_variable,
+   ConstantU32(&state,0),ConstantU32(&state,dword/4),ConstantU32(&state,dword%4)});
+  state.builder.AddFunction({OpLoad,state.uint_type,value,pointer});return value;
+ };
+ const auto abi_count=point_push ? fixture_push(1) : ConstantU32(&state,1);
+ const auto abi_first=point_push ? fixture_push(2) : ConstantU32(&state,25);
+ const auto abi_instance=point_push ? fixture_push(3) : ConstantU32(&state,27);
  const auto abi_low_expected=EmitBinaryU32(&state,OpIAdd,ConstantU32(&state,0xabcdef01u),
   EmitBinaryU32(&state,OpISub,abi_first,ConstantU32(&state,25)));
 
