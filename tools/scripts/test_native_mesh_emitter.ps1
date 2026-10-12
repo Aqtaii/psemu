@@ -6,7 +6,7 @@ $dir=Join-Path $root 'gpu\src\graphics\shader\recompiler'
 Push-Location $out
 try {
  $sources=@("$root\tests\native_mesh_emitter_test.cpp")
- foreach($name in @('SpirvEmitter','SpirvBuilder','BindingLayout','ResourceMaterialization','SrtWalker','ScalarProvenance','ShaderCFG')) {$sources+="$dir\$name.cpp"}
+ foreach($name in @('SpirvEmitter','SpirvBuilder','BindingLayout','ResourceMaterialization','SrtWalker','ScalarProvenance','ShaderCFG','ShaderDecoder','ScalarAluOps','VectorAluOps','MemoryOps','ImageOps','ExportOps')) {$sources+="$dir\$name.cpp"}
  $sources+=(Get-ChildItem -LiteralPath "$dir\spirvEmitter" -Filter '*.cpp').FullName
  $sources+="$dir\shaderIR\ShaderIRLog.cpp"
  $sources+="$root\gpu\src\graphics\guest_gpu\gpu_format.cpp"
