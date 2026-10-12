@@ -5,6 +5,7 @@
 #include <array>
 #include <fstream>
 #include "graphics/shader/meshAssembly.h"
+#include "graphics/shader/recompiler/meshBarrierPlan.h"
 #include <cstdio>
 #include <stdexcept>
 #include <source_location>
@@ -52,10 +53,40 @@ int main(int argc,char** argv) {
       inst.op==Libs::Graphics::ShaderRecompiler::IR::Opcode::ReadFirstLaneU32)
     Require(inst.execution==InstructionExecution::Scalar);
   }
+  Libs::Graphics::ShaderRecompiler::MeshBarrierPlan phases;
+  Require(Libs::Graphics::ShaderRecompiler::PlanMeshBarrierPhases(captured_ir,&phases));
+  Require(phases.barrier_pcs==std::vector<uint32_t>({0xe0,0x864,0x8f8,0x970,0xa48}));
+  std::printf("[MESH-BARRIERS] phases=%zu static-order=passed convergence=not-executed\n",phases.barrier_pcs.size());
   std::printf("[MESH-REPLAY] instructions=%zu blocks=%zu dispatcher=%u IR=passed GPU=not-executed\n",
       captured.instructions.size(),captured_ir.blocks.size(),unsigned(!structured));
  }
 
+ // Static phase analysis must reject bypasses, repeated barriers and early exit.
+ {
+  using namespace Libs::Graphics::ShaderRecompiler;
+  IR::Program phases;phases.stage=Libs::Graphics::ShaderType::Mesh;phases.blocks.resize(3);
+  for(uint32_t i=0;i<3;++i) phases.blocks[i].id=i;
+  phases.blocks[0].terminator.kind=CFG::TerminatorKind::ConditionalBranch;
+  phases.blocks[0].terminator.true_block=1;phases.blocks[0].terminator.false_block=2;
+  phases.blocks[1].terminator.kind=CFG::TerminatorKind::Branch;phases.blocks[1].terminator.true_block=2;
+  IR::Instruction barrier;barrier.op=IR::Opcode::Barrier;barrier.execution=IR::InstructionExecution::Scalar;barrier.pc=16;
+  phases.blocks[2].instructions={barrier};
+  barrier.pc=20;phases.blocks[2].instructions.push_back(barrier);
+  MeshBarrierPlan plan;
+  Require(PlanMeshBarrierPhases(phases,&plan));Require(plan.barrier_pcs==std::vector<uint32_t>({16,20}));
+  const auto saved=plan.barrier_pcs;
+  phases.blocks[1].terminator.kind=CFG::TerminatorKind::Return;
+  Require(!PlanMeshBarrierPhases(phases,&plan));Require(plan.barrier_pcs==saved);
+  phases.blocks[1].terminator.kind=CFG::TerminatorKind::Branch;
+  phases.blocks[2].terminator.kind=CFG::TerminatorKind::Branch;phases.blocks[2].terminator.true_block=0;
+  Require(!PlanMeshBarrierPhases(phases,&plan));
+  phases.blocks[2].terminator.kind=CFG::TerminatorKind::Return;
+  phases.blocks[0].terminator.kind=CFG::TerminatorKind::IndirectBranch;
+  Require(!PlanMeshBarrierPhases(phases,&plan));
+  phases.blocks[0].terminator.kind=CFG::TerminatorKind::ConditionalBranch;
+  phases.blocks[1].instructions.push_back(barrier);phases.blocks[2].instructions.pop_back();
+  Require(!PlanMeshBarrierPhases(phases,&plan)); // one branch executes barrier20 before barrier16
+ }
  Libs::Graphics::MeshAssemblyPlan assembly;
  Require(Libs::Graphics::PlanPointMeshAssembly(3,24,72,216,64,&assembly));
  Require(assembly.max_primitives==210 && assembly.primitives_per_group==3 &&
