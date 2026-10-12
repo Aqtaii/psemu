@@ -431,6 +431,7 @@ uint32_t EmitInputComponentU32(EmitterState* state, IR::StageInputKind kind, uin
 }
 
 uint32_t EmitLocalInvocationIndex(EmitterState* state) {
+	if (state->stage == ShaderType::Mesh) return EmitMeshGuestLocalInvocationIndex(state);
 	const auto variable = InputVariableForKind(*state, IR::StageInputKind::LocalInvocationIndex);
 	if (variable == 0) {
 		return ConstantU32(state, 0);

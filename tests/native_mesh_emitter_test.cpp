@@ -18,10 +18,12 @@ void Require(bool ok,const std::string& error={}){if(!ok){std::fprintf(stderr,"M
 // Exercise the production register allocator/load/store emitter without enabling public wave64.
 // A render readback must distinguish upper/lower VGPR values while seeing a shared scalar write.
 void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInputInfo& info,
-                             const IR::ResourceSnapshot& resources) {
+                             const IR::ResourceSnapshot& resources, bool upper_outputs=false) {
  using namespace Spirv::Emitter;
  EmitterState state;state.builder=Spirv::Builder(0x00010400u);
- state.program=&program;state.resources=&resources;state.vertex_input_info=&info;
+ auto mesh_info=info;
+ if(upper_outputs){mesh_info.mesh.max_vertices=35;mesh_info.mesh.max_primitives=33;}
+ state.program=&program;state.resources=&resources;state.vertex_input_info=&mesh_info;
  state.stage=ShaderType::Mesh;state.wave_size=64;state.lanes_per_invocation=2;
  state.exact_subgroup_operations=Spirv::ProgramRequiresExactSubgroupSize(program);
  CollectRegisters(program,&state.registers);
@@ -144,12 +146,29 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
    if(inst.export_info.index==0) inst.src[0]=Reg(value.file,value.index);
    if(inst.export_info.index==1) inst.src[0]=Reg(shared.file,shared.index);
   }
+  if(upper_outputs && inst.op==IR::Opcode::MoveU32 && inst.dst.kind==IR::OperandKind::Register && inst.dst.reg.file==IR::RegisterFile::M0)
+   inst.src[0]=Imm(35|(33u<<12));
+  if(upper_outputs && inst.op==IR::Opcode::Export) {
+   // Emit upper first, then poison lower: aliased staging must fail the render readback.
+   std::array<uint32_t,4> sources {};
+   for(uint32_t i=0;i<inst.src_count;++i)
+    if(inst.src[i].kind==IR::OperandKind::Register && inst.src[i].reg.file==IR::RegisterFile::Vector)
+     sources[i]=EmitValueLoad(&state,inst.src[i]);
+   state.lane_half=1;
+   for(uint32_t i=0;i<inst.src_count;++i) if(sources[i]!=0) EmitStoreU32(&state,inst.src[i],sources[i]);
+   auto upper=inst;
+   if(upper.export_info.kind==IR::ExportTargetKind::Primitive) upper.src[0]=Imm(32u|(33u<<10)|(34u<<20));
+   EmitInstruction(&state,upper);
+   state.lane_half=0;
+   if(inst.export_info.kind==IR::ExportTargetKind::Primitive) inst.src[0]=Imm(0x80000000u);
+   else for(uint32_t i=0;i<inst.src_count;++i) inst.src[i]=Imm(i==3 ? 0x3f800000u : 0u);
+  }
   EmitInstruction(&state,inst);
  }
  state.builder.AddFunction({OpReturn});state.builder.AddFunction({OpFunctionEnd});
  EmitNativeMeshEntryPoint(&state);
  const auto words=state.builder.Build();
- auto* file=std::fopen("native_mesh_lane_backing.spv","wb");Require(file!=nullptr);
+ auto* file=std::fopen(upper_outputs ? "native_mesh_upper_outputs.spv" : "native_mesh_lane_backing.spv","wb");Require(file!=nullptr);
  Require(std::fwrite(words.data(),sizeof(uint32_t),words.size(),file)==words.size());
  Require(std::fclose(file)==0);
 }
@@ -188,7 +207,7 @@ int main(int argc,char** argv){
  Require(Spirv::EmitProgram(p,resources,&info,nullptr,nullptr,&words,&error),error);
  auto* file=std::fopen(argc==2 ? "native_mesh_emitter_multiwave.spv" : "native_mesh_emitter.spv","wb");Require(file!=nullptr);
  Require(std::fwrite(words.data(),sizeof(uint32_t),words.size(),file)==words.size());Require(std::fclose(file)==0);
- if(argc==1) WriteLaneBackingFixture(p,info,resources);
+ if(argc==1){WriteLaneBackingFixture(p,info,resources);WriteLaneBackingFixture(p,info,resources,true);}
  info.mesh.invocations=31;Require(!Spirv::EmitProgram(p,resources,&info,nullptr,nullptr,&words,&error));
  info.mesh.invocations=invocations;
  auto duplicate=p.info.outputs.back();p.info.outputs.push_back(duplicate);

@@ -98,7 +98,7 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
  if(state->stage==ShaderType::Mesh) {
   if(inst.export_info.kind==IR::ExportTargetKind::Primitive) {
    if(inst.src_count>0 && (inst.export_info.en&1u))
-    state->builder.AddFunction({OpStore,state->mesh_primitive_data,EmitValueLoad(state,inst.src[0])});
+    state->builder.AddFunction({OpStore,state->mesh_primitive_data[state->lane_half],EmitValueLoad(state,inst.src[0])});
    return;
   }
   if(!ExportWritesData(inst)) return;
@@ -106,7 +106,7 @@ void EmitExport(EmitterState* state, const IR::Instruction& inst) {
    const bool match=(output.kind==IR::StageOutputKind::Position && inst.export_info.kind==IR::ExportTargetKind::Position) ||
                     (output.kind==IR::StageOutputKind::Parameter && inst.export_info.kind==IR::ExportTargetKind::Parameter);
    if(match && output.index==inst.export_info.index) {
-    state->builder.AddFunction({OpStore,output.mesh_data,EmitExportVec4F32(state,inst)});return;
+    state->builder.AddFunction({OpStore,output.mesh_data[state->lane_half],EmitExportVec4F32(state,inst)});return;
    }
   }
   return;

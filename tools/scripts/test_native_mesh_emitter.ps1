@@ -16,6 +16,8 @@ try {
  if($LASTEXITCODE -ne 0){throw 'Native Mesh emitter regression failed'}
  & "$env:VULKAN_SDK\Bin\spirv-val.exe" --target-env vulkan1.2 .\native_mesh_lane_backing.spv
  if($LASTEXITCODE -ne 0){throw 'Native Mesh two-lane backing SPIR-V validation failed'}
+ & "$env:VULKAN_SDK\Bin\spirv-val.exe" --target-env vulkan1.2 .\native_mesh_upper_outputs.spv
+ if($LASTEXITCODE -ne 0){throw 'Native Mesh upper-half output SPIR-V validation failed'}
  & .\native_mesh_emitter_test.exe multiwave
  if($LASTEXITCODE -ne 0){throw 'Native Mesh multiwave regression failed'}
  & "$env:VULKAN_SDK\Bin\spirv-val.exe" --target-env vulkan1.2 .\native_mesh_emitter_multiwave.spv

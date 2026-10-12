@@ -1159,12 +1159,13 @@ void EmitFunction(EmitterState* state, const IR::Program& program) {
 	EmitPixelInputRegisters(state);
 	EmitVertexInputRegisters(state);
  if(state->stage==ShaderType::Mesh) {
-  const auto pointer=PointerForRegister(*state,{IR::RegisterFile::Vector,5});
-  if(pointer!=0) {
-   const auto index=state->builder.AllocateId();
-   state->builder.AddFunction({OpLoad,state->uint_type,index,state->mesh_local_index});
-   state->builder.AddFunction({OpStore,pointer,index});
+  const auto saved_half=state->lane_half;
+  for(uint32_t half=0;half<state->lanes_per_invocation;++half) {
+   state->lane_half=half;
+   const auto pointer=PointerForRegister(*state,{IR::RegisterFile::Vector,5});
+   if(pointer!=0) state->builder.AddFunction({OpStore,pointer,EmitMeshGuestLocalInvocationIndex(state)});
   }
+  state->lane_half=saved_half;
  }
 	if (state->dispatcher_fallback) {
 		EmitDispatcherFunction(state, program);

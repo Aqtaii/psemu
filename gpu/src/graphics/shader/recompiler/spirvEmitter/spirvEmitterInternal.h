@@ -284,7 +284,7 @@ struct OutputBinding {
 	uint32_t            location    = 0;
 	uint32_t            variable_id = 0;
 	std::string         debug_name;
- uint32_t mesh_data=0;
+ std::array<uint32_t,2> mesh_data {};
 };
 
 struct DescriptorResourceBinding {
@@ -308,7 +308,8 @@ struct EmitterState {
 	Builder                                builder;
  MeshOutputLayout mesh_outputs;
  uint32_t mesh_guest_func=0, mesh_local_index=0, mesh_allocation=0;
- uint32_t mesh_primitive_data=0, mesh_ptr_private_uint=0, mesh_ptr_private_vec4=0;
+ std::array<uint32_t,2> mesh_primitive_data {};
+ uint32_t mesh_ptr_private_uint=0, mesh_ptr_private_vec4=0;
 	const IR::Program*                     program                        = nullptr;
 	const IR::ResourceSnapshot*            resources                      = nullptr;
 	const ShaderVertexInputInfo*           vertex_input_info              = nullptr;
@@ -691,6 +692,7 @@ uint32_t ConstantF32Value(EmitterState* state, float value);
 void AllocateInputVariables(EmitterState* state);
 
 void AllocateOutputVariables(EmitterState* state);
+uint32_t EmitMeshGuestLocalInvocationIndex(EmitterState* state);
 void DefineNativeMeshVariables(EmitterState* state);
 void EmitNativeMeshEntryPoint(EmitterState* state);
 void EmitNativeMeshAllocate(EmitterState* state,const IR::Instruction& inst);
