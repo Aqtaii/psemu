@@ -665,6 +665,8 @@ struct Program {
 };
 
 bool DecodeProgram(std::span<const uint32_t> code, Program* program, std::string* error);
+// AGC ES code may contain inline data after the s[6:7] GS handoff.
+bool DecodeFrontProgram(std::span<const uint32_t> code, Program* program, std::string* error);
 
 bool DecodeScalarSource(uint32_t code, uint32_t pc, Operand* operand, std::string* error);
 bool DecodeScalarDestination(uint32_t code, uint32_t pc, Operand* operand, std::string* error);

@@ -1418,7 +1418,9 @@ void ShaderDumpSkippedGe(const HW::VertexShaderInfo& regs) {
 		binary.Close();
 		ShaderRecompiler::Decoder::Program decoded;
 		std::string error;
-		const bool success = ShaderRecompiler::Decoder::DecodeProgram(code, &decoded, &error);
+		const bool success = i == 0
+		                         ? ShaderRecompiler::Decoder::DecodeFrontProgram(code, &decoded, &error)
+		                         : ShaderRecompiler::Decoder::DecodeProgram(code, &decoded, &error);
 		Common::File text;
 		auto text_path = base;
 		text_path += ".rdna2";

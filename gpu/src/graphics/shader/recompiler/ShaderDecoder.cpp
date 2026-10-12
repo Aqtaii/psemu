@@ -342,7 +342,8 @@ void SetUnsupported(Instruction* inst, Family family, uint32_t opcode_id, const 
 	inst->unsupported_reason = reason;
 }
 
-bool DecodeProgram(std::span<const uint32_t> code, Program* program, std::string* error) {
+static bool DecodeProgramImpl(std::span<const uint32_t> code, Program* program,
+                              std::string* error, bool front_stage) {
 	if (code.empty() || code.size() > UINT32_MAX / sizeof(uint32_t) || program == nullptr) {
 		SetError(error, "invalid shader decoder input");
 		return false;
@@ -403,14 +404,43 @@ bool DecodeProgram(std::span<const uint32_t> code, Program* program, std::string
 		if (IsControlFlowBranch(inst.opcode)) {
 			branch_targets.insert(inst.branch_target);
 		}
+		if (front_stage && inst.opcode == Opcode::SSetpcB64) {
+			if (inst.src0.kind != OperandKind::Sgpr || inst.src0.reg != 6u) {
+				SetError(error, "ES handoff must use S_SETPC_B64 s[6:7]");
+				return false;
+			}
+			for (const auto target: branch_targets) {
+				if (target >= word_index * sizeof(uint32_t) ||
+				    std::none_of(program->instructions.begin(), program->instructions.end(),
+				                 [target](const auto& instruction) { return instruction.pc == target; })) {
+					SetError(error, "ES branch target is outside the executable front stage");
+					return false;
+				}
+			}
+			program->code = code.first(word_index);
+			return true;
+		}
+		if (front_stage && inst.opcode == Opcode::SEndpgm) {
+			SetError(error, "ES front stage ended without GS handoff");
+			return false;
+		}
 		if (inst.opcode == Opcode::SEndpgm &&
 		    (word_index >= code.size() || !branch_targets.contains(word_index * 4u))) {
 			return true;
 		}
 	}
 
-	SetError(error, "shader decode reached the code boundary before S_ENDPGM");
+	SetError(error, front_stage ? "ES front stage is missing GS handoff"
+	                           : "shader decode reached the code boundary before S_ENDPGM");
 	return false;
+}
+
+bool DecodeProgram(std::span<const uint32_t> code, Program* program, std::string* error) {
+	return DecodeProgramImpl(code, program, error, false);
+}
+
+bool DecodeFrontProgram(std::span<const uint32_t> code, Program* program, std::string* error) {
+	return DecodeProgramImpl(code, program, error, true);
 }
 
 std::string FamilyToString(Family family) {
