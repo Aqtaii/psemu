@@ -672,7 +672,7 @@ void EmitHeaderAndTypes(EmitterState* state) {
 		state->builder.AddType({OpVariable, state->ptr_output_per_vertex,
 		                        state->per_vertex_variable, StorageClassOutput});
 	}
-	for (const auto& binding: state->outputs) {
+	if(state->stage!=ShaderType::Mesh) for (const auto& binding: state->outputs) {
 		if (binding.kind == IR::StageOutputKind::Parameter ||
 		    binding.kind == IR::StageOutputKind::Mrt) {
 			state->builder.AddType({OpVariable, state->ptr_output_vec4_float, binding.variable_id,
