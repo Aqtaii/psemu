@@ -487,7 +487,10 @@ struct ScalarMemoryGroup {
  bool operator==(const ScalarMemoryGroup&) const = default;
 };
 
+enum class InstructionExecution { Unknown, Scalar, Vector };
+
 struct Instruction {
+	InstructionExecution execution = InstructionExecution::Unknown;
 	uint32_t     pc = 0;
 	Opcode       op = Opcode::MoveU32;
 	Operand      dst;

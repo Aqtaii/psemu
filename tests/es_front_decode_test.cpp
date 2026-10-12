@@ -45,6 +45,13 @@ int main(int argc,char** argv) {
   Require(Libs::Graphics::ShaderRecompiler::IR::LowerProgram(captured,captured_graph,
       Libs::Graphics::ShaderType::Mesh,64,&captured_ir,&diagnostic));
   captured_ir.dispatcher_fallback=!structured;
+  for(const auto& block:captured_ir.blocks) for(const auto& inst:block.instructions) {
+   using namespace Libs::Graphics::ShaderRecompiler::IR;
+   Require(inst.execution!=InstructionExecution::Unknown);
+   if(inst.op==Libs::Graphics::ShaderRecompiler::IR::Opcode::ReadLaneU32 ||
+      inst.op==Libs::Graphics::ShaderRecompiler::IR::Opcode::ReadFirstLaneU32)
+    Require(inst.execution==InstructionExecution::Scalar);
+  }
   std::printf("[MESH-REPLAY] instructions=%zu blocks=%zu dispatcher=%u IR=passed GPU=not-executed\n",
       captured.instructions.size(),captured_ir.blocks.size(),unsigned(!structured));
  }
@@ -97,7 +104,11 @@ int main(int argc,char** argv) {
  Require(ir.stage==Libs::Graphics::ShaderType::Mesh && !ir.blocks.empty());
  bool retains_ds_write=false;
  for(const auto& block:ir.blocks) for(const auto& inst:block.instructions) {
-  if(inst.op==Libs::Graphics::ShaderRecompiler::IR::Opcode::DsWriteB32) retains_ds_write=true;
+  Require(inst.execution!=Libs::Graphics::ShaderRecompiler::IR::InstructionExecution::Unknown);
+  if(inst.op==Libs::Graphics::ShaderRecompiler::IR::Opcode::DsWriteB32) {
+   retains_ds_write=true;
+   Require(inst.execution==Libs::Graphics::ShaderRecompiler::IR::InstructionExecution::Vector);
+  }
  }
  Require(retains_ds_write); // ES-to-GS shared-memory operation survives fused lowering.
 
@@ -119,6 +130,7 @@ int main(int argc,char** argv) {
   for(const auto& b:ir.blocks) for(const auto& instruction:b.instructions) {
    if(instruction.op!=Libs::Graphics::ShaderRecompiler::IR::Opcode::Sendmsg) continue;
    found=true;
+   Require(instruction.execution==Libs::Graphics::ShaderRecompiler::IR::InstructionExecution::Scalar);
    Require(instruction.src[0].imm==9);
    if(stage==Libs::Graphics::ShaderType::Mesh) {
     Require(instruction.src_count==2 && instruction.src[1].kind==Libs::Graphics::ShaderRecompiler::IR::OperandKind::Register);

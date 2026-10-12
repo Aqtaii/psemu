@@ -266,9 +266,9 @@ uint32_t EmitBufferByteAddress(EmitterState* state, const IR::Instruction& inst,
 		}
 		const auto source = cursor++;
 		if (first_src == 0 && inst.op == IR::Opcode::BufferLoadDword) {
-			const auto captured = state->buffer_address_group_values.find(inst.pc);
-			if (captured != state->buffer_address_group_values.end()) {
-				return captured->second[source];
+			const auto* captured = state->buffer_address_group_values.Find(inst.pc, state->lane_half);
+			if (captured != nullptr) {
+				return (*captured)[source];
 			}
 			if (inst.memory.component_count > 1u) {
 				EXIT("buffer load address group was not captured at pc 0x%08x\n", inst.pc);

@@ -9,6 +9,7 @@
 #include "graphics/shader/recompiler/ShaderIR.h"
 #include "graphics/shader/recompiler/SpirvBuilder.h"
 #include "graphics/shader/recompiler/spirvEmitter/meshOutputs.h"
+#include "graphics/shader/recompiler/spirvEmitter/bufferMemoryGroup.h"
 
 #include <algorithm>
 #include <array>
@@ -301,7 +302,7 @@ struct SampledImageDescriptors {
 };
 
 struct EmitterState {
-	std::map<uint32_t, std::array<uint32_t,4>> buffer_address_group_values;
+	BufferAddressGroups buffer_address_group_values;
 	std::map<uint32_t, std::array<uint32_t,3>> guest_scalar_group_values;
 	std::map<uint32_t, std::array<uint32_t,5>> guest_scalar_buffer_group_values;
 	Builder                                builder;

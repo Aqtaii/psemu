@@ -10,6 +10,28 @@
 
 namespace Libs::Graphics::ShaderRecompiler::IR {
 
+// Preserve decoder semantics before opcodes shared by scalar/vector ALU lose their origin.
+InstructionExecution ExecutionForDecoded(const Decoder::Instruction& inst) {
+	if (inst.opcode == Decoder::Opcode::VReadlaneB32 ||
+	    inst.opcode == Decoder::Opcode::VReadfirstlaneB32) {
+		return InstructionExecution::Scalar; // One wave-wide result, despite VOP encoding.
+	}
+	switch (inst.family) {
+		case Decoder::Family::SOP1: case Decoder::Family::SOP2:
+		case Decoder::Family::SOPK: case Decoder::Family::SOPC:
+		case Decoder::Family::SOPP: case Decoder::Family::SMEM:
+			return InstructionExecution::Scalar;
+		case Decoder::Family::VOP1: case Decoder::Family::VOP2:
+		case Decoder::Family::VOP3: case Decoder::Family::VOP3P:
+		case Decoder::Family::VOPC: case Decoder::Family::VINTRP:
+		case Decoder::Family::MUBUF: case Decoder::Family::MTBUF:
+		case Decoder::Family::FLAT: case Decoder::Family::DS:
+		case Decoder::Family::MIMG: case Decoder::Family::EXP:
+			return InstructionExecution::Vector;
+		default: return InstructionExecution::Unknown;
+	}
+}
+
 Operand MakeSccOperand() {
 	Operand operand;
 	operand.kind      = OperandKind::Register;
@@ -1229,8 +1251,13 @@ bool LowerProgram(const Decoder::Program& decoded, const CFG::Graph& cfg, Shader
 			              decoded.instructions[i].pc) != cfg.code_table_load_pcs.end()) {
 				continue;
 			}
+			const auto first_lowered = block.instructions.size();
 			if (!LowerDecodedInstruction(decoded.instructions[i], &block, stage, error)) {
 				return false;
+			}
+			const auto execution = ExecutionForDecoded(decoded.instructions[i]);
+			for (size_t n = first_lowered; n < block.instructions.size(); ++n) {
+				block.instructions[n].execution = execution;
 			}
 		}
 
