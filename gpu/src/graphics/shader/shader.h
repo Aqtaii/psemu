@@ -21,7 +21,7 @@ struct ComputeShaderInfo;
 struct ShaderRegisters;
 } // namespace HW
 
-enum class ShaderType { Unknown, Vertex, Pixel, Fetch, Compute };
+enum class ShaderType { Unknown, Vertex, Pixel, Fetch, Compute, Mesh };
 
 enum class ShaderLaneMaskMode { NativeWave, PerInvocation };
 

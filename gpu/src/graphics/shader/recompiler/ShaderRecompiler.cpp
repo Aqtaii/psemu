@@ -688,21 +688,14 @@ bool TryRecompile(std::span<const uint32_t> code, const CompileOptions& options,
 		LOGF("%s irreducible CFG detected: %s\n", GetDumpLabel(options), diagnostic.c_str());
 	} else {
 		std::string structure_error;
-		const auto  unstructured_cfg = cfg;
 		LOGF("%s phase begin: stage=%s hash=0x%016" PRIx64 " CFG Structurize\n",
 		     GetDumpLabel(options), StageName(options.stage), options.shader_hash);
-		if (!CFG::Structurize(&cfg, &structure_error)) {
+		if (!CFG::StructurizeForLowering(&cfg, &structure_error)) {
 			const auto diagnostic = FormatCfgFailure(cfg, options, structure_error);
 			LOGF("%s structured CFG bug/failure: %s\n", GetDumpLabel(options), diagnostic.c_str());
 			dispatcher_fallback      = true;
 			dispatcher_reason        = structure_error;
-			const auto failure_kind  = cfg.failure_kind;
-			const auto failure_block = cfg.failure_block;
-			cfg                      = unstructured_cfg;
-			cfg.unsupported          = true;
-			cfg.failure_kind         = failure_kind;
-			cfg.failure_block        = failure_block;
-			cfg.unsupported_reason   = structure_error;
+
 		} else {
 			LOGF("%s structured CFG success: blocks=%" PRIu64 "\n", GetDumpLabel(options),
 			     static_cast<uint64_t>(cfg.blocks.size()));

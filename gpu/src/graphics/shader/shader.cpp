@@ -1457,9 +1457,29 @@ void ShaderDumpSkippedGe(const HW::VertexShaderInfo& regs) {
 			ShaderRecompiler::CFG::Graph graph;
 			error.clear();
 			const bool built = ShaderRecompiler::CFG::BuildGraph(fused, &graph, &error);
-			const bool structured = built && ShaderRecompiler::CFG::Structurize(&graph, &error);
+			const bool structured = built && ShaderRecompiler::CFG::StructurizeForLowering(&graph, &error);
 			printf("[GE-FUSED-CFG] built=%d structured=%d blocks=%zu loops=%zu error=%s\n",
 			       built, structured, graph.blocks.size(), graph.natural_loops.size(), error.c_str());
+			if (built) {
+				ShaderRecompiler::IR::Program ir;
+				error.clear();
+				// Diagnostic lowering uses the captured wave64 contract, without GPU emission.
+				constexpr uint32_t wave = 64u;
+				const bool lowered = ShaderRecompiler::IR::LowerProgram(
+				    fused, graph, ShaderType::Mesh, wave, &ir, &error);
+				ir.dispatcher_fallback = !structured;
+				printf("[GE-FUSED-IR] lowered=%d dispatcher=%d blocks=%zu error=%s\n",
+				       lowered, ir.dispatcher_fallback, ir.blocks.size(), error.c_str());
+				Common::File ir_text;
+				auto ir_path = path;
+				ir_path += ".ir";
+				ir_text.Create(ir_path);
+				if (!ir_text.IsInvalid()) {
+					ir_text.Printf("%s\n%s", error.c_str(),
+					               ShaderRecompiler::IR::ProgramToString(ir).c_str());
+					ir_text.Close();
+				}
+			}
 			Common::File cfg_text;
 			auto cfg_path = path;
 			cfg_path += ".cfg";

@@ -1536,4 +1536,20 @@ std::string GraphToString(const Graph& graph) {
 	return text;
 }
 
+bool StructurizeForLowering(Graph* graph, std::string* error) {
+	if (graph == nullptr) { return false; }
+	const auto original = *graph;
+	std::string reason;
+	if (Structurize(graph, &reason)) { return true; }
+	const auto kind = graph->failure_kind;
+	const auto block = graph->failure_block;
+	*graph = original;
+	graph->unsupported = true;
+	graph->failure_kind = kind;
+	graph->failure_block = block;
+	graph->unsupported_reason = reason;
+	if (error != nullptr) { *error = reason; }
+	return false;
+}
+
 } // namespace Libs::Graphics::ShaderRecompiler::CFG

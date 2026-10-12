@@ -107,6 +107,8 @@ struct Graph {
 
 bool        BuildGraph(const Decoder::Program& program, Graph* graph, std::string* error);
 bool        Structurize(Graph* graph, std::string* error);
+// False preserves original edges and failure metadata for dispatcher lowering.
+bool        StructurizeForLowering(Graph* graph, std::string* error);
 std::string BranchConditionToString(BranchCondition condition);
 std::string FailureKindToString(FailureKind kind);
 std::string FormatBlockDiagnostic(const Graph& graph, uint32_t block_id, const char* stage,

@@ -1,10 +1,19 @@
 #include "graphics/shader/recompiler/ShaderDecoder.h"
 #include "graphics/shader/recompiler/ShaderCFG.h"
+#include "graphics/shader/recompiler/ShaderIR.h"
+#include "common/assert.h"
 #include <array>
 #include <cstdio>
 #include <stdexcept>
 using namespace Libs::Graphics::ShaderRecompiler::Decoder;
 void Require(bool value) { if (!value) throw std::runtime_error("ES decoder regression"); }
+namespace Common {
+int DbgExitHandler(char const*,int,std::string_view) { std::abort(); }
+int DbgExitHandler(char const*,int,fmt::text_style,std::string_view) { std::abort(); }
+int DbgExitIfHandler(char const*,char const*,int) { std::abort(); }
+int DbgNotImplementedHandler(char const*,char const*,int) { std::abort(); }
+void DbgExit(int) { std::abort(); }
+}
 int main() {
  // Captured ES executable prefix, followed by inline non-instruction data.
  std::array<uint32_t,18> code {0x8f6a9003u,0x94fe6ac1u,0xbf88000bu,0xd7650005u,
@@ -36,6 +45,16 @@ int main() {
  Require(Libs::Graphics::ShaderRecompiler::CFG::BuildGraph(fused,&graph,&error));
  Require(graph.FindBlockByPc(64)!=nullptr);
  Require(Libs::Graphics::ShaderRecompiler::CFG::Structurize(&graph,&error));
+ Libs::Graphics::ShaderRecompiler::IR::Program ir;
+ Require(Libs::Graphics::ShaderRecompiler::IR::LowerProgram(fused,graph,
+     Libs::Graphics::ShaderType::Mesh,64,&ir,&error));
+ Require(ir.stage==Libs::Graphics::ShaderType::Mesh && !ir.blocks.empty());
+ bool retains_ds_write=false;
+ for(const auto& block:ir.blocks) for(const auto& inst:block.instructions) {
+  if(inst.op==Libs::Graphics::ShaderRecompiler::IR::Opcode::DsWriteB32) retains_ds_write=true;
+ }
+ Require(retains_ds_write); // ES-to-GS shared-memory operation survives fused lowering.
+
  back[0]=0xbf82ffffu; Require(DecodeFusedProgram(code,back,&joined,&fused,&error)); // GS-local loop.
  Require(fused.instructions[11].branch_target==64);
  back[0]=0xbf82fffeu; Require(!DecodeFusedProgram(code,back,&joined,&fused,&error)); // Cannot jump into ES.
@@ -43,5 +62,19 @@ int main() {
  std::array<uint32_t,4> middle {0xbf820001u,0xd7650005u,0x000100c1u,0xbf810000u};
  Require(!DecodeFusedProgram(code,middle,&joined,&fused,&error));
  Require(!DecodeFusedProgram(code,{},&joined,&fused,&error));
+ // Nested selections share one merge; failed structuring must retain original CFG edges.
+ std::array<uint32_t,4> nested {0xbf840002u,0xbf850001u,0xbf800000u,0xbf810000u};
+ Program selection; Require(DecodeProgram(nested,&selection,&error));
+ Require(Libs::Graphics::ShaderRecompiler::CFG::BuildGraph(selection,&graph,&error));
+ const auto original=graph;
+ Require(!Libs::Graphics::ShaderRecompiler::CFG::StructurizeForLowering(&graph,&error));
+ Require(graph.unsupported && graph.failure_kind==Libs::Graphics::ShaderRecompiler::CFG::FailureKind::StructuredControlFlow);
+ Require(graph.blocks.size()==original.blocks.size());
+ for(size_t i=0;i<graph.blocks.size();++i) {
+  Require(graph.blocks[i].successors==original.blocks[i].successors);
+  Require(graph.blocks[i].terminator.merge_block==original.blocks[i].terminator.merge_block);
+ }
+ Require(Libs::Graphics::ShaderRecompiler::IR::LowerProgram(selection,graph,
+     Libs::Graphics::ShaderType::Mesh,64,&ir,&error));
  std::puts("Captured ES handoff, inline data, branch boundaries and ordinary decoder passed");
 }
