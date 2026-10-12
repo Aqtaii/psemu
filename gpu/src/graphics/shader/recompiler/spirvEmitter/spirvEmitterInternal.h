@@ -319,6 +319,7 @@ struct EmitterState {
 	// Internal backing only: public Mesh wave64 remains gated until mask/shuffle semantics are ready.
 	uint32_t                               lanes_per_invocation           = 1;
 	uint32_t                               lane_half                      = 0;
+	std::map<uint32_t, uint32_t> instruction_register_values;
 	bool                                   exact_subgroup_operations      = false;
 	bool                                   per_invocation_masks           = false;
 	uint32_t                               void_type                      = 0;
@@ -1509,6 +1510,7 @@ void EmitComputeInputRegisters(EmitterState* state);
 
 void EmitPixelInputRegisters(EmitterState* state);
 
+bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst);
 void EmitInstruction(EmitterState* state, const IR::Instruction& inst);
 
 uint32_t DispatcherTargetValue(EmitterState* state, uint32_t block_id);

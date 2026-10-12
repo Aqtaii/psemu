@@ -378,6 +378,64 @@ void EmitVertexInputRegisters(EmitterState* state) {
 	}
 }
 
+// Limited internal virtual64 path. Public Mesh wave64 stays gated until all op families are ready.
+bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst) {
+	if (state->lanes_per_invocation == 1) {
+		EmitInstruction(state, inst);
+		return true;
+	}
+	if (state->lanes_per_invocation != 2 || state->stage != ShaderType::Mesh ||
+	    state->wave_size != 64 || inst.src_count > 4 || inst.execution == IR::InstructionExecution::Unknown ||
+	    !state->instruction_register_values.empty()) return false;
+	if (inst.op == IR::Opcode::Barrier || inst.op == IR::Opcode::Export ||
+	    inst.op == IR::Opcode::ReadFirstLaneU32) return false;
+	if (inst.execution == IR::InstructionExecution::Vector) {
+		// Add opcode families only with tests for their cross-half dependencies.
+		switch (inst.op) {
+			case IR::Opcode::MoveU32: case IR::Opcode::MoveF32Bits:
+			case IR::Opcode::IAddU32: case IR::Opcode::CompareEqU32:
+			case IR::Opcode::SelectMaskU32: case IR::Opcode::SelectMaskF32Bits:
+			case IR::Opcode::MaskedBitCountLowU32: case IR::Opcode::MaskedBitCountHighU32: break;
+			default: return false;
+		}
+		if (inst.dst.dpp || inst.dst2.dpp) return false;
+		for (uint32_t i=0;i<inst.src_count;++i) if(inst.src[i].dpp) return false;
+	}
+	const auto saved_half = state->lane_half;
+	if (inst.execution == IR::InstructionExecution::Scalar) {
+		state->lane_half = 0;
+		EmitInstruction(state, inst);
+		state->lane_half = saved_half;
+		return true;
+	}
+	auto Capture = [&](IR::Register reg) {
+		const auto pointer = PointerForRegister(*state, reg);
+		if (pointer != 0 && !state->instruction_register_values.contains(pointer)) {
+			const auto value = EmitRegisterLoad(state, reg);
+			state->instruction_register_values.emplace(pointer, value);
+		}
+	};
+	// Snapshot raw values before either destination bank or shared mask is changed.
+	for (uint32_t half=0;half<2;++half) {
+		state->lane_half = half;
+		Capture({IR::RegisterFile::Exec,0});Capture({IR::RegisterFile::Exec,1});
+		for (uint32_t i=0;i<inst.src_count;++i) {
+			if(inst.src[i].kind != IR::OperandKind::Register) continue;
+			Capture(inst.src[i].reg);
+			if(i==0 && (inst.op==IR::Opcode::SelectMaskU32 || inst.op==IR::Opcode::SelectMaskF32Bits)) {
+				auto high=inst.src[i].reg;++high.index;Capture(high);
+			}
+		}
+	}
+	for (uint32_t half=0;half<2;++half) {
+		state->lane_half = half;
+		EmitInstruction(state, inst);
+	}
+	state->instruction_register_values.clear();
+	state->lane_half = saved_half;
+	return true;
+}
+
 void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
 	if (inst.op == IR::Opcode::BufferLoadDword && inst.memory.component_count > 1u &&
 	    inst.memory.component_index == 0u) {
@@ -1068,7 +1126,7 @@ void EmitDispatcherBlocks(EmitterState* state, const IR::Program& program) {
 		}
 		state->builder.AddFunction({OpLabel, BlockLabel(*state, block.id)});
 		for (const auto& inst: block.instructions) {
-			EmitInstruction(state, inst);
+			EXIT_IF(!EmitGuestInstruction(state, inst));
 		}
 		EmitDispatcherTerminator(state, block.terminator);
 	}
@@ -1128,7 +1186,7 @@ void EmitFunction(EmitterState* state, const IR::Program& program) {
 		}
 		state->builder.AddFunction({OpLabel, BlockLabel(*state, block.id)});
 		for (const auto& inst: block.instructions) {
-			EmitInstruction(state, inst);
+			EXIT_IF(!EmitGuestInstruction(state, inst));
 		}
 		EmitTerminator(state, block.terminator);
 	}

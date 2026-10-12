@@ -194,16 +194,7 @@ uint32_t EmitValueLoad(EmitterState* state, const IR::Operand& operand) {
 	switch (operand.kind) {
 		case IR::OperandKind::ImmediateU32:
 		case IR::OperandKind::PcRelativeU32: value = ConstantU32(state, operand.imm); break;
-		case IR::OperandKind::Register: {
-			const auto pointer = PointerForRegister(*state, operand.reg);
-			if (pointer == 0) {
-				value = ConstantU32(state, 0);
-				break;
-			}
-			value = state->builder.AllocateId();
-			state->builder.AddFunction({OpLoad, state->uint_type, value, pointer});
-			break;
-		}
+		case IR::OperandKind::Register: value = EmitRegisterLoad(state, operand.reg); break;
 		case IR::OperandKind::Null: value = ConstantU32(state, 0); break;
 		default: value = ConstantU32(state, 0); break;
 	}
@@ -218,6 +209,10 @@ uint32_t EmitRegisterLoad(EmitterState* state, IR::Register reg) {
 	const auto pointer = PointerForRegister(*state, reg);
 	if (pointer == 0) {
 		return ConstantU32(state, 0);
+	}
+	const auto captured = state->instruction_register_values.find(pointer);
+	if (captured != state->instruction_register_values.end()) {
+		return captured->second;
 	}
 	const auto value = state->builder.AllocateId();
 	state->builder.AddFunction({OpLoad, state->uint_type, value, pointer});

@@ -33,6 +33,8 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  CollectRegister(&state.registers,{IR::RegisterFile::Scalar,27});
  CollectRegister(&state.registers,{IR::RegisterFile::Vector,10});
  CollectRegister(&state.registers,{IR::RegisterFile::Vector,11});
+ CollectRegister(&state.registers,{IR::RegisterFile::Vector,12});
+ CollectRegister(&state.registers,{IR::RegisterFile::Scalar,28});
  CopyProgramInputsAndOutputs(&state,program);
  state.needs_subgroup_ballot=ProgramNeedsSubgroupBallot(program);
  state.needs_subgroup_shuffle=true;
@@ -107,6 +109,34 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
   count.src[1]=count.dst;EmitMaskedBitCountU32(&state,count,1);
  }
  state.lane_half=0;read_check(11,31,31);read_check(11,32,32);read_check(11,63,63);
+ // Paired vector ALU must update both banks, while scalar ALU runs once.
+ EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,12),ConstantU32(&state,4));
+ state.lane_half=1;EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,12),ConstantU32(&state,7));
+ state.lane_half=0;
+ IR::Instruction paired;paired.op=IR::Opcode::IAddU32;paired.src_count=2;
+ paired.execution=IR::InstructionExecution::Vector;
+ paired.dst=Reg(IR::RegisterFile::Vector,12);paired.src[0]=paired.dst;paired.src[1]=Imm(3);
+ Require(EmitGuestInstruction(&state,paired));
+ Require(state.instruction_register_values.empty() && state.lane_half==0);
+ read_check(12,0,7);read_check(12,32,10);
+ paired.execution=IR::InstructionExecution::Scalar;
+ paired.dst=Reg(IR::RegisterFile::Scalar,28);paired.src[0]=paired.dst;paired.src[1]=Imm(1);
+ Require(EmitGuestInstruction(&state,paired));
+ check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,28}),1);
+ // Both halves compare the pre-instruction VCC low word. Lower writes must not change upper input.
+ EmitStoreU32(&state,Reg(IR::RegisterFile::Vcc,0),ConstantU32(&state,0));
+ EmitStoreU32(&state,Reg(IR::RegisterFile::Vcc,1),ConstantU32(&state,0));
+ paired.op=IR::Opcode::CompareEqU32;paired.execution=IR::InstructionExecution::Vector;
+ paired.dst=Reg(IR::RegisterFile::Vcc,0);paired.src[0]=paired.dst;paired.src[1]=Imm(0);
+ Require(EmitGuestInstruction(&state,paired));
+ check(EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,0}),0xffffffff);
+ check(EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,1}),0xffffffff);
+ paired.execution=IR::InstructionExecution::Unknown;Require(!EmitGuestInstruction(&state,paired));
+ paired.execution=IR::InstructionExecution::Scalar;paired.op=IR::Opcode::Barrier;
+ Require(!EmitGuestInstruction(&state,paired));
+ paired.execution=IR::InstructionExecution::Vector;paired.op=IR::Opcode::Export;
+ Require(!EmitGuestInstruction(&state,paired));
+ Require(state.instruction_register_values.empty() && state.lane_half==0);
  EmitStoreU32(&state,Reg(shared.file,shared.index),EmitSelectU32Value(&state,passed,ConstantU32(&state,0x3f800000),ConstantU32(&state,0)));
  for(const auto& original:program.blocks[0].instructions) {
   auto inst=original;
