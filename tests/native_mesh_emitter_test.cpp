@@ -289,6 +289,8 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  Require(EmitGuestInstruction(&state,paired));
  Require(state.instruction_register_values.empty() && state.lane_half==0);
  read_check(12,0,7);read_check(12,32,10);
+ // S28 previously held the guest wave ID; the scalar-once check needs its own zero baseline.
+ EmitStoreU32(&state,Reg(IR::RegisterFile::Scalar,28),ConstantU32(&state,0));
  paired.execution=IR::InstructionExecution::Scalar;
  paired.dst=Reg(IR::RegisterFile::Scalar,28);paired.src[0]=paired.dst;paired.src[1]=Imm(1);
  Require(EmitGuestInstruction(&state,paired));
@@ -453,7 +455,9 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
   auto inst=original;
   if(inst.op==IR::Opcode::Export && inst.export_info.kind==IR::ExportTargetKind::Parameter) {
    if(inst.export_info.index==0) {inst.src[0]=Reg(value.file,value.index);if(point_push) inst.src[1]=Reg(IR::RegisterFile::Vector,17);}
-   if(inst.export_info.index==1) inst.src[0]=Reg(shared.file,shared.index);
+   // Gate every color channel on the checks, including the green push-data case.
+   if(inst.export_info.index==1)
+    for(uint32_t i=0;i<inst.src_count;++i) inst.src[i]=Reg(shared.file,shared.index);
   }
   if(upper_outputs && inst.op==IR::Opcode::MoveU32 && inst.dst.kind==IR::OperandKind::Register && inst.dst.reg.file==IR::RegisterFile::M0)
    inst.src[0]=Imm(mesh_info.mesh.max_vertices|(mesh_info.mesh.max_primitives<<12));
