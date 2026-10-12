@@ -27,10 +27,12 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  const IR::Register value{IR::RegisterFile::Vector,9};
  const IR::Register shared{IR::RegisterFile::Scalar,24};
  CollectRegister(&state.registers,value);CollectRegister(&state.registers,shared);
+ CollectRegister(&state.registers,{IR::RegisterFile::Scalar,25});
+ CollectRegister(&state.registers,{IR::RegisterFile::Scalar,26});
  CopyProgramInputsAndOutputs(&state,program);
  state.needs_subgroup_ballot=ProgramNeedsSubgroupBallot(program);
- state.needs_subgroup_shuffle=ProgramNeedsSubgroupShuffle(program);
- state.needs_subgroup_local_invocation_id=ProgramNeedsSubgroupLocalInvocationId(program);
+ state.needs_subgroup_shuffle=true;
+ state.needs_subgroup_local_invocation_id=true;
  AllocateInputVariables(&state);AllocateOutputVariables(&state);
  AllocateDescriptorVariables(&state);EmitHeaderAndTypes(&state);AllocateRegisterVariables(&state);
  Require(PointerForRegisterHalf(state,value,0)!=0);
@@ -44,14 +46,20 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  const auto index=state.builder.AllocateId();
  state.builder.AddFunction({OpLoad,state.uint_type,index,state.mesh_local_index});
  state.builder.AddFunction({OpStore,PointerForRegister(state,{IR::RegisterFile::Vector,5}),index});
- EmitStoreU32(&state,Reg(value.file,value.index),ConstantU32(&state,0x3e800000)); // 0.25
+ const auto last_lane=state.builder.AllocateId();
+ state.builder.AddFunction({OpIEqual,state.bool_type,last_lane,EmitSubgroupLocalInvocationId(&state),ConstantU32(&state,31)});
+ EmitStoreU32(&state,Reg(value.file,value.index),EmitSelectU32Value(&state,last_lane,ConstantU32(&state,0x3e800000),ConstantU32(&state,0))); // lane31: 0.25
  EmitStoreU32(&state,Reg(shared.file,shared.index),ConstantU32(&state,0));
  state.lane_half=1;
- EmitStoreU32(&state,Reg(value.file,value.index),ConstantU32(&state,0x3f400000)); // 0.75
+ EmitStoreU32(&state,Reg(value.file,value.index),EmitSelectU32Value(&state,last_lane,ConstantU32(&state,0x3f400000),ConstantU32(&state,0))); // lane63: 0.75
  EmitStoreU32(&state,Reg(shared.file,shared.index),ConstantU32(&state,0x3f800000)); // 1
- const auto upper=EmitBitcastU32ToF32(&state,EmitRegisterLoad(&state,value));
  state.lane_half=0;
- const auto lower=EmitBitcastU32ToF32(&state,EmitRegisterLoad(&state,value));
+ IR::Instruction read;read.op=IR::Opcode::ReadLaneU32;read.src_count=2;
+ read.src[0]=Reg(value.file,value.index);read.src[1]=Imm(63);
+ read.dst=Reg(IR::RegisterFile::Scalar,25);EmitReadLaneU32(&state,read);
+ read.src[1]=Imm(31);read.dst=Reg(IR::RegisterFile::Scalar,26);EmitReadLaneU32(&state,read);
+ const auto upper=EmitBitcastU32ToF32(&state,EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,25}));
+ const auto lower=EmitBitcastU32ToF32(&state,EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,26}));
  const auto sum=state.builder.AllocateId();
  state.builder.AddFunction({OpFAdd,state.float_type,sum,lower,upper});
  EmitStoreU32(&state,Reg(value.file,value.index),EmitBitcastF32ToU32(&state,sum));

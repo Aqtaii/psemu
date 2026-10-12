@@ -285,8 +285,31 @@ uint32_t EmitLaneIndex(EmitterState* state, const IR::Operand& operand) {
 }
 
 void EmitReadLaneU32(EmitterState* state, const IR::Instruction& inst) {
-	const auto src   = EmitValueLoad(state, inst.src[0]);
-	const auto lane  = EmitLaneIndex(state, inst.src[1]);
+	const auto lane = EmitLaneIndex(state, inst.src[1]);
+	if (state->lanes_per_invocation == 2) {
+		// Read each bank before shuffling: the source invocation may differ from this one.
+		// Keep both shuffles converged; choosing the bank locally before a divergent shuffle
+		// would select the target invocation's bank selector rather than the caller's.
+		const auto saved_half = state->lane_half;
+		state->lane_half = 0;
+		const auto lower = EmitValueLoad(state, inst.src[0]);
+		state->lane_half = 1;
+		const auto upper = EmitValueLoad(state, inst.src[0]);
+		state->lane_half = saved_half;
+		const auto host_lane = EmitBinaryU32(state, OpBitwiseAnd, lane, ConstantU32(state, 31));
+		const auto lower_value = state->builder.AllocateId();
+		const auto upper_value = state->builder.AllocateId();
+		state->builder.AddFunction({OpGroupNonUniformShuffle, state->uint_type, lower_value,
+		                            ConstantU32(state, ScopeSubgroup), lower, host_lane});
+		state->builder.AddFunction({OpGroupNonUniformShuffle, state->uint_type, upper_value,
+		                            ConstantU32(state, ScopeSubgroup), upper, host_lane});
+		const auto upper_half = state->builder.AllocateId();
+		state->builder.AddFunction({OpUGreaterThanEqual, state->bool_type, upper_half,
+		                            lane, ConstantU32(state, 32)});
+		EmitStoreU32(state, inst.dst, EmitSelectU32Value(state, upper_half, upper_value, lower_value));
+		return;
+	}
+	const auto src = EmitValueLoad(state, inst.src[0]);
 	const auto value = state->builder.AllocateId();
 	state->builder.AddFunction({OpGroupNonUniformShuffle, state->uint_type, value,
 	                            ConstantU32(state, ScopeSubgroup), src, lane});
