@@ -468,10 +468,27 @@ bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst) {
 	}
 
 	if (inst.execution == IR::InstructionExecution::Vector) {
+  const bool address_alu=inst.op==IR::Opcode::ShiftLeftAddU32 ||
+   inst.op==IR::Opcode::ShiftLeftLogicalU32 || inst.op==IR::Opcode::BitwiseAndU32;
+  if(address_alu) {
+   // Only the plain VGPR form is proven here; other modifier/output forms stay gated.
+   auto plain=[](const IR::Operand& operand) {
+    return !operand.dpp && operand.sdwa_sel==6 && !operand.sdwa_sext &&
+     !operand.op_sel && !operand.op_sel_hi && !operand.negate && !operand.negate_hi &&
+     !operand.absolute && !operand.clamp && operand.omod==0;
+   };
+   if(inst.dst.kind!=IR::OperandKind::Register || inst.dst.reg.file!=IR::RegisterFile::Vector ||
+      inst.dst2.kind!=IR::OperandKind::Null || !plain(inst.dst) ||
+      inst.src_count!=(inst.op==IR::Opcode::ShiftLeftAddU32 ? 3u : 2u)) return false;
+   for(uint32_t i=0;i<inst.src_count;++i)
+    if((inst.src[i].kind!=IR::OperandKind::Register && inst.src[i].kind!=IR::OperandKind::ImmediateU32) ||
+       !plain(inst.src[i])) return false;
+  }
 		// Add opcode families only with tests for their cross-half dependencies.
 		switch (inst.op) {
 			case IR::Opcode::MoveU32: case IR::Opcode::MoveF32Bits:
 			case IR::Opcode::IAddU32: case IR::Opcode::CompareEqU32:
+   case IR::Opcode::ShiftLeftAddU32: case IR::Opcode::ShiftLeftLogicalU32: case IR::Opcode::BitwiseAndU32:
 			case IR::Opcode::SelectMaskU32: case IR::Opcode::SelectMaskF32Bits:
 			case IR::Opcode::MaskedBitCountLowU32: case IR::Opcode::MaskedBitCountHighU32:
 			case IR::Opcode::Export: case IR::Opcode::DsReadB32: case IR::Opcode::DsWriteB32: break;

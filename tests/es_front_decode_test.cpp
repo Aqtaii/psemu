@@ -201,14 +201,27 @@ int main(int argc,char** argv) {
  Require(Libs::Graphics::ShaderRecompiler::IR::LowerProgram(fused,graph,
      Libs::Graphics::ShaderType::Mesh,64,&ir,&error));
  Require(ir.stage==Libs::Graphics::ShaderType::Mesh && !ir.blocks.empty());
+ bool retains_es_shift_add=false,retains_es_shift=false;
  bool retains_ds_write=false;
  for(const auto& block:ir.blocks) for(const auto& inst:block.instructions) {
   Require(inst.execution!=Libs::Graphics::ShaderRecompiler::IR::InstructionExecution::Unknown);
+  using namespace Libs::Graphics::ShaderRecompiler::IR;
+  if(inst.pc==0x24 && inst.op==Libs::Graphics::ShaderRecompiler::IR::Opcode::ShiftLeftAddU32) {
+   retains_es_shift_add=true;Require(inst.execution==InstructionExecution::Vector);
+   Require(inst.dst.reg.file==RegisterFile::Vector && inst.dst.reg.index==5 && inst.src_count==3);
+   Require(inst.src[1].kind==Libs::Graphics::ShaderRecompiler::IR::OperandKind::ImmediateU32 && inst.src[1].imm==6);
+   Require(inst.src[2].reg.file==RegisterFile::Vector && inst.src[2].reg.index==5);
+  }
+  if(inst.pc==0x2c && inst.op==Libs::Graphics::ShaderRecompiler::IR::Opcode::ShiftLeftLogicalU32) {
+   retains_es_shift=true;Require(inst.execution==InstructionExecution::Vector);
+   Require(inst.dst.reg.index==5 && inst.src_count==2 && inst.src[0].reg.index==5 && inst.src[1].imm==2);
+  }
   if(inst.op==Libs::Graphics::ShaderRecompiler::IR::Opcode::DsWriteB32) {
    retains_ds_write=true;
    Require(inst.execution==Libs::Graphics::ShaderRecompiler::IR::InstructionExecution::Vector);
   }
  }
+ Require(retains_es_shift_add && retains_es_shift);
  Require(retains_ds_write); // ES-to-GS shared-memory operation survives fused lowering.
 
  back[0]=0xbf82ffffu; Require(DecodeFusedProgram(code,back,&joined,&fused,&error)); // GS-local loop.

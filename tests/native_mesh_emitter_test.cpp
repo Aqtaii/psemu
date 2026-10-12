@@ -54,6 +54,7 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  CollectRegister(&state.registers,{IR::RegisterFile::Scalar,29});
  CollectRegister(&state.registers,SccRegister());
  CollectRegister(&state.registers,{IR::RegisterFile::Vector,17});
+ for(uint32_t reg=18;reg<=20;++reg) CollectRegister(&state.registers,{IR::RegisterFile::Vector,reg});
  for(uint32_t reg: {0u,1u,3u,8u}) CollectRegister(&state.registers,{IR::RegisterFile::Scalar,reg});
  for(uint32_t reg: {0u,1u,5u,8u}) CollectRegister(&state.registers,{IR::RegisterFile::Vector,reg});
  CopyProgramInputsAndOutputs(&state,program);
@@ -161,6 +162,75 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
   abi_check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,8}),abi_instance);
  }
  state.lane_half=0;
+ // Captured ES address chain: wave*64+lane, then dword-to-byte conversion in place.
+ auto address_instruction=[&](IR::Opcode op,uint32_t dst,std::initializer_list<IR::Operand> sources) {
+  IR::Instruction inst;inst.op=op;inst.execution=IR::InstructionExecution::Vector;
+  inst.dst=Reg(IR::RegisterFile::Vector,dst);
+  for(const auto& source:sources) inst.src[inst.src_count++]=source;
+  return inst;
+ };
+ for(uint32_t half=0;half<2;++half) {
+  state.lane_half=half;
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,18),EmitGuestSubgroupLocalInvocationId(&state));
+ }
+ state.lane_half=0;
+ EmitStoreU32(&state,Reg(IR::RegisterFile::Scalar,28),abi_wave);
+ auto address=address_instruction(IR::Opcode::ShiftLeftAddU32,18,
+  {Reg(IR::RegisterFile::Scalar,28),Imm(6),Reg(IR::RegisterFile::Vector,18)});
+ state.lane_half=1;Require(EmitGuestInstruction(&state,address));Require(state.lane_half==1);state.lane_half=0;
+ auto scale=address_instruction(IR::Opcode::ShiftLeftLogicalU32,18,{Reg(IR::RegisterFile::Vector,18),Imm(2)});
+ Require(EmitGuestInstruction(&state,scale));
+ for(uint32_t half=0;half<2;++half) {
+  state.lane_half=half;
+  const auto expected=EmitBinaryU32(&state,OpIMul,
+   EmitBinaryU32(&state,OpIAdd,index,EmitBinaryU32(&state,OpIAdd,
+    EmitBinaryU32(&state,OpBitwiseAnd,index,ConstantU32(&state,~31u)),ConstantU32(&state,half*32))),ConstantU32(&state,4));
+  abi_check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,18}),expected);
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,19),EmitBinaryU32(&state,OpIAdd,expected,ConstantU32(&state,3)));
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,20),ConstantU32(&state,half==0 ? 0x40000001u : 0x80000002u));
+ }
+ state.lane_half=0;
+ auto align=address_instruction(IR::Opcode::BitwiseAndU32,19,{Imm(0xfffc),Reg(IR::RegisterFile::Vector,19)});
+ Require(EmitGuestInstruction(&state,align));
+ // Modulo32 shift count, u32 wrap and both source0/source2 aliases of the destination.
+ auto overlap=address_instruction(IR::Opcode::ShiftLeftAddU32,20,
+  {Reg(IR::RegisterFile::Vector,20),Imm(33),Reg(IR::RegisterFile::Vector,20)});
+ Require(EmitGuestInstruction(&state,overlap));
+ auto masked_shift=address_instruction(IR::Opcode::ShiftLeftLogicalU32,20,{Reg(IR::RegisterFile::Vector,20),Imm(34)});
+ Require(EmitGuestInstruction(&state,masked_shift));
+ for(uint32_t half=0;half<2;++half) {
+  state.lane_half=half;
+  abi_check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,19}),EmitRegisterLoad(&state,{IR::RegisterFile::Vector,18}));
+  check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,20}),half==0 ? 12u : 24u);
+ }
+ state.lane_half=0;
+ // Unsupported forms must reject before changing registers or the active half.
+ auto rejected=address;rejected.src_count=2;Require(!EmitGuestInstruction(&state,rejected));
+ rejected=scale;rejected.dst=Reg(IR::RegisterFile::Scalar,28);Require(!EmitGuestInstruction(&state,rejected));
+ rejected=align;rejected.dst2=Reg(IR::RegisterFile::Vcc,0);Require(!EmitGuestInstruction(&state,rejected));
+ rejected=scale;rejected.src[0].sdwa_sel=0;Require(!EmitGuestInstruction(&state,rejected));
+ rejected=address;rejected.src[0].dpp=true;rejected.src[0].dpp_ctrl=0x111;Require(!EmitGuestInstruction(&state,rejected));
+ Require(state.lane_half==0 && state.instruction_register_values.empty());
+ // Different sparse EXEC words preserve inactive lanes through each new opcode.
+ EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,2));
+ EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,4));
+ auto sparse=address_instruction(IR::Opcode::ShiftLeftAddU32,18,{Reg(IR::RegisterFile::Vector,18),Imm(1),Imm(5)});
+ Require(EmitGuestInstruction(&state,sparse));
+ scale.src[1]=Imm(1);Require(EmitGuestInstruction(&state,scale));
+ auto sparse_align=address_instruction(IR::Opcode::BitwiseAndU32,18,{Imm(0xfffffffcu),Reg(IR::RegisterFile::Vector,18)});
+ Require(EmitGuestInstruction(&state,sparse_align));
+ for(uint32_t half=0;half<2;++half) {
+  state.lane_half=half;
+  const auto active=state.builder.AllocateId();
+  state.builder.AddFunction({OpIEqual,state.bool_type,active,EmitSubgroupLocalInvocationId(&state),ConstantU32(&state,half==0?1u:2u)});
+  const auto original=EmitRegisterLoad(&state,{IR::RegisterFile::Vector,19});
+  const auto changed=EmitBinaryU32(&state,OpIAdd,EmitBinaryU32(&state,OpIMul,original,ConstantU32(&state,4)),ConstantU32(&state,8));
+  abi_check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,18}),EmitSelectU32Value(&state,active,changed,original));
+ }
+ state.lane_half=0;
+ EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,0xffffffff));
+ EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,0xffffffff));
+ abi_check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,28}),abi_wave);
  // Restore the triangle fixture's local vertex ID after checking the merged entry ABI.
  EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,5),EmitSubgroupLocalInvocationId(&state));
  check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,24}),0x3f800000);
@@ -258,7 +328,7 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
   for(uint32_t half=0;half<2;++half){
    state.lane_half=half;
    const auto guest=EmitMeshGuestLocalInvocationIndex(&state);
-   EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,14),EmitBinaryU32(&state,OpShiftLeftLogical,guest,ConstantU32(&state,2)));
+   EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,14),EmitRegisterLoad(&state,{IR::RegisterFile::Vector,19}));
    EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,15),EmitBinaryU32(&state,OpIAdd,guest,ConstantU32(&state,bias)));
   }
   state.lane_half=0;
