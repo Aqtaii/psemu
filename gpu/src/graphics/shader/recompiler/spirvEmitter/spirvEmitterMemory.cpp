@@ -503,6 +503,11 @@ uint32_t EmitMemoryLoadDwordValueU32(EmitterState* state, const IR::Instruction&
 		return value;
 	};
 	if (mem.kind == IR::ResourceKind::Lds) {
+		if (state->stage == ShaderType::Mesh) {
+			return EmitValueOrZeroIfCondition(state, EmitLdsElementInBounds(state, index), [&]() {
+				return LoadFromPointer(EmitLdsElementPointer(state, index));
+			});
+		}
 		return LoadFromPointer(EmitLdsElementPointer(state, index));
 	}
 	if (mem.kind == IR::ResourceKind::Gds) {
@@ -624,6 +629,8 @@ void EmitMemoryStoreU32(EmitterState* state, const IR::Instruction& inst, IR::Re
 		    EmitStorageBufferElementInBounds(state, store_inst.memory, index, inst.pc));
 	} else if (store_inst.memory.kind == IR::ResourceKind::Gds) {
 		in_bounds = EmitGdsElementInBounds(state, index);
+	} else if (store_inst.memory.kind == IR::ResourceKind::Lds && state->stage == ShaderType::Mesh) {
+		in_bounds = EmitLdsElementInBounds(state, index);
 	}
 	EmitIfCondition(state, in_bounds, [&]() {
 		const auto pointer = EmitMemoryElementPointer(state, store_inst.memory, index, inst.pc);

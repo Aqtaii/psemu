@@ -22,6 +22,7 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  using namespace Spirv::Emitter;
  EmitterState state;state.builder=Spirv::Builder(0x00010400u);
  auto mesh_info=info;
+ mesh_info.mesh.lds_dwords=2*info.mesh.invocations;
  const uint32_t upper_base=info.mesh.invocations==64 ? 96u : 32u;
  if(upper_outputs){mesh_info.mesh.max_vertices=upper_base+3;mesh_info.mesh.max_primitives=upper_base+1;}
  state.program=&program;state.resources=&resources;state.vertex_input_info=&mesh_info;
@@ -39,6 +40,7 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  CollectRegister(&state.registers,{IR::RegisterFile::Vector,12});
  CollectRegister(&state.registers,{IR::RegisterFile::Vector,13});
  CollectRegister(&state.registers,{IR::RegisterFile::Scalar,28});
+ for(uint32_t reg=14;reg<=16;++reg) CollectRegister(&state.registers,{IR::RegisterFile::Vector,reg});
  CopyProgramInputsAndOutputs(&state,program);
  state.needs_subgroup_ballot=ProgramNeedsSubgroupBallot(program);
  state.needs_subgroup_shuffle=true;
@@ -177,10 +179,73 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  read_check(13,33,35); // bank0 masked out, upper previous value survives
  dpp.dst.dpp_ctrl=0x130;dpp.src[0]=dpp.dst;
  Require(!EmitGuestInstruction(&state,dpp)); // cross-row controls still unsupported
+ // Two guest halves share LDS, including across the second native subgroup.
+ const uint32_t logical_count=2*info.mesh.invocations;
+ auto init_lds_registers=[&](uint32_t bias){
+  for(uint32_t half=0;half<2;++half){
+   state.lane_half=half;
+   const auto guest=EmitMeshGuestLocalInvocationIndex(&state);
+   EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,14),EmitBinaryU32(&state,OpShiftLeftLogical,guest,ConstantU32(&state,2)));
+   EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,15),EmitBinaryU32(&state,OpIAdd,guest,ConstantU32(&state,bias)));
+  }
+  state.lane_half=0;
+ };
+ IR::Instruction ds_write;ds_write.op=IR::Opcode::DsWriteB32;
+ ds_write.execution=IR::InstructionExecution::Vector;ds_write.memory.kind=IR::ResourceKind::Lds;
+ ds_write.src_count=2;ds_write.src[0]=Reg(IR::RegisterFile::Vector,15);ds_write.src[1]=Reg(IR::RegisterFile::Vector,14);
+ IR::Instruction ds_read;ds_read.op=IR::Opcode::DsReadB32;
+ ds_read.execution=IR::InstructionExecution::Vector;ds_read.memory.kind=IR::ResourceKind::Lds;
+ ds_read.src_count=1;ds_read.src[0]=Reg(IR::RegisterFile::Vector,14);ds_read.dst=ds_read.src[0];
+ IR::Instruction barrier;barrier.op=IR::Opcode::Barrier;
+ auto dynamic_check=[&](uint32_t actual,uint32_t expected){
+  const auto equal=state.builder.AllocateId();
+  const auto both=state.builder.AllocateId();
+  state.builder.AddFunction({OpIEqual,state.bool_type,equal,actual,expected});
+  state.builder.AddFunction({OpLogicalAnd,state.bool_type,both,passed,equal});passed=both;
+ };
+ init_lds_registers(1000);Require(EmitGuestInstruction(&state,ds_write));
+ // Only this straight-line fixture calls a known-uniform barrier. Guest CFG remains gated.
+ EmitBarrier(&state,barrier);
+ for(uint32_t half=0;half<2;++half){
+  state.lane_half=half;
+  const auto partner=EmitBinaryU32(&state,OpISub,ConstantU32(&state,logical_count-1),EmitMeshGuestLocalInvocationIndex(&state));
+  EmitStoreU32(&state,ds_read.src[0],EmitBinaryU32(&state,OpShiftLeftLogical,partner,ConstantU32(&state,2)));
+ }
+ state.lane_half=0;Require(EmitGuestInstruction(&state,ds_read));
+ for(uint32_t half=0;half<2;++half){
+  state.lane_half=half;
+  const auto partner=EmitBinaryU32(&state,OpISub,ConstantU32(&state,logical_count-1),EmitMeshGuestLocalInvocationIndex(&state));
+  dynamic_check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,14}),EmitBinaryU32(&state,OpIAdd,partner,ConstantU32(&state,1000)));
+ }
+ state.lane_half=0;
+ // Sparse EXEC writes must preserve all other initialized shared words.
+ init_lds_registers(2000);
+ EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,2));
+ EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,4));
+ Require(EmitGuestInstruction(&state,ds_write));EmitBarrier(&state,barrier);
+ EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,0xffffffff));
+ EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,0xffffffff));
+ ds_read.dst=Reg(IR::RegisterFile::Vector,16);Require(EmitGuestInstruction(&state,ds_read));
+ for(uint32_t half=0;half<2;++half){
+  state.lane_half=half;
+  const auto lane=EmitGuestSubgroupLocalInvocationId(&state);
+  const auto hit=state.builder.AllocateId();
+  state.builder.AddFunction({OpIEqual,state.bool_type,hit,lane,ConstantU32(&state,half==0 ? 1u : 34u)});
+  const auto bias=EmitSelectU32Value(&state,hit,ConstantU32(&state,2000),ConstantU32(&state,1000));
+  dynamic_check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,16}),EmitBinaryU32(&state,OpIAdd,EmitMeshGuestLocalInvocationIndex(&state),bias));
+ }
+ state.lane_half=0;
+ // Out-of-range loads return zero; writes cannot corrupt the live allocation or outputs.
+ ds_read.src[0]=Imm(logical_count*4);Require(EmitGuestInstruction(&state,ds_read));
+ check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,16}),0);
+ state.lane_half=1;check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,16}),0);state.lane_half=0;
+ ds_write.src[1]=Imm(logical_count*4);Require(EmitGuestInstruction(&state,ds_write));
+ ds_write.memory.kind=IR::ResourceKind::Gds;Require(!EmitGuestInstruction(&state,ds_write));
+ ds_read.memory.kind=IR::ResourceKind::Gds;Require(!EmitGuestInstruction(&state,ds_read));
  paired.execution=IR::InstructionExecution::Unknown;Require(!EmitGuestInstruction(&state,paired));
  paired.execution=IR::InstructionExecution::Scalar;paired.op=IR::Opcode::Barrier;
  Require(!EmitGuestInstruction(&state,paired));
- paired.execution=IR::InstructionExecution::Vector;paired.op=IR::Opcode::DsWriteB32;
+ paired.execution=IR::InstructionExecution::Vector;paired.op=IR::Opcode::DsWriteAddtidB32;
  Require(!EmitGuestInstruction(&state,paired));
  Require(state.instruction_register_values.empty() && state.lane_half==0);
  EmitStoreU32(&state,Reg(shared.file,shared.index),EmitSelectU32Value(&state,passed,ConstantU32(&state,0x3f800000),ConstantU32(&state,0)));

@@ -388,6 +388,14 @@ bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst) {
 	    state->wave_size != 64 || inst.src_count > 4 || inst.execution == IR::InstructionExecution::Unknown ||
 	    !state->instruction_register_values.empty()) return false;
 	if (inst.op == IR::Opcode::Barrier) return false;
+	if (inst.op == IR::Opcode::DsReadB32 || inst.op == IR::Opcode::DsWriteB32) {
+		if (inst.execution != IR::InstructionExecution::Vector ||
+		    inst.memory.kind != IR::ResourceKind::Lds || inst.memory.data_dwords != 1 ||
+		    inst.src_count != (inst.op == IR::Opcode::DsReadB32 ? 1u : 2u)) return false;
+		if (inst.op == IR::Opcode::DsReadB32 &&
+		    (inst.dst.kind != IR::OperandKind::Register || inst.dst.reg.file != IR::RegisterFile::Vector)) return false;
+	}
+
 	if (inst.execution == IR::InstructionExecution::Vector) {
 		// Add opcode families only with tests for their cross-half dependencies.
 		switch (inst.op) {
@@ -395,7 +403,7 @@ bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst) {
 			case IR::Opcode::IAddU32: case IR::Opcode::CompareEqU32:
 			case IR::Opcode::SelectMaskU32: case IR::Opcode::SelectMaskF32Bits:
 			case IR::Opcode::MaskedBitCountLowU32: case IR::Opcode::MaskedBitCountHighU32:
-			case IR::Opcode::Export: break;
+			case IR::Opcode::Export: case IR::Opcode::DsReadB32: case IR::Opcode::DsWriteB32: break;
 			default: return false;
 		}
 		if (inst.dst2.dpp) return false;
