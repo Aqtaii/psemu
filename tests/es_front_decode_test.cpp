@@ -5,6 +5,7 @@
 #include <array>
 #include <fstream>
 #include "graphics/shader/meshAssembly.h"
+#include "graphics/shader/meshPointAbi.h"
 #include "graphics/shader/recompiler/meshBarrierPlan.h"
 #include <cstdio>
 #include <stdexcept>
@@ -118,6 +119,54 @@ int main(int argc,char** argv) {
  Require(!Libs::Graphics::PlanPointMeshAssembly(64,64,1024,1024,64,&assembly));
  Require(!Libs::Graphics::PlanPointMeshAssembly(3,24,72,1024,32,&assembly));
  Require(!Libs::Graphics::PlanPointMeshAssembly(3,24,72,216,16,&assembly));
+ // Merged point ABI: partial groups, empty waves and both physical halves.
+ {
+  using namespace Libs::Graphics;
+  MeshPointInitialRegisters regs;
+  MeshPointDraw draw {7,19,23,2,4,0x12345678abcdef01ull};
+  Require(PlanPointMeshAssembly(3,24,72,216,64,&assembly));
+  Require(PlanMeshPointInitialRegisters(assembly,64,draw,0,&regs));
+  Require(regs.s0==0xabcdef01u && regs.s1==0x12345678u && regs.s3==0x40000101u);
+  Require(regs.v0==0 && regs.v1==0 && regs.v5==25 && regs.v8==27);
+  Require(regs.es_user_data_base==8);
+  const auto saved=regs;
+  Require(!PlanMeshPointInitialRegisters(assembly,64,draw,256,&regs));
+  Require(regs.s3==saved.s3 && regs.v5==saved.v5); // failure is transactional
+  auto invalid=assembly;invalid.guest_waves=3;
+  Require(!PlanMeshPointInitialRegisters(invalid,64,draw,0,&regs));
+  Require(!PlanMeshPointInitialRegisters(assembly,16,draw,0,&regs));
+  Require(!PlanMeshPointInitialRegisters(assembly,64,draw,0,nullptr));
+  draw.group_x=0xffffffffu;
+  Require(!PlanMeshPointInitialRegisters(assembly,64,draw,0,&regs));
+  // Independently count valid input points per wave; do not derive expectations from S3.
+  for(const uint32_t wave_size: {32u,64u}) {
+   Require(PlanPointMeshAssembly(3,24,72,216,wave_size,&assembly));
+   for(uint32_t total=0;total<=10;++total) for(uint32_t group=0;group<5;++group) {
+    draw={total,19,23,group,4,0x12345678abcdef01ull};
+    for(uint32_t lane=0;lane<assembly.logical_invocations;++lane) {
+     Require(PlanMeshPointInitialRegisters(assembly,wave_size,draw,lane,&regs));
+     uint32_t expected_count=0;
+     const uint32_t wave=lane/wave_size;
+     for(uint32_t point=0;point<3;++point)
+      if(group*3+point<total && point/wave_size==wave) ++expected_count;
+     Require((regs.s3&0xffu)==expected_count && ((regs.s3>>8)&0xffu)==expected_count);
+     Require((regs.s3>>28)==assembly.guest_waves && ((regs.s3>>24)&15u)==wave);
+     Require(regs.v0==lane*4 && regs.v1==0 && regs.v5==19+group*3+lane && regs.v8==27);
+    }
+   }
+   // A 64-point input group exercises the wave32 boundary; wave64 has one populated wave.
+   Require(PlanPointMeshAssembly(64,64,3,216,wave_size,&assembly));
+   draw={63,0xffffffffu,0xffffffffu,0,1,0};
+   for(uint32_t lane=0;lane<assembly.logical_invocations;++lane) {
+    Require(PlanMeshPointInitialRegisters(assembly,wave_size,draw,lane,&regs));
+    uint32_t count=0;
+    for(uint32_t point=0;point<63;++point) if(point/wave_size==lane/wave_size) ++count;
+    Require((regs.s3&0xffu)==count && ((regs.s3>>8)&0xffu)==count);
+    Require(regs.v5==uint32_t(0xffffffffu+lane) && regs.v8==0); // guest u32 addition wraps
+   }
+  }
+  std::puts("[MESH-POINT-ABI] partial-groups wave32/wave64 register-oracle=passed GPU=not-executed");
+ }
  // Captured ES executable prefix, followed by inline non-instruction data.
  std::array<uint32_t,18> code {0x8f6a9003u,0x94fe6ac1u,0xbf88000bu,0xd7650005u,
   0x000100c1u,0x93eaff03u,0x00040018u,0xd7660005u,0x00020ac1u,0xd7460005u,
