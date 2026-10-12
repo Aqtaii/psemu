@@ -39,7 +39,7 @@ struct BufferView {
 
 class DescriptorCache {
 public:
-	enum class Stage { Unknown, Vertex, Pixel, Compute };
+	enum class Stage { Unknown, Vertex, Pixel, Compute, Mesh };
 
 	struct TextureBinding {
 		VulkanImage*  image      = nullptr;
