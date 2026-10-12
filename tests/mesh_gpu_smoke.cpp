@@ -46,7 +46,7 @@ int main(int argc,char** argv){try{
   if(gpu){std::printf("[MESH-GPU] device=%s\n",properties.deviceName);break;}
  }
  if(!gpu)throw std::runtime_error("No suitable Mesh GPU");
- const float priority=1;VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};qci.queueFamilyIndex=family;ci.flags=VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;qci.queueCount=1;qci.pQueuePriorities=&priority;
+ const float priority=1;VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};qci.queueFamilyIndex=family;qci.queueCount=1;qci.pQueuePriorities=&priority;
  VkPhysicalDeviceMeshShaderFeaturesEXT mesh{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};mesh.meshShader=VK_TRUE;
  const char* extension=VK_EXT_MESH_SHADER_EXTENSION_NAME;VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};dci.pNext=&mesh;
  dci.queueCreateInfoCount=1;dci.pQueueCreateInfos=&qci;dci.enabledExtensionCount=1;dci.ppEnabledExtensionNames=&extension;
@@ -88,7 +88,7 @@ int main(int argc,char** argv){try{
  VkPipelineLayoutCreateInfo li{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};if(point_push){li.pushConstantRangeCount=1;li.pPushConstantRanges=&push_range;}VkPipelineLayout layout;VK_CHECK(vkCreatePipelineLayout(device,&li,nullptr,&layout));
  VkGraphicsPipelineCreateInfo pi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};pi.stageCount=2;pi.pStages=stages;pi.pViewportState=&vp;pi.pRasterizationState=&raster;pi.pMultisampleState=&ms;pi.pColorBlendState=&cb;pi.layout=layout;pi.renderPass=render_pass;
  VkPipeline pipeline;VK_CHECK(vkCreateGraphicsPipelines(device,VK_NULL_HANDLE,1,&pi,nullptr,&pipeline));
- VkCommandPoolCreateInfo ci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};ci.queueFamilyIndex=family;VkCommandPool pool;VK_CHECK(vkCreateCommandPool(device,&ci,nullptr,&pool));
+ VkCommandPoolCreateInfo ci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};ci.queueFamilyIndex=family;ci.flags=VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;VkCommandPool pool;VK_CHECK(vkCreateCommandPool(device,&ci,nullptr,&pool));
  VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};cai.commandPool=pool;cai.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY;cai.commandBufferCount=1;
  VkCommandBuffer cmd;VK_CHECK(vkAllocateCommandBuffers(device,&cai,&cmd));VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};bool readbacks_passed=true;
  for(uint32_t point_case=0;point_case<(point_push?2u:1u);++point_case) {
