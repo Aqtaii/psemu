@@ -197,6 +197,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_storage_1d.ps1
 
+      - name: Test native Mesh output SPIR-V
+        shell: pwsh
+        run: ./tools/scripts/test_mesh_outputs.ps1
+
       - name: Build complete emulator
         shell: cmd
         run: call cmbuild.bat
@@ -249,5 +253,13 @@ jobs:
             build/native-atomic-tests/es_front_decode_test.exe
             dist/msvcp140*.dll
             dist/vcruntime140*.dll
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload validated Mesh output module
+        uses: actions/upload-artifact@v4
+        with:
+          name: psemu-mesh-output-test
+          path: build/native-atomic-tests/mesh_outputs.spv
           if-no-files-found: error
           retention-days: 14
