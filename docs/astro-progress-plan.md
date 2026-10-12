@@ -1,5 +1,21 @@
 # Astro Bot ilerleme planÄ± â€” 10 Ekim 2026
 
+## Güncel durum — 13 Ekim 2026
+
+Gerçek Astro oyun karesi henüz alýnmadý. Kurulu oyun loader'ý deðiþtirilmedi; aþaðýdaki GPU sonuçlarý sentetik Mesh testleridir.
+
+- [x] Ýki VGPR bankasýnda adres shift/add/AND komutlarý, kaynak çakýþmasý ve farklý EXEC maskeleri doðrulandý.
+- [x] Hesaplanan adreslerle dalgalar arasý LDS yazma/okuma: yedi GPU senaryosu, sekiz okuma; her biri1024/1024 doðru piksel (kaynak9202e92 + test düzeltmesia796d5b).
+- [x] a796d5b için tüm regresyonlar, Vulkan1.2 SPIR-V denetimleri ve tam Windows derlemesi geçti (CI38315998784).
+- [x] GS S0:S1 adresini ES S8+ verisinden ayýran compiler/SRT desteði ve C++ testi eklendi (kaynak7d4f2a8). GS adresi deðiþince ES verisi korunuyor; S3 kaynak verisine dönüþmüyor; eksik adres çýktý deðiþtirmeden reddediliyor.
+- [x] 7d4f2a8 için tüm regresyonlar, Vulkan1.2 shader denetimleri ve tam Windows derlemesi geçti (CI38316725162, job115035010394).
+- [ ] Baðýmsýz GS kökünü yakalanmýþ551-komut Astro shader'ýnýn kaynak çözümleme ve GPU descriptor yoluna baðlamak.
+- [ ] Kalan paired vector/float ve buffer komutlarýný tamamlamak; yakalanmýþ bütün shader'ý native SPIR-V'ye çevirmek ve GPU'da doðrulamak.
+- [ ] Gerçek GE çizimi, grup baþýna count/base verisi, pipeline/descriptors/render targets ve ilk oyun karesi.
+
+Runtime point-push ve phased barrier adapter'larý hâlâ iç test yolunda. Public Mesh wave64 ve gerçek GE kapýlarý henüz açýlmadý. Sarah'nýn loader'ý ve kullanýcý launcher deðiþiklikleri korunuyor.
+
+
 ## DoÄŸrulanmÄ±ÅŸ baÅŸlangÄ±Ã§
 Referans: KytyPS5 307fdcf7ad5d9d15b5966288fcc598ac9dbca188 yerel kaynaklarÄ±.
 Bu karÅŸÄ±laÅŸtÄ±rma bu commit ile sÄ±nÄ±rlÄ±dÄ±r; KytyPS5 Ã¼zerinde Astro Bot oynanabilirliÄŸi doÄŸrulanmÄ±ÅŸ deÄŸildir.
@@ -297,3 +313,7 @@ Paired address ALU implementation (validation pending): allow plain VGPR ShiftLe
 Paired address ALU GPU proof: source9202e92 plus fixture fixa796d5b, CI38315998784/job115032647056 regression and Vulkan1.2 module checks passed; full Windows build pending. Artifact outputs/psemu-native-mesh-a796d5b.zip SHA256cd89e1eb8841a691dba0ad310f13ef18350da80ab077932085ee7c962c3a26ee, extracted work/native-mesh-a796d5b. Arc B580 eight readbacks each1024/1024: point-push red/green on one pipeline plus phased, paired, upper, upper_multi, single, multi. Initial9202e92 upper_multi and point red failed because S28 guest wave ID leaked into the old scalar increment fixture expecting a zero baseline; fixa796d5b resets S28 after checking its wave ID. Green also now gates all modulation channels on the complete assertion result, preventing a green false positive. Production address ALU code unchanged after9202e92. Logs tools/data/astro_native_mesh_a796d5b_{point_push,phased,paired,upper,upper_multi,single,multi}_gpu_log.txt. Synthetic proof only; Astro=not-executed; no game loader installed.
 
 Separate GS resource root implementation (validation pending): opt-in Program/CompileOptions.mesh_gs_user_data seeds only S0:S1 as MeshGsUserData provenance leaves; ES still uses the separate S8+ user-data window and S3 remains Unknown wave metadata. SrtRuntime/CompileOptions carry optional mesh_gs_user_data_address independently of ES words. Runtime evaluator takes low/high halves from that explicit address, failing transactionally if absent; no default zero pointer. Opt-in rejects non-Mesh stage and ES base below8 before provenance mutation. New scalar/SRT regression reads separate GS and ES fake memory tables, changes GS address without changing ES data, checks missing-address output preservation and default-off/non-Mesh/overlap rejection. This exposes compiler/runtime preparation only: real fused caller, GPU descriptor binding, Mesh wave64, barriers and real GE remain gated. Reference original307fdcf7 src/graphics/shader/shader.cpp GS-front params.user_data[0/1] at748/749 and Jetsku f9e19582 same path at1315/1316 (within PrepareVertexProgram). No upstream typed IR copied.
+
+Full paired-address verification complete: sourcea796d5b CI38315998784 job115032647056 all regressions, Vulkan1.2 checks and complete Windows build SUCCESS. Eight Arc B580 readbacks each1024/1024 already verified above; no repeated unchanged GPU testing needed.
+
+Separate GS root verification complete: source7d4f2a82d9d6701e4deba2e6af4071090bb0ca87 CI38316725162 job115035010394 all regressions, all native Mesh/SPIR-V checks and complete Windows emulator build SUCCESS. scalar_address_shift_test covers independent fake GS/ES memory reads, GS runtime root replacement, missing-root transactional failure, S3 Unknown, explicit Mesh/S8 opt-in guards and default-off behavior. Real captured shader resource materialization, GPU descriptor binding/cache integration and GE activation remain pending; Astro=not-executed. The GS opt-in is unused by the real caller. No loader installed and no synthetic image counted as an Astro frame.
