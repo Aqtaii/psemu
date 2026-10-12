@@ -103,6 +103,7 @@ uint32_t HwShSetGsUserSgpr(CommandProcessor*, uint32_t, uint32_t, const uint32_t
 uint32_t HwShSetHsUserSgpr(CommandProcessor*, uint32_t, uint32_t, const uint32_t*, uint32_t);
 uint32_t HwShSetCsUserSgpr(CommandProcessor*, uint32_t, uint32_t, const uint32_t*, uint32_t);
 uint32_t HwShSetPsUserAccumSgpr(CommandProcessor*, uint32_t, uint32_t, const uint32_t*, uint32_t);
+uint32_t HwShSetGsUserDataAddress(CommandProcessor*, uint32_t, uint32_t, const uint32_t*, uint32_t);
 uint32_t HwShSetGsUserAccumSgpr(CommandProcessor*, uint32_t, uint32_t, const uint32_t*, uint32_t);
 uint32_t HwShSetHsUserAccumSgpr(CommandProcessor*, uint32_t, uint32_t, const uint32_t*, uint32_t);
 uint32_t HwShSetCsUserAccumSgpr(CommandProcessor*, uint32_t, uint32_t, const uint32_t*, uint32_t);

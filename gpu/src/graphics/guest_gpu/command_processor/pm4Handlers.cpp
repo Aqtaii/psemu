@@ -1558,6 +1558,18 @@ KYTY_HW_SH_PARSER(HwShSetGsUserSgpr) {
 	return reg_num;
 }
 
+KYTY_HW_SH_PARSER(HwShSetGsUserDataAddress) {
+	const auto count = (cmd_id >> 16u) & 0x3fffu;
+	EXIT_NOT_IMPLEMENTED(cmd_offset < Pm4::SPI_SHADER_USER_DATA_ADDR_LO_GS ||
+	                     cmd_offset > Pm4::SPI_SHADER_USER_DATA_ADDR_HI_GS);
+	const auto first = cmd_offset - Pm4::SPI_SHADER_USER_DATA_ADDR_LO_GS;
+	EXIT_NOT_IMPLEMENTED(count > 2u - first);
+	for (uint32_t i = 0; i < count; i++) {
+		cp->GetShCtx()->SetGsUserDataAddress(first + i, buffer[i]);
+	}
+	return count;
+}
+
 KYTY_HW_SH_PARSER(HwShSetGsUserAccumSgpr) {
 	EXIT_NOT_IMPLEMENTED(!(cmd_offset >= Pm4::SPI_SHADER_USER_ACCUM_ESGS_0 &&
 	                       cmd_offset <= Pm4::SPI_SHADER_USER_ACCUM_ESGS_3));
@@ -4511,10 +4523,10 @@ void GraphicsInitJmpTablesShIndirect() {
 		HwShIgnoreShaderRegister(cmd_offset, value);
 	};
 	g_hw_sh_indirect_func[Pm4::SPI_SHADER_USER_DATA_ADDR_LO_GS] = [](KYTY_HW_SH_INDIRECT_ARGS) {
-		HwShIgnoreShaderRegister(cmd_offset, value);
+		cp->GetShCtx()->SetGsUserDataAddress(0, value);
 	};
 	g_hw_sh_indirect_func[Pm4::SPI_SHADER_USER_DATA_ADDR_HI_GS] = [](KYTY_HW_SH_INDIRECT_ARGS) {
-		HwShIgnoreShaderRegister(cmd_offset, value);
+		cp->GetShCtx()->SetGsUserDataAddress(1, value);
 	};
 	g_hw_sh_indirect_func[Pm4::SPI_SHADER_REQ_CTRL_ESGS] = [](KYTY_HW_SH_INDIRECT_ARGS) {
 		HwShIgnoreShaderRegister(cmd_offset, value);

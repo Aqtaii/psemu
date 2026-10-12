@@ -64,6 +64,10 @@ jobs:
       - name: Test encoded GDS append and consume offsets
         shell: pwsh
         run: ./tools/scripts/test_gds_append_decode.ps1
+      - name: Test GS user data address snapshots
+        shell: pwsh
+        run: ./tools/scripts/test_gs_user_data_address.ps1
+
       - name: Test captured ES front-stage GS handoff
         shell: pwsh
         run: ./tools/scripts/test_es_front_decode.ps1

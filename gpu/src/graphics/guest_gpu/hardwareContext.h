@@ -528,6 +528,7 @@ struct GsShaderResource2 {
 };
 
 struct GsStageRegisters {
+	uint64_t          user_data_addr = 0;
 	uint64_t          data_addr = 0;
 	GsShaderResource1 rsrc1;
 	GsShaderResource2 rsrc2;
@@ -994,6 +995,14 @@ public:
 	void SetHsShaderResource2(const VsShaderResource2& rsrc2) { m_vs.hs_regs.rsrc2 = rsrc2; }
 	void SetHsShaderChksum(uint32_t value) { m_vs.hs_regs.chksum = value; }
 	void SetGsShaderBase(uint64_t addr) { m_vs.gs_regs.data_addr = addr; }
+	void SetGsUserDataAddress(uint32_t word, uint32_t value) {
+		if (word == 0) {
+			m_vs.gs_regs.user_data_addr = (m_vs.gs_regs.user_data_addr & 0xffffffff00000000ull) | value;
+		} else if (word == 1) {
+			m_vs.gs_regs.user_data_addr = (m_vs.gs_regs.user_data_addr & 0xffffffffull) |
+			                               (static_cast<uint64_t>(value) << 32u);
+		}
+	}
 	void SetGsShaderResource1(const GsShaderResource1& rsrc1) { m_vs.gs_regs.rsrc1 = rsrc1; }
 	void SetGsShaderResource2(const GsShaderResource2& rsrc2) { m_vs.gs_regs.rsrc2 = rsrc2; }
 	void SetGsShaderChksum(uint32_t value) { m_vs.gs_regs.chksum = value; }
