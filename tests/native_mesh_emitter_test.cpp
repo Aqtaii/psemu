@@ -42,7 +42,7 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  CollectRegister(&state.registers,{IR::RegisterFile::Scalar,28});
  for(uint32_t reg=14;reg<=16;++reg) CollectRegister(&state.registers,{IR::RegisterFile::Vector,reg});
  CollectRegister(&state.registers,{IR::RegisterFile::Scalar,29});
- CollectRegister(&state.registers,{IR::RegisterFile::Scc,0});
+ CollectRegister(&state.registers,SccRegister());
  CopyProgramInputsAndOutputs(&state,program);
  state.needs_subgroup_ballot=ProgramNeedsSubgroupBallot(program);
  state.needs_subgroup_shuffle=true;
@@ -278,7 +278,7 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
    flow.blocks[block].instructions.push_back(inst);
   };
   const auto counter=Reg(IR::RegisterFile::Scalar,29);
-  instruction(0,IR::Opcode::CompareEqU32,IR::InstructionExecution::Scalar,Reg(IR::RegisterFile::Scc,0),{Reg(IR::RegisterFile::Scalar,28),Imm(0)});
+  instruction(0,IR::Opcode::CompareEqU32,IR::InstructionExecution::Scalar,SccOperand(),{Reg(IR::RegisterFile::Scalar,28),Imm(0)});
   flow.blocks[0].terminator.kind=CFG::TerminatorKind::ConditionalBranch;
   flow.blocks[0].terminator.condition=CFG::BranchCondition::SccNonZero;
   flow.blocks[0].terminator.true_block=1;flow.blocks[0].terminator.false_block=2;
