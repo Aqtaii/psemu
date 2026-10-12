@@ -1,4 +1,5 @@
 #include "graphics/shader/recompiler/ShaderDecoder.h"
+#include "graphics/shader/recompiler/ShaderCFG.h"
 #include <array>
 #include <cstdio>
 #include <stdexcept>
@@ -31,6 +32,10 @@ int main() {
  Require(fused.instructions[10].opcode==Opcode::SBranch && fused.instructions[10].branch_target==64);
  Require(fused.instructions[11].pc==64 && fused.instructions[11].branch_target==72);
  Require(fused.instructions.back().pc==72);
+ Libs::Graphics::ShaderRecompiler::CFG::Graph graph;
+ Require(Libs::Graphics::ShaderRecompiler::CFG::BuildGraph(fused,&graph,&error));
+ Require(graph.FindBlockByPc(64)!=nullptr);
+ Require(Libs::Graphics::ShaderRecompiler::CFG::Structurize(&graph,&error));
  back[0]=0xbf82ffffu; Require(DecodeFusedProgram(code,back,&joined,&fused,&error)); // GS-local loop.
  Require(fused.instructions[11].branch_target==64);
  back[0]=0xbf82fffeu; Require(!DecodeFusedProgram(code,back,&joined,&fused,&error)); // Cannot jump into ES.

@@ -13,6 +13,7 @@
 #include "graphics/guest_gpu/graphicsRun.h"
 #include "graphics/guest_gpu/hardwareContext.h"
 #include "graphics/shader/recompiler/ShaderDecoder.h"
+#include "graphics/shader/recompiler/ShaderCFG.h"
 #include "graphics/shader/recompiler/ShaderRecompiler.h"
 #include "graphics/shader/shaderVertexMetadata.h"
 #include "libs/errno.h"
@@ -1452,6 +1453,23 @@ void ShaderDumpSkippedGe(const HW::VertexShaderInfo& regs) {
 		}
 		printf("[GE-FUSED] decoded=%d instructions=%zu error=%s\n", success,
 		       fused.instructions.size(), error.c_str());
+		if (success) {
+			ShaderRecompiler::CFG::Graph graph;
+			error.clear();
+			const bool built = ShaderRecompiler::CFG::BuildGraph(fused, &graph, &error);
+			const bool structured = built && ShaderRecompiler::CFG::Structurize(&graph, &error);
+			printf("[GE-FUSED-CFG] built=%d structured=%d blocks=%zu loops=%zu error=%s\n",
+			       built, structured, graph.blocks.size(), graph.natural_loops.size(), error.c_str());
+			Common::File cfg_text;
+			auto cfg_path = path;
+			cfg_path += ".cfg";
+			cfg_text.Create(cfg_path);
+			if (!cfg_text.IsInvalid()) {
+				cfg_text.Printf("%s\n%s", error.c_str(),
+				                ShaderRecompiler::CFG::GraphToString(graph).c_str());
+				cfg_text.Close();
+			}
+		}
 	}
 
 }
