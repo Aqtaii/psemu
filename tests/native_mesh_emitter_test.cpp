@@ -218,6 +218,7 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
   dynamic_check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,14}),EmitBinaryU32(&state,OpIAdd,partner,ConstantU32(&state,1000)));
  }
  state.lane_half=0;
+ EmitBarrier(&state,barrier); // All reversed reads must finish before sparse overwrites.
  // Sparse EXEC writes must preserve all other initialized shared words.
  init_lds_registers(2000);
  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,2));
