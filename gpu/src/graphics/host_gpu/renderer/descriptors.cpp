@@ -1105,7 +1105,8 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 	const auto& snapshot = *runtime.resources;
 	std::string error;
  std::vector<uint32_t> push_data;
- if(!ShaderRecompiler::IR::BuildPushConstantPayload(program,snapshot,point,&push_data,&error))
+ const bool point_layout=program.bindings.mesh_point_input_dword!=ShaderRecompiler::IR::BindingLayout::NoMeshPointInputs;
+ if((point_layout || point!=nullptr) && !ShaderRecompiler::IR::BuildPushConstantPayload(program,snapshot,point,&push_data,&error))
   EXIT("invalid native shader push payload: %s\n",error.c_str());
  if(point!=nullptr && (vk_stage & vk::ShaderStageFlagBits::eMeshEXT)==vk::ShaderStageFlags{})
   EXIT("point draw payload requires Vulkan Mesh stage visibility\n");
@@ -1257,9 +1258,10 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 		buffer->RecycleDescriptorAfterFence(set);
 	}
 	if (program.bindings.push_constant_size != 0) {
-		EXIT_IF(program.bindings.push_constant_size != push_data.size() * sizeof(uint32_t));
+		const auto& payload=point_layout ? push_data : user_data;
+		EXIT_IF(program.bindings.push_constant_size != payload.size() * sizeof(uint32_t));
 		vk_buffer.pushConstants(layout, vk_stage, program.bindings.push_constant_offset,
-		                        program.bindings.push_constant_size, push_data.data());
+		                        program.bindings.push_constant_size, payload.data());
 	}
 }
 

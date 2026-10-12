@@ -1032,7 +1032,7 @@ static void ShaderAppendNativeSpecialization(std::vector<uint32_t>*             
 	ids->push_back(program.bindings.descriptor_set);
 	ids->push_back(program.bindings.push_constant_offset);
 	ids->push_back(program.bindings.push_constant_size);
- ids->push_back(program.bindings.mesh_point_input_dword);
+ if(program.stage==ShaderType::Mesh) ids->push_back(program.bindings.mesh_point_input_dword);
 	ids->push_back(static_cast<uint32_t>(program.bindings.user_data_registers.size()));
 	ids->insert(ids->end(), program.bindings.user_data_registers.begin(),
 	            program.bindings.user_data_registers.end());
