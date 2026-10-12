@@ -40,6 +40,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <cstdlib>
 #include <limits>
 #include <span>
 #include <unordered_map>
@@ -476,6 +477,18 @@ static bool ShouldSkipGeShader(const HW::Context* ctx, const HW::UserConfig* ucf
 	    sh_regs.m_geMaxOutputPerSubgroup > 0x00000040;
 
 	if (unsupported_stage_mask || unsupported_gs_stage || ge_group_size || ge_shader_regs) {
+		static const bool capture_ge = [] {
+			const char* value = std::getenv("PSEMU_DRAW_DIAGNOSTICS");
+			return value != nullptr && value[0] != '0';
+		}();
+		static std::atomic_uint capture_count {0};
+		if (capture_ge && capture_count.fetch_add(1, std::memory_order_relaxed) < 2) {
+			ShaderDumpSkippedGe(vertex_info);
+			printf("[GE-SKIP-STATE] stages=0x%08x target=0x%016llx mask=0x%08x prim=%u max_vertices=%u\n",
+			       stages, static_cast<unsigned long long>(ctx->GetRenderTarget(0).base.addr),
+			       ctx->GetRenderTargetMask(), static_cast<uint32_t>(ucfg->GetPrimType()),
+			       sh_regs.m_geMaxOutputPerSubgroup);
+		}
 		const auto log_id = g_shader_stage_log_count.fetch_add(1);
 		if (log_id < 32) {
 			LOGF("Skipping unsupported GE shader draw: stages=0x%08" PRIx32
@@ -842,11 +855,21 @@ static void LogDrawStateIfNeeded(HW::Context* ctx, HW::UserConfig* ucfg, const D
 	EXIT_IF(ucfg == nullptr);
 	EXIT_IF(draw.name == nullptr);
 
-	if (!graphics_debug_dump_enabled()) {
+	static const bool diagnostics = [] {
+		const char* value = std::getenv("PSEMU_DRAW_DIAGNOSTICS");
+		return value != nullptr && value[0] != '0';
+	}();
+	if (!graphics_debug_dump_enabled() && !diagnostics) {
 		return;
 	}
+	if (diagnostics) {
+		static std::atomic_uint diagnostic_count {0};
+		if (diagnostic_count.fetch_add(1, std::memory_order_relaxed) >= 64) {
+			return;
+		}
+	}
 
-	if (!always_log && !force_legacy_rect_log) {
+	if (!diagnostics && !always_log && !force_legacy_rect_log) {
 		return;
 	}
 

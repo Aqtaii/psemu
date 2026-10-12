@@ -1390,6 +1390,49 @@ static void DumpShaderRecompilerOriginal(const char* type, uint64_t shader_hash,
 	}
 }
 
+// Opt-in diagnostic only: retain the unsupported-stage guard and capture bounded AGC code.
+void ShaderDumpSkippedGe(const HW::VertexShaderInfo& regs) {
+	const uint64_t addresses[] = {regs.es_regs.data_addr, regs.gs_regs.data_addr};
+	const char* names[] = {"es", "gs"};
+	for (uint32_t i = 0; i < 2; i++) {
+		ShaderMappedData mapped;
+		if (addresses[i] == 0 || !ShaderGetMappedData(addresses[i], &mapped) ||
+		    mapped.code_size_bytes == 0 || mapped.code_size_bytes > 128u * 1024u ||
+		    mapped.code_size_bytes % sizeof(uint32_t) != 0) {
+			printf("[GE-CAPTURE] %s skipped: missing or invalid registered code size\n", names[i]);
+			continue;
+		}
+		const auto code = ShaderGetMappedCode(addresses[i], "GE diagnostic", addresses[i]);
+		const auto base = std::filesystem::path("tools/dumps/astro_ge") /
+		                  fmt::format("{}_{:016x}", names[i], addresses[i]);
+		Common::File::CreateDirectories(base.parent_path());
+		Common::File binary;
+		auto binary_path = base;
+		binary_path += ".bin";
+		binary.Create(binary_path);
+		if (binary.IsInvalid()) {
+			printf("[GE-CAPTURE] %s could not create binary\n", names[i]);
+			continue;
+		}
+		binary.Write(code.data(), code.size_bytes());
+		binary.Close();
+		ShaderRecompiler::Decoder::Program decoded;
+		std::string error;
+		const bool success = ShaderRecompiler::Decoder::DecodeProgram(code, &decoded, &error);
+		Common::File text;
+		auto text_path = base;
+		text_path += ".rdna2";
+		text.Create(text_path);
+		if (!text.IsInvalid()) {
+			text.Printf("%s\n%s", error.c_str(),
+			            ShaderRecompiler::Decoder::ProgramToString(decoded).c_str());
+			text.Close();
+		}
+		printf("[GE-CAPTURE] %s addr=0x%016llx bytes=%u decoded=%d\n", names[i],
+		       static_cast<unsigned long long>(addresses[i]), mapped.code_size_bytes, success);
+	}
+}
+
 bool ShaderCompileSpirvVS(const HW::VertexShaderInfo* regs, const HW::ShaderRegisters* sh,
                           ShaderLaneMaskMode lane_mask_mode, ShaderVertexInputInfo* input_info,
                           std::vector<uint32_t>* spirv) {

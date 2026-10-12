@@ -213,6 +213,7 @@ struct ShaderMappedData {
 };
 
 void ShaderInit();
+void ShaderDumpSkippedGe(const HW::VertexShaderInfo& regs);
 void ShaderMapUserData(uint64_t addr, const ShaderMappedData& data);
 
 void     ShaderDbgDumpInputInfo(const ShaderVertexInputInfo* info);
