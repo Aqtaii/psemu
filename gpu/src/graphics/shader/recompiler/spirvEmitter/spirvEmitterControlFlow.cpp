@@ -387,8 +387,7 @@ bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst) {
 	if (state->lanes_per_invocation != 2 || state->stage != ShaderType::Mesh ||
 	    state->wave_size != 64 || inst.src_count > 4 || inst.execution == IR::InstructionExecution::Unknown ||
 	    !state->instruction_register_values.empty()) return false;
-	if (inst.op == IR::Opcode::Barrier ||
-	    inst.op == IR::Opcode::ReadFirstLaneU32) return false;
+	if (inst.op == IR::Opcode::Barrier) return false;
 	if (inst.execution == IR::InstructionExecution::Vector) {
 		// Add opcode families only with tests for their cross-half dependencies.
 		switch (inst.op) {

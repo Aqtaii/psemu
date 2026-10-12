@@ -103,6 +103,27 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  state.lane_half=1;EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,10),ConstantU32(&state,9));
  state.lane_half=0;
  read_check(10,1,7);read_check(10,34,9);read_check(10,0,0);read_check(10,32,0);
+ // READFIRSTLANE runs once and selects logical lanes across both banks.
+ IR::Instruction first;first.op=IR::Opcode::ReadFirstLaneU32;
+ first.execution=IR::InstructionExecution::Scalar;first.src_count=1;
+ first.src[0]=Reg(IR::RegisterFile::Vector,10);first.dst=Reg(IR::RegisterFile::Scalar,27);
+ auto first_check=[&](uint32_t low_mask,uint32_t high_mask,uint32_t expected){
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,low_mask));
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,high_mask));
+  state.lane_half=1;
+  Require(EmitGuestInstruction(&state,first));
+  Require(state.lane_half==1 && state.instruction_register_values.empty());
+  check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,27}),expected);
+  state.lane_half=0;
+ };
+ first_check(2,4,7); // lowest active lower lane wins
+ first_check(0,4,9); // upper-only EXEC must read guest34
+ first_check(0,0,0); // empty EXEC reads guest0
+ first.src[0]=Reg(value.file,value.index);
+ first_check(0x80000000u,0x80000000u,0x3f800000u); // lower31 holds sum1
+ first_check(0,0x80000000u,0x3f400000u); // upper63 remains0.75
+ first.execution=IR::InstructionExecution::Vector;
+ Require(!EmitGuestInstruction(&state,first));
  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,0xffffffff));
  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,0xffffffff));
  // MBCNT low/high with full masks must recover guest IDs across the 31/32 boundary.

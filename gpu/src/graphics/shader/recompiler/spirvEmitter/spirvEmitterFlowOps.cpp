@@ -262,7 +262,52 @@ void EmitSaveexecB64(EmitterState* state, const IR::Instruction& inst) {
 	EmitStoreU32(state, SccOperand(), scc);
 }
 
+uint32_t EmitVirtualWaveShuffle(EmitterState* state, const IR::Operand& source, uint32_t lane) {
+	// Read each bank before shuffling: the source invocation may differ from this one.
+	// Keep both shuffles converged; choosing the bank locally before a divergent shuffle
+	// would select the target invocation's bank selector rather than the caller's.
+	const auto saved_half = state->lane_half;
+	state->lane_half = 0;
+	const auto lower = EmitValueLoad(state, source);
+	state->lane_half = 1;
+	const auto upper = EmitValueLoad(state, source);
+	state->lane_half = saved_half;
+	const auto host_lane = EmitBinaryU32(state, OpBitwiseAnd, lane, ConstantU32(state, 31));
+	const auto lower_value = state->builder.AllocateId();
+	const auto upper_value = state->builder.AllocateId();
+	state->builder.AddFunction({OpGroupNonUniformShuffle, state->uint_type, lower_value,
+	                            ConstantU32(state, ScopeSubgroup), lower, host_lane});
+	state->builder.AddFunction({OpGroupNonUniformShuffle, state->uint_type, upper_value,
+	                            ConstantU32(state, ScopeSubgroup), upper, host_lane});
+	const auto upper_half = state->builder.AllocateId();
+	state->builder.AddFunction({OpUGreaterThanEqual, state->bool_type, upper_half,
+	                            lane, ConstantU32(state, 32)});
+	return EmitSelectU32Value(state, upper_half, upper_value, lower_value);
+}
+
 void EmitReadFirstLaneU32(EmitterState* state, const IR::Instruction& inst) {
+	if (state->lanes_per_invocation == 2) {
+		// EXEC is a shared guest wave64 mask, not the native subgroup's ballot.
+		const auto low = EmitRegisterLoad(state, {IR::RegisterFile::Exec, 0});
+		const auto high = EmitRegisterLoad(state, {IR::RegisterFile::Exec, 1});
+		const auto low_active = state->builder.AllocateId();
+		const auto any_active = state->builder.AllocateId();
+		state->builder.AddFunction({OpINotEqual, state->bool_type, low_active, low, ConstantU32(state, 0)});
+		const auto any = EmitBinaryU32(state, OpBitwiseOr, low, high);
+		state->builder.AddFunction({OpINotEqual, state->bool_type, any_active, any, ConstantU32(state, 0)});
+		const auto word = EmitSelectU32Value(state, low_active, low, high);
+		// Empty EXEC reads guest lane zero; never shuffle with FindILsb(0) == -1.
+		const auto safe_word = EmitSelectU32Value(state, any_active, word, ConstantU32(state, 1));
+		const auto first_i32 = state->builder.AllocateId();
+		const auto first_u32 = state->builder.AllocateId();
+		state->builder.AddFunction({OpExtInst, state->int_type, first_i32, state->glsl_std450, GlslFindILsb, safe_word});
+		state->builder.AddFunction({OpBitcast, state->uint_type, first_u32, first_i32});
+		const auto offset = EmitSelectU32Value(state, low_active, ConstantU32(state, 0), ConstantU32(state, 32));
+		const auto active_lane = EmitBinaryU32(state, OpIAdd, first_u32, offset);
+		const auto lane = EmitSelectU32Value(state, any_active, active_lane, ConstantU32(state, 0));
+		EmitStoreU32(state, inst.dst, EmitVirtualWaveShuffle(state, inst.src[0], lane));
+		return;
+	}
 	const auto src         = EmitValueLoad(state, inst.src[0]);
 	const auto active      = EmitExecActiveBool(state);
 	const auto ballot      = state->builder.AllocateId();
@@ -287,26 +332,7 @@ uint32_t EmitLaneIndex(EmitterState* state, const IR::Operand& operand) {
 void EmitReadLaneU32(EmitterState* state, const IR::Instruction& inst) {
 	const auto lane = EmitLaneIndex(state, inst.src[1]);
 	if (state->lanes_per_invocation == 2) {
-		// Read each bank before shuffling: the source invocation may differ from this one.
-		// Keep both shuffles converged; choosing the bank locally before a divergent shuffle
-		// would select the target invocation's bank selector rather than the caller's.
-		const auto saved_half = state->lane_half;
-		state->lane_half = 0;
-		const auto lower = EmitValueLoad(state, inst.src[0]);
-		state->lane_half = 1;
-		const auto upper = EmitValueLoad(state, inst.src[0]);
-		state->lane_half = saved_half;
-		const auto host_lane = EmitBinaryU32(state, OpBitwiseAnd, lane, ConstantU32(state, 31));
-		const auto lower_value = state->builder.AllocateId();
-		const auto upper_value = state->builder.AllocateId();
-		state->builder.AddFunction({OpGroupNonUniformShuffle, state->uint_type, lower_value,
-		                            ConstantU32(state, ScopeSubgroup), lower, host_lane});
-		state->builder.AddFunction({OpGroupNonUniformShuffle, state->uint_type, upper_value,
-		                            ConstantU32(state, ScopeSubgroup), upper, host_lane});
-		const auto upper_half = state->builder.AllocateId();
-		state->builder.AddFunction({OpUGreaterThanEqual, state->bool_type, upper_half,
-		                            lane, ConstantU32(state, 32)});
-		EmitStoreU32(state, inst.dst, EmitSelectU32Value(state, upper_half, upper_value, lower_value));
+		EmitStoreU32(state, inst.dst, EmitVirtualWaveShuffle(state, inst.src[0], lane));
 		return;
 	}
 	const auto src = EmitValueLoad(state, inst.src[0]);
