@@ -387,7 +387,7 @@ bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst) {
 	if (state->lanes_per_invocation != 2 || state->stage != ShaderType::Mesh ||
 	    state->wave_size != 64 || inst.src_count > 4 || inst.execution == IR::InstructionExecution::Unknown ||
 	    !state->instruction_register_values.empty()) return false;
-	if (inst.op == IR::Opcode::Barrier || inst.op == IR::Opcode::Export ||
+	if (inst.op == IR::Opcode::Barrier ||
 	    inst.op == IR::Opcode::ReadFirstLaneU32) return false;
 	if (inst.execution == IR::InstructionExecution::Vector) {
 		// Add opcode families only with tests for their cross-half dependencies.
@@ -395,7 +395,8 @@ bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst) {
 			case IR::Opcode::MoveU32: case IR::Opcode::MoveF32Bits:
 			case IR::Opcode::IAddU32: case IR::Opcode::CompareEqU32:
 			case IR::Opcode::SelectMaskU32: case IR::Opcode::SelectMaskF32Bits:
-			case IR::Opcode::MaskedBitCountLowU32: case IR::Opcode::MaskedBitCountHighU32: break;
+			case IR::Opcode::MaskedBitCountLowU32: case IR::Opcode::MaskedBitCountHighU32:
+			case IR::Opcode::Export: break;
 			default: return false;
 		}
 		if (inst.dst.dpp || inst.dst2.dpp) return false;

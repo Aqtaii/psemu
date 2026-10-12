@@ -136,7 +136,7 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  paired.execution=IR::InstructionExecution::Unknown;Require(!EmitGuestInstruction(&state,paired));
  paired.execution=IR::InstructionExecution::Scalar;paired.op=IR::Opcode::Barrier;
  Require(!EmitGuestInstruction(&state,paired));
- paired.execution=IR::InstructionExecution::Vector;paired.op=IR::Opcode::Export;
+ paired.execution=IR::InstructionExecution::Vector;paired.op=IR::Opcode::DsWriteB32;
  Require(!EmitGuestInstruction(&state,paired));
  Require(state.instruction_register_values.empty() && state.lane_half==0);
  EmitStoreU32(&state,Reg(shared.file,shared.index),EmitSelectU32Value(&state,passed,ConstantU32(&state,0x3f800000),ConstantU32(&state,0)));
@@ -158,7 +158,8 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
    for(uint32_t i=0;i<inst.src_count;++i) if(sources[i]!=0) EmitStoreU32(&state,inst.src[i],sources[i]);
    auto upper=inst;
    if(upper.export_info.kind==IR::ExportTargetKind::Primitive) upper.src[0]=Imm(32u|(33u<<10)|(34u<<20));
-   EmitInstruction(&state,upper);
+   upper.execution=IR::InstructionExecution::Vector;
+   Require(EmitGuestInstruction(&state,upper));
    state.lane_half=0;
    if(inst.export_info.kind==IR::ExportTargetKind::Primitive) inst.src[0]=Imm(0x80000000u);
    else for(uint32_t i=0;i<inst.src_count;++i) inst.src[i]=Imm(i==3 ? 0x3f800000u : 0u);
