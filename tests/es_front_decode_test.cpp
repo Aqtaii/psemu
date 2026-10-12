@@ -109,7 +109,7 @@ int main(int argc,char** argv) {
  Require(!DecodeFusedProgram(code,middle,&joined,&fused,&error));
  Require(!DecodeFusedProgram(code,{},&joined,&fused,&error));
  // Captured GS SENDMSG9 allocation must read the preceding M0 write.
- std::array<uint32_t,4> allocation {0xbefc00ffu,0x00001003u,0xbf900009u,0xbf810000u};
+ std::array<uint32_t,4> allocation {0xbefc03ffu,0x00001003u,0xbf900009u,0xbf810000u};
  Require(DecodeFusedProgram(code,allocation,&joined,&fused,&error));
  Require(Libs::Graphics::ShaderRecompiler::CFG::BuildGraph(fused,&graph,&error));
  Libs::Graphics::ShaderRecompiler::CFG::StructurizeForLowering(&graph,&error);
