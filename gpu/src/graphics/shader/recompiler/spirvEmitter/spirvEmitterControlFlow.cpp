@@ -1,3 +1,4 @@
+#include "graphics/shader/recompiler/spirvEmitter/bufferMemoryGroup.h"
 #include "graphics/shader/recompiler/spirvEmitter/scalarMemoryGroup.h"
 #include "graphics/shader/recompiler/spirvEmitter/spirvEmitterInternal.h"
 
@@ -371,6 +372,11 @@ void EmitVertexInputRegisters(EmitterState* state) {
 }
 
 void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
+	if (inst.op == IR::Opcode::BufferLoadDword && inst.memory.component_count > 1u &&
+	    inst.memory.component_index == 0u) {
+		state->buffer_address_group_values[inst.pc] = CaptureBufferAddressGroup(
+		    inst, [&](const IR::Operand& source) { return EmitValueLoad(state, source); });
+	}
 	if (state->program->uses_guest_address_table && inst.scalar_memory_group.valid &&
 	    inst.scalar_memory_group.component_index == 0) {
 		if(inst.scalar_memory_group.descriptor_dwords==4) {

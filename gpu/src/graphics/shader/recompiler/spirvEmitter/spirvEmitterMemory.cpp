@@ -264,7 +264,17 @@ uint32_t EmitBufferByteAddress(EmitterState* state, const IR::Instruction& inst,
 		if (cursor >= end) {
 			return ConstantU32(state, 0);
 		}
-		return EmitValueLoad(state, inst.src[cursor++]);
+		const auto source = cursor++;
+		if (first_src == 0 && inst.op == IR::Opcode::BufferLoadDword) {
+			const auto captured = state->buffer_address_group_values.find(inst.pc);
+			if (captured != state->buffer_address_group_values.end()) {
+				return captured->second[source];
+			}
+			if (inst.memory.component_count > 1u) {
+				EXIT("buffer load address group was not captured at pc 0x%08x\n", inst.pc);
+			}
+		}
+		return EmitValueLoad(state, inst.src[source]);
 	};
 
 	uint32_t index = ConstantU32(state, 0);

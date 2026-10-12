@@ -298,6 +298,7 @@ struct SampledImageDescriptors {
 };
 
 struct EmitterState {
+	std::map<uint32_t, std::array<uint32_t,4>> buffer_address_group_values;
 	std::map<uint32_t, std::array<uint32_t,3>> guest_scalar_group_values;
 	std::map<uint32_t, std::array<uint32_t,5>> guest_scalar_buffer_group_values;
 	Builder                                builder;

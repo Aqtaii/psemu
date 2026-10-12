@@ -70,6 +70,9 @@ jobs:
       - name: Test NGG vertex wave ABI
         shell: pwsh
         run: ./tools/scripts/test_ngg_vertex_abi.ps1
+      - name: Test overlapping vector buffer load address snapshot
+        shell: pwsh
+        run: ./tools/scripts/test_buffer_address_group.ps1
 
       - name: Test captured Astro BVH IR lowering
         shell: pwsh
