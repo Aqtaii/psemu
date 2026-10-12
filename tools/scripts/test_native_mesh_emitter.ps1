@@ -17,5 +17,5 @@ try {
  & "$env:VULKAN_SDK\Bin\spirv-dis.exe" .\native_mesh_emitter.spv -o .\native_mesh_emitter.spvasm
  if($LASTEXITCODE -ne 0){throw 'Native Mesh disassembly failed'}
  & "$env:VULKAN_SDK\Bin\spirv-val.exe" --target-env vulkan1.2 .\native_mesh_emitter.spv
- if($LASTEXITCODE -ne 0){throw 'Native Mesh emitter SPIR-V validation failed'}
+ if($LASTEXITCODE -ne 0){Get-Content -LiteralPath .\native_mesh_emitter.spvasm -TotalCount 45; throw 'Native Mesh emitter SPIR-V validation failed'}
 } finally {Pop-Location}

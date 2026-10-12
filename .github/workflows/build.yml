@@ -205,6 +205,20 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_native_mesh_emitter.ps1
 
+      - name: Upload production Mesh compiler diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: psemu-native-mesh-emitter-test
+          path: |
+            build/native-atomic-tests/native_mesh_emitter.spv
+            build/native-atomic-tests/native_mesh_emitter.spvasm
+            build/native-atomic-tests/native_mesh_emitter_test.exe
+            build/native-atomic-tests/mesh_fragment.spv
+            build/native-atomic-tests/mesh_gpu_smoke.exe
+          if-no-files-found: ignore
+          retention-days: 14
+
       - name: Build complete emulator
         shell: cmd
         run: call cmbuild.bat
