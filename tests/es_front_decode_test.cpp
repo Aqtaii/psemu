@@ -4,6 +4,7 @@
 #include "common/assert.h"
 #include <array>
 #include <fstream>
+#include "graphics/shader/meshAssembly.h"
 #include <cstdio>
 #include <stdexcept>
 #include <source_location>
@@ -48,6 +49,18 @@ int main(int argc,char** argv) {
       captured.instructions.size(),captured_ir.blocks.size(),unsigned(!structured));
  }
 
+ Libs::Graphics::MeshAssemblyPlan assembly;
+ Require(Libs::Graphics::PlanPointMeshAssembly(3,24,72,216,64,&assembly));
+ Require(assembly.max_primitives==210 && assembly.primitives_per_group==3 &&
+         assembly.vertices_per_group==3 && assembly.logical_invocations==256 && assembly.guest_waves==4);
+ Require(Libs::Graphics::PlanPointMeshAssembly(3,24,72,216,32,&assembly));
+ Require(assembly.logical_invocations==224 && assembly.guest_waves==7);
+ const auto valid_assembly=assembly;
+ Require(!Libs::Graphics::PlanPointMeshAssembly(3,24,72,71,64,&assembly));
+ Require(assembly.logical_invocations==valid_assembly.logical_invocations);
+ Require(!Libs::Graphics::PlanPointMeshAssembly(64,64,1024,1024,64,&assembly));
+ Require(!Libs::Graphics::PlanPointMeshAssembly(3,24,72,1024,32,&assembly));
+ Require(!Libs::Graphics::PlanPointMeshAssembly(3,24,72,216,16,&assembly));
  // Captured ES executable prefix, followed by inline non-instruction data.
  std::array<uint32_t,18> code {0x8f6a9003u,0x94fe6ac1u,0xbf88000bu,0xd7650005u,
   0x000100c1u,0x93eaff03u,0x00040018u,0xd7660005u,0x00020ac1u,0xd7460005u,

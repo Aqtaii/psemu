@@ -30,6 +30,7 @@
 #include "graphics/shader/recompiler/ShaderIR.h"
 #include "graphics/host_gpu/renderer/descriptorCache.h"
 #include "graphics/shader/shader.h"
+#include "graphics/shader/meshAssembly.h"
 #include "kernel/eventQueue.h"
 #include "kernel/pthread.h"
 #include "kernel/memory.h"
@@ -484,6 +485,16 @@ static bool ShouldSkipGeShader(const HW::Context* ctx, const HW::UserConfig* ucf
 		static std::atomic_uint capture_count {0};
 		if (capture_ge && capture_count.fetch_add(1, std::memory_order_relaxed) < 2) {
 			ShaderDumpSkippedGe(vertex_info);
+            if(static_cast<uint32_t>(ucfg->GetPrimType())==1u && sh_regs.m_vgtGsOutPrimType==2u) {
+                MeshAssemblyPlan plan;
+                const uint32_t wave=(stages & 0x00400000u)!=0 ? 32u : 64u;
+                const bool valid=PlanPointMeshAssembly(ge_cntl.primitive_group_size,
+                    ge_cntl.vertex_group_size,sh_regs.m_vgtGsMaxVertOut,
+                    sh_regs.m_geMaxOutputPerSubgroup,wave,&plan);
+                printf("[GE-MESH-PLAN] valid=%d wave=%u logical_threads=%u waves=%u vertices=%u primitives=%u group=%u\n",
+                    valid,wave,plan.logical_invocations,plan.guest_waves,
+                    plan.max_vertices,plan.max_primitives,plan.primitives_per_group);
+            }
 			printf("[GE-SKIP-STATE] stages=0x%08x target=0x%016llx mask=0x%08x prim=%u max_vertices=%u\n",
 			       stages, static_cast<unsigned long long>(ctx->GetRenderTarget(0).base.addr),
 			       ctx->GetRenderTargetMask(), static_cast<uint32_t>(ucfg->GetPrimType()),
