@@ -14,7 +14,10 @@ void DbgExit(int) {std::abort();}
 IR::Operand Imm(uint32_t value){IR::Operand o;o.kind=IR::OperandKind::ImmediateU32;o.imm=value;return o;}
 IR::Operand Reg(IR::RegisterFile file,uint32_t index){IR::Operand o;o.kind=IR::OperandKind::Register;o.reg={file,index};return o;}
 void Require(bool ok,const std::string& error={}){if(!ok){std::fprintf(stderr,"Mesh emitter test failed: %s\n",error.c_str());std::exit(1);}}
-int main(){
+int main(int argc,char** argv){
+ Require(argc==1 || argc==2);
+ const uint32_t invocations=argc==2 ? 64u : 32u;
+ if(argc==2) Require(std::string(argv[1])=="multiwave");
  IR::Program p; p.stage=ShaderType::Mesh;p.wave_size=32;
  p.srt_patching_complete=p.resource_tracking_complete=p.shader_info_complete=p.binding_layout_complete=true;
  p.info.outputs={{IR::StageOutputKind::Position,0,0,"position"},
@@ -41,13 +44,13 @@ int main(){
  output(IR::ExportTargetKind::Parameter,0,{Imm(0x3f800000),Imm(0),Imm(0),Imm(0x3f800000)});
  output(IR::ExportTargetKind::Parameter,1,{Imm(0x3f800000),Imm(0x3f800000),Imm(0x3f800000),Imm(0x3f800000)});
  output(IR::ExportTargetKind::Primitive,0,{Imm((1u<<10)|(2u<<20))});
- ShaderVertexInputInfo info{};info.mesh={3,1,32,32,64};
+ ShaderVertexInputInfo info{};info.mesh={3,1,invocations,32,64};
  IR::ResourceSnapshot resources;std::vector<uint32_t> words;std::string error;
  Require(Spirv::EmitProgram(p,resources,&info,nullptr,nullptr,&words,&error),error);
- auto* file=std::fopen("native_mesh_emitter.spv","wb");Require(file!=nullptr);
+ auto* file=std::fopen(argc==2 ? "native_mesh_emitter_multiwave.spv" : "native_mesh_emitter.spv","wb");Require(file!=nullptr);
  Require(std::fwrite(words.data(),sizeof(uint32_t),words.size(),file)==words.size());Require(std::fclose(file)==0);
  info.mesh.invocations=31;Require(!Spirv::EmitProgram(p,resources,&info,nullptr,nullptr,&words,&error));
- info.mesh.invocations=32;
+ info.mesh.invocations=invocations;
  auto duplicate=p.info.outputs.back();p.info.outputs.push_back(duplicate);
  Require(!Spirv::EmitProgram(p,resources,&info,nullptr,nullptr,&words,&error));
  Require(error.find("duplicate")!=std::string::npos,error);p.info.outputs.pop_back();

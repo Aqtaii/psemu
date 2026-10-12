@@ -212,7 +212,9 @@ jobs:
           name: psemu-native-mesh-emitter-test
           path: |
             build/native-atomic-tests/native_mesh_emitter.spv
-            build/native-atomic-tests/native_mesh_emitter.spvasm
+            build/native-atomic-tests/native_mesh_emitter_multiwave.spv
+            build/native-atomic-tests/native_mesh_emitter.spv
+            build/native-atomic-tests/native_mesh_emitter_multiwave.spvasm
             build/native-atomic-tests/native_mesh_emitter_test.exe
             build/native-atomic-tests/mesh_fragment.spv
             build/native-atomic-tests/mesh_gpu_smoke.exe
@@ -280,6 +282,7 @@ jobs:
           name: psemu-mesh-output-test
           path: |
             build/native-atomic-tests/native_mesh_emitter.spv
+            build/native-atomic-tests/native_mesh_emitter_multiwave.spv
             build/native-atomic-tests/mesh_outputs.spv
             build/native-atomic-tests/mesh_fragment.spv
             build/native-atomic-tests/mesh_gpu_smoke.exe
