@@ -67,6 +67,9 @@ jobs:
       - name: Test captured ES front-stage GS handoff
         shell: pwsh
         run: ./tools/scripts/test_es_front_decode.ps1
+      - name: Test NGG vertex wave ABI
+        shell: pwsh
+        run: ./tools/scripts/test_ngg_vertex_abi.ps1
 
       - name: Test captured Astro BVH IR lowering
         shell: pwsh

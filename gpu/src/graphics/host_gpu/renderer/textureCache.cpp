@@ -535,6 +535,28 @@ struct TextureCache::ReadbackWorker {
 			                                                            info.width, info.height);
 			Transfer::DownloadImage(cached.ctx, download.data(), info.size, regions, cached.image,
 			                        cached.image->layout);
+			static const bool diagnostics = [] {
+				const char* value = std::getenv("PSEMU_DRAW_DIAGNOSTICS");
+				return value != nullptr && value[0] != '0';
+			}();
+			static std::atomic_uint content_logs {0};
+			if (diagnostics && content_logs.fetch_add(1, std::memory_order_relaxed) < 16) {
+				uint32_t nonzero = 0, sampled = 0;
+				for (uint32_t y = 0; y < 16; y++) for (uint32_t x = 0; x < 16; x++) {
+					const uint64_t row = (2ull * y + 1) * info.height / 32;
+					const uint64_t col = (2ull * x + 1) * info.width / 32;
+					const uint64_t offset = (row * info.pitch + col) * info.bytes_per_element;
+					if (offset >= download.size() || info.bytes_per_element > download.size() - offset) continue;
+					for (uint32_t byte = 0; byte < info.bytes_per_element; byte++) {
+						nonzero += download[offset + byte] != 0;
+						sampled++;
+					}
+				}
+				printf("[IMAGE-CONTENT] addr=0x%016llx kind=%u extent=%ux%u bpe=%u sampled_nonzero_bytes=%u/%u\n",
+				       static_cast<unsigned long long>(info.address), static_cast<uint32_t>(cached.kind),
+				       info.width, info.height, info.bytes_per_element, nonzero, sampled);
+			}
+
 			if (tiled_target || tiled_storage) {
 				guest.resize(info.size);
 				const RenderTargetInfo layout =

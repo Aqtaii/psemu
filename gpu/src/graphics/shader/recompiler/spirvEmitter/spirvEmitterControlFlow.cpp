@@ -159,6 +159,11 @@ uint32_t EmitVsharpDwordLoad(EmitterState* state, uint32_t dword_index) {
 }
 
 uint32_t InitialRegisterValue(const EmitterState& state, IR::Register reg) {
+	// Vulkan assembles primitives; retain the guest NGG full-wave vertex ABI.
+	if (state.stage == ShaderType::Vertex && reg.file == IR::RegisterFile::Scalar) {
+		if (reg.index == 2u) return state.wave_size << 12u;
+		if (reg.index == 3u) return (1u << 28u) | state.wave_size;
+	}
 	if (reg.file == IR::RegisterFile::Exec) {
 		if (state.per_invocation_masks) {
 			return reg.index == 0 ? 1u : 0u;
