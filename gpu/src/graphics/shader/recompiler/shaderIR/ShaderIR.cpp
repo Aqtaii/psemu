@@ -961,7 +961,7 @@ bool LowerControlMarker(const Decoder::Instruction& decoded, BasicBlock* block, 
 }
 
 bool LowerControlInstruction(const Decoder::Instruction& decoded, BasicBlock* block,
-                             std::string* error) {
+                             ShaderType stage, std::string* error) {
 	switch (decoded.opcode) {
 		// No guest GPU trap handler is installed; S_TRAP falls through, as in KytyPS5.
 		case Decoder::Opcode::STrap:
@@ -971,8 +971,18 @@ bool LowerControlInstruction(const Decoder::Instruction& decoded, BasicBlock* bl
 			return LowerControlMarker(decoded, block, Opcode::Waitcnt, true, error);
 		case Decoder::Opcode::SBarrier:
 			return LowerControlMarker(decoded, block, Opcode::Barrier, false, error);
-		case Decoder::Opcode::SSendmsg:
-			return LowerControlMarker(decoded, block, Opcode::Sendmsg, true, error);
+		case Decoder::Opcode::SSendmsg: {
+            if (!LowerControlMarker(decoded, block, Opcode::Sendmsg, true, error)) return false;
+            auto& message=block->instructions.back();
+            if (stage==ShaderType::Mesh && message.src[0].kind==OperandKind::ImmediateU32 &&
+                message.src[0].imm==9u) {
+                // GS allocation consumes M0 in addition to its message ID.
+                message.src[1].kind=OperandKind::Register;
+                message.src[1].reg={RegisterFile::M0,0};
+                message.src_count=2;
+            }
+            return true;
+        }
 		case Decoder::Opcode::SSetregB32:
 		case Decoder::Opcode::SSleep:
 			return LowerControlMarker(decoded, block, Opcode::ControlNop, true, error);
@@ -1076,7 +1086,7 @@ bool IsTerminatorOpcode(Decoder::Opcode opcode) {
 bool LowerImplemented(const Decoder::Instruction& decoded, BasicBlock* block, std::string* error);
 
 bool LowerDecodedInstruction(const Decoder::Instruction& inst, BasicBlock* block,
-                             std::string* error) {
+                             ShaderType stage, std::string* error) {
 	switch (inst.opcode) {
 		case Decoder::Opcode::Unsupported:
 			if (error != nullptr) {
@@ -1122,7 +1132,7 @@ bool LowerDecodedInstruction(const Decoder::Instruction& inst, BasicBlock* block
 		return true;
 	}
 	if (IsControlOpcode(inst.opcode)) {
-		return LowerControlInstruction(inst, block, error);
+		return LowerControlInstruction(inst, block, stage, error);
 	}
 	if (IsScalarSaveexecOpcode(inst.opcode)) {
 		return LowerScalarSaveexec(inst, block, error);
@@ -1219,7 +1229,7 @@ bool LowerProgram(const Decoder::Program& decoded, const CFG::Graph& cfg, Shader
 			              decoded.instructions[i].pc) != cfg.code_table_load_pcs.end()) {
 				continue;
 			}
-			if (!LowerDecodedInstruction(decoded.instructions[i], &block, error)) {
+			if (!LowerDecodedInstruction(decoded.instructions[i], &block, stage, error)) {
 				return false;
 			}
 		}

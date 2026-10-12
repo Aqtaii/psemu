@@ -108,6 +108,25 @@ int main(int argc,char** argv) {
  std::array<uint32_t,4> middle {0xbf820001u,0xd7650005u,0x000100c1u,0xbf810000u};
  Require(!DecodeFusedProgram(code,middle,&joined,&fused,&error));
  Require(!DecodeFusedProgram(code,{},&joined,&fused,&error));
+ // Captured GS SENDMSG9 allocation must read the preceding M0 write.
+ std::array<uint32_t,4> allocation {0xbefc00ffu,0x00001003u,0xbf900009u,0xbf810000u};
+ Require(DecodeFusedProgram(code,allocation,&joined,&fused,&error));
+ Require(Libs::Graphics::ShaderRecompiler::CFG::BuildGraph(fused,&graph,&error));
+ Libs::Graphics::ShaderRecompiler::CFG::StructurizeForLowering(&graph,&error);
+ for(auto stage:{Libs::Graphics::ShaderType::Mesh,Libs::Graphics::ShaderType::Vertex}) {
+  Require(Libs::Graphics::ShaderRecompiler::IR::LowerProgram(fused,graph,stage,64,&ir,&error));
+  bool found=false;
+  for(const auto& b:ir.blocks) for(const auto& instruction:b.instructions) {
+   if(instruction.op!=Libs::Graphics::ShaderRecompiler::IR::Opcode::Sendmsg) continue;
+   found=true;
+   Require(instruction.src[0].imm==9);
+   if(stage==Libs::Graphics::ShaderType::Mesh) {
+    Require(instruction.src_count==2 && instruction.src[1].kind==Libs::Graphics::ShaderRecompiler::IR::OperandKind::Register);
+    Require(instruction.src[1].reg.file==Libs::Graphics::ShaderRecompiler::IR::RegisterFile::M0);
+   } else Require(instruction.src_count==1);
+  }
+  Require(found);
+ }
  // Captured Astro control-flow shape; non-control instructions replaced with NOPs.
  std::vector<uint32_t> nested(750,0xbf800000u);
  nested[2]=0xbf88000bu;
