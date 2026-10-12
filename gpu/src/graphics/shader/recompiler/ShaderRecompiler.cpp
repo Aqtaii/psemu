@@ -717,6 +717,7 @@ bool TryRecompile(std::span<const uint32_t> code, const CompileOptions& options,
 	ir.shader_hash     = options.shader_hash;
 	ir.user_data_base  = options.user_data_base;
 	ir.user_data_count = options.user_data_count;
+	ir.mesh_gs_user_data = options.mesh_gs_user_data;
 	LOGF("%s phase end: stage=%s hash=0x%016" PRIx64 " IR LowerProgram blocks=%" PRIu64
 	     " elapsed_ms=%" PRIu64 "\n",
 	     GetDumpLabel(options), StageName(options.stage), options.shader_hash,
@@ -797,6 +798,7 @@ bool TryRecompile(std::span<const uint32_t> code, const CompileOptions& options,
 		                                                     : nullptr;
 		runtime.userdata    = options.read_memory_data;
 		runtime.flat_memory_base = options.flat_memory_base;
+		runtime.mesh_gs_user_data_address = options.mesh_gs_user_data_address;
 		if (!IR::MaterializeResources(ir, runtime, &resources, error)) {
 			return false;
 		}

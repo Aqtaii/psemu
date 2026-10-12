@@ -209,6 +209,11 @@ public:
 			        ? InternValue({ScalarValueOp::UserData, 0, reg})
 			        : ScalarProvenance::Unknown;
 		}
+		if (m_program->mesh_gs_user_data) {
+			for (uint32_t reg = 0; reg < 2; ++reg) {
+				m_user_data.regs[reg] = InternValue({ScalarValueOp::MeshGsUserData, 0, reg});
+			}
+		}
 		m_user_data.scc = ScalarProvenance::Unknown;
 		m_user_data.m0  = ScalarProvenance::Unknown;
 
@@ -901,6 +906,14 @@ bool BuildScalarProvenance(Program* program, std::string* error) {
 		}
 		return false;
 	}
+	// S0:S1 is a separate root; ES data starts at S8, while S3 remains wave metadata.
+	if (program->mesh_gs_user_data &&
+	    (program->stage != ShaderType::Mesh || program->user_data_base < 8)) {
+		if (error != nullptr) {
+			*error = "merged Mesh GS root requires Mesh stage and ES user-data base at least S8";
+		}
+		return false;
+	}
 	if (program->user_data_count > 64) {
 		if (error != nullptr) {
 			*error = "scalar provenance user-data count exceeds 64 SGPRs";
@@ -955,6 +968,7 @@ std::string ScalarValueToString(const ScalarProvenance& provenance, uint32_t val
 		case ScalarValueOp::Undefined: return "undefined";
 		case ScalarValueOp::Unknown: return "unknown";
 		case ScalarValueOp::UserData: return fmt::format("ud{}", node.imm);
+		case ScalarValueOp::MeshGsUserData: return fmt::format("mesh_gs_ud{}", node.imm);
 		case ScalarValueOp::Constant: return fmt::format("0x{:08x}", node.imm);
 		case ScalarValueOp::PcRelativeLow: return fmt::format("pc_lo+0x{:x}", node.imm);
 		case ScalarValueOp::PcRelativeHigh: return fmt::format("pc_hi+0x{:x}", node.imm);

@@ -379,6 +379,13 @@ public:
 		const auto& value = m_program.provenance.values[id];
 		uint32_t    out   = 0;
 		switch (value.op) {
+			case ScalarValueOp::MeshGsUserData:
+				if (!m_program.mesh_gs_user_data || m_program.stage != ShaderType::Mesh ||
+				    value.imm > 1 || !m_runtime.mesh_gs_user_data_address.has_value()) {
+					return Fail(error, "merged Mesh GS user-data address is unavailable");
+				}
+				out = static_cast<uint32_t>(*m_runtime.mesh_gs_user_data_address >> (value.imm * 32));
+				break;
 			case ScalarValueOp::UserData:
 				if (value.imm < m_program.user_data_base ||
 				    value.imm - m_program.user_data_base >= m_runtime.user_data.size()) {

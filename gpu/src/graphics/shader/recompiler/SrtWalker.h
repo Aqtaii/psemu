@@ -16,6 +16,7 @@ struct SrtRuntime {
 	SrtMemoryReader           read_memory = nullptr;
 	void*                     userdata    = nullptr;
 	std::optional<uint64_t>   flat_memory_base;
+	std::optional<uint64_t>   mesh_gs_user_data_address;
 };
 
 struct DescriptorSourceRequest {

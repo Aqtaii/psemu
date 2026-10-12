@@ -50,6 +50,47 @@ int main() {
  CHECK(BuildSrtPlan(&planned,&error));
  CHECK(planned.srt.reads.size()==1 && planned.srt.reads[0].value==5);
 
+ // Captured merged ABI: GS S0:S1 root is independent from the ES S8:S9 root.
+ {
+  Program merged;merged.stage=Libs::Graphics::ShaderType::Mesh;
+  merged.user_data_base=8;merged.user_data_count=2;merged.mesh_gs_user_data=true;
+  merged.blocks.resize(1);
+  Instruction gs;gs.op=Opcode::SLoadDword;gs.pc=0x68;gs.dst=reg(16);
+  gs.memory.resource=0;gs.src_count=1;gs.src[0]=imm(0);
+  auto es=gs;es.pc=0x70;es.dst=reg(24);es.memory.resource=8;
+  merged.blocks[0].instructions={move(40,reg(0)),move(41,reg(1)),move(42,reg(3)),gs,es};
+  CHECK(BuildScalarProvenance(&merged,&error));
+  const auto& insts=merged.blocks[0].instructions;
+  CHECK(merged.provenance.values[insts[0].scalar_value].op==ScalarValueOp::MeshGsUserData);
+  CHECK(merged.provenance.values[insts[1].scalar_value].imm==1);
+  CHECK(insts[2].scalar_value==ScalarProvenance::Unknown); // S3 cannot become user data.
+  CHECK(BuildSrtPlan(&merged,&error));CHECK(merged.srt.reads.size()==2);
+  const uint32_t es_words[]={0x34560000,2};SrtRuntime runtime;
+  runtime.user_data=es_words;runtime.mesh_gs_user_data_address=0x123450000ull;
+  runtime.read_memory=[](void*,uint64_t address,uint32_t* value) {
+   if(address==0x123450000ull){*value=0xaabbccdd;return true;}
+   if(address==0x123460000ull){*value=0x11223344;return true;}
+   if(address==0x234560000ull){*value=0x55667788;return true;}
+   return false;
+  };
+  std::vector<uint32_t> flat;
+  CHECK(WalkSrt(merged,runtime,&flat,&error));
+  CHECK(flat==std::vector<uint32_t>({0xaabbccdd,0x55667788}));
+  runtime.mesh_gs_user_data_address=0x123460000ull;
+  CHECK(WalkSrt(merged,runtime,&flat,&error));
+  CHECK(flat==std::vector<uint32_t>({0x11223344,0x55667788}));
+  const auto saved=flat;runtime.mesh_gs_user_data_address.reset();
+  CHECK(!WalkSrt(merged,runtime,&flat,&error));CHECK(flat==saved);
+  CHECK(error.find("GS user-data address is unavailable")!=std::string::npos);
+  auto invalid=merged;invalid.stage=Libs::Graphics::ShaderType::Vertex;
+  CHECK(!BuildScalarProvenance(&invalid,&error));
+  invalid=merged;invalid.user_data_base=0;CHECK(!BuildScalarProvenance(&invalid,&error));
+  // Ordinary shaders retain their original single user-data window.
+  auto ordinary=merged;ordinary.mesh_gs_user_data=false;
+  CHECK(BuildScalarProvenance(&ordinary,&error));
+  CHECK(ordinary.blocks[0].instructions[0].scalar_value==ScalarProvenance::Unknown);
+ }
+
 #ifdef _WIN32
  Program read;read.srt_plan_complete=true;read.provenance.values.resize(4);
  read.provenance.values[0].op=ScalarValueOp::Constant;read.provenance.values[0].imm=0x24;

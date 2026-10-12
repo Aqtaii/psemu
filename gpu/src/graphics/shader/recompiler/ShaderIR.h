@@ -560,6 +560,8 @@ enum class ScalarValueOp {
 	ReadConst,
 	ReadConstBuffer,
 	Phi,
+	// Independent runtime GS table pointer for merged Mesh shaders, low/high dword.
+	MeshGsUserData,
 };
 
 struct ScalarValue {
@@ -775,6 +777,7 @@ struct Program {
 	uint32_t                user_data_base      = 0;
 	uint32_t                user_data_count     = 64;
 	bool                    uses_guest_address_table = false;
+	bool                    mesh_gs_user_data = false;
 	bool                    dispatcher_fallback = false;
 	CFG::FailureKind        cfg_failure_kind    = CFG::FailureKind::None;
 	std::string             fallback_reason;
