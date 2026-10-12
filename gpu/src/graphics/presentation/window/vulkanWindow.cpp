@@ -607,10 +607,30 @@ static vk::Device VulkanCreateDevice(vk::PhysicalDevice physical_device, vk::Sur
 		supported_features12.pNext = &supported_robustness2;
 	}
 
+	const bool mesh_extension = HasExtension(device_extensions, VK_EXT_MESH_SHADER_EXTENSION_NAME);
+	vk::PhysicalDeviceMeshShaderFeaturesEXT supported_mesh {};
+	supported_mesh.sType = vk::StructureType::ePhysicalDeviceMeshShaderFeaturesEXT;
+	supported_mesh.pNext = &supported_features13;
+
 	vk::PhysicalDeviceFeatures2 supported_features2 {};
 	supported_features2.sType = vk::StructureType::ePhysicalDeviceFeatures2;
-	supported_features2.pNext = &supported_features13;
+	supported_features2.pNext = mesh_extension ? static_cast<void*>(&supported_mesh)
+	                                          : static_cast<void*>(&supported_features13);
 	physical_device.getFeatures2(&supported_features2);
+	ctx->mesh_shader_enabled = mesh_extension && supported_mesh.meshShader == VK_TRUE;
+	if (ctx->mesh_shader_enabled) {
+		ctx->mesh_shader_properties.sType = vk::StructureType::ePhysicalDeviceMeshShaderPropertiesEXT;
+		vk::PhysicalDeviceProperties2 mesh_properties {};
+		mesh_properties.sType = vk::StructureType::ePhysicalDeviceProperties2;
+		mesh_properties.pNext = &ctx->mesh_shader_properties;
+		physical_device.getProperties2(&mesh_properties);
+	}
+	std::printf("[VK-MESH] supported=%d vertices=%u primitives=%u workgroup=%u shared_bytes=%u\n",
+	            ctx->mesh_shader_enabled, ctx->mesh_shader_properties.maxMeshOutputVertices,
+	            ctx->mesh_shader_properties.maxMeshOutputPrimitives,
+	            ctx->mesh_shader_properties.maxMeshWorkGroupInvocations,
+	            ctx->mesh_shader_properties.maxMeshSharedMemorySize);
+
 	ctx->bvh_device_address_enabled = supported_features12.bufferDeviceAddress == VK_TRUE &&
 	                                  supported_features2.features.shaderInt64 == VK_TRUE;
 	features12.bufferDeviceAddress = ctx->bvh_device_address_enabled ? VK_TRUE : VK_FALSE;
@@ -661,9 +681,16 @@ static vk::Device VulkanCreateDevice(vk::PhysicalDevice physical_device, vk::Sur
 	     features13.robustImageAccess == VK_TRUE ? "true" : "false",
 	     robustness2_ext_enabled && robustness2.robustImageAccess2 == VK_TRUE ? "true" : "false");
 
+	// Enable only the feature used by merged ES/GS; task shaders and multiview remain optional.
+	vk::PhysicalDeviceMeshShaderFeaturesEXT mesh_features {};
+	mesh_features.sType = vk::StructureType::ePhysicalDeviceMeshShaderFeaturesEXT;
+	mesh_features.pNext = &features13;
+	mesh_features.meshShader = ctx->mesh_shader_enabled ? VK_TRUE : VK_FALSE;
+
 	vk::DeviceCreateInfo create_info {};
 	create_info.sType                = vk::StructureType::eDeviceCreateInfo;
-	create_info.pNext                = &features13;
+	create_info.pNext                = ctx->mesh_shader_enabled ? static_cast<void*>(&mesh_features)
+	                                                          : static_cast<void*>(&features13);
 	create_info.flags                = {};
 	create_info.pQueueCreateInfos    = queue_create_info.data();
 	create_info.queueCreateInfoCount = queue_create_info_num;
@@ -1092,6 +1119,9 @@ void VulkanCreate(WindowContext* ctx) {
 		}
 		if (HasExtension(available_extensions, VK_EXT_ROBUSTNESS_2_EXTENSION_NAME)) {
 			device_extensions.push_back(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME);
+		}
+		if (HasExtension(available_extensions, VK_EXT_MESH_SHADER_EXTENSION_NAME)) {
+			device_extensions.push_back(VK_EXT_MESH_SHADER_EXTENSION_NAME);
 		}
 	}
 
