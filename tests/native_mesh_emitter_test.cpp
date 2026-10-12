@@ -18,7 +18,7 @@ void Require(bool ok,const std::string& error={}){if(!ok){std::fprintf(stderr,"M
 // Exercise the production register allocator/load/store emitter without enabling public wave64.
 // A render readback must distinguish upper/lower VGPR values while seeing a shared scalar write.
 void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInputInfo& info,
-                             const IR::ResourceSnapshot& resources, bool upper_outputs=false) {
+                             const IR::ResourceSnapshot& resources, bool upper_outputs=false, bool phased=false) {
  using namespace Spirv::Emitter;
  EmitterState state;state.builder=Spirv::Builder(0x00010400u);
  auto mesh_info=info;
@@ -41,12 +41,21 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  CollectRegister(&state.registers,{IR::RegisterFile::Vector,13});
  CollectRegister(&state.registers,{IR::RegisterFile::Scalar,28});
  for(uint32_t reg=14;reg<=16;++reg) CollectRegister(&state.registers,{IR::RegisterFile::Vector,reg});
+ CollectRegister(&state.registers,{IR::RegisterFile::Scalar,29});
+ CollectRegister(&state.registers,{IR::RegisterFile::Scc,0});
  CopyProgramInputsAndOutputs(&state,program);
  state.needs_subgroup_ballot=ProgramNeedsSubgroupBallot(program);
  state.needs_subgroup_shuffle=true;
  state.needs_subgroup_local_invocation_id=true;
  AllocateInputVariables(&state);AllocateOutputVariables(&state);
  AllocateDescriptorVariables(&state);EmitHeaderAndTypes(&state);AllocateRegisterVariables(&state);
+ if(phased) {
+  Require(info.mesh.invocations==64 && !upper_outputs);
+  IR::Program dispatcher;dispatcher.dispatcher_fallback=true;
+  AllocateDispatcherState(&state,dispatcher);
+  state.mesh_phase_done_variable=state.builder.AllocateId();
+ }
+
  Require(PointerForRegisterHalf(state,value,0)!=0);
  Require(PointerForRegisterHalf(state,value,0)!=PointerForRegisterHalf(state,value,1));
  Require(PointerForRegisterHalf(state,shared,0)==PointerForRegisterHalf(state,shared,1));
@@ -249,6 +258,54 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  paired.execution=IR::InstructionExecution::Vector;paired.op=IR::Opcode::DsWriteAddtidB32;
  Require(!EmitGuestInstruction(&state,paired));
  Require(state.instruction_register_values.empty() && state.lane_half==0);
+ if(phased) {
+  init_lds_registers(1000);
+  for(uint32_t half=0;half<2;++half) {
+   state.lane_half=half;
+   const auto partner=EmitBinaryU32(&state,OpISub,ConstantU32(&state,logical_count-1),EmitMeshGuestLocalInvocationIndex(&state));
+   EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,16),EmitBinaryU32(&state,OpShiftLeftLogical,partner,ConstantU32(&state,2)));
+  }
+  state.lane_half=0;
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Scalar,28),EmitBinaryU32(&state,OpShiftRightLogical,index,ConstantU32(&state,5)));
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Scalar,29),ConstantU32(&state,0));
+  IR::Program flow;flow.stage=ShaderType::Mesh;flow.wave_size=64;flow.dispatcher_fallback=true;
+  flow.blocks.resize(6);for(uint32_t i=0;i<6;++i) flow.blocks[i].id=i;
+  auto branch=[&](uint32_t from,uint32_t to){flow.blocks[from].terminator.kind=CFG::TerminatorKind::Branch;flow.blocks[from].terminator.true_block=to;};
+  auto instruction=[&](uint32_t block,IR::Opcode op,IR::InstructionExecution execution,IR::Operand dst,std::initializer_list<IR::Operand> src){
+   IR::Instruction inst;inst.op=op;inst.execution=execution;inst.dst=dst;
+   for(const auto& operand:src) inst.src[inst.src_count++]=operand;
+   flow.blocks[block].instructions.push_back(inst);
+  };
+  const auto counter=Reg(IR::RegisterFile::Scalar,29);
+  instruction(0,IR::Opcode::CompareEqU32,IR::InstructionExecution::Scalar,Reg(IR::RegisterFile::Scc,0),{Reg(IR::RegisterFile::Scalar,28),Imm(0)});
+  flow.blocks[0].terminator.kind=CFG::TerminatorKind::ConditionalBranch;
+  flow.blocks[0].terminator.condition=CFG::BranchCondition::SccNonZero;
+  flow.blocks[0].terminator.true_block=1;flow.blocks[0].terminator.false_block=2;
+  branch(1,3);branch(2,4);branch(4,3);branch(3,5);
+  instruction(2,IR::Opcode::IAddU32,IR::InstructionExecution::Scalar,counter,{counter,Imm(1)});
+  instruction(4,IR::Opcode::IAddU32,IR::InstructionExecution::Scalar,counter,{counter,Imm(1)});
+  instruction(3,IR::Opcode::IAddU32,IR::InstructionExecution::Vector,Reg(IR::RegisterFile::Vector,15),{Reg(IR::RegisterFile::Vector,15),counter});
+  auto write=ds_write;write.memory.kind=IR::ResourceKind::Lds;write.src[1]=Reg(IR::RegisterFile::Vector,14);
+  flow.blocks[3].instructions.push_back(write);
+  auto sync=barrier;sync.execution=IR::InstructionExecution::Scalar;sync.pc=100;flow.blocks[3].instructions.push_back(sync);
+  auto load=ds_read;load.memory.kind=IR::ResourceKind::Lds;load.dst=Reg(IR::RegisterFile::Vector,16);load.src[0]=load.dst;
+  flow.blocks[3].instructions.push_back(load);
+  sync.pc=104;flow.blocks[3].instructions.push_back(sync);
+  instruction(3,IR::Opcode::IAddU32,IR::InstructionExecution::Scalar,counter,{counter,Imm(1)});
+  Require(EmitMeshPhasedDispatcher(&state,flow));
+  for(uint32_t half=0;half<2;++half) {
+   state.lane_half=half;
+   const auto partner=EmitBinaryU32(&state,OpISub,ConstantU32(&state,logical_count-1),EmitMeshGuestLocalInvocationIndex(&state));
+   const auto other_group=state.builder.AllocateId();
+   state.builder.AddFunction({OpUGreaterThanEqual,state.bool_type,other_group,partner,ConstantU32(&state,64)});
+   const auto bias=EmitSelectU32Value(&state,other_group,ConstantU32(&state,1002),ConstantU32(&state,1000));
+   dynamic_check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,16}),EmitBinaryU32(&state,OpIAdd,partner,bias));
+  }
+  state.lane_half=0;
+  const auto long_path=state.builder.AllocateId();
+  state.builder.AddFunction({OpUGreaterThanEqual,state.bool_type,long_path,index,ConstantU32(&state,32)});
+  dynamic_check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,29}),EmitSelectU32Value(&state,long_path,ConstantU32(&state,3),ConstantU32(&state,1)));
+ }
  EmitStoreU32(&state,Reg(shared.file,shared.index),EmitSelectU32Value(&state,passed,ConstantU32(&state,0x3f800000),ConstantU32(&state,0)));
  for(const auto& original:program.blocks[0].instructions) {
   auto inst=original;
@@ -285,7 +342,7 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  state.builder.AddFunction({OpReturn});state.builder.AddFunction({OpFunctionEnd});
  EmitNativeMeshEntryPoint(&state);
  const auto words=state.builder.Build();
- auto* file=std::fopen(upper_outputs ? (info.mesh.invocations==64 ? "native_mesh_upper_outputs_multiwave.spv" : "native_mesh_upper_outputs.spv") : "native_mesh_lane_backing.spv","wb");Require(file!=nullptr);
+ auto* file=std::fopen(phased ? "native_mesh_phased_dispatcher.spv" : upper_outputs ? (info.mesh.invocations==64 ? "native_mesh_upper_outputs_multiwave.spv" : "native_mesh_upper_outputs.spv") : "native_mesh_lane_backing.spv","wb");Require(file!=nullptr);
  Require(std::fwrite(words.data(),sizeof(uint32_t),words.size(),file)==words.size());
  Require(std::fclose(file)==0);
 }
@@ -325,7 +382,7 @@ int main(int argc,char** argv){
  auto* file=std::fopen(argc==2 ? "native_mesh_emitter_multiwave.spv" : "native_mesh_emitter.spv","wb");Require(file!=nullptr);
  Require(std::fwrite(words.data(),sizeof(uint32_t),words.size(),file)==words.size());Require(std::fclose(file)==0);
  if(argc==1){WriteLaneBackingFixture(p,info,resources);WriteLaneBackingFixture(p,info,resources,true);}
- else WriteLaneBackingFixture(p,info,resources,true);
+ else {WriteLaneBackingFixture(p,info,resources,true);WriteLaneBackingFixture(p,info,resources,false,true);}
  info.mesh.invocations=31;Require(!Spirv::EmitProgram(p,resources,&info,nullptr,nullptr,&words,&error));
  info.mesh.invocations=invocations;
  auto duplicate=p.info.outputs.back();p.info.outputs.push_back(duplicate);

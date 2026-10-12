@@ -20,6 +20,9 @@ try {
  if($LASTEXITCODE -ne 0){throw 'Native Mesh upper-half output SPIR-V validation failed'}
  & .\native_mesh_emitter_test.exe multiwave
  if($LASTEXITCODE -ne 0){throw 'Native Mesh multiwave regression failed'}
+ & "$env:VULKAN_SDK\Bin\spirv-val.exe" --target-env vulkan1.2 .\native_mesh_phased_dispatcher.spv
+ if($LASTEXITCODE -ne 0){throw 'Native Mesh phased dispatcher validation failed'}
+
  & "$env:VULKAN_SDK\Bin\spirv-val.exe" --target-env vulkan1.2 .\native_mesh_upper_outputs_multiwave.spv
  if($LASTEXITCODE -ne 0){throw 'Native Mesh second-subgroup upper output validation failed'}
  & "$env:VULKAN_SDK\Bin\spirv-val.exe" --target-env vulkan1.2 .\native_mesh_emitter_multiwave.spv

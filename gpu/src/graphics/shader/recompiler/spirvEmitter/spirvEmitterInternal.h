@@ -434,6 +434,7 @@ struct EmitterState {
 	uint32_t                               pixel_valid_mask_variable                     = 0;
 	bool                                   dispatcher_fallback                           = false;
 	uint32_t                               dispatch_pc_variable                          = 0;
+	uint32_t                               mesh_phase_done_variable                      = 0;
 	uint32_t                               dispatch_header_label                         = 0;
 	uint32_t                               dispatch_select_label                         = 0;
 	uint32_t                               dispatch_default_label                        = 0;
@@ -1530,6 +1531,9 @@ void EmitDispatcherBlocks(EmitterState* state, const IR::Program& program);
 void EmitDispatcherLoopTail(EmitterState* state);
 
 void EmitDispatcherFunction(EmitterState* state, const IR::Program& program);
+
+// Internal opt-in; returns at the final phase merge, preserving Function registers.
+bool EmitMeshPhasedDispatcher(EmitterState* state, const IR::Program& program);
 
 void EmitFunction(EmitterState* state, const IR::Program& program);
 

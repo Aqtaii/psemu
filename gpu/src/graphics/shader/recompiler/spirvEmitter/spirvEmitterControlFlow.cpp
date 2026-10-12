@@ -1,4 +1,5 @@
 #include "graphics/shader/recompiler/spirvEmitter/bufferMemoryGroup.h"
+#include "graphics/shader/recompiler/meshBarrierPlan.h"
 #include "graphics/shader/recompiler/spirvEmitter/scalarMemoryGroup.h"
 #include "graphics/shader/recompiler/spirvEmitter/spirvEmitterInternal.h"
 
@@ -201,6 +202,10 @@ void EmitRegisterVariables(EmitterState* state) {
 	if (state->dispatcher_fallback) {
 		state->builder.AddFunction(
 		    {OpVariable, state->ptr_func_uint, state->dispatch_pc_variable, StorageClassFunction});
+	}
+	if (state->mesh_phase_done_variable != 0) {
+		state->builder.AddFunction({OpVariable, state->ptr_func_uint,
+		                            state->mesh_phase_done_variable, StorageClassFunction});
 	}
 	if (state->pixel_valid_mask_variable != 0) {
 		state->builder.AddFunction({OpVariable, state->ptr_func_uint,
@@ -1154,6 +1159,79 @@ void EmitDispatcherLoopTail(EmitterState* state) {
 	state->builder.AddFunction({OpBranch, state->dispatch_header_label});
 	state->builder.AddFunction({OpLabel, state->dispatch_merge_label});
 	EmitReturn(state);
+}
+
+bool EmitMeshPhasedDispatcher(EmitterState* state, const IR::Program& program) {
+	MeshBarrierPlan plan;
+	if (state->stage != ShaderType::Mesh || state->lanes_per_invocation != 2 ||
+	    state->wave_size != 64 || !state->dispatcher_fallback ||
+	    state->dispatch_pc_variable == 0 || state->mesh_phase_done_variable == 0 ||
+	    !PlanMeshBarrierPhases(program, &plan)) return false;
+	auto& b = state->builder;
+	b.AddFunction({OpStore, state->dispatch_pc_variable, ConstantU32(state, plan.block_first_segments[0])});
+	for (uint32_t phase = 0; phase <= plan.barrier_pcs.size(); ++phase) {
+		const auto header = b.AllocateId(), select = b.AllocateId(), fallback = b.AllocateId();
+		const auto after = b.AllocateId(), next = b.AllocateId(), merge = b.AllocateId();
+		std::vector<uint32_t> labels(plan.segments.size(), 0);
+		for (uint32_t i = 0; i < plan.segments.size(); ++i)
+			if (plan.segments[i].phase == phase) labels[i] = b.AllocateId();
+		b.AddFunction({OpStore, state->mesh_phase_done_variable, ConstantU32(state, 0)});
+		b.AddFunction({OpBranch, header});
+		b.AddFunction({OpLabel, header});
+		const auto pc = b.AllocateId(), done = b.AllocateId(), finished = b.AllocateId();
+		b.AddFunction({OpLoad, state->uint_type, pc, state->dispatch_pc_variable});
+		b.AddFunction({OpLoad, state->uint_type, done, state->mesh_phase_done_variable});
+		b.AddFunction({OpINotEqual, state->bool_type, finished, done, ConstantU32(state, 0)});
+		b.AddFunction({OpLoopMerge, merge, next, LoopControlNone});
+		b.AddFunction({OpBranchConditional, finished, merge, select});
+		b.AddFunction({OpLabel, select});
+		b.AddFunction({OpSelectionMerge, after, SelectionControlNone});
+		std::vector<uint32_t> dispatch {OpSwitch, pc, fallback};
+		for (uint32_t i = 0; i < labels.size(); ++i) if (labels[i] != 0) {
+			dispatch.push_back(i); dispatch.push_back(labels[i]);
+		}
+		b.AddFunction(dispatch);
+		b.AddFunction({OpLabel, fallback});
+		b.AddFunction({OpStore, state->mesh_phase_done_variable, ConstantU32(state, 1)});
+		b.AddFunction({OpBranch, after});
+		for (uint32_t i = 0; i < labels.size(); ++i) {
+			if (labels[i] == 0) continue;
+			const auto& segment = plan.segments[i];
+			const auto& block = program.blocks[segment.block_id];
+			b.AddFunction({OpLabel, labels[i]});
+			for (uint32_t inst = segment.instruction_begin; inst < segment.instruction_end; ++inst)
+				if (!EmitGuestInstruction(state, block.instructions[inst])) return false;
+			uint32_t target = 0;
+			if (segment.ends_at_barrier) {
+				target = ConstantU32(state, segment.continuation);
+				b.AddFunction({OpStore, state->mesh_phase_done_variable, ConstantU32(state, 1)});
+			} else {
+				const auto& term = block.terminator;
+				if (term.kind == CFG::TerminatorKind::Return) {
+					target = ConstantU32(state, UINT32_MAX);
+					b.AddFunction({OpStore, state->mesh_phase_done_variable, ConstantU32(state, 1)});
+				} else if (term.kind == CFG::TerminatorKind::Branch) {
+					target = ConstantU32(state, plan.block_first_segments[term.true_block]);
+				} else {
+					target = EmitSelectU32Value(state, EmitBranchCondition(state, term.condition),
+					    ConstantU32(state, plan.block_first_segments[term.true_block]),
+					    ConstantU32(state, plan.block_first_segments[term.false_block]));
+				}
+			}
+			b.AddFunction({OpStore, state->dispatch_pc_variable, target});
+			b.AddFunction({OpBranch, after});
+		}
+		b.AddFunction({OpLabel, after}); b.AddFunction({OpBranch, next});
+		b.AddFunction({OpLabel, next}); b.AddFunction({OpBranch, header});
+		b.AddFunction({OpLabel, merge});
+		// Every invocation exits the same phase loop before this common barrier.
+		// No guest barrier is emitted inside the per-wave switch or EXEC guard.
+		if (phase < plan.barrier_pcs.size()) {
+			IR::Instruction barrier; barrier.op = IR::Opcode::Barrier;
+			EmitBarrier(state, barrier);
+		}
+	}
+	return true;
 }
 
 void EmitDispatcherFunction(EmitterState* state, const IR::Program& program) {
