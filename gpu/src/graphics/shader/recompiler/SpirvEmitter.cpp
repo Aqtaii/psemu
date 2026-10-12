@@ -468,7 +468,7 @@ bool EmitProgram(const IR::Program& program, const IR::ResourceSnapshot& resourc
      mesh.invocations==0 || mesh.invocations>1024 || mesh.invocations%32!=0 ||
      mesh.max_vertices==0 || mesh.max_vertices>1023 || mesh.max_vertices>mesh.invocations ||
      mesh.max_primitives==0 || mesh.max_primitives>1024 || mesh.max_primitives>mesh.invocations ||
-     mesh.lds_dwords>32768) {
+     mesh.lds_dwords>32767) {
    SetError(error,"Mesh requires validated native wave32 metadata; virtual wave64 is pending");return false;
   }
   for(const auto& output:program.info.outputs) {

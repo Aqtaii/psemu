@@ -45,6 +45,11 @@ int main(){
  Require(Spirv::EmitProgram(p,resources,&info,nullptr,nullptr,&words,&error),error);
  auto* file=std::fopen("native_mesh_emitter.spv","wb");Require(file!=nullptr);
  Require(std::fwrite(words.data(),sizeof(uint32_t),words.size(),file)==words.size());Require(std::fclose(file)==0);
+ info.mesh.invocations=31;Require(!Spirv::EmitProgram(p,resources,&info,nullptr,nullptr,&words,&error));
+ info.mesh.invocations=32;
+ auto duplicate=p.info.outputs.back();p.info.outputs.push_back(duplicate);
+ Require(!Spirv::EmitProgram(p,resources,&info,nullptr,nullptr,&words,&error));
+ Require(error.find("duplicate")!=std::string::npos,error);p.info.outputs.pop_back();
  p.wave_size=64;Require(!Spirv::EmitProgram(p,resources,&info,nullptr,nullptr,&words,&error));
  Require(error.find("wave64")!=std::string::npos,error);
  p.wave_size=32;p.dispatcher_fallback=true;
