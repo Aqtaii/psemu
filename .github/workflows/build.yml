@@ -260,6 +260,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: psemu-mesh-output-test
-          path: build/native-atomic-tests/mesh_outputs.spv
+          path: |
+            build/native-atomic-tests/mesh_outputs.spv
+            build/native-atomic-tests/mesh_fragment.spv
+            build/native-atomic-tests/mesh_gpu_smoke.exe
+            dist/msvcp140*.dll
+            dist/vcruntime140*.dll
           if-no-files-found: error
           retention-days: 14

@@ -8,7 +8,12 @@ try {
  if($LASTEXITCODE -ne 0){throw 'Mesh output module compilation failed'}
  & .\mesh_outputs_test.exe
  if($LASTEXITCODE -ne 0){throw 'Mesh output module generation failed'}
- & (Join-Path $env:VULKAN_SDK 'Bin\spirv-val.exe') --target-env vulkan1.2 .\mesh_outputs.spv
+ $validator=Join-Path $env:VULKAN_SDK 'Bin\spirv-val.exe'
+ & $validator --target-env vulkan1.2 .\mesh_outputs.spv
  if($LASTEXITCODE -ne 0){throw 'Mesh output SPIR-V validation failed'}
- Write-Output 'PASS: Mesh output interface validates for Vulkan 1.2'
+ & $validator --target-env vulkan1.2 .\mesh_fragment.spv
+ if($LASTEXITCODE -ne 0){throw 'Mesh fragment validation failed'}
+ & clang-cl /nologo /std:c++20 /O2 /EHsc /MD "/I$env:VULKAN_SDK\Include" "$root\tests\mesh_gpu_smoke.cpp" /Fe:mesh_gpu_smoke.exe /link "/LIBPATH:$env:VULKAN_SDK\Lib" vulkan-1.lib
+ if($LASTEXITCODE -ne 0){throw 'Mesh GPU smoke compilation failed'}
+ Write-Output 'PASS: Mesh interfaces validate; GPU runner compiled but not executed on CI'
 } finally {Pop-Location}
