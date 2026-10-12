@@ -383,6 +383,51 @@ void EmitVertexInputRegisters(EmitterState* state) {
 	}
 }
 
+// Internal merged ABI adapter. The dynamic draw/resource IDs come from the caller;
+// this does not bake a draw into the shader cache or enable the public Mesh path.
+bool EmitMeshPointInputRegisters(EmitterState* state, const MeshAssemblyPlan& assembly,
+                                 const MeshPointGroupInputIds& inputs) {
+ MeshPointInitialRegisters probe;
+ if(state==nullptr || state->stage!=ShaderType::Mesh || state->vertex_input_info==nullptr ||
+    state->wave_size!=64 || state->lanes_per_invocation!=2 ||
+    uint64_t(state->vertex_input_info->mesh.invocations)*2!=assembly.logical_invocations ||
+    !PlanMeshPointInitialRegisters(assembly,64,{},0,&probe) ||
+    inputs.vertex_count==0 || inputs.first_vertex==0 || inputs.instance==0 ||
+    inputs.gs_user_data_low==0 || inputs.gs_user_data_high==0) return false;
+ const auto saved_half=state->lane_half;
+ auto store=[&](IR::RegisterFile file,uint32_t reg,uint32_t value) {
+  const auto pointer=PointerForRegister(*state,{file,reg});
+  if(pointer!=0) state->builder.AddFunction({OpStore,pointer,value});
+ };
+ state->lane_half=0;
+ const auto local=EmitMeshGuestLocalInvocationIndex(state);
+ const auto wave=EmitBinaryU32(state,OpShiftRightLogical,local,ConstantU32(state,6));
+ const auto wave_base=EmitBinaryU32(state,OpBitwiseAnd,local,ConstantU32(state,~63u));
+ const auto populated=state->builder.AllocateId();
+ state->builder.AddFunction({OpUGreaterThan,state->bool_type,populated,inputs.vertex_count,wave_base});
+ const auto remaining=EmitBinaryU32(state,OpISub,inputs.vertex_count,wave_base);
+ const auto count=EmitSelectU32Value(state,populated,remaining,ConstantU32(state,0));
+ // Point groups have at most64 inputs, so the remaining count is already wave-bounded.
+ const auto wave_bits=EmitBinaryU32(state,OpShiftLeftLogical,wave,ConstantU32(state,24));
+ const auto count_bits=EmitBinaryU32(state,OpShiftLeftLogical,count,ConstantU32(state,8));
+ const auto packed=EmitBinaryU32(state,OpBitwiseOr,
+  EmitBinaryU32(state,OpBitwiseOr,wave_bits,ConstantU32(state,assembly.guest_waves<<28)),
+  EmitBinaryU32(state,OpBitwiseOr,count_bits,count));
+ store(IR::RegisterFile::Scalar,0,inputs.gs_user_data_low);
+ store(IR::RegisterFile::Scalar,1,inputs.gs_user_data_high);
+ store(IR::RegisterFile::Scalar,3,packed);
+ for(uint32_t half=0;half<2;++half) {
+  state->lane_half=half;
+  const auto logical=EmitMeshGuestLocalInvocationIndex(state);
+  store(IR::RegisterFile::Vector,0,EmitBinaryU32(state,OpShiftLeftLogical,logical,ConstantU32(state,2)));
+  store(IR::RegisterFile::Vector,1,ConstantU32(state,0));
+  store(IR::RegisterFile::Vector,5,EmitBinaryU32(state,OpIAdd,inputs.first_vertex,logical));
+  store(IR::RegisterFile::Vector,8,inputs.instance);
+ }
+ state->lane_half=saved_half;
+ return true;
+}
+
 // Limited internal virtual64 path. Public Mesh wave64 stays gated until all op families are ready.
 bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst) {
 	if (state->lanes_per_invocation == 1) {

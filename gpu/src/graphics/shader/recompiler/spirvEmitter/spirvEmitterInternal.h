@@ -1,5 +1,6 @@
 #ifndef EMULATOR_INCLUDE_EMULATOR_GRAPHICS_SHADER_RECOMPILER_SPIRVEMITTER_INTERNAL_H_
 #define EMULATOR_INCLUDE_EMULATOR_GRAPHICS_SHADER_RECOMPILER_SPIRVEMITTER_INTERNAL_H_
+#include "graphics/shader/meshPointAbi.h"
 
 #include "common/common.h"
 #include "common/stringUtils.h"
@@ -1533,6 +1534,14 @@ void EmitDispatcherLoopTail(EmitterState* state);
 void EmitDispatcherFunction(EmitterState* state, const IR::Program& program);
 
 // Internal opt-in; returns at the final phase merge, preserving Function registers.
+// SSA u32 IDs for one already partitioned, non-indexed point input group.
+// Caller bounds vertex_count to vertices_per_group and supplies group-local base IDs.
+struct MeshPointGroupInputIds {
+ uint32_t vertex_count=0, first_vertex=0, instance=0;
+ uint32_t gs_user_data_low=0, gs_user_data_high=0;
+};
+bool EmitMeshPointInputRegisters(EmitterState* state, const Libs::Graphics::MeshAssemblyPlan& assembly,
+                                 const MeshPointGroupInputIds& inputs);
 bool EmitMeshPhasedDispatcher(EmitterState* state, const IR::Program& program);
 
 void EmitFunction(EmitterState* state, const IR::Program& program);

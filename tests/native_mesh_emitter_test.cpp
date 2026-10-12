@@ -43,6 +43,8 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  for(uint32_t reg=14;reg<=16;++reg) CollectRegister(&state.registers,{IR::RegisterFile::Vector,reg});
  CollectRegister(&state.registers,{IR::RegisterFile::Scalar,29});
  CollectRegister(&state.registers,SccRegister());
+ for(uint32_t reg: {0u,1u,3u,8u}) CollectRegister(&state.registers,{IR::RegisterFile::Scalar,reg});
+ for(uint32_t reg: {0u,1u,5u,8u}) CollectRegister(&state.registers,{IR::RegisterFile::Vector,reg});
  CopyProgramInputsAndOutputs(&state,program);
  state.needs_subgroup_ballot=ProgramNeedsSubgroupBallot(program);
  state.needs_subgroup_shuffle=true;
@@ -99,6 +101,44 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
    state.builder.AddFunction({OpLogicalAnd,state.bool_type,both,passed,equal});passed=both;
   }
  };
+ // The merged ABI adapter must initialize both banks, including the later guest wave.
+ MeshAssemblyPlan abi_assembly;
+ Require(PlanPointMeshAssembly(3,24,3,info.mesh.invocations*2,64,&abi_assembly));
+ const MeshPointGroupInputIds abi_inputs {ConstantU32(&state,1),ConstantU32(&state,25),ConstantU32(&state,27),
+  ConstantU32(&state,0xabcdef01u),ConstantU32(&state,0x12345678u)};
+ EmitStoreU32(&state,Reg(IR::RegisterFile::Scalar,8),ConstantU32(&state,0x87654321u));
+ state.lane_half=1;Require(EmitMeshPointInputRegisters(&state,abi_assembly,abi_inputs));
+ Require(state.lane_half==1);state.lane_half=0;
+ check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,0}),0xabcdef01u);
+ check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,1}),0x12345678u);
+ check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,8}),0x87654321u); // ES payload survives
+ const auto abi_wave=EmitBinaryU32(&state,OpShiftRightLogical,index,ConstantU32(&state,5));
+ const auto first_wave=state.builder.AllocateId();
+ state.builder.AddFunction({OpIEqual,state.bool_type,first_wave,abi_wave,ConstantU32(&state,0)});
+ const auto abi_s3=EmitBinaryU32(&state,OpBitwiseOr,
+  EmitBinaryU32(&state,OpShiftLeftLogical,abi_wave,ConstantU32(&state,24)),
+  EmitBinaryU32(&state,OpBitwiseOr,ConstantU32(&state,abi_assembly.guest_waves<<28),
+   EmitSelectU32Value(&state,first_wave,ConstantU32(&state,0x101),ConstantU32(&state,0))));
+ auto abi_check=[&](uint32_t actual,uint32_t expected) {
+  const auto equal=state.builder.AllocateId(),both=state.builder.AllocateId();
+  state.builder.AddFunction({OpIEqual,state.bool_type,equal,actual,expected});
+  state.builder.AddFunction({OpLogicalAnd,state.bool_type,both,passed,equal});passed=both;
+ };
+ abi_check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,3}),abi_s3);
+ for(uint32_t half=0;half<2;++half) {
+  state.lane_half=half;
+  // Independent mapping from the native index, not the helper under test.
+  const auto guest=EmitBinaryU32(&state,OpIAdd,
+   EmitBinaryU32(&state,OpIAdd,index,EmitBinaryU32(&state,OpBitwiseAnd,index,ConstantU32(&state,~31u))),
+   ConstantU32(&state,half*32));
+  abi_check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,0}),EmitBinaryU32(&state,OpIMul,guest,ConstantU32(&state,4)));
+  check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,1}),0);
+  abi_check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,5}),EmitBinaryU32(&state,OpIAdd,guest,ConstantU32(&state,25)));
+  check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,8}),27);
+ }
+ state.lane_half=0;
+ // Restore the triangle fixture's local vertex ID after checking the merged entry ABI.
+ EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,5),EmitSubgroupLocalInvocationId(&state));
  check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,24}),0x3f800000);
  check(EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,0}),0x80000000);
  check(EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,1}),1);
