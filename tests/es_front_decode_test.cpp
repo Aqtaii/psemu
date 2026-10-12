@@ -3,6 +3,7 @@
 #include "graphics/shader/recompiler/ShaderIR.h"
 #include "common/assert.h"
 #include <array>
+#include <fstream>
 #include <cstdio>
 #include <stdexcept>
 #include <source_location>
@@ -17,7 +18,36 @@ int DbgExitIfHandler(char const*,char const*,int) { std::abort(); }
 int DbgNotImplementedHandler(char const*,char const*,int) { std::abort(); }
 void DbgExit(int) { std::abort(); }
 }
-int main() {
+std::vector<uint32_t> ReadCapturedCode(const char* path) {
+ std::ifstream input(path,std::ios::binary|std::ios::ate);
+ Require(input.is_open());
+ const std::streamoff bytes=input.tellg();
+ Require(bytes>0 && bytes<=128*1024 && bytes%4==0);
+ std::vector<uint32_t> words(static_cast<size_t>(bytes)/4);
+ input.seekg(0);
+ Require(bool(input.read(reinterpret_cast<char*>(words.data()),bytes)));
+ return words;
+}
+int main(int argc,char** argv) {
+ Require(argc==1 || argc==3);
+ if(argc==3) {
+  const auto es=ReadCapturedCode(argv[1]);
+  const auto gs=ReadCapturedCode(argv[2]);
+  std::vector<uint32_t> joined;
+  Program captured;
+  std::string diagnostic;
+  Require(DecodeFusedProgram(es,gs,&joined,&captured,&diagnostic));
+  Libs::Graphics::ShaderRecompiler::CFG::Graph captured_graph;
+  Require(Libs::Graphics::ShaderRecompiler::CFG::BuildGraph(captured,&captured_graph,&diagnostic));
+  const bool structured=Libs::Graphics::ShaderRecompiler::CFG::StructurizeForLowering(&captured_graph,&diagnostic);
+  Libs::Graphics::ShaderRecompiler::IR::Program captured_ir;
+  Require(Libs::Graphics::ShaderRecompiler::IR::LowerProgram(captured,captured_graph,
+      Libs::Graphics::ShaderType::Mesh,64,&captured_ir,&diagnostic));
+  captured_ir.dispatcher_fallback=!structured;
+  std::printf("[MESH-REPLAY] instructions=%zu blocks=%zu dispatcher=%u IR=passed GPU=not-executed\n",
+      captured.instructions.size(),captured_ir.blocks.size(),unsigned(!structured));
+ }
+
  // Captured ES executable prefix, followed by inline non-instruction data.
  std::array<uint32_t,18> code {0x8f6a9003u,0x94fe6ac1u,0xbf88000bu,0xd7650005u,
   0x000100c1u,0x93eaff03u,0x00040018u,0xd7660005u,0x00020ac1u,0xd7460005u,
