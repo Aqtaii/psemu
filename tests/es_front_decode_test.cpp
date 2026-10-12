@@ -5,10 +5,13 @@
 #include <array>
 #include <cstdio>
 #include <stdexcept>
+#include <source_location>
 using namespace Libs::Graphics::ShaderRecompiler::Decoder;
-void Require(bool value) { if (!value) throw std::runtime_error("ES decoder regression"); }
+void Require(bool value, std::source_location where=std::source_location::current()) {
+ if (!value) { std::fprintf(stderr,"ES regression failed at line %u\n",where.line()); std::exit(1); }
+}
 namespace Common {
-int DbgExitHandler(char const*,int,std::string_view) { std::abort(); }
+int DbgExitHandler(char const*,int line,std::string_view text) { std::fprintf(stderr,"IR fatal line %d: %.*s\n",line,int(text.size()),text.data()); std::abort(); }
 int DbgExitHandler(char const*,int,fmt::text_style,std::string_view) { std::abort(); }
 int DbgExitIfHandler(char const*,char const*,int) { std::abort(); }
 int DbgNotImplementedHandler(char const*,char const*,int) { std::abort(); }
