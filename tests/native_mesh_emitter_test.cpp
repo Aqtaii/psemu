@@ -22,7 +22,7 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  using namespace Spirv::Emitter;
  EmitterState state;state.builder=Spirv::Builder(0x00010400u);
  state.program=&program;state.resources=&resources;state.vertex_input_info=&info;
- state.stage=ShaderType::Mesh;state.wave_size=32;state.lanes_per_invocation=2;
+ state.stage=ShaderType::Mesh;state.wave_size=64;state.lanes_per_invocation=2;
  state.exact_subgroup_operations=Spirv::ProgramRequiresExactSubgroupSize(program);
  CollectRegisters(program,&state.registers);
  const IR::Register value{IR::RegisterFile::Vector,9};
@@ -30,6 +30,9 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  CollectRegister(&state.registers,value);CollectRegister(&state.registers,shared);
  CollectRegister(&state.registers,{IR::RegisterFile::Scalar,25});
  CollectRegister(&state.registers,{IR::RegisterFile::Scalar,26});
+ CollectRegister(&state.registers,{IR::RegisterFile::Scalar,27});
+ CollectRegister(&state.registers,{IR::RegisterFile::Vector,10});
+ CollectRegister(&state.registers,{IR::RegisterFile::Vector,11});
  CopyProgramInputsAndOutputs(&state,program);
  state.needs_subgroup_ballot=ProgramNeedsSubgroupBallot(program);
  state.needs_subgroup_shuffle=true;
@@ -64,6 +67,47 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  const auto sum=state.builder.AllocateId();
  state.builder.AddFunction({OpFAdd,state.float_type,sum,lower,upper});
  EmitStoreU32(&state,Reg(value.file,value.index),EmitBitcastF32ToU32(&state,sum));
+ // Different ballots must survive both half emissions without overwriting each other.
+ const auto first_lane=state.builder.AllocateId();
+ state.builder.AddFunction({OpIEqual,state.bool_type,first_lane,EmitSubgroupLocalInvocationId(&state),ConstantU32(&state,0)});
+ const auto vcc=Reg(IR::RegisterFile::Vcc,0);
+ EmitLaneMaskPairFromBool(&state,vcc,last_lane);
+ state.lane_half=1;EmitLaneMaskPairFromBool(&state,vcc,first_lane);state.lane_half=0;
+ uint32_t passed=0;
+ auto check=[&](uint32_t actual,uint32_t expected){
+  const auto equal=state.builder.AllocateId();
+  state.builder.AddFunction({OpIEqual,state.bool_type,equal,actual,ConstantU32(&state,expected)});
+  if(passed==0){passed=equal;}else{
+   const auto both=state.builder.AllocateId();
+   state.builder.AddFunction({OpLogicalAnd,state.bool_type,both,passed,equal});passed=both;
+  }
+ };
+ check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,24}),0x3f800000);
+ check(EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,0}),0x80000000);
+ check(EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,1}),1);
+ auto read_check=[&](uint32_t vgpr,uint32_t lane,uint32_t expected){
+  read.src[0]=Reg(IR::RegisterFile::Vector,vgpr);read.src[1]=Imm(lane);
+  read.dst=Reg(IR::RegisterFile::Scalar,27);EmitReadLaneU32(&state,read);
+  check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,27}),expected);
+ };
+ // Sparse EXEC must guard VGPR writes according to the selected guest mask word.
+ EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,2));
+ EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,4));
+ EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,10),ConstantU32(&state,7));
+ state.lane_half=1;EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,10),ConstantU32(&state,9));
+ state.lane_half=0;
+ read_check(10,1,7);read_check(10,34,9);read_check(10,0,0);read_check(10,32,0);
+ EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,0xffffffff));
+ EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,0xffffffff));
+ // MBCNT low/high with full masks must recover guest IDs across the 31/32 boundary.
+ IR::Instruction count;count.dst=Reg(IR::RegisterFile::Vector,11);count.src_count=2;
+ count.src[0]=Imm(0xffffffff);
+ for(uint32_t half=0;half<2;++half){
+  state.lane_half=half;count.src[1]=Imm(0);EmitMaskedBitCountU32(&state,count,0);
+  count.src[1]=count.dst;EmitMaskedBitCountU32(&state,count,1);
+ }
+ state.lane_half=0;read_check(11,31,31);read_check(11,32,32);read_check(11,63,63);
+ EmitStoreU32(&state,Reg(shared.file,shared.index),EmitSelectU32Value(&state,passed,ConstantU32(&state,0x3f800000),ConstantU32(&state,0)));
  for(const auto& original:program.blocks[0].instructions) {
   auto inst=original;
   if(inst.op==IR::Opcode::Export && inst.export_info.kind==IR::ExportTargetKind::Parameter) {

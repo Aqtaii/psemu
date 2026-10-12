@@ -585,6 +585,14 @@ void EmitLaneMaskPairFromBool(EmitterState* state, const IR::Operand& dst, uint3
 	const auto ballot = state->builder.AllocateId();
 	state->builder.AddFunction({OpGroupNonUniformBallot, state->vec4_uint_type, ballot,
 	                            ConstantU32(state, ScopeSubgroup), write_mask});
+	if (state->lanes_per_invocation == 2) {
+		// The host ballot contains 32 lanes; each guest half owns one mask word.
+		// Preserve the other word until its vector instruction has executed.
+		const auto result = state->builder.AllocateId();
+		state->builder.AddFunction({OpCompositeExtract, state->uint_type, result, ballot, 0});
+		EmitStoreU32(state, OffsetRegisterOperand(dst, state->lane_half), result);
+		return;
+	}
 	for (uint32_t part = 0; part < 2u; part++) {
 		uint32_t result = ConstantU32(state, 0);
 		if (state->wave_size != 32u || part == 0u) {

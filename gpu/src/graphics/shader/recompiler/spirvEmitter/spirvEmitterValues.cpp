@@ -231,8 +231,15 @@ uint32_t WaveMaskHighLoad(EmitterState* state, IR::RegisterFile file) {
 	return EmitRegisterLoad(state, {file, 1});
 }
 
+uint32_t EmitGuestSubgroupLocalInvocationId(EmitterState* state) {
+	const auto host_lane = EmitSubgroupLocalInvocationId(state);
+	return state->lanes_per_invocation == 2
+	           ? EmitAddU32(state, host_lane, ConstantU32(state, state->lane_half * 32u))
+	           : host_lane;
+}
+
 uint32_t EmitLaneMaskPartU32(EmitterState* state, uint32_t part) {
-	const auto subid = EmitSubgroupLocalInvocationId(state);
+	const auto subid = EmitGuestSubgroupLocalInvocationId(state);
 	const auto lane  = state->builder.AllocateId();
 	const auto bit   = state->builder.AllocateId();
 	state->builder.AddFunction(
@@ -261,7 +268,7 @@ uint32_t EmitLaneMaskPartU32(EmitterState* state, uint32_t part) {
 }
 
 uint32_t EmitThreadMaskBelowPartU32(EmitterState* state, uint32_t part) {
-	const auto subid = EmitSubgroupLocalInvocationId(state);
+	const auto subid = EmitGuestSubgroupLocalInvocationId(state);
 	const auto lane  = state->builder.AllocateId();
 	const auto bit   = state->builder.AllocateId();
 	const auto below = state->builder.AllocateId();

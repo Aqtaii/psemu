@@ -735,6 +735,7 @@ uint32_t EmitRegisterLoad(EmitterState* state, IR::Register reg);
 
 uint32_t WaveMaskHighLoad(EmitterState* state, IR::RegisterFile file);
 
+uint32_t EmitGuestSubgroupLocalInvocationId(EmitterState* state);
 uint32_t EmitLaneMaskPartU32(EmitterState* state, uint32_t part);
 
 uint32_t EmitThreadMaskBelowPartU32(EmitterState* state, uint32_t part);
