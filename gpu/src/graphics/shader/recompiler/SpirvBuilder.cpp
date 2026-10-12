@@ -103,6 +103,8 @@ void Builder::AddAnnotation(std::initializer_list<uint32_t> words) {
 }
 
 void Builder::AddType(std::initializer_list<uint32_t> words) {
+ // OpVariable is emitted here only for module-scope variables.
+ if(words.size()>=4 && *words.begin()==59u) m_globals.push_back(*(words.begin()+2));
 	AppendInstructionWords(&m_types, words.begin(), words.size());
 }
 

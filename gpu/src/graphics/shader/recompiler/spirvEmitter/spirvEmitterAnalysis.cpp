@@ -366,7 +366,7 @@ bool IsLdsOpcode(IR::Opcode op) {
 }
 
 bool ProgramNeedsFunctionLds(const IR::Program& program) {
-	if (program.stage == ShaderType::Compute) {
+	if (program.stage == ShaderType::Compute || program.stage == ShaderType::Mesh) {
 		return false;
 	}
 
@@ -771,6 +771,7 @@ uint32_t ExecutionModelForStage(ShaderType stage) {
 	switch (stage) {
 		case ShaderType::Vertex: return ExecutionModelVertex;
 		case ShaderType::Pixel: return ExecutionModelFragment;
+  case ShaderType::Mesh: return spv::ExecutionModelMeshEXT;
 		default: return ExecutionModelGLCompute;
 	}
 }

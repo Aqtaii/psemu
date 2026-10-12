@@ -64,6 +64,12 @@ inline uint8_t GetDstSel(uint32_t swizzle, uint32_t channel) {
 	return (swizzle >> (channel * 3u)) & 0x7u;
 }
 
+// Native Mesh emission is opt-in; virtual wave64 lowering is not enabled yet.
+struct ShaderMeshInputInfo {
+ uint32_t max_vertices=0, max_primitives=0, invocations=0;
+ uint32_t host_subgroup_size=0, lds_dwords=0;
+};
+
 struct ShaderVertexInputInfo {
 	static constexpr int RES_MAX = 32;
 
@@ -72,6 +78,7 @@ struct ShaderVertexInputInfo {
 	int                     resource_fetch_components[RES_MAX] = {};
 	ShaderVertexInputBuffer buffers[RES_MAX];
 	ShaderStageRuntime      stage;
+	ShaderMeshInputInfo     mesh;
 	int                     resources_num     = 0;
 	int                     fetch_shader_reg  = 0;
 	int                     fetch_attrib_reg  = 0;

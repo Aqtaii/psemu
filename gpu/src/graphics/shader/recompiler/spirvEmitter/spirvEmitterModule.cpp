@@ -204,6 +204,7 @@ static uint32_t AllocateSharedOutputVariable(EmitterState* state, uint32_t& vari
 }
 
 void AllocateOutputVariables(EmitterState* state) {
+ if(state->stage==ShaderType::Mesh) return;
 	for (auto& binding: state->outputs) {
 		switch (binding.kind) {
 			case IR::StageOutputKind::Position:
@@ -534,7 +535,7 @@ void EmitHeaderAndTypes(EmitterState* state) {
 	} else {
 		state->builder.AddMemoryModel({AddressingModelLogical, MemoryModelGLSL450});
 	}
-	state->builder.AddEntryPoint(ExecutionModelForStage(state->stage), state->main_func, "main",
+	if(state->stage!=ShaderType::Mesh) state->builder.AddEntryPoint(ExecutionModelForStage(state->stage), state->main_func, "main",
 	                             state->interface_variables);
 	if (state->stage == ShaderType::Compute) {
 		uint32_t local_x = state->needs_compute_derivatives ? 2u : 1u;
@@ -565,11 +566,11 @@ void EmitHeaderAndTypes(EmitterState* state) {
 		state->builder.AddExecutionMode({state->main_func, ExecutionModeDerivativeGroupQuadsKHR});
 	}
 	state->builder.AddName(state->main_func, "main");
-	if (state->stage == ShaderType::Compute || state->needs_function_lds) {
+	if (state->stage == ShaderType::Compute || state->stage == ShaderType::Mesh || state->needs_function_lds) {
 		state->builder.AddName(state->lds_variable, "lds_dwords");
 	}
 	AddInputAnnotationsAndNames(state);
-	AddOutputAnnotationsAndNames(state);
+	if(state->stage!=ShaderType::Mesh) AddOutputAnnotationsAndNames(state);
 	AddDescriptorAnnotationsAndNames(state);
 	AddVsharpAnnotationsAndNames(state);
 	state->builder.AddAnnotation(
@@ -776,16 +777,16 @@ void EmitHeaderAndTypes(EmitterState* state) {
             state->vec2_float_type,state->vec3_float_type,state->guest_physical_uint_ptr,
             state->glsl_std450,state->guest_address_lookup_function,fault_fn);
 	}
-	if (state->stage == ShaderType::Compute || state->needs_function_lds) {
+	if (state->stage == ShaderType::Compute || state->stage == ShaderType::Mesh || state->needs_function_lds) {
 		const auto storage_class =
 		    state->needs_function_lds ? StorageClassFunction : StorageClassWorkgroup;
-		const auto lds_size = ConstantU32(state, state->needs_function_lds ? 8192u : 1024u);
+		const auto lds_size = ConstantU32(state, state->stage==ShaderType::Mesh ? std::max(state->vertex_input_info->mesh.lds_dwords,1u) : (state->needs_function_lds ? 8192u : 1024u));
 		state->builder.AddType({OpTypeArray, state->lds_array_type, state->uint_type, lds_size});
 		state->builder.AddType(
 		    {OpTypePointer, state->ptr_workgroup_array, storage_class, state->lds_array_type});
 		state->builder.AddType(
 		    {OpTypePointer, state->ptr_workgroup_uint, storage_class, state->uint_type});
-		if (state->stage == ShaderType::Compute) {
+		if (state->stage == ShaderType::Compute || state->stage == ShaderType::Mesh) {
 			state->builder.AddType({OpVariable, state->ptr_workgroup_array, state->lds_variable,
 			                        StorageClassWorkgroup});
 		}
@@ -917,6 +918,7 @@ void EmitHeaderAndTypes(EmitterState* state) {
 	state->builder.AddType(
 	    {OpTypePointer, state->ptr_image_uint, StorageClassImage, state->uint_type});
 	state->builder.AddType({OpTypeFunction, state->func_type, state->void_type});
+ if(state->stage==ShaderType::Mesh) DefineNativeMeshVariables(state);
 }
 
 void AllocateRegisterVariables(EmitterState* state) {

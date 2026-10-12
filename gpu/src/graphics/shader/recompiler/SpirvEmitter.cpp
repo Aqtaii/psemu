@@ -441,8 +441,8 @@ bool EmitProgram(const IR::Program& program, const IR::ResourceSnapshot& resourc
 		return false;
 	}
 	if (program.stage != ShaderType::Compute && program.stage != ShaderType::Vertex &&
-	    program.stage != ShaderType::Pixel) {
-		SetError(error, "binary SPIR-V emitter supports compute, vertex, and pixel shaders");
+	    program.stage != ShaderType::Pixel && program.stage != ShaderType::Mesh) {
+		SetError(error, "binary SPIR-V emitter supports compute, vertex, pixel, and native Mesh shaders");
 		return false;
 	}
 	if (!program.srt_patching_complete || !program.resource_tracking_complete ||
@@ -460,7 +460,53 @@ bool EmitProgram(const IR::Program& program, const IR::ResourceSnapshot& resourc
 		return false;
 	}
 
+ if(program.stage==ShaderType::Mesh) {
+  if(vertex_input_info==nullptr) {SetError(error,"Mesh input metadata missing");return false;}
+  const auto& mesh=vertex_input_info->mesh;
+  if(program.wave_size!=32 || mesh.host_subgroup_size!=32 ||
+     program.lane_mask_mode!=ShaderLaneMaskMode::NativeWave ||
+     mesh.invocations==0 || mesh.invocations>1024 || mesh.invocations%32!=0 ||
+     mesh.max_vertices==0 || mesh.max_vertices>1023 || mesh.max_vertices>mesh.invocations ||
+     mesh.max_primitives==0 || mesh.max_primitives>1024 || mesh.max_primitives>mesh.invocations ||
+     mesh.lds_dwords>32768) {
+   SetError(error,"Mesh requires validated native wave32 metadata; virtual wave64 is pending");return false;
+  }
+  for(const auto& output:program.info.outputs) {
+   if(output.kind!=IR::StageOutputKind::Position && output.kind!=IR::StageOutputKind::Parameter) {
+    SetError(error,"unsupported native Mesh output");return false;
+   }
+  }
+  for(size_t i=0;i<program.info.outputs.size();++i) {
+   const auto& output=program.info.outputs[i];
+   if(output.kind==IR::StageOutputKind::Position && output.index!=0) {
+    SetError(error,"native Mesh only supports position export zero");return false;
+   }
+   for(size_t j=0;j<i;++j) {
+    const auto& previous=program.info.outputs[j];
+    if(previous.kind==output.kind && (previous.index==output.index ||
+       (output.kind==IR::StageOutputKind::Parameter && previous.location==output.location))) {
+     SetError(error,"duplicate Mesh output binding");return false;
+    }
+   }
+  }
+  for(const auto& input:program.info.inputs) {
+   if(input.kind!=IR::StageInputKind::LocalInvocationIndex) {
+    SetError(error,"unsupported native Mesh input ABI");return false;
+   }
+  }
+  for(const auto& block:program.blocks) for(const auto& inst:block.instructions) {
+   if(inst.op==IR::Opcode::Barrier) {
+    SetError(error,"Mesh guest barrier uniformity is not validated");return false;
+   }
+   if(inst.op==IR::Opcode::Sendmsg && (inst.src_count!=2 ||
+      inst.src[0].kind!=IR::OperandKind::ImmediateU32 || inst.src[0].imm!=9 || inst.src[1].kind!=IR::OperandKind::Register ||
+      inst.src[1].reg.file!=IR::RegisterFile::M0 || inst.src[1].reg.index!=0)) {
+    SetError(error,"unsupported Mesh allocation message");return false;
+   }
+  }
+ }
 	EmitterState state;
+ if(program.stage==ShaderType::Mesh) state.builder=Builder(0x00010400u);
 	state.program              = &program;
 	state.resources            = &resources;
 	state.vertex_input_info    = vertex_input_info;

@@ -201,6 +201,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_mesh_outputs.ps1
 
+      - name: Test production native Mesh emitter
+        shell: pwsh
+        run: ./tools/scripts/test_native_mesh_emitter.ps1
+
       - name: Build complete emulator
         shell: cmd
         run: call cmbuild.bat
@@ -261,6 +265,7 @@ jobs:
         with:
           name: psemu-mesh-output-test
           path: |
+            build/native-atomic-tests/native_mesh_emitter.spv
             build/native-atomic-tests/mesh_outputs.spv
             build/native-atomic-tests/mesh_fragment.spv
             build/native-atomic-tests/mesh_gpu_smoke.exe

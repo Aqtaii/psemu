@@ -393,6 +393,7 @@ void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
 		case IR::Opcode::Waitcnt: EmitWaitcnt(state, inst); break;
 		case IR::Opcode::Barrier: EmitBarrier(state, inst); break;
 		case IR::Opcode::Sendmsg:
+   if(state->stage==ShaderType::Mesh) {EmitNativeMeshAllocate(state,inst);break;}
 		case IR::Opcode::TtraceData:
 		case IR::Opcode::InstPrefetch: EmitControlNop(state, inst); break;
 		case IR::Opcode::LoadInputF32: EmitLoadInputF32(state, inst); break;
@@ -1085,16 +1086,25 @@ void EmitDispatcherFunction(EmitterState* state, const IR::Program& program) {
 
 void EmitFunction(EmitterState* state, const IR::Program& program) {
 	state->builder.AddFunction(
-	    {OpFunction, state->void_type, state->main_func, FunctionControlNone, state->func_type});
+	    {OpFunction, state->void_type, state->stage==ShaderType::Mesh ? state->mesh_guest_func : state->main_func, FunctionControlNone, state->func_type});
 	state->builder.AddFunction({OpLabel, state->entry_label});
 
 	EmitRegisterVariables(state);
 	EmitComputeInputRegisters(state);
 	EmitPixelInputRegisters(state);
 	EmitVertexInputRegisters(state);
+ if(state->stage==ShaderType::Mesh) {
+  const auto pointer=PointerForRegister(*state,{IR::RegisterFile::Vector,5});
+  if(pointer!=0) {
+   const auto index=state->builder.AllocateId();
+   state->builder.AddFunction({OpLoad,state->uint_type,index,state->mesh_local_index});
+   state->builder.AddFunction({OpStore,pointer,index});
+  }
+ }
 	if (state->dispatcher_fallback) {
 		EmitDispatcherFunction(state, program);
 		state->builder.AddFunction({OpFunctionEnd});
+  if(state->stage==ShaderType::Mesh) EmitNativeMeshEntryPoint(state);
 		return;
 	}
 
@@ -1117,6 +1127,7 @@ void EmitFunction(EmitterState* state, const IR::Program& program) {
 	}
 
 	state->builder.AddFunction({OpFunctionEnd});
+ if(state->stage==ShaderType::Mesh) EmitNativeMeshEntryPoint(state);
 }
 
 } // namespace Libs::Graphics::ShaderRecompiler::Spirv::Emitter

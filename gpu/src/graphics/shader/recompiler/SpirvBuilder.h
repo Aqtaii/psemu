@@ -30,6 +30,8 @@ public:
 	void AddFunction(const std::vector<uint32_t>& words);
 
 	[[nodiscard]] std::vector<uint32_t> Build() const;
+ // SPIR-V 1.4 entry points must list all statically used globals.
+ [[nodiscard]] const std::vector<uint32_t>& GlobalVariables() const { return m_globals; }
 
 private:
 	static void AppendInstruction(std::vector<uint32_t>* section, uint32_t opcode,
@@ -49,6 +51,7 @@ private:
 	std::vector<uint32_t> m_debug;
 	std::vector<uint32_t> m_annotations;
 	std::vector<uint32_t> m_types;
+ std::vector<uint32_t> m_globals;
 	std::vector<uint32_t> m_functions;
 };
 
