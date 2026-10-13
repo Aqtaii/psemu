@@ -988,11 +988,13 @@ static void EmitDrawPrimitives(const HW::UserConfig* ucfg, vk::CommandBuffer vk_
 // submission completes; discarded recordings simply release the query pool.
 static std::shared_ptr<vk::QueryPool> PrepareDrawCoverageProbe(
     CommandBuffer* command, const DrawRenderState& state, const DrawCallInfo& draw,
-    uint64_t submit_id) {
+    uint64_t submit_id, bool primitives = false) {
     const char* flag = std::getenv("PSEMU_ASTRO_COVERAGE_PROBE");
     if (!flag || std::strcmp(flag, "1") != 0) return {};
-    static std::atomic_uint probe_count{0};
-    const auto probe_id = probe_count.fetch_add(1);
+    if (primitives && (!state.merged_mesh ||
+        !g_render_ctx->GetGraphicCtx()->mesh_queries_enabled)) return {};
+    static std::atomic_uint probe_count{0}, primitive_probe_count{0};
+    const auto probe_id = (primitives ? primitive_probe_count : probe_count).fetch_add(1);
     if (probe_id >= 48) return {};
     auto device = g_render_ctx->GetGraphicCtx()->device;
     auto pool = std::shared_ptr<vk::QueryPool>(new vk::QueryPool{},
@@ -1001,7 +1003,7 @@ static std::shared_ptr<vk::QueryPool> PrepareDrawCoverageProbe(
             delete p;
         });
     vk::QueryPoolCreateInfo info{};
-    info.queryType = vk::QueryType::eOcclusion;
+    info.queryType = primitives ? vk::QueryType::eMeshPrimitivesGeneratedEXT : vk::QueryType::eOcclusion;
     info.queryCount = 1;
     const auto created = device.createQueryPool(&info, nullptr, pool.get());
     if (created != vk::Result::eSuccess) {
@@ -1017,16 +1019,18 @@ static std::shared_ptr<vk::QueryPool> PrepareDrawCoverageProbe(
     const auto colors = state.color_count;
     const auto extent = colors ? state.color_info[0].extent : vk::Extent2D{};
     command->OnFenceComplete([device, pool, probe_id, submit_id, mesh, words,
-                              indices, instances, colors, extent] {
+                              indices, instances, colors, extent, primitives] {
         uint64_t result[2]{};
         const auto status = device.getQueryPoolResults(*pool, 0, 1, sizeof(result),
             result, sizeof(result), vk::QueryResultFlagBits::e64 |
                                     vk::QueryResultFlagBits::eWithAvailability);
-        printf("[GPU-DRAW-COVERAGE] id=%u submit=%llu mesh=%u vs_words=%zu "
-               "indices=%u instances=%u colors=%u extent=%ux%u samples=%llu "
+        printf("[%s] id=%u submit=%llu mesh=%u vs_words=%zu "
+               "indices=%u instances=%u colors=%u extent=%ux%u %s=%llu "
                "available=%llu result=%d source=completed-fence\n",
+               primitives ? "GPU-MESH-PRIMITIVES" : "GPU-DRAW-COVERAGE",
                probe_id, static_cast<unsigned long long>(submit_id), unsigned(mesh),
                words, indices, instances, colors, extent.width, extent.height,
+               primitives ? "primitives" : "samples",
                static_cast<unsigned long long>(result[0]),
                static_cast<unsigned long long>(result[1]), int(status));
     });
@@ -1104,6 +1108,7 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 
 		FlushBounceCopies(state->vk_buffer, false);
 		auto coverage_probe = PrepareDrawCoverageProbe(buffer, *state, draw, submit_id);
+		auto primitive_probe = PrepareDrawCoverageProbe(buffer, *state, draw, submit_id, true);
 
 		LogDrawPhase(draw.name, "BeginRenderPass");
 		if (set_auto_debug) {
@@ -1116,6 +1121,7 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 		}
 
 		if (coverage_probe) state->vk_buffer.beginQuery(*coverage_probe, 0, {});
+		if (primitive_probe) state->vk_buffer.beginQuery(*primitive_probe, 0, {});
   if(state->merged_mesh) {
    std::vector<uint32_t> payload;std::string error;
    for(uint32_t instance=0;instance<draw.instance_count;++instance) {
@@ -1137,6 +1143,7 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 		if (set_auto_debug) {
 			SetDrawDebugPhase(buffer, submit_id, draw, 0x600u);
 		}
+		if (primitive_probe) state->vk_buffer.endQuery(*primitive_probe, 0);
 		if (coverage_probe) state->vk_buffer.endQuery(*coverage_probe, 0);
 		buffer->EndRenderPass();
 		FlushBounceCopies(state->vk_buffer, true);

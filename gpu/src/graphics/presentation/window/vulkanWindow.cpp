@@ -618,6 +618,12 @@ static vk::Device VulkanCreateDevice(vk::PhysicalDevice physical_device, vk::Sur
 	                                          : static_cast<void*>(&supported_features13);
 	physical_device.getFeatures2(&supported_features2);
 	ctx->mesh_shader_enabled = mesh_extension && supported_mesh.meshShader == VK_TRUE;
+	const char* coverage_probe = std::getenv("PSEMU_ASTRO_COVERAGE_PROBE");
+	ctx->mesh_queries_enabled = ctx->mesh_shader_enabled &&
+	    supported_mesh.meshShaderQueries == VK_TRUE && coverage_probe &&
+	    std::strcmp(coverage_probe, "1") == 0;
+	std::printf("[VK-MESH-QUERIES] supported=%u enabled=%u\n",
+	            unsigned(supported_mesh.meshShaderQueries), unsigned(ctx->mesh_queries_enabled));
 	if (ctx->mesh_shader_enabled) {
 		ctx->mesh_shader_properties.sType = vk::StructureType::ePhysicalDeviceMeshShaderPropertiesEXT;
 		vk::PhysicalDeviceProperties2 mesh_properties {};
@@ -686,6 +692,7 @@ static vk::Device VulkanCreateDevice(vk::PhysicalDevice physical_device, vk::Sur
 	mesh_features.sType = vk::StructureType::ePhysicalDeviceMeshShaderFeaturesEXT;
 	mesh_features.pNext = &features13;
 	mesh_features.meshShader = ctx->mesh_shader_enabled ? VK_TRUE : VK_FALSE;
+	mesh_features.meshShaderQueries = ctx->mesh_queries_enabled ? VK_TRUE : VK_FALSE;
 
 	vk::DeviceCreateInfo create_info {};
 	create_info.sType                = vk::StructureType::eDeviceCreateInfo;

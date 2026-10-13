@@ -47,14 +47,18 @@ int main(int argc,char** argv){try{
  }
  if(!gpu)throw std::runtime_error("No suitable Mesh GPU");
  const float priority=1;VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};qci.queueFamilyIndex=family;qci.queueCount=1;qci.pQueuePriorities=&priority;
- VkPhysicalDeviceMeshShaderFeaturesEXT mesh{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};mesh.meshShader=VK_TRUE;
+ const bool primitive_probe=argc==4 && std::string(argv[3])=="primitive-probe";
+ VkPhysicalDeviceMeshShaderFeaturesEXT supported_mesh{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
+ VkPhysicalDeviceFeatures2 supported{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};supported.pNext=&supported_mesh;vkGetPhysicalDeviceFeatures2(gpu,&supported);
+ if(primitive_probe && !supported_mesh.meshShaderQueries) throw std::runtime_error("Mesh primitive queries unsupported");
+ VkPhysicalDeviceMeshShaderFeaturesEXT mesh{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};mesh.meshShader=VK_TRUE;mesh.meshShaderQueries=primitive_probe;
  const char* extension=VK_EXT_MESH_SHADER_EXTENSION_NAME;VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};dci.pNext=&mesh;
  dci.queueCreateInfoCount=1;dci.pQueueCreateInfos=&qci;dci.enabledExtensionCount=1;dci.ppEnabledExtensionNames=&extension;
  VkDevice device;VK_CHECK(vkCreateDevice(gpu,&dci,nullptr,&device));VkQueue queue;vkGetDeviceQueue(device,family,0,&queue);
  const bool buffer_reads=argc==4 && std::string(argv[3])=="buffer-reads";
  const bool point_push=buffer_reads || (argc==4 && std::string(argv[3])=="point-push");
  const bool vertex_probe=argc==4 && std::string(argv[3])=="vertex-probe";
- if(argc==4 && !point_push && !vertex_probe) throw std::runtime_error("Unknown Mesh GPU test mode");
+ if(argc==4 && !point_push && !vertex_probe && !primitive_probe) throw std::runtime_error("Unknown Mesh GPU test mode");
  auto draw=reinterpret_cast<PFN_vkCmdDrawMeshTasksEXT>(vkGetDeviceProcAddr(device,"vkCmdDrawMeshTasksEXT"));if(!draw)throw std::runtime_error("Mesh draw entry unavailable");
  constexpr uint32_t width=32,height=32,bytes=width*height*4;
  VkImageCreateInfo image_info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};image_info.imageType=VK_IMAGE_TYPE_2D;image_info.format=VK_FORMAT_R8G8B8A8_UNORM;
@@ -119,9 +123,12 @@ int main(int argc,char** argv){try{
  VkCommandPoolCreateInfo ci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};ci.queueFamilyIndex=family;ci.flags=VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;VkCommandPool pool;VK_CHECK(vkCreateCommandPool(device,&ci,nullptr,&pool));
  VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};cai.commandPool=pool;cai.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY;cai.commandBufferCount=1;
  VkCommandBuffer cmd;VK_CHECK(vkAllocateCommandBuffers(device,&cai,&cmd));VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};bool readbacks_passed=true;
+ VkQueryPool primitive_pool=VK_NULL_HANDLE;
+ if(primitive_probe){VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};qi.queryType=VK_QUERY_TYPE_MESH_PRIMITIVES_GENERATED_EXT;qi.queryCount=1;VK_CHECK(vkCreateQueryPool(device,&qi,nullptr,&primitive_pool));}
  for(uint32_t point_case=0;point_case<(point_push?2u:1u);++point_case) {
  if(point_case!=0) VK_CHECK(vkResetCommandBuffer(cmd,0));
  VK_CHECK(vkBeginCommandBuffer(cmd,&begin));
+ if(primitive_probe)vkCmdResetQueryPool(cmd,primitive_pool,0,1);
  VkClearValue clear{};clear.color.float32[3]=1;VkRenderPassBeginInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};rp.renderPass=render_pass;rp.framebuffer=framebuffer;rp.renderArea=scissor;rp.clearValueCount=1;rp.pClearValues=&clear;
  vkCmdBeginRenderPass(cmd,&rp,VK_SUBPASS_CONTENTS_INLINE);vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline);
  if(buffer_reads) vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,layout,0,1,&storage_set,0,nullptr);
@@ -129,7 +136,10 @@ int main(int argc,char** argv){try{
   const uint32_t payload[6]={0x87654321u,point_case?2u:1u,point_case?41u:25u,point_case?43u:27u,point_case?0xabcdef11u:0xabcdef01u,0x12345678u};
   vkCmdPushConstants(cmd,layout,VK_SHADER_STAGE_MESH_BIT_EXT,0,sizeof(payload),payload);
  }
- if(vertex_probe) vkCmdDraw(cmd,3,1,0,0);else draw(cmd,1,1,1);vkCmdEndRenderPass(cmd);
+ if(primitive_probe)vkCmdBeginQuery(cmd,primitive_pool,0,0);
+ if(vertex_probe) vkCmdDraw(cmd,3,1,0,0);else draw(cmd,1,1,1);
+ if(primitive_probe)vkCmdEndQuery(cmd,primitive_pool,0);
+ vkCmdEndRenderPass(cmd);
  VkImageMemoryBarrier ib{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};ib.srcAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;ib.dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT;ib.oldLayout=ib.newLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
  ib.srcQueueFamilyIndex=ib.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;ib.image=image;ib.subresourceRange=vi.subresourceRange;
  vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,nullptr,0,nullptr,1,&ib);
@@ -138,6 +148,9 @@ int main(int argc,char** argv){try{
  vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,0,nullptr,1,&bb,0,nullptr);VK_CHECK(vkEndCommandBuffer(cmd));
  VkFenceCreateInfo fence_info{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};VkFence fence;VK_CHECK(vkCreateFence(device,&fence_info,nullptr,&fence));
  VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};submit.commandBufferCount=1;submit.pCommandBuffers=&cmd;VK_CHECK(vkQueueSubmit(queue,1,&submit,fence));VK_CHECK(vkWaitForFences(device,1,&fence,VK_TRUE,20000000000ull));
+ if(primitive_probe){uint64_t result[2]{};VK_CHECK(vkGetQueryPoolResults(device,primitive_pool,0,1,sizeof(result),result,sizeof(result),VK_QUERY_RESULT_64_BIT|VK_QUERY_RESULT_WITH_AVAILABILITY_BIT));
+  std::printf("[MESH-PRIMITIVE-PROBE] primitives=%llu available=%llu game_frame=0\n",static_cast<unsigned long long>(result[0]),static_cast<unsigned long long>(result[1]));
+  readbacks_passed=readbacks_passed && result[0]>0 && result[1]==1;}
  void* pixels;VK_CHECK(vkMapMemory(device,buffer_memory,0,bytes,0,&pixels));auto* p=static_cast<unsigned char*>(pixels);uint32_t red=0;
  for(uint32_t i=0;i<width*height;++i)if((point_case==1 ? (p[i*4]<10 && p[i*4+1]>240) : (p[i*4]>240 && p[i*4+1]<10)) && p[i*4+2]<10)++red;
  vkUnmapMemory(device,buffer_memory);
@@ -154,6 +167,7 @@ int main(int argc,char** argv){try{
   vkDestroyDescriptorPool(device,storage_pool,nullptr);vkDestroyDescriptorSetLayout(device,storage_layout,nullptr);
   vkDestroyBuffer(device,input_buffer,nullptr);vkFreeMemory(device,input_memory,nullptr);
  }
+ if(primitive_pool)vkDestroyQueryPool(device,primitive_pool,nullptr);
  vkDestroyCommandPool(device,pool,nullptr);vkDestroyPipeline(device,pipeline,nullptr);vkDestroyPipelineLayout(device,layout,nullptr);
  vkDestroyShaderModule(device,mesh_shader,nullptr);vkDestroyShaderModule(device,fragment_shader,nullptr);vkDestroyFramebuffer(device,framebuffer,nullptr);vkDestroyRenderPass(device,render_pass,nullptr);
  vkDestroyImageView(device,view,nullptr);vkDestroyImage(device,image,nullptr);vkFreeMemory(device,image_memory,nullptr);vkDestroyBuffer(device,buffer,nullptr);vkFreeMemory(device,buffer_memory,nullptr);vkDestroyDevice(device,nullptr);vkDestroyInstance(instance,nullptr);

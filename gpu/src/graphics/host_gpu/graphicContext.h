@@ -46,6 +46,7 @@ struct GraphicContext: public VulkanInstance {
 	// Both features must be enabled before physical-address shader accesses.
 	bool                                  bvh_device_address_enabled = false;
 	bool                                  mesh_shader_enabled = false;
+	bool                                  mesh_queries_enabled = false;
 	vk::PhysicalDeviceMeshShaderPropertiesEXT mesh_shader_properties {};
 	uint32_t                              screen_width  = 0;
 	uint32_t                              screen_height = 0;
