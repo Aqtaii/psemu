@@ -1,5 +1,6 @@
 #include "graphics/shader/recompiler/meshOutputProbe.h"
 #include "graphics/host_gpu/renderer/renderDraw.h"
+#include "graphics/host_gpu/renderer/singlePointIndex.h"
 
 #include "common/assert.h"
 #include "common/common.h"
@@ -1217,6 +1218,20 @@ void RenderDrawIndex(uint64_t submit_id, CommandBuffer* buffer, HW::Context* ctx
 	                     index_count, flags, type, instance_count,
 	                     reinterpret_cast<uint64_t>(index_addr));
 
+ // A single indexed point is exactly the existing point draw with its decoded vertex ID.
+ // Read before taking the renderer mutex so a GPU-owned guest page can resolve its producer.
+ if(index_count==1 && flags==0 && type==1 && IsAstroMeshDraw(ctx,ucfg,sh_ctx)) {
+  uint32_t first_vertex=0;
+  if(DecodeSinglePointIndex(index_addr,index_type_and_size,vertex_offset_add,&first_vertex)) {
+   static std::atomic_uint indexed_mesh_logs{0};
+   if(indexed_mesh_logs.fetch_add(1)<8)
+    printf("[ASTRO-MESH-INDEXED] count=1 instances=%u index_type=%u first_vertex=%u first_instance=%u source=decoded-guest-index\n",
+     instance_count,index_type_and_size,first_vertex,first_instance);
+   RenderDrawIndexAuto(submit_id,buffer,ctx,ucfg,sh_ctx,1,0,render_target_slice_offset,
+    instance_count,first_vertex,first_instance);
+   return;
+  }
+ }
 	Common::LockGuard lock(g_render_ctx->GetMutex());
 
 	if (index_count == 0) {

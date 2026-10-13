@@ -1,5 +1,6 @@
 #include "graphics/shader/recompiler/meshOutputProbe.h"
 #include "graphics/host_gpu/renderer/meshSubgroupPolicy.h"
+#include "graphics/host_gpu/renderer/singlePointIndex.h"
 #include "graphics/shader/recompiler/SpirvEmitter.h"
 #include "graphics/shader/recompiler/spirvEmitter/spirvEmitterInternal.h"
 #include "common/assert.h"
@@ -692,6 +693,17 @@ void WriteCapturedMesh(const char* es_path,const char* gs_path) {
  Require(std::fwrite(words.data(),4,words.size(),f)==words.size());Require(std::fclose(f)==0);
 }
 int main(int argc,char** argv){
+ {
+  const std::array<uint8_t,5> bytes{0xaa,0x34,0x12,0x78,0x56};
+  uint32_t vertex=99;
+  Require(DecodeSinglePointIndex(bytes.data()+1,0,-3,&vertex) && vertex==0x1231);
+  Require(DecodeSinglePointIndex(bytes.data()+1,1,5,&vertex) && vertex==0x56781239);
+  Require(DecodeSinglePointIndex(bytes.data()+1,2,-0x35,&vertex) && vertex==0xffffffff);
+  Require(!DecodeSinglePointIndex(bytes.data(),3,0,&vertex) && vertex==0xffffffff);
+  Require(!DecodeSinglePointIndex(nullptr,0,0,&vertex) && vertex==0xffffffff);
+  Require(!DecodeSinglePointIndex(bytes.data(),0,0,nullptr));
+ }
+
  {
   auto p=SelectMeshWave32Policy(true,true,16,32,32);
   Require(p.supported && p.required_size==32);
