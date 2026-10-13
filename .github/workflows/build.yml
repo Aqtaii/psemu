@@ -53,6 +53,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_semaphore_dispatch.ps1
 
+      - name: Test captured Astro XML numeric parsing
+        shell: pwsh
+        run: ./tools/scripts/test_guest_numeric_parse.ps1
+
       - name: Test ten-argument ACB DMA ABI
         shell: pwsh
         run: ./tools/scripts/test_acb_dma_abi.ps1

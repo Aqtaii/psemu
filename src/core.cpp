@@ -2,6 +2,7 @@
 #include "native_atomic_guard.h"
 #include "guest_stub_memory.h"
 #include "guest_file_stat.h"
+#include "guest_numeric_parse.h"
 #include "host_allocation_size.h"
 #include "sarah_tls_sites.h"
 #include "shared_direct_memory.h"
@@ -5185,6 +5186,42 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 RegisterAllocSize(p, size);
                 ctx->Rax = reinterpret_cast<uint64_t>(p);
                 special_return_set = true;
+            } else if (readable_name == "sscanf_s") {
+                const auto input = SafeReadCString(reinterpret_cast<const char*>(ctx->Rdi),256);
+                const auto format = SafeReadCString(reinterpret_cast<const char*>(ctx->Rsi),64);
+                int assigned = 0;
+                auto* destination = reinterpret_cast<uint32_t*>(ctx->Rdx);
+                if (format == "%x" && destination && SafeReadable(destination,sizeof(uint32_t))) {
+                    assigned = GuestScanHex32(input.c_str(),destination);
+                }
+                ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(assigned));
+                special_return_set = true;
+                static std::atomic_uint scan_logs{0};
+                if (scan_logs.fetch_add(1,std::memory_order_relaxed)<8)
+                    printf("[GUEST-SCAN] format=%s input=%.32s assigned=%d supported=%u\n",
+                           format.c_str(),input.c_str(),assigned,unsigned(format=="%x"));
+            } else if (readable_name == "atoi" || readable_name == "atol" || readable_name == "atoll") {
+                const auto input = SafeReadCString(reinterpret_cast<const char*>(ctx->Rdi),256);
+                const int64_t parsed = GuestDecimalInteger(input.c_str());
+                const int64_t value = readable_name=="atoi" ? static_cast<int32_t>(parsed) : parsed;
+                ctx->Rax = static_cast<uint64_t>(value);
+                special_return_set = true;
+                static std::atomic_uint integer_logs{0};
+                if (integer_logs.fetch_add(1,std::memory_order_relaxed)<8)
+                    printf("[GUEST-ATOI] function=%s input=%.32s value=%lld\n",
+                           readable_name.c_str(),input.c_str(),static_cast<long long>(value));
+            } else if (readable_name == "atof") {
+                const auto input = SafeReadCString(reinterpret_cast<const char*>(ctx->Rdi),256);
+                errno = 0;
+                const double value = GuestDecimalFloat(input.c_str());
+                if (errno==ERANGE)g_guest_errno=kGuestERANGE;
+                std::memcpy(&ctx->Xmm0.Low,&value,sizeof(value));
+                ctx->Xmm0.High = 0;
+                ctx->ContextFlags |= CONTEXT_FLOATING_POINT;
+                special_return_set = true;
+                static std::atomic_uint float_logs{0};
+                if (float_logs.fetch_add(1,std::memory_order_relaxed)<8)
+                    printf("[GUEST-ATOF] input=%.32s value=%.9g\n",input.c_str(),value);
             } else if (readable_name == "strtol" || readable_name == "strtoll" ||
                        readable_name == "strtoul" || readable_name == "strtoull") {
                 // long/long long/unsigned strtoX(const char* nptr, char** endptr, int base)
