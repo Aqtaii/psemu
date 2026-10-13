@@ -3071,10 +3071,11 @@ void TextureCache::ReconstructDepthStencilForBufferLocked(CachedImage& cached,
 	const auto info = cached.depth;
 	const bool stencil = address == info.stencil_address && size == info.stencil_size;
 	const bool depth = address == info.address && size == info.size;
+	const bool has_htile = info.htile_address != 0 || info.htile_size != 0;
 	TileSizeAlign expected_stencil {}, expected_htile {}, expected_depth {};
 	const auto z = info.bytes_per_element == 2 ? Prospero::DepthFormat::kZ16 : Prospero::DepthFormat::kZ32F;
 	const bool layout = TileGetDepthSize(info.width, info.height, 0, Prospero::GpuEnumValue(z),
-	    Prospero::GpuEnumValue(Prospero::StencilFormat::k8UInt), false,
+	    Prospero::GpuEnumValue(Prospero::StencilFormat::k8UInt), has_htile,
 	    &expected_stencil, &expected_htile, &expected_depth);
 	if ((!stencil && !depth) || !cached.gpu_modified || cached.buffer_modified ||
 	    !cached.stencil_initialized || !IsSupportedDepthTargetFormat(info) ||
@@ -3082,7 +3083,8 @@ void TextureCache::ReconstructDepthStencilForBufferLocked(CachedImage& cached,
 	    info.pitch != TileGetTexturePitch(info.guest_format, info.width, 1, info.tile_mode) ||
 	    info.layers != 1 || !layout || info.size != expected_depth.size ||
 	    info.stencil_size != expected_stencil.size || info.stencil_htile_compressed ||
-	    info.htile_address != 0 || info.htile_size != 0 ||
+	    (has_htile && (info.htile_address == 0 || info.htile_size != expected_htile.size ||
+	                  expected_htile.align == 0 || info.htile_address % expected_htile.align != 0)) ||
 	    cached.image->format != info.format || cached.image->layers != 1 ||
 	    cached.image->extent.width != info.width || cached.image->extent.height != info.height ||
 	    ImagePageRangesOverlap(info.address, info.size, info.stencil_address, info.stencil_size) ||
@@ -3095,6 +3097,34 @@ void TextureCache::ReconstructDepthStencilForBufferLocked(CachedImage& cached,
 		     info.htile_address, info.htile_size, info.stencil_htile_compressed, cached.stencil_initialized);
 	}
 	RequireRetirementIsolation({&cached}, "depth/stencil buffer reconstruction", address, size);
+	// HTile is virtual write-tracked metadata in this backend. Its guest bytes
+	// stay intact; only the last native owner's tracking record is retired.
+	if (has_htile) {
+		const auto metadata = m_surface_metas.find(info.htile_address);
+		if (metadata == m_surface_metas.end() || metadata->second.size != info.htile_size ||
+		    metadata->second.layers != info.layers) {
+			EXIT("TextureCache: invalid HTile registration for depth/stencil reconstruction\n");
+		}
+		for (const auto& other: m_images) {
+			if (other.get() != &cached && other->kind == CachedImage::Kind::DepthTarget &&
+			    ImagePageRangesOverlap(info.htile_address, info.htile_size,
+			                           other->depth.htile_address, other->depth.htile_size)) {
+				EXIT("TextureCache: depth/stencil reconstruction has a retained HTile owner\n");
+			}
+			for (uint32_t plane = 0; plane < other->RangeCount(); plane++) {
+				if (ImagePageRangesOverlap(info.htile_address, info.htile_size,
+				                           other->Address(plane), other->Size(plane))) {
+					EXIT("TextureCache: depth/stencil HTile retirement aliases image pages\n");
+				}
+			}
+		}
+		for (const auto& [meta_address, meta]: m_surface_metas) {
+			if (meta_address != info.htile_address &&
+			    ImagePageRangesOverlap(info.htile_address, info.htile_size, meta_address, meta.size)) {
+				EXIT("TextureCache: depth/stencil HTile retirement aliases retained metadata pages\n");
+			}
+		}
+	}
 	Transfer::WaitForGraphicsIdle(cached.ctx);
 	std::array<std::vector<uint8_t>, 2> backing;
 	for (uint32_t plane = 0; plane < 2; plane++) {
@@ -3122,6 +3152,15 @@ void TextureCache::ReconstructDepthStencilForBufferLocked(CachedImage& cached,
 		m_memory_tracker.ForEachDownloadRange<true>(cached.Address(plane), cached.Size(plane),
 		                                          [](uint64_t, uint64_t) noexcept {});
 	}
+	if (has_htile) {
+		auto metadata = m_surface_metas.find(info.htile_address);
+		if (metadata->second.gpu_modified) {
+			m_metadata_tracker.ForEachDownloadRange<true>(metadata->first, metadata->second.size,
+			                                              [](uint64_t, uint64_t) noexcept {});
+		}
+		m_metadata_tracker.UntrackMemory(metadata->first, metadata->second.size);
+		m_surface_metas.erase(metadata);
+	}
 	cached.gpu_modified = false;
 	// Backing owns both aspects. Retire the native cache entry rather than refreshing
 	// only depth and accidentally overwriting the independently-written stencil plane.
@@ -3129,8 +3168,8 @@ void TextureCache::ReconstructDepthStencilForBufferLocked(CachedImage& cached,
 	static std::atomic_uint logs {0};
 	if (logs.fetch_add(1, std::memory_order_relaxed) < 8) {
 		printf("[DEPTH-STENCIL-BUFFER-SYNC] depth=0x%016" PRIx64 " stencil=0x%016" PRIx64
-		       " write=0x%016" PRIx64 " both_aspects=1 padding_preserved=1 retired=1\n",
-		       info.address, info.stencil_address, address);
+		       " write=0x%016" PRIx64 " both_aspects=1 padding_preserved=1 retired=1 htile_retired=%u\n",
+		       info.address, info.stencil_address, address, static_cast<unsigned>(has_htile));
 	}
 }
 
