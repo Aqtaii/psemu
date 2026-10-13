@@ -8,6 +8,7 @@
 #include "graphics/shader/recompiler/ShaderInfoCollection.h"
 #include <array>
 #include <fstream>
+#include <source_location>
 #include <cstdio>
 #include <cstdlib>
 using namespace Libs::Graphics;
@@ -21,7 +22,7 @@ void DbgExit(int) {std::abort();}
 }
 IR::Operand Imm(uint32_t value){IR::Operand o;o.kind=IR::OperandKind::ImmediateU32;o.imm=value;return o;}
 IR::Operand Reg(IR::RegisterFile file,uint32_t index){IR::Operand o;o.kind=IR::OperandKind::Register;o.reg={file,index};return o;}
-void Require(bool ok,const std::string& error={}){if(!ok){std::fprintf(stderr,"Mesh emitter test failed: %s\n",error.c_str());std::exit(1);}}
+void Require(bool ok,const std::string& error={},std::source_location where=std::source_location::current()){if(!ok){std::fprintf(stderr,"Mesh emitter test failed line=%u: %s\n",where.line(),error.c_str());std::exit(1);}}
 // Exercise the production register allocator/load/store emitter without enabling public wave64.
 // A render readback must distinguish upper/lower VGPR values while seeing a shared scalar write.
 void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInputInfo& info,
@@ -228,7 +229,7 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  auto rejected=address;rejected.src_count=2;Require(!EmitGuestInstruction(&state,rejected));
  rejected=scale;rejected.dst=Reg(IR::RegisterFile::Scalar,28);Require(!EmitGuestInstruction(&state,rejected));
  rejected=align;rejected.dst2=Reg(IR::RegisterFile::Vcc,0);Require(!EmitGuestInstruction(&state,rejected));
- rejected=scale;rejected.src[0].sdwa_sel=0;Require(!EmitGuestInstruction(&state,rejected));
+ rejected=scale;rejected.src[0].sdwa_sel=0;rejected.src[0].sdwa_sext=true;Require(!EmitGuestInstruction(&state,rejected));
  rejected=address;rejected.src[0].dpp=true;rejected.src[0].dpp_ctrl=0x111;Require(!EmitGuestInstruction(&state,rejected));
  Require(state.lane_half==0 && state.instruction_register_values.empty());
  // Different sparse EXEC words preserve inactive lanes through each new opcode.
