@@ -832,7 +832,9 @@ ClassifyStorageBufferRebind(bool buffer_overlap, bool cached_gpu_modified,
 	       sampled.address == depth.stencil_address && sampled.size == depth.stencil_size &&
 	       sampled.format == Prospero::GpuEnumValue(Prospero::BufferFormat::k8UInt) &&
 	       sampled.width == depth.width && sampled.height == depth.height &&
-	       sampled.pitch == depth.pitch && sampled.tile == depth.tile_mode &&
+	       // R8 stencil has 256-wide blocks; Z32 uses 128-wide blocks.
+	       sampled.pitch == ((uint64_t(depth.width) + 255u) & ~uint64_t(255u)) &&
+	       sampled.tile == depth.tile_mode &&
 	       sampled.base_level == 0 && sampled.levels == 1 && sampled.view_levels == 1 &&
 	       sampled.depth == 1 && sampled.base_array == 0 && depth.layers == 1 &&
 	       sampled.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor2D);

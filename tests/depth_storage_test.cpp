@@ -6,10 +6,12 @@ int main() {
   d.stencil_address=d.address+d.size;d.stencil_size=0x280000;
   d.width=d.pitch=1920;d.height=1080;d.tile_mode=24;
   ImageInfo s{};s.address=d.stencil_address;s.size=d.stencil_size;
-  s.width=s.pitch=1920;s.height=1080;s.tile=24;
+  s.width=1920;s.pitch=2048;s.height=1080;s.tile=24;
   s.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k8UInt);
   s.type=Prospero::GpuEnumValue(Prospero::ImageType::kColor2D);
   Require(CanRetireSampledStencil(s,false,d));
+  auto depth_pitch=s;depth_pitch.pitch=d.pitch;
+  Require(!CanRetireSampledStencil(depth_pitch,false,d));
   Require(!CanRetireSampledStencil(s,true,d));
   for(int i=0;i<12;i++) {
    auto bad=s;

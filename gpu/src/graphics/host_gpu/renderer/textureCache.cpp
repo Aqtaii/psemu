@@ -2277,6 +2277,14 @@ DepthStencilVulkanImage* TextureCache::FindDepthTarget(CommandBuffer* command, G
 			case DepthOverlap::Unsupported: break;
 		}
 		if (!supported) {
+			LOGF("[DEPTH-ALIAS] stencil=0x%016" PRIx64 "+0x%016" PRIx64
+			     " extent=%ux%u pitch=%u tile=%u layers=%u clear=%u,%u current=%u"
+			     " sampled_format=%u extent=%ux%u pitch=%u tile=%u gpu_modified=%u\n",
+			     info.stencil_address, info.stencil_size, info.width, info.height, info.pitch,
+			     info.tile_mode, info.layers, info.depth_load_clear, info.stencil_load_clear,
+			     IsCoherentGuestImageSource(stencil_source, info.stencil_address, info.stencil_size),
+			     cached.info.format, cached.info.width, cached.info.height, cached.info.pitch,
+			     cached.info.tile, cached.gpu_modified);
 			EXIT("TextureCache: unsupported depth-target alias, depth=0x%016" PRIx64
 			     "+0x%016" PRIx64 " existing_kind=%u existing=0x%016" PRIx64 "+0x%016" PRIx64 "\n",
 			     info.address, info.size, static_cast<uint32_t>(cached.kind), cached.Address(),
