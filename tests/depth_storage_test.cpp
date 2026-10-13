@@ -1,5 +1,23 @@
 static void Require(bool ok) {if(!ok) throw std::runtime_error("regression failed");}
 int main() {
+ // Actual HTile allocation is adjacent to stencil; shared pages must retain ownership.
+ {
+  constexpr uint64_t htile=0x243c0e80000ull, bytes=0x30000;
+  Require(DepthMetadataPagesOverlap(htile,bytes,htile,bytes));
+  Require(DepthMetadataPagesOverlap(htile,bytes,htile+bytes-1,0x1000));
+  Require(!DepthMetadataPagesOverlap(htile,bytes,htile+bytes,0x1000));
+  Require(!DepthMetadataPagesOverlap(htile,bytes,htile-0x280000,0x280000));
+  Require(!DepthMetadataPagesOverlap(htile,bytes,0,0));
+  Require(!DepthMetadataPagesOverlap(0,0,htile,bytes));
+  Require(!DepthMetadataPagesOverlap(htile,bytes,htile,0));
+  // Disjoint bytes on one watched page still conflict during retirement.
+  Require(DepthMetadataPagesOverlap(htile+1,1,htile+3,1));
+  bool rejected=false;
+  try { (void)DepthMetadataPagesOverlap(htile,bytes,UINT64_MAX-1,4); }
+  catch(const std::runtime_error&) {rejected=true;}
+  Require(rejected);
+ }
+
  // Both aspects publish together; a conflict in either must leave all bytes untouched.
  for(int conflict=0;conflict<6;conflict++) {
   BufferCache cache;

@@ -637,6 +637,13 @@ SelectDepthTransitionSource(bool depth_load_clear, bool sampled_native_available
 	return left_first <= right_last && right_first <= left_last;
 }
 
+// A depth target may omit virtual HTile. Absent metadata has no tracked pages.
+[[nodiscard]] inline bool DepthMetadataPagesOverlap(uint64_t left, uint64_t left_size,
+                                                    uint64_t right, uint64_t right_size) {
+	return left != 0 && left_size != 0 && right != 0 && right_size != 0 &&
+	       ImagePageRangesOverlap(left, left_size, right, right_size);
+}
+
 [[nodiscard]] inline SampledOverlap ClassifySampledOverlap(const ImageInfo& requested,
                                                            const ImageInfo& cached,
                                                            bool             cached_gpu_modified,
