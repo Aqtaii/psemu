@@ -3078,6 +3078,8 @@ void TextureCache::ReconstructDepthStencilForBufferLocked(CachedImage& cached,
 	    &expected_stencil, &expected_htile, &expected_depth);
 	if ((!stencil && !depth) || !cached.gpu_modified || cached.buffer_modified ||
 	    !cached.stencil_initialized || !IsSupportedDepthTargetFormat(info) ||
+	    DepthAspectTransferBytes(info.format) != info.bytes_per_element ||
+	    info.pitch != TileGetTexturePitch(info.guest_format, info.width, 1, info.tile_mode) ||
 	    info.layers != 1 || !layout || info.size != expected_depth.size ||
 	    info.stencil_size != expected_stencil.size || info.stencil_htile_compressed ||
 	    info.htile_address != 0 || info.htile_size != 0 ||
