@@ -1,4 +1,5 @@
 #include "graphics/shader/recompiler/spirvEmitter/spirvEmitterInternal.h"
+#include "graphics/shader/recompiler/meshOutputProbe.h"
 
 namespace Libs::Graphics::ShaderRecompiler::Spirv::Emitter {
 namespace {
@@ -104,10 +105,43 @@ void EmitNativeMeshEntryPoint(EmitterState* state) {
  const auto vertices=MeshCount(state,allocation,0,10,mesh.max_vertices);
  const auto primitives=MeshCount(state,allocation,12,11,mesh.max_primitives);
  b.AddFunction({spv::OpSetMeshOutputsEXT,vertices,primitives});
+ const bool probe=MeshOutputProbeEnabled() && state->guest_address_fault_variable!=0;
+ const auto probe_store=[&](uint32_t offset,uint32_t value) {
+  const auto ptr=b.AllocateId();
+  b.AddFunction({spv::OpAccessChain,state->ptr_storage_buffer_uint,ptr,
+   state->guest_address_fault_variable,ConstantU32(state,0),offset});
+  b.AddFunction({spv::OpStore,ptr,value});
+ };
+ if(probe) MeshIf(state,first,[&]{
+  probe_store(ConstantU32(state,4),ConstantU32(state,MeshOutputProbe::Magic));
+  probe_store(ConstantU32(state,5),allocation);
+  probe_store(ConstantU32(state,6),vertices);
+  probe_store(ConstantU32(state,7),primitives);
+ });
  const auto saved_half=state->lane_half;
  for(uint32_t half=0;half<state->lanes_per_invocation;++half) {
  state->lane_half=half;
  const auto index=EmitMeshGuestLocalInvocationIndex(state);
+ if(probe) {
+  const auto bounded=b.AllocateId();
+  b.AddFunction({spv::OpULessThan,state->bool_type,bounded,index,ConstantU32(state,MeshOutputProbe::Capacity)});
+  MeshIf(state,bounded,[&]{
+   const auto base=EmitAddU32(state,ConstantU32(state,MeshOutputProbe::HeaderWords),
+    EmitBinaryU32(state,OpIMul,index,ConstantU32(state,MeshOutputProbe::LaneWords)));
+   for(const auto& output:state->outputs) if(output.kind==IR::StageOutputKind::Position && output.index==0) {
+    const auto position=MeshLoad(state,state->vec4_float_type,output.mesh_data[half]);
+    for(uint32_t c=0;c<4;++c) {
+     const auto component=b.AllocateId(),raw=b.AllocateId();
+     b.AddFunction({spv::OpCompositeExtract,state->float_type,component,position,c});
+     b.AddFunction({spv::OpBitcast,state->uint_type,raw,component});
+     probe_store(EmitAddU32(state,base,ConstantU32(state,c)),raw);
+    }
+   }
+   probe_store(EmitAddU32(state,base,ConstantU32(state,4)),
+    MeshLoad(state,state->uint_type,state->mesh_primitive_data[half]));
+   probe_store(EmitAddU32(state,base,ConstantU32(state,5)),ConstantU32(state,1));
+  });
+ }
  const auto vertex=b.AllocateId();
  b.AddFunction({spv::OpULessThan,state->bool_type,vertex,index,vertices});
  MeshIf(state,vertex,[&]{

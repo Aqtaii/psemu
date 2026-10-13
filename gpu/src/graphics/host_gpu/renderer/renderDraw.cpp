@@ -1,3 +1,4 @@
+#include "graphics/shader/recompiler/meshOutputProbe.h"
 #include "graphics/host_gpu/renderer/renderDraw.h"
 
 #include "common/assert.h"
@@ -1051,6 +1052,9 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 
 	// Diagnostic control only: preserve real shaders/resources, but isolate fragment-test
 	// rejection. Never treat output from this altered state as a correct game frame.
+ if(state->merged_mesh && ShaderRecompiler::MeshOutputProbeEnabled() &&
+    (draw.index_count!=1 || draw.instance_count!=1))
+  EXIT("Mesh output probe requires exactly one point and one instance\n");
 	RenderDepthInfo pipeline_depth = state->depth_info;
 	const char* depth_probe_flag = std::getenv("PSEMU_ASTRO_DEPTH_PROBE");
 	const bool depth_probe = state->merged_mesh && depth_probe_flag &&

@@ -1,3 +1,4 @@
+#include "graphics/shader/recompiler/meshOutputProbe.h"
 #include "graphics/host_gpu/renderer/guestAddressFaultRecord.h"
 #include "graphics/host_gpu/renderer/bufferCache.h"
 #include "graphics/host_gpu/renderer/textureCache.h"
@@ -1057,7 +1058,7 @@ static BufferView NativeUpload(CommandBuffer* command_buffer, std::span<const ui
 	return result;
 }
 
-static BufferView NativeGuestAddressFault(CommandBuffer* command) {
+static BufferView NativeGuestAddressFault(CommandBuffer* command, bool mesh_probe) {
  auto* ctx = g_render_ctx->GetGraphicCtx();
  auto backing = std::shared_ptr<VulkanBuffer>(new VulkanBuffer, [ctx](VulkanBuffer* b) {
   VulkanDeleteBuffer(ctx,b); delete b;
@@ -1065,16 +1066,38 @@ static BufferView NativeGuestAddressFault(CommandBuffer* command) {
  backing->usage = vk::BufferUsageFlagBits::eStorageBuffer;
  backing->memory.property = vk::MemoryPropertyFlagBits::eHostVisible |
                             vk::MemoryPropertyFlagBits::eHostCoherent;
- VulkanCreateBuffer(ctx,sizeof(GuestAddressFaultRecord),backing.get());
+ const size_t bytes=mesh_probe ? sizeof(ShaderRecompiler::MeshOutputProbe) : sizeof(GuestAddressFaultRecord);
+ VulkanCreateBuffer(ctx,bytes,backing.get());
  void* mapped = nullptr;
  VulkanMapMemory(ctx,&backing->memory,&mapped);
- std::memset(mapped,0,sizeof(GuestAddressFaultRecord));
+ std::memset(mapped,0,bytes);
  VulkanUnmapMemory(ctx,&backing->memory);
- command->OnFenceComplete([ctx,backing] {
+ command->OnFenceComplete([ctx,backing,mesh_probe] {
   void* data = nullptr;
   VulkanMapMemory(ctx,&backing->memory,&data);
   GuestAddressFaultRecord fault;
   std::memcpy(&fault,data,sizeof(fault));
+  if(mesh_probe) {
+   ShaderRecompiler::MeshOutputProbe probe;
+   std::memcpy(&probe,data,sizeof(probe));
+   static std::atomic_uint logs{0};
+   if(logs.fetch_add(1)<8) {
+    printf("[MESH-OUTPUT-PROBE] magic=%08x allocation=%08x vertices=%u primitives=%u source=completed-fence\n",
+     probe.magic,probe.allocation,probe.vertices,probe.primitives);
+    for(uint32_t i=0;i<std::min(probe.primitives,8u);++i) {
+     const auto packed=probe.lanes[i].primitive;
+     printf("[MESH-OUTPUT-INDEX] primitive=%u raw=%08x indices=(%u,%u,%u) culled=%u\n",
+      i,packed,packed&1023u,(packed>>10)&1023u,(packed>>20)&1023u,packed>>31);
+     for(uint32_t c=0;c<3;++c) {
+      const auto index=(packed>>(c*10))&1023u;
+      std::array<float,4> position{};
+      const bool valid=ShaderRecompiler::MeshProbePosition(probe,index,&position);
+      printf("[MESH-OUTPUT-POSITION] index=%u valid=%u clip=(%.9g,%.9g,%.9g,%.9g)\n",
+       index,unsigned(valid),position[0],position[1],position[2],position[3]);
+     }
+    }
+   }
+  }
   VulkanUnmapMemory(ctx,&backing->memory);
   // Partial dispatch outputs cannot be published as correct guest results.
   // Page population/replay must be connected before allowing continuation.
@@ -1090,10 +1113,10 @@ static BufferView NativeGuestAddressFault(CommandBuffer* command) {
  barrier.dstAccessMask=vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite;
  barrier.srcQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
  barrier.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
- barrier.buffer=backing->buffer;barrier.offset=0;barrier.size=sizeof(GuestAddressFaultRecord);
+ barrier.buffer=backing->buffer;barrier.offset=0;barrier.size=bytes;
  command->Handle().pipelineBarrier(vk::PipelineStageFlagBits::eHost,
   vk::PipelineStageFlagBits::eAllCommands,{},0,nullptr,1,&barrier,0,nullptr);
- return {backing.get(),0,sizeof(GuestAddressFaultRecord)};
+ return {backing.get(),0,bytes};
 }
 
 void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
@@ -1190,7 +1213,8 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 		for (const auto& backing: addresses.backing) buffer->RetainResourceUntilFence(backing);
 	}
 	if (program.uses_guest_address_table) {
-		descriptors.guest_address_fault = NativeGuestAddressFault(buffer);
+		descriptors.guest_address_fault = NativeGuestAddressFault(buffer, program.stage==ShaderType::Mesh &&
+            ShaderRecompiler::MeshOutputProbeEnabled());
 	}
 	if (ShaderRecompiler::IR::FindBinding(
 	        program.bindings, ShaderRecompiler::IR::DescriptorBindingKind::FlattenedSrt) !=

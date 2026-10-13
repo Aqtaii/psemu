@@ -1,3 +1,4 @@
+#include "graphics/shader/recompiler/meshOutputProbe.h"
 #include "graphics/host_gpu/renderer/guestAddressTable.h"
 #include "graphics/host_gpu/renderer/fenceCompletionActions.h"
 #include "graphics/host_gpu/renderer/guestAddressFaultRecord.h"
@@ -7,6 +8,23 @@
 using namespace Libs::Graphics;
 #define CHECK(x) do {if(!(x)){std::printf("FAIL %d: %s\n",__LINE__,#x);return 1;}}while(0)
 int main() {
+ using ShaderRecompiler::MeshOutputProbe;
+ MeshOutputProbe probe;
+ std::array<float,4> position{9,9,9,9};
+ CHECK(!ShaderRecompiler::MeshProbePosition(probe,0,&position));
+ CHECK(position[0]==9);
+ probe.magic=MeshOutputProbe::Magic;probe.vertices=256;
+ probe.lanes[255].position={0xbf800000u,0x40000000u,0x80000000u,0x3f800000u};
+ CHECK(!ShaderRecompiler::MeshProbePosition(probe,255,&position));
+ probe.lanes[255].seen=1;
+ CHECK(ShaderRecompiler::MeshProbePosition(probe,255,&position));
+ CHECK(position[0]==-1 && position[1]==2 && position[3]==1);
+ CHECK(std::bit_cast<uint32_t>(position[2])==0x80000000u);
+ CHECK(!ShaderRecompiler::MeshProbePosition(probe,256,&position));
+ probe.vertices=255;CHECK(!ShaderRecompiler::MeshProbePosition(probe,255,&position));
+ CHECK(!ShaderRecompiler::MeshProbePosition(probe,0,nullptr));
+ CHECK(reinterpret_cast<const char*>(&probe.lanes[0])-reinterpret_cast<const char*>(&probe)==32);
+ CHECK(reinterpret_cast<const char*>(&probe.magic)-reinterpret_cast<const char*>(&probe)==16);
  FenceCompletionActions actions;
  int completed=0;
  auto resource=std::make_shared<int>(42);std::weak_ptr<int> weak=resource;
