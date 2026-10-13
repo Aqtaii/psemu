@@ -8,6 +8,10 @@ int main(){
  uint32_t output=0xfeedface;
  Require(GuestScanHex32("  0x2A",&output)==1 && output==42);
  Require(GuestScanHex32("FFFFFFFF",&output)==1 && output==0xffffffffu);
+ Require(GuestScanHex32("FF00B050</BgColor>",&output,true)==1 && output==0xff00b050u);
+ Require(GuestScanHex32("123456789ABC",&output,true)==1 && output==0x12345678u);
+ Require(GuestScanHex32("0x12345678",&output,true)==1 && output==0x123456u);
+
  Require(GuestScanHex32("-1",&output)==1 && output==0xffffffffu);
  Require(GuestScanHex32("12tail",&output)==1 && output==0x12u);
  output=0xfeedface;

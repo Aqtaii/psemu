@@ -10,10 +10,10 @@ inline double GuestDecimalFloat(const char* text) {
  return std::strtod(text,nullptr);
 }
 // Captured Astro XML caller at RVA0x29b856 uses exactly "%x" and uint32_t*.
-inline int GuestScanHex32(const char* text,uint32_t* destination) {
+inline int GuestScanHex32(const char* text,uint32_t* destination,bool width8=false) {
  if(!text || !destination)return EOF;
  unsigned int value=0;
- const int assigned=std::sscanf(text,"%x",&value);
+ const int assigned=std::sscanf(text,width8 ? "%8x" : "%x",&value);
  if(assigned==1)*destination=static_cast<uint32_t>(value);
  return assigned;
 }

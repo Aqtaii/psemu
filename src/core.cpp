@@ -5191,17 +5191,22 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 const auto format = SafeReadCString(reinterpret_cast<const char*>(ctx->Rsi),64);
                 int assigned = 0;
                 auto* destination = reinterpret_cast<uint32_t*>(ctx->Rdx);
-                if (format == "%x" && destination && SafeReadable(destination,sizeof(uint32_t))) {
-                    assigned = GuestScanHex32(input.c_str(),destination);
+                if ((format == "%x" || format == "%08x") && destination && SafeReadable(destination,sizeof(uint32_t))) {
+                    assigned = GuestScanHex32(input.c_str(),destination,format=="%08x");
                 } else if (format == "%d" && destination && SafeReadable(destination,sizeof(int32_t))) {
                     assigned = GuestScanDecimal32(input.c_str(),reinterpret_cast<int32_t*>(destination));
                 }
                 ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(assigned));
                 special_return_set = true;
-                static std::atomic_uint scan_logs{0};
-                if (scan_logs.fetch_add(1,std::memory_order_relaxed)<8)
-                    printf("[GUEST-SCAN] format=%s input=%.32s assigned=%d supported=%u\n",
-                           format.c_str(),input.c_str(),assigned,unsigned(format=="%x" || format=="%d"));
+                const bool supported = format=="%x" || format=="%08x" || format=="%d";
+                static std::atomic_uint scan_logs{0},unsupported_scan_logs{0};
+                auto& logs=supported ? scan_logs : unsupported_scan_logs;
+                if (logs.fetch_add(1,std::memory_order_relaxed)<8) {
+                    auto shown=input.substr(0,32);
+                    for(char& ch:shown)if(ch=='\r' || ch=='\n' || ch=='\t')ch=' ';
+                    printf("[GUEST-SCAN] format=%s input=%s assigned=%d supported=%u\n",
+                           format.c_str(),shown.c_str(),assigned,unsigned(supported));
+                }
             } else if (readable_name == "atoi" || readable_name == "atol" || readable_name == "atoll") {
                 const auto input = SafeReadCString(reinterpret_cast<const char*>(ctx->Rdi),256);
                 const int64_t parsed = GuestDecimalInteger(input.c_str());
