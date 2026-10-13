@@ -36,8 +36,13 @@ int main() {
   for(uint32_t y=0;y<height;y++)for(uint32_t x=0;x<width;x++)linear[y*pitch+x]=uint8_t(x*3+y*7);
   TileConvertLinearToTiledDepthPreservePadding(tiled.data(),linear.data(),format,width,height,pitch,bytes);
   TileConvertTiledToLinearDepth(roundtrip.data(),tiled.data(),format,width,height,pitch,bytes);
-  for(uint32_t y=0;y<1280;y++)for(uint32_t x=0;x<pitch;x++)
-   Require(roundtrip[y*pitch+x]==(x<width && y<height?linear[y*pitch+x]:0xa5));
+  for(uint32_t y=0;y<height;y++)for(uint32_t x=0;x<width;x++)
+   Require(roundtrip[y*pitch+x]==linear[y*pitch+x]);
+  std::vector<uint8_t> ones(bytes,1),mask(bytes,0);
+  TileConvertLinearToTiledDepth(mask.data(),ones.data(),format,width,height,pitch,bytes);
+  size_t visible=0;
+  for(size_t i=0;i<bytes;i++) {visible+=mask[i]!=0;if(mask[i]==0)Require(tiled[i]==0xa5);}
+  Require(visible==size_t(width)*height);
  }
 
  // Actual Astro descriptor: zero PerfMod is valid, as are the other hardware hints.
