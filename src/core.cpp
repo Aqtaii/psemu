@@ -3,6 +3,7 @@
 #include "guest_stub_memory.h"
 #include "guest_file_stat.h"
 #include "guest_numeric_parse.h"
+#include "guest_save_transfer.h"
 #include "host_allocation_size.h"
 #include "sarah_tls_sites.h"
 #include "shared_direct_memory.h"
@@ -5754,6 +5755,41 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             // Oyun "/app0/~INDEX", "/app0/save_data_icon.png" gibi dosyalari
             // aciyor. fopen NULL dondugu icin "no VFS rom ~INDEX" diyordu.
             // Artik gercek host dosyalarina baglaniyoruz.
+            else if (readable_name == "sceSaveDataTransferringMount" ||
+                     readable_name == "SaveDataTransferringMount" ||
+                     func_name.find("WAzWTZm1H+I") != std::string::npos ||
+                     func_name.find("RjMlsR8EXrw") != std::string::npos) {
+                int32_t status = static_cast<int32_t>(0x809f0000u);
+                const auto* mount = reinterpret_cast<const uint8_t*>(ctx->Rdi);
+                void* result = reinterpret_cast<void*>(ctx->Rsi);
+                if (mount && SafeReadable(mount,64) && result && SafeWritable(result,64)) {
+                    int32_t user = 0;
+                    uint64_t title_ptr = 0, dir_ptr = 0;
+                    memcpy(&user,mount,4);
+                    memcpy(&title_ptr,mount+8,8);
+                    memcpy(&dir_ptr,mount+16,8);
+                    const auto* title_data = reinterpret_cast<const char*>(title_ptr);
+                    const auto* dir_data = reinterpret_cast<const char*>(dir_ptr);
+                    if (title_data && dir_data && SafeReadable(title_data,10) && SafeReadable(dir_data,32)) {
+                        const auto title = SafeReadCString(title_data,10);
+                        const auto dir = SafeReadCString(dir_data,32);
+                        if (GuestSaveComponent(title,10) && GuestSaveComponent(dir,32)) {
+                            const std::string archive = "savedata/" + title;
+                            const DWORD attrs = GetFileAttributesA(archive.c_str());
+                            const bool exists = attrs != INVALID_FILE_ATTRIBUTES &&
+                                                (attrs & FILE_ATTRIBUTE_DIRECTORY) != 0;
+                            status = GuestSaveTransferStatus(user,title,dir,exists);
+                            memset(result,0,64);
+                            static std::atomic<uint32_t> reported{0};
+                            if (reported.fetch_add(1,std::memory_order_relaxed) < 8)
+                                printf("[SAVE-TRANSFER] title=%s directory=%s archive=%d status=0x%08x\n",
+                                       title.c_str(),dir.c_str(),exists,static_cast<uint32_t>(status));
+                        }
+                    }
+                }
+                ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(status));
+                special_return_set = true;
+            }
             else if (readable_name == "SaveDataMount3" || readable_name == "sceSaveDataMount" ||
                      func_name.find("ZP4e7rlzOUk") != std::string::npos) {
                 // SaveDataMount3(mount, result): RDI=mount, RSI=result
