@@ -706,8 +706,12 @@ std::pair<VulkanBuffer*, uint64_t> BufferCache::ObtainBuffer(CommandBuffer*  com
 	// Snapshot foreign producers before acquiring the resource transaction. Draining
 	// resets recordings, so callers must use the existing descriptor preparation retry.
 	std::vector<std::pair<std::shared_ptr<VulkanBuffer>, uint64_t>> drained_owners;
+	bool image_write_drain = false;
 	{
 		std::lock_guard transaction(m_resource_mutex);
+		// A native image may own writes still recorded on a producer command buffer.
+		// Inspect texture ownership before the buffer lock to preserve cache lock order.
+		image_write_drain = is_written && m_texture_cache->QueryRegion(vaddr, size).gpu_image_bytes;
 		FaultSafeCacheLock lock(this, m_mutex);
 		auto owner = m_buffers.upper_bound(vaddr);
 		bool contained = false;
@@ -737,13 +741,14 @@ std::pair<VulkanBuffer*, uint64_t> BufferCache::ObtainBuffer(CommandBuffer*  com
 			}
 		}
 	}
-	if (!drained_owners.empty()) {
+	if (image_write_drain || !drained_owners.empty()) {
 		GraphicsRunSynchronizeCommandProcessors();
 		Transfer::WaitForGraphicsIdle(ctx);
 		static std::atomic_uint drain_logs {0};
 		if (drain_logs.fetch_add(1, std::memory_order_relaxed) < 8) {
 			printf("[BUFFER-QUEUE-DRAIN] addr=0x%016" PRIx64 " size=0x%016" PRIx64
-			       " owners=%zu queue=%u\n", vaddr, size, drained_owners.size(), queue);
+			       " owners=%zu queue=%u image_write=%u\n", vaddr, size, drained_owners.size(), queue,
+			       static_cast<unsigned>(image_write_drain));
 		}
 	}
 	std::lock_guard transaction(m_resource_mutex);
