@@ -479,6 +479,16 @@ static void ConfigureSubgroupSize(const GraphicContext* gctx, vk::ShaderStageFla
 	required->sType = vk::StructureType::ePipelineShaderStageRequiredSubgroupSizeCreateInfo;
 	required->requiredSubgroupSize = config.required_size;
 	stage->pNext                   = required;
+	if (vk_stage == vk::ShaderStageFlagBits::eMeshEXT && gctx->full_subgroups_enabled) {
+		// Native Mesh emission already rejects local sizes that are not multiples of 32.
+		stage->flags |= vk::PipelineShaderStageCreateFlagBits::eRequireFullSubgroups;
+	}
+	if (vk_stage == vk::ShaderStageFlagBits::eMeshEXT) {
+		static std::atomic<uint32_t> log_count {0};
+		if (log_count.fetch_add(1, std::memory_order_relaxed) < 8)
+			LOGF("[MESH-SUBGROUP] required=%u full=%u\n", config.required_size,
+			     unsigned(gctx->full_subgroups_enabled));
+	}
 }
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)

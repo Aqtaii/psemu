@@ -662,6 +662,8 @@ static vk::Device VulkanCreateDevice(vk::PhysicalDevice physical_device, vk::Sur
 
 	if (ctx->subgroup_size_control_enabled && supported_features13.subgroupSizeControl == VK_TRUE) {
 		subgroup_size_control.subgroupSizeControl = VK_TRUE;
+		subgroup_size_control.computeFullSubgroups = supported_features13.computeFullSubgroups;
+		ctx->full_subgroups_enabled = supported_features13.computeFullSubgroups == VK_TRUE;
 	}
 
 	const auto* base_feature_chain = (subgroup_size_control.subgroupSizeControl == VK_TRUE

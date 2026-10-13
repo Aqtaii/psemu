@@ -59,11 +59,12 @@ int main(int argc,char** argv){try{
  const bool controlled32=output_probe && supported_control.subgroupSizeControl &&
   (control_props.requiredSubgroupSizeStages & VK_SHADER_STAGE_MESH_BIT_EXT) &&
   control_props.minSubgroupSize<=32 && control_props.maxSubgroupSize>=32;
- if(output_probe && !controlled32)throw std::runtime_error("Explicit Mesh subgroup32 unavailable for control test");
+ if(output_probe && (!controlled32 || !supported_control.computeFullSubgroups))throw std::runtime_error("Explicit full Mesh subgroup32 unavailable for control test");
  if(primitive_probe && !supported_mesh.meshShaderQueries) throw std::runtime_error("Mesh primitive queries unsupported");
  VkPhysicalDeviceMeshShaderFeaturesEXT mesh{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};mesh.meshShader=VK_TRUE;mesh.meshShaderQueries=primitive_probe;
  VkPhysicalDeviceSubgroupSizeControlFeatures enabled_control{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES};
  enabled_control.subgroupSizeControl=controlled32;
+ enabled_control.computeFullSubgroups=controlled32;
  if(controlled32)mesh.pNext=&enabled_control;
  const char* extension=VK_EXT_MESH_SHADER_EXTENSION_NAME;VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};dci.pNext=&mesh;
  VkPhysicalDeviceFeatures device_features{};device_features.vertexPipelineStoresAndAtomics=output_probe ? supported.features.vertexPipelineStoresAndAtomics : VK_FALSE;
@@ -101,8 +102,8 @@ int main(int argc,char** argv){try{
  const auto mesh_shader=Shader(device,argv[1]),fragment_shader=Shader(device,argv[2]);
  VkPipelineShaderStageCreateInfo stages[2]{};for(auto& s:stages){s.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;s.pName="main";}
  VkPipelineShaderStageRequiredSubgroupSizeCreateInfo required32{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO};
- required32.requiredSubgroupSize=32;if(controlled32)stages[0].pNext=&required32;
- if(controlled32)std::printf("[MESH-SUBGROUP-GPU] required_size=32 explicit_control=1 game_frame=0\n");
+ required32.requiredSubgroupSize=32;if(controlled32){stages[0].pNext=&required32;stages[0].flags|=VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT;}
+ if(controlled32)std::printf("[MESH-SUBGROUP-GPU] required_size=32 explicit_control=1 full_subgroups=1 game_frame=0\n");
  stages[0].stage=vertex_probe ? VK_SHADER_STAGE_VERTEX_BIT : VK_SHADER_STAGE_MESH_BIT_EXT;stages[0].module=mesh_shader;stages[1].stage=VK_SHADER_STAGE_FRAGMENT_BIT;stages[1].module=fragment_shader;
  VkViewport viewport{0,0,float(width),float(height),0,1};VkRect2D scissor{{0,0},{width,height}};
  VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};vp.viewportCount=1;vp.pViewports=&viewport;vp.scissorCount=1;vp.pScissors=&scissor;
