@@ -1232,6 +1232,15 @@ void RenderDrawIndex(uint64_t submit_id, CommandBuffer* buffer, HW::Context* ctx
 	}
 
 	if (ShouldSkipGeShader(ctx, ucfg, sh_ctx)) {
+  if(ShaderRecompiler::MeshOutputProbeEnabled()) {
+   static std::atomic_uint indexed_probe_logs{0};
+   if(indexed_probe_logs.fetch_add(1)<8)
+    printf("[MESH-INDEXED-PENDING] submit=%llu count=%u instances=%u index_type=%u index_addr=0x%llx "
+           "vertex_offset=%d first_instance=%u prim=%u gs_root=0x%llx source=skipped-draw\n",
+     static_cast<unsigned long long>(submit_id),index_count,instance_count,index_type_and_size,
+     static_cast<unsigned long long>(reinterpret_cast<uint64_t>(index_addr)),vertex_offset_add,first_instance,
+     uint32_t(ucfg->GetPrimType()),static_cast<unsigned long long>(sh_ctx->GetVs().gs_regs.user_data_addr));
+  }
 		return;
 	}
 
