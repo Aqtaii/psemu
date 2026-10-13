@@ -13,6 +13,9 @@
 #include "graphics/presentation/window.h"
 
 #include <atomic>
+#include <cinttypes>
+#include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <span>
 #include <vector>
@@ -907,6 +910,65 @@ void UploadImage(GraphicContext* ctx, VulkanImage* dst_image, const void* src_da
 	                    vk::ImageLayout::eUndefined, dst_layout);
 }
 
+// Optional measurement of completed readbacks, without additional GPU work or backing writes.
+static void LogColorReadbackPixels(const void* data, uint64_t size,
+                                   std::span<const ImageBufferCopy> regions,
+                                   const VulkanImage* image) {
+	static const bool enabled = [] {
+		const char* value = std::getenv("PSEMU_ASTRO_PIXEL_PROBE");
+		return value != nullptr && value[0] == '1';
+	}();
+	if (!enabled || data == nullptr || image == nullptr || regions.size() != 1 ||
+	    regions[0].aspect != vk::ImageAspectFlagBits::eColor) return;
+	uint32_t element = 0, color = 0, component = 1;
+	bool floating = false;
+	switch (image->format) {
+		case vk::Format::eR8G8B8A8Unorm: case vk::Format::eR8G8B8A8Srgb:
+		case vk::Format::eR8G8B8A8Uint: case vk::Format::eR8G8B8A8Sint:
+		case vk::Format::eB8G8R8A8Unorm: case vk::Format::eB8G8R8A8Srgb:
+			element = 4; color = 3; break;
+		case vk::Format::eR16G16B16A16Sfloat:
+			element = 8; color = 6; component = 2; floating = true; break;
+		case vk::Format::eR16G16B16A16Unorm: case vk::Format::eR16G16B16A16Uint:
+		case vk::Format::eR16G16B16A16Sint:
+			element = 8; color = 6; component = 2; break;
+		case vk::Format::eR32G32B32A32Sfloat:
+			element = 16; color = 12; component = 4; floating = true; break;
+		case vk::Format::eR32Sfloat:
+			element = color = component = 4; floating = true; break;
+		case vk::Format::eR16Sfloat:
+			element = color = component = 2; floating = true; break;
+		case vk::Format::eR8Unorm: case vk::Format::eR8Uint:
+			element = color = 1; break;
+		default: return;
+	}
+	const auto& region = regions[0];
+	if (region.width == 0 || region.height == 0 || region.pitch < region.width ||
+	    region.offset > size) return;
+	const uint64_t elements = uint64_t(region.height - 1) * region.pitch + region.width;
+	if (elements > (size - region.offset) / element) return;
+	static std::atomic_uint count {0};
+	if (count.fetch_add(1, std::memory_order_relaxed) >= 48) return;
+	const auto* pixels = static_cast<const uint8_t*>(data) + region.offset;
+	uint64_t nonzero = 0;
+	for (uint32_t y = 0; y < region.height; y++) {
+		for (uint32_t x = 0; x < region.width; x++) {
+			const auto* pixel = pixels + (uint64_t(y) * region.pitch + x) * element;
+			uint8_t bits = 0;
+			for (uint32_t b = 0; b < color; b++) {
+				// Ignore floating-point sign bits so negative zero still counts as black.
+				bits |= pixel[b] & (floating && b % component == component - 1 ? 0x7f : 0xff);
+			}
+			nonzero += bits != 0;
+		}
+	}
+	printf("[GPU-COLOR-PIXELS] image=%p format=%u extent=%ux%u pitch=%u "
+	       "rgb_nonzero=%" PRIu64 "/%" PRIu64 " source=completed-readback\n",
+	       static_cast<const void*>(image), static_cast<unsigned>(image->format),
+	       region.width, region.height, region.pitch, nonzero,
+	       uint64_t(region.width) * region.height);
+}
+
 void DownloadImage(GraphicContext* ctx, void* dst_data, uint64_t size, uint32_t dst_pitch,
                    VulkanImage* src_image, vk::ImageLayout src_layout,
                    vk::ImageAspectFlags aspect) {
@@ -925,6 +987,7 @@ void DownloadImage(GraphicContext* ctx, void* dst_data, uint64_t size,
 	EXIT_IF(size == 0 || regions.empty());
 	GetStagingBuffer(StagingBufferType::ReadBack)
 	    ->DownloadFromImage(ctx, dst_data, size, regions, src_image, src_layout);
+	LogColorReadbackPixels(dst_data, size, regions, src_image);
 }
 
 void UploadImage(GraphicContext* ctx, VulkanImage* image, const void* src_data, uint64_t size,
