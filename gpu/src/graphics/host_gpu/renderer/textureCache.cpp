@@ -3107,6 +3107,7 @@ void TextureCache::ReconstructDepthStencilForBufferLocked(CachedImage& cached,
 		}
 		for (const auto& other: m_images) {
 			if (other.get() != &cached && other->kind == CachedImage::Kind::DepthTarget &&
+			    other->depth.htile_address != 0 && other->depth.htile_size != 0 &&
 			    ImagePageRangesOverlap(info.htile_address, info.htile_size,
 			                           other->depth.htile_address, other->depth.htile_size)) {
 				EXIT("TextureCache: depth/stencil reconstruction has a retained HTile owner\n");
