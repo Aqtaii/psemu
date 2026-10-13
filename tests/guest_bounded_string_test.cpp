@@ -1,3 +1,4 @@
+#include <windows.h> // Match core.h: min/max macros are enabled.
 #include "guest_bounded_string.h"
 #include <array>
 #include <cassert>
@@ -13,9 +14,9 @@ int main() {
     assert(GuestStrncpyS(out,5,"abcd",4)==0 && std::string_view(out)=="abcd");
     assert(GuestStrncpyS(out,5,"abcde",5)==34 && out[0]==0);
     assert(GuestStrncpyS(out,5,"xy",100)==0 && std::string_view(out)=="xy");
-    assert(GuestStrncpyS(out,5,"abcdef",std::numeric_limits<std::size_t>::max())==80);
+    assert(GuestStrncpyS(out,5,"abcdef",(std::numeric_limits<std::size_t>::max)())==80);
     assert(std::string_view(out)=="abcd");
-    assert(GuestStrncpyS(out,1,"x",std::numeric_limits<std::size_t>::max())==80 && out[0]==0);
+    assert(GuestStrncpyS(out,1,"x",(std::numeric_limits<std::size_t>::max)())==80 && out[0]==0);
     assert(GuestStrncpyS(out,1,"",0)==0 && out[0]==0);
     assert(GuestStrncpyS(nullptr,5,"abc",3)==22);
     out[0]='!';assert(GuestStrncpyS(out,0,"abc",3)==22 && out[0]=='!');
