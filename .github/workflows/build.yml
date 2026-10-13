@@ -53,6 +53,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_semaphore_dispatch.ps1
 
+      - name: Test captured Astro bounded path copies
+        shell: pwsh
+        run: ./tools/scripts/test_guest_bounded_string.ps1
+
       - name: Test missing legacy save archive errors
         shell: pwsh
         run: ./tools/scripts/test_guest_save_transfer.ps1

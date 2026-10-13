@@ -4,6 +4,7 @@
 #include "guest_file_stat.h"
 #include "guest_numeric_parse.h"
 #include "guest_save_transfer.h"
+#include "guest_bounded_string.h"
 #include "host_allocation_size.h"
 #include "sarah_tls_sites.h"
 #include "shared_direct_memory.h"
@@ -4722,6 +4723,36 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 std::string s = SafeReadCString(reinterpret_cast<const char*>(ctx->Rsi));
                 if (SafeWritable(dst, s.size() + 1)) { memcpy(dst, s.c_str(), s.size() + 1); }
                 ctx->Rax = ctx->Rdi;
+                special_return_set = true;
+            } else if (readable_name == "strncpy_s") {
+                char* dst = reinterpret_cast<char*>(ctx->Rdi);
+                const auto* src = reinterpret_cast<const char*>(ctx->Rdx);
+                const size_t capacity = static_cast<size_t>(ctx->Rsi);
+                const size_t count = static_cast<size_t>(ctx->Rcx);
+                int status = 22;
+                if (dst && capacity > 0 && capacity <= 1048576 && SafeWritable(dst,capacity)) {
+                    if (count == 0) {
+                        dst[0] = 0;
+                        status = 0;
+                    } else if (src) {
+                        const size_t limit = (count == SIZE_MAX ? capacity : (std::min)(count,capacity));
+                        const auto sample = SafeReadCString(src,limit);
+                        const size_t readable = sample.size() + (sample.size() < limit ? 1 : 0);
+                        const uint64_t da = reinterpret_cast<uint64_t>(dst);
+                        const uint64_t sa = reinterpret_cast<uint64_t>(src);
+                        const bool overlaps = da >= sa ? da-sa < readable : sa-da < capacity;
+                        if (!overlaps && SafeReadable(src,readable)) {
+                            status = GuestStrncpyS(dst,capacity,sample,count);
+                        } else { dst[0] = 0; }
+                    } else { dst[0] = 0; }
+                }
+                static std::atomic<uint32_t> copies{0};
+                if (copies.fetch_add(1,std::memory_order_relaxed) < 8) {
+                    printf("[GUEST-STRNCPY-S] capacity=%zu count=%zu status=%d output=%s\n",
+                           capacity,count,status,
+                           dst && SafeReadable(dst,1) ? SafeReadCString(dst,(std::min)(capacity,size_t(64))).c_str() : "<invalid>");
+                }
+                ctx->Rax = static_cast<uint64_t>(status);
                 special_return_set = true;
             } else if (readable_name == "strncpy") {
                 char* dst = reinterpret_cast<char*>(ctx->Rdi);
