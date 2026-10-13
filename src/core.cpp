@@ -5225,7 +5225,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 if (float_logs.fetch_add(1,std::memory_order_relaxed)<8)
                     printf("[GUEST-ATOF] input=%.32s value=%.9g\n",input.c_str(),value);
             } else if (readable_name == "strtol" || readable_name == "strtoll" ||
-                       readable_name == "strtoul" || readable_name == "strtoull") {
+                       readable_name == "strtoul" || readable_name == "strtoull" || readable_name == "_Stoul") {
                 // long/long long/unsigned strtoX(const char* nptr, char** endptr, int base)
                 //   RDI=nptr, RSI=endptr, RDX=base
                 // ONEMLI: endptr DOGRU ilerletilmezse cagiran "hic karakter
@@ -5235,7 +5235,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 const char* nptr = reinterpret_cast<const char*>(ctx->Rdi);
                 char** endptr    = reinterpret_cast<char**>(ctx->Rsi);
                 int base         = static_cast<int>(ctx->Rdx);
-                bool is_unsigned = (readable_name == "strtoul" || readable_name == "strtoull");
+                bool is_unsigned = (readable_name == "strtoul" || readable_name == "strtoull" || readable_name == "_Stoul");
                 InterlockedIncrement(reinterpret_cast<volatile LONG*>(&g_n_strtoint));
                 // JSON sayilari kisa; buyuk tamponun ortasindan okuyoruz, NUL'a
                 // kadar gitmesin diye siniri makul tutuyoruz.
@@ -5245,7 +5245,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 errno = 0;
                 if (!s.empty()) {
                     if (is_unsigned) {
-                        raw = static_cast<uint64_t>(strtoull(s.c_str(), &end, base));
+                        raw = GuestUnsignedInteger(s.c_str(), &end, base);
                     } else {
                         raw = static_cast<uint64_t>(strtoll(s.c_str(), &end, base));
                     }

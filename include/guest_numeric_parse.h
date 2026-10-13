@@ -26,3 +26,7 @@ inline int GuestScanDecimal32(const char* text,int32_t* destination) {
  if(assigned==1)*destination=static_cast<int32_t>(value);
  return assigned;
 }
+
+inline uint64_t GuestUnsignedInteger(const char* text,char** end,int base) {
+ return std::strtoull(text,end,base);
+}

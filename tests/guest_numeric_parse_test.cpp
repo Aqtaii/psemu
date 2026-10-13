@@ -21,6 +21,13 @@ int main(){
  decimal=-999;
  Require(GuestScanDecimal32("invalid",&decimal)==0 && decimal==-999);
  Require(GuestScanDecimal32("",&decimal)==EOF && decimal==-999);
+ char* end=nullptr;
+ const char* large="4294967297suffix";
+ Require(GuestUnsignedInteger(large,&end,10)==4294967297ULL && end==large+10);
+ const char* hex="0xf10045fe";
+ Require(GuestUnsignedInteger(hex,&end,0)==0xf10045feULL && *end=='\0');
+ const char* invalid="invalid";
+ Require(GuestUnsignedInteger(invalid,&end,10)==0 && end==invalid);
  Require(GuestDecimalInteger(" +123suffix")==123);
  Require(GuestDecimalInteger("-2147483648")==-2147483648LL);
  Require(GuestDecimalInteger("4294967297")==4294967297LL);
