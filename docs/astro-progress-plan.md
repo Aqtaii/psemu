@@ -1,5 +1,21 @@
 # Astro Bot ilerleme planÄ± â€” 10 Ekim 2026
 
+## Full Mesh pipeline checkpoint - 13 October 2026
+
+First visible Astro game content is NOT confirmed. PSEMU_ASTRO_MESH=1 enables only non-indexed merged wave64 point-list GE draws. Runs use a separate loader; installed Sarah loader and launchers are preserved.
+
+- [x] Production interface collection, full Mesh emission, paired VGPR banks, point ABI and phased dispatcher connected.
+- [x] Real ES/GS bytecode, GS root resource materialization/cache and Mesh pipeline/descriptors/subgroup32/group-instance push wired. Actual guest Mesh compile/draw has not yet been observed.
+- [x] 8f5d02a: all regressions, SPIR-V checks and full Windows build passed (CI38325600444).
+- [x] Captured shader:551 instructions,64 blocks,4 buffers,148450-word full Mesh emission and Vulkan1.2 validation passed. Replay uses synthetic descriptors; not a real game GPU execution.
+- [x] Arc B580: five buffer-read/point-push/phased framebuffer checks each1024/1024 correct pixels.
+- [x] Actual8f5d02a Astro run compiled29 shaders and saved a BLACK presented framebuffer at images/run_20261013_032100/frame_00000.bmp. It then exited at unsupported depth-target alias. No ASTRO-MESH-COMPILE/DRAW log yet.
+- [x] aabf7b0: independent clean exact R8 sampled-stencil retirement, clear/current guest backing guard, negative layout/GPU-write regression coverage; forced runtime merged Mesh validation.
+- [ ] aabf7b0 Windows checks/build (CI38327246244), repeat actual guest run, verify Mesh compile/draw.
+- [ ] Visible game framebuffer content and repeatable startup.
+
+Pool warnings were followed by further shader compilation and are not evidence of a stalled boot. Actual failure: depth0x25b3a3f0000+0x870000 and adjacent sampled R8 plane0x25b3ac60000+0x280000. Older checklists below are historical checkpoints.
+
 ## Güncel durum — 13 Ekim 2026
 
 Gerçek Astro oyun karesi henüz alýnmadý. Kurulu oyun loader'ý deðiþtirilmedi; aþaðýdaki GPU sonuçlarý sentetik Mesh testleridir.
