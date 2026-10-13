@@ -770,7 +770,8 @@ static void RefreshShaders(HW::Context* ctx, HW::Shader* sh_ctx, const DrawCallI
   const ShaderMeshInputInfo mesh{group.max_vertices,group.max_primitives,group.logical_invocations/2,32,
    uint32_t(vertex_shader_info.gs_regs.rsrc2.lds_size)*128};
   if(!ShaderCompileInfoMesh(vertex_shader_info,mesh,state->mesh_primitive_group,
-      state->mesh_vertex_group,ge.m_vgtGsMaxVertOut,&state->vs_input_info,&state->vs_shader,&error)) {
+      state->mesh_vertex_group,ge.m_vgtGsMaxVertOut,&state->vs_input_info,&state->vs_shader,&error,
+      ShaderRecompiler::MeshOutputProbeEnabled() && draw.index_count==1 && draw.instance_count==1)) {
    EXIT("Astro Mesh compilation failed: %s\n",error.c_str());
   }
  } else if (!ShaderCompileInfoVS(&vertex_shader_info, &shader_regs, lane_mask_mode,
@@ -1053,7 +1054,7 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 
 	// Diagnostic control only: preserve real shaders/resources, but isolate fragment-test
 	// rejection. Never treat output from this altered state as a correct game frame.
- if(state->merged_mesh && ShaderRecompiler::MeshOutputProbeEnabled() &&
+ if(state->merged_mesh && state->vs_input_info.stage.program->bindings.mesh_output_probe &&
     (draw.index_count!=1 || draw.instance_count!=1))
   EXIT("Mesh output probe requires exactly one point and one instance\n");
 	RenderDepthInfo pipeline_depth = state->depth_info;

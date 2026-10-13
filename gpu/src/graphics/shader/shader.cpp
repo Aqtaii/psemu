@@ -1107,7 +1107,7 @@ static void DumpShaderRecompilerSpirv(const char*,uint64_t,const std::vector<uin
 
 bool ShaderCompileInfoMesh(const HW::VertexShaderInfo& regs,const ShaderMeshInputInfo& mesh,
  uint32_t primitive_group,uint32_t vertex_group,uint32_t vertices_per_primitive,
- ShaderVertexInputInfo* info,std::span<const uint32_t>* spirv,std::string* error) {
+ ShaderVertexInputInfo* info,std::span<const uint32_t>* spirv,std::string* error,bool output_probe) {
  namespace R=ShaderRecompiler::IR;
  if(!info || !spirv) return false;
  *info={};*spirv={};info->mesh=mesh;
@@ -1124,7 +1124,8 @@ bool ShaderCompileInfoMesh(const HW::VertexShaderInfo& regs,const ShaderMeshInpu
  static std::mutex mutex;static std::vector<std::unique_ptr<Entry>> cache;
  std::scoped_lock lock(mutex);
  for(const auto& e:cache) {
-  if(e->mesh.max_vertices!=mesh.max_vertices || e->mesh.max_primitives!=mesh.max_primitives ||
+  if(e->program->bindings.mesh_output_probe!=output_probe ||
+     e->mesh.max_vertices!=mesh.max_vertices || e->mesh.max_primitives!=mesh.max_primitives ||
      e->mesh.invocations!=mesh.invocations || e->mesh.lds_dwords!=mesh.lds_dwords ||
      e->assembly.primitives_per_group!=assembly.primitives_per_group || e->program->user_data_count!=user_count ||
      !std::equal(es.begin(),es.end(),e->es.begin(),e->es.end()) ||
@@ -1146,7 +1147,7 @@ bool ShaderCompileInfoMesh(const HW::VertexShaderInfo& regs,const ShaderMeshInpu
  R::ResourceSnapshot resources;
  if(!R::MaterializeResources(program,runtime,&resources,error) || !R::SpecializeResources(&program,resources,error)) return false;
  R::ShaderInfoOptions opts;opts.vertex=info;
- R::BindingLayoutOptions layout;layout.mesh_point_inputs=true;layout.mesh_output_probe=ShaderRecompiler::MeshOutputProbeEnabled();
+ R::BindingLayoutOptions layout;layout.mesh_point_inputs=true;layout.mesh_output_probe=output_probe;
  if(!R::CollectShaderInfo(&program,opts,error) || !R::AllocateBindings(&program,layout,error)) return false;
  auto next=std::make_unique<Entry>();
  if(!ShaderRecompiler::Spirv::EmitMergedPointMeshProgram(program,resources,*info,assembly,&next->spirv,error)) return false;
