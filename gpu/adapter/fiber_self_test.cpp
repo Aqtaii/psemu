@@ -22,8 +22,7 @@ GetSelf get_self=nullptr;
 void* expected_fiber=nullptr;
 uint32_t reached=0;
 bool completed=false;
-void Require(bool ok){if(!ok){std::fputs("[FIBER-SELF-TEST] failed
-",stderr);std::abort();}}
+void Require(bool ok){if(!ok){std::fputs("[FIBER-SELF-TEST] failed\n",stderr);std::abort();}}
 void KYTY_SYSV_ABI TestEntry(uint64_t initialized,uint64_t run){
  volatile uint64_t sentinel=0x1122334455667788ULL;
  uint64_t resumed=run;
