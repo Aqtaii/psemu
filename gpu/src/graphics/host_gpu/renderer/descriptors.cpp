@@ -1212,7 +1212,8 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 		descriptors.guest_address_table.range = words.size() * sizeof(uint32_t);
 		for (const auto& backing: addresses.backing) buffer->RetainResourceUntilFence(backing);
 	}
-	if (program.uses_guest_address_table) {
+	if (ShaderRecompiler::IR::FindBinding(program.bindings,
+            ShaderRecompiler::IR::DescriptorBindingKind::GuestAddressFault)) {
 		descriptors.guest_address_fault = NativeGuestAddressFault(buffer, program.stage==ShaderType::Mesh &&
             ShaderRecompiler::MeshOutputProbeEnabled());
 	}

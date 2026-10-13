@@ -207,7 +207,7 @@ bool AllocateBindings(Program* program, const BindingLayoutOptions& options, std
 		return false;
 	}
 
- if(options.mesh_point_inputs && program->stage!=ShaderType::Mesh) {
+ if((options.mesh_point_inputs || options.mesh_output_probe) && program->stage!=ShaderType::Mesh) {
   if(error) *error="point draw payload requires Mesh stage";
   return false;
  }
@@ -272,6 +272,8 @@ bool AllocateBindings(Program* program, const BindingLayoutOptions& options, std
 	}
 	if (program->uses_guest_address_table) {
 		AddBinding(&next, DescriptorBindingKind::GuestAddressTable);
+	}
+	if (program->uses_guest_address_table || options.mesh_output_probe) {
 		AddBinding(&next, DescriptorBindingKind::GuestAddressFault);
 	}
 	if (!program->srt.reads.empty()) {

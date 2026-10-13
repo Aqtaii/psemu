@@ -1,3 +1,4 @@
+#include "graphics/shader/recompiler/meshOutputProbe.h"
 #include "graphics/shader/recompiler/SpirvEmitter.h"
 #include "graphics/shader/recompiler/spirvEmitter/spirvEmitterInternal.h"
 #include "common/assert.h"
@@ -693,6 +694,15 @@ int main(int argc,char** argv){
  Require(argc==1 || argc==2 || argc==3);
  if(argc==3){WriteCapturedMesh(argv[1],argv[2]);return 0;}
  {
+  IR::Program probe_plan;probe_plan.stage=ShaderType::Mesh;probe_plan.shader_info_complete=true;
+  IR::BindingLayoutOptions probe_options;probe_options.mesh_output_probe=true;std::string e;
+  Require(IR::AllocateBindings(&probe_plan,probe_options,&e),e);
+  Require(IR::FindBinding(probe_plan.bindings,IR::DescriptorBindingKind::GuestAddressFault)!=nullptr);
+  Require(IR::FindBinding(probe_plan.bindings,IR::DescriptorBindingKind::GuestAddressTable)==nullptr);
+  IR::Program rejected;rejected.stage=ShaderType::Vertex;rejected.shader_info_complete=true;
+  Require(!IR::AllocateBindings(&rejected,probe_options,&e));Require(!rejected.binding_layout_complete);
+ }
+ {
   IR::Program plan;plan.stage=ShaderType::Mesh;plan.shader_info_complete=true;
   IR::BindingLayoutOptions options;options.mesh_point_inputs=true;
   std::string error;Require(IR::AllocateBindings(&plan,options,&error),error);
@@ -766,6 +776,16 @@ int main(int argc,char** argv){
  output(IR::ExportTargetKind::Primitive,0,{Imm((1u<<10)|(2u<<20))});
  ShaderVertexInputInfo info{};info.mesh={3,1,invocations,32,64};
  IR::ResourceSnapshot resources;std::vector<uint32_t> words;std::string error;
+ if(MeshOutputProbeEnabled()) {
+  auto probe_program=p;IR::DescriptorBinding diagnostic;
+  diagnostic.kind=IR::DescriptorBindingKind::GuestAddressFault;diagnostic.binding=0;
+  probe_program.bindings.descriptors.push_back(diagnostic);
+  std::vector<uint32_t> probe_words;
+  Require(Spirv::EmitProgram(probe_program,resources,&info,nullptr,nullptr,&probe_words,&error),error);
+  auto* probe_file=std::fopen("native_mesh_output_probe.spv","wb");Require(probe_file!=nullptr);
+  Require(std::fwrite(probe_words.data(),4,probe_words.size(),probe_file)==probe_words.size());
+  Require(std::fclose(probe_file)==0);
+ }
  Require(Spirv::EmitProgram(p,resources,&info,nullptr,nullptr,&words,&error),error);
  auto* file=std::fopen(argc==2 ? "native_mesh_emitter_multiwave.spv" : "native_mesh_emitter.spv","wb");Require(file!=nullptr);
  Require(std::fwrite(words.data(),sizeof(uint32_t),words.size(),file)==words.size());Require(std::fclose(file)==0);

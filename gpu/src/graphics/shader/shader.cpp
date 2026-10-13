@@ -1,3 +1,4 @@
+#include "graphics/shader/recompiler/meshOutputProbe.h"
 #include "graphics/shader/shader.h"
 
 #include "common/assert.h"
@@ -1145,7 +1146,7 @@ bool ShaderCompileInfoMesh(const HW::VertexShaderInfo& regs,const ShaderMeshInpu
  R::ResourceSnapshot resources;
  if(!R::MaterializeResources(program,runtime,&resources,error) || !R::SpecializeResources(&program,resources,error)) return false;
  R::ShaderInfoOptions opts;opts.vertex=info;
- R::BindingLayoutOptions layout;layout.mesh_point_inputs=true;
+ R::BindingLayoutOptions layout;layout.mesh_point_inputs=true;layout.mesh_output_probe=ShaderRecompiler::MeshOutputProbeEnabled();
  if(!R::CollectShaderInfo(&program,opts,error) || !R::AllocateBindings(&program,layout,error)) return false;
  auto next=std::make_unique<Entry>();
  if(!ShaderRecompiler::Spirv::EmitMergedPointMeshProgram(program,resources,*info,assembly,&next->spirv,error)) return false;

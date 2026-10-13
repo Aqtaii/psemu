@@ -231,6 +231,7 @@ jobs:
             build/native-atomic-tests/native_mesh_full_adapter.spv
             build/native-atomic-tests/native_mesh_emitter.spvasm
             build/native-atomic-tests/native_mesh_emitter_test.exe
+            build/native-atomic-tests/native_mesh_output_probe.spv
             build/native-atomic-tests/spirv-val.exe
             build/native-atomic-tests/spirv-dis.exe
             build/native-atomic-tests/SPIRV-Tools*.dll

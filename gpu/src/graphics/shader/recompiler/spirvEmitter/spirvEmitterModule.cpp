@@ -367,9 +367,11 @@ void AddDescriptorAnnotationsAndNames(EmitterState* state) {
 	if (state->gds_variable != 0) {
 		Decorate(state->gds_variable, "gds", IR::DescriptorBindingKind::Gds);
 	}
-	if (state->guest_address_table_variable != 0) {
+	if (state->guest_address_fault_variable != 0) {
 		Decorate(state->guest_address_fault_variable, "guest_address_fault",
 		         IR::DescriptorBindingKind::GuestAddressFault);
+	}
+	if (state->guest_address_table_variable != 0) {
 		Decorate(state->guest_address_table_variable, "guest_address_table",
 		         IR::DescriptorBindingKind::GuestAddressTable);
 	}
@@ -748,6 +750,10 @@ void EmitHeaderAndTypes(EmitterState* state) {
 		state->builder.AddType({OpVariable, state->ptr_storage_buffer,
 		                        state->flattened_srt_variable, StorageClassStorageBuffer});
 	}
+	if (state->guest_address_fault_variable != 0) {
+		state->builder.AddType({OpVariable, state->ptr_storage_buffer,
+                                state->guest_address_fault_variable, StorageClassStorageBuffer});
+	}
 	if (state->guest_address_table_variable != 0) {
 		state->builder.AddType({OpVariable, state->ptr_storage_buffer,
 		                        state->guest_address_table_variable, StorageClassStorageBuffer});
@@ -755,8 +761,6 @@ void EmitHeaderAndTypes(EmitterState* state) {
 		    state->builder, state->uint_type, state->bool_type, state->vec2_uint_type,
 		    state->uint_pair_type, state->ptr_storage_buffer_uint,
 		    state->guest_address_table_variable);
-		state->builder.AddType({OpVariable, state->ptr_storage_buffer,
-                                state->guest_address_fault_variable, StorageClassStorageBuffer});
         const auto fault_fn = DefineGuestAddressFault(
             state->builder, state->uint_type, state->bool_type, state->vec2_uint_type,
             state->ptr_storage_buffer_uint, state->guest_address_fault_variable);
@@ -952,6 +956,8 @@ void AllocateDescriptorVariables(EmitterState* state) {
 	}
 	if (DescriptorBinding(*state, IR::DescriptorBindingKind::GuestAddressTable) != nullptr) {
 		state->guest_address_table_variable = state->builder.AllocateId();
+	}
+	if (DescriptorBinding(*state, IR::DescriptorBindingKind::GuestAddressFault) != nullptr) {
 		state->guest_address_fault_variable = state->builder.AllocateId();
 	}
 	if (DescriptorBinding(*state, IR::DescriptorBindingKind::FlattenedSrt) != nullptr) {

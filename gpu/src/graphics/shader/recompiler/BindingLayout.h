@@ -10,6 +10,7 @@ struct BindingLayoutOptions {
 	uint32_t push_constant_offset = 0;
 	uint32_t max_push_dwords      = 32;
  bool mesh_point_inputs = false;
+ bool mesh_output_probe = false;
 };
 
 bool AllocateBindings(Program* program, const BindingLayoutOptions& options, std::string* error);
