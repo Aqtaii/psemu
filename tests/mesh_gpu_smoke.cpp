@@ -167,6 +167,13 @@ int main(int argc,char** argv){try{
   const std::array<std::array<float,4>,3> expected{{{-1,-1,0,1},{3,-1,0,1},{-1,3,0,1}}};
   for(uint32_t i=0;i<3;++i){std::array<float,4> position{};valid=MeshProbePosition(probe,i,&position) && position==expected[i] && valid;}
   for(const auto word:probe.fault)valid=valid && word==0;
+  bool gate_valid=true;
+  for(uint32_t i=0;i<31;++i)gate_valid=gate_valid && probe.lanes[i].gate_seen==1 &&
+   probe.lanes[i].gate_pc==0x104 && probe.lanes[i].gate_record==7 && probe.lanes[i].gate_value==(i==30 ? 0u : 0x3f800000u);
+  gate_valid=gate_valid && probe.lanes[31].gate_seen==0 && probe.lanes[255].gate_seen==0;
+  std::printf("[MESH-INPUT-GPU] exact_value_record_pc=%u untouched_outside_dispatch=%u game_frame=0\n",
+   unsigned(gate_valid),unsigned(probe.lanes[255].gate_seen==0));
+  valid=valid && gate_valid;
   std::printf("[MESH-OUTPUT-GPU] vertices=%u primitives=%u exact_positions_indices=%u fault_header_preserved=%u game_frame=0\n",probe.vertices,probe.primitives,unsigned(valid),unsigned(probe.fault==std::array<uint32_t,4>{}));
   readbacks_passed=readbacks_passed && valid;
  }

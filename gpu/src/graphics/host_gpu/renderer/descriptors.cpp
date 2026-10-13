@@ -1084,6 +1084,14 @@ static BufferView NativeGuestAddressFault(CommandBuffer* command, bool mesh_prob
    if(logs.fetch_add(1)<8) {
     printf("[MESH-OUTPUT-PROBE] magic=%08x allocation=%08x vertices=%u primitives=%u source=completed-fence\n",
      probe.magic,probe.allocation,probe.vertices,probe.primitives);
+    uint32_t reached=0;
+    for(uint32_t i=0;i<ShaderRecompiler::MeshOutputProbe::Capacity;++i) {
+     const auto& lane=probe.lanes[i];
+     if(lane.gate_seen!=1)continue;
+     if(reached++<8)printf("[MESH-INPUT-GATE] lane=%u pc=0x%x record=%u bits=%08x value=%.9g source=completed-fence\n",
+      i,lane.gate_pc,lane.gate_record,lane.gate_value,std::bit_cast<float>(lane.gate_value));
+    }
+    printf("[MESH-INPUT-GATE-COUNT] reached=%u capacity=%u\n",reached,ShaderRecompiler::MeshOutputProbe::Capacity);
     for(uint32_t i=0;i<std::min(probe.primitives,8u);++i) {
      const auto packed=probe.lanes[i].primitive;
      printf("[MESH-OUTPUT-INDEX] primitive=%u raw=%08x indices=(%u,%u,%u) culled=%u\n",

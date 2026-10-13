@@ -1,5 +1,6 @@
 #include "graphics/shader/recompiler/spirvEmitter/bufferMemoryGroup.h"
 #include "graphics/shader/recompiler/meshBarrierPlan.h"
+#include "graphics/shader/recompiler/meshOutputProbe.h"
 #include "graphics/shader/recompiler/spirvEmitter/scalarMemoryGroup.h"
 #include "graphics/shader/recompiler/spirvEmitter/spirvEmitterInternal.h"
 
@@ -573,6 +574,34 @@ bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst) {
 }
 
 void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
+ // Bounded opt-in capture of the actual Astro empty-input gate, before CMPX changes EXEC.
+ // The selector includes the captured PC/op/register; it does not change guest operands.
+ if(state->stage==ShaderType::Mesh && state->program->bindings.mesh_output_probe &&
+    state->guest_address_fault_variable!=0 && inst.pc==0x104 &&
+    inst.op==IR::Opcode::CompareMaskLtF32 && inst.src_count==2 &&
+    inst.src[1].kind==IR::OperandKind::Register &&
+    inst.src[1].reg.file==IR::RegisterFile::Vector && inst.src[1].reg.index==8) {
+  EmitGuardedByExec(state,[&] {
+   auto& b=state->builder;
+   const auto index=EmitMeshGuestLocalInvocationIndex(state);
+   const auto bounded=b.AllocateId(),yes=b.AllocateId(),end=b.AllocateId();
+   b.AddFunction({OpULessThan,state->bool_type,bounded,index,ConstantU32(state,MeshOutputProbe::Capacity)});
+   b.AddFunction({OpSelectionMerge,end,SelectionControlNone});
+   b.AddFunction({OpBranchConditional,bounded,yes,end});
+   b.AddFunction({OpLabel,yes});
+   const auto base=EmitAddU32(state,ConstantU32(state,MeshOutputProbe::HeaderWords),
+    EmitBinaryU32(state,OpIMul,index,ConstantU32(state,MeshOutputProbe::LaneWords)));
+   const uint32_t values[]={EmitValueLoad(state,inst.src[1]),
+    EmitRegisterLoad(state,{IR::RegisterFile::Vector,9}),ConstantU32(state,1),ConstantU32(state,inst.pc)};
+   for(uint32_t i=0;i<4;++i) {
+    const auto ptr=b.AllocateId();
+    b.AddFunction({OpAccessChain,state->ptr_storage_buffer_uint,ptr,state->guest_address_fault_variable,
+     ConstantU32(state,0),EmitAddU32(state,base,ConstantU32(state,6+i))});
+    b.AddFunction({OpStore,ptr,values[i]});
+   }
+   b.AddFunction({OpBranch,end});b.AddFunction({OpLabel,end});
+  });
+ }
 	if (inst.op == IR::Opcode::BufferLoadDword && inst.memory.component_count > 1u &&
 	    inst.memory.component_index == 0u) {
 		state->buffer_address_group_values.Capture(

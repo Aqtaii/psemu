@@ -783,6 +783,18 @@ int main(int argc,char** argv){
   probe_program.bindings.descriptors.push_back(diagnostic);
   Require(!Spirv::EmitProgram(probe_program,resources,&info,nullptr,nullptr,&words,&error));
   probe_program.bindings.mesh_output_probe=true;
+  // Exercise the exact diagnostic selector with known positive input before the real CMPX.
+  std::vector<IR::Instruction> gate;
+  auto add_gate=[&](IR::Opcode op,IR::Operand dst,std::initializer_list<IR::Operand> src,uint32_t pc) {
+   IR::Instruction i;i.op=op;i.dst=dst;i.pc=pc;
+   for(const auto& operand:src)i.src[i.src_count++]=operand;gate.push_back(i);
+  };
+  add_gate(IR::Opcode::CompareMaskGtU32,Reg(IR::RegisterFile::Exec,0),{Imm(31),vector(5)},0xe0);
+  add_gate(IR::Opcode::CompareEqU32,mask,{vector(5),Imm(30)},0xe4);
+  add_gate(IR::Opcode::SelectMaskU32,vector(8),{mask,Imm(0),Imm(0x3f800000)},0xf8);
+  add_gate(IR::Opcode::MoveU32,vector(9),{Imm(7)},0xfc);
+  add_gate(IR::Opcode::CompareMaskLtF32,Reg(IR::RegisterFile::Exec,0),{Imm(0),vector(8)},0x104);
+  probe_program.blocks[0].instructions.insert(probe_program.blocks[0].instructions.begin(),gate.begin(),gate.end());
   std::vector<uint32_t> probe_words;
   Require(Spirv::EmitProgram(probe_program,resources,&info,nullptr,nullptr,&probe_words,&error),error);
   auto* probe_file=std::fopen("native_mesh_output_probe.spv","wb");Require(probe_file!=nullptr);
