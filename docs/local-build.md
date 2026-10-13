@@ -9,3 +9,5 @@ From D:/proje/psemu run tools\scripts\build_local.bat. It activates process-loca
 Measured on Ryzen 5 5600X: first complete 138-step build 98.33 seconds, unchanged-source repeat 0.97 seconds (Ninja: no work to do). The repeat is not a measurement of a changed-source rebuild.
 
 Validation: bounded string copy with windows.h min/max macros enabled, save-transfer errors and numeric parser tests passed locally. The built executable passed --fiber-self-test with native NID lookup, 64 yields/resumes, preserved stack sentinel and termination without loading a game. Astro first-frame verification is separate and remains pending.
+
+Local Astro run passed the old bounded-path crash, submitted real Vulkan Mesh draws and reached presentation. The saved frame remained black, then a new guest fault at RVA 0x37f34c ended the process. This is separate from toolchain/build validation.
