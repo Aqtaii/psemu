@@ -1,4 +1,5 @@
 #include "graphics/host_gpu/renderer/shaderSubgroup.h"
+#include "graphics/host_gpu/renderer/meshSubgroupPolicy.h"
 
 #include "graphics/shader/recompiler/SpirvEmitter.h"
 
@@ -23,10 +24,12 @@ ShaderSubgroupConfiguration ConfigureShaderSubgroup(const GraphicContext&       
   if(!context.mesh_shader_enabled || program.lane_mask_mode!=ShaderLaneMaskMode::NativeWave ||
      (program.wave_size!=32 && !(program.wave_size==64 && program.mesh_gs_user_data &&
       program.bindings.mesh_point_input_dword!=ShaderRecompiler::IR::BindingLayout::NoMeshPointInputs))) return {};
-  if(context.subgroup_size==32) return {ShaderSubgroupMode::Natural,0};
-  if(context.subgroup_size_control_enabled && (context.required_subgroup_size_stages & stage) &&
-     context.min_subgroup_size<=32 && context.max_subgroup_size>=32) return {ShaderSubgroupMode::Controlled,32};
-  return {};
+  const auto policy=SelectMeshWave32Policy(context.subgroup_size_control_enabled,
+   bool(context.required_subgroup_size_stages & stage),context.min_subgroup_size,
+   context.max_subgroup_size,context.subgroup_size);
+  if(!policy.supported)return {};
+  return {policy.required_size ? ShaderSubgroupMode::Controlled : ShaderSubgroupMode::Natural,
+   policy.required_size};
  }
 	const auto guest_wave_size = program.wave_size;
 	if (guest_wave_size != 32u && guest_wave_size != 64u) {

@@ -1,4 +1,5 @@
 #include "graphics/shader/recompiler/meshOutputProbe.h"
+#include "graphics/host_gpu/renderer/meshSubgroupPolicy.h"
 #include "graphics/shader/recompiler/SpirvEmitter.h"
 #include "graphics/shader/recompiler/spirvEmitter/spirvEmitterInternal.h"
 #include "common/assert.h"
@@ -691,6 +692,16 @@ void WriteCapturedMesh(const char* es_path,const char* gs_path) {
  Require(std::fwrite(words.data(),4,words.size(),f)==words.size());Require(std::fclose(f)==0);
 }
 int main(int argc,char** argv){
+ {
+  auto p=SelectMeshWave32Policy(true,true,16,32,32);
+  Require(p.supported && p.required_size==32);
+  p=SelectMeshWave32Policy(true,true,16,32,16);Require(p.supported && p.required_size==32);
+  p=SelectMeshWave32Policy(false,true,16,32,32);Require(p.supported && p.required_size==0);
+  p=SelectMeshWave32Policy(false,true,16,32,16);Require(!p.supported);
+  p=SelectMeshWave32Policy(true,false,16,32,16);Require(!p.supported);
+  p=SelectMeshWave32Policy(true,true,64,64,64);Require(!p.supported);
+  p=SelectMeshWave32Policy(true,true,32,64,64);Require(p.supported && p.required_size==32);
+ }
  Require(argc==1 || argc==2 || argc==3);
  if(argc==3){WriteCapturedMesh(argv[1],argv[2]);return 0;}
  {

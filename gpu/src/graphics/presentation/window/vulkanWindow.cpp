@@ -530,8 +530,8 @@ static void VulkanInitSubgroupSizeControl(vk::PhysicalDevice physical_device, Gr
 	ctx->max_subgroup_size             = subgroup_size_control.maxSubgroupSize;
 	ctx->required_subgroup_size_stages = subgroup_size_control.requiredSubgroupSizeStages;
 	ctx->subgroup_size_control_enabled = features13.subgroupSizeControl == VK_TRUE &&
-	                                     subgroup_size_control.minSubgroupSize <= 64 &&
-	                                     subgroup_size_control.maxSubgroupSize >= 64;
+	                                     subgroup_size_control.minSubgroupSize > 0 &&
+	                                     subgroup_size_control.minSubgroupSize <= subgroup_size_control.maxSubgroupSize;
 
 	LOGF("Vulkan subgroup: default=%u min=%u max=%u stages=0x%08x size_control=%s\n",
 	     ctx->subgroup_size, ctx->min_subgroup_size, ctx->max_subgroup_size,

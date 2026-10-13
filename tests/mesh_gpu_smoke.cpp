@@ -23,14 +23,14 @@ static VkShaderModule Shader(VkDevice device,const char* path){
 }
 int main(int argc,char** argv){try{
  if(argc!=3 && argc!=4)throw std::runtime_error("Usage: mesh_gpu_smoke.exe mesh.spv fragment.spv");
- VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};app.pApplicationName="psemu Mesh smoke";app.apiVersion=VK_API_VERSION_1_2;
+ VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};app.pApplicationName="psemu Mesh smoke";app.apiVersion=VK_API_VERSION_1_3;
  VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};ici.pApplicationInfo=&app;
  VkInstance instance;VK_CHECK(vkCreateInstance(&ici,nullptr,&instance));
  uint32_t count=0;VK_CHECK(vkEnumeratePhysicalDevices(instance,&count,nullptr));std::vector<VkPhysicalDevice> devices(count);
  VK_CHECK(vkEnumeratePhysicalDevices(instance,&count,devices.data()));VkPhysicalDevice gpu=VK_NULL_HANDLE;uint32_t family=0;
  for(auto candidate:devices){
   VkPhysicalDeviceProperties properties;vkGetPhysicalDeviceProperties(candidate,&properties);
-  if(properties.apiVersion<VK_API_VERSION_1_2)continue;
+  if(properties.apiVersion<VK_API_VERSION_1_3)continue;
   uint32_t extensions=0;VK_CHECK(vkEnumerateDeviceExtensionProperties(candidate,nullptr,&extensions,nullptr));
   std::vector<VkExtensionProperties> available(extensions);VK_CHECK(vkEnumerateDeviceExtensionProperties(candidate,nullptr,&extensions,available.data()));
   bool mesh_extension=false;for(const auto& e:available)if(std::strcmp(e.extensionName,VK_EXT_MESH_SHADER_EXTENSION_NAME)==0)mesh_extension=true;
@@ -51,9 +51,20 @@ int main(int argc,char** argv){try{
  const bool output_probe=argc==4 && std::string(argv[3])=="output-probe";
  const bool primitive_probe=argc==4 && std::string(argv[3])=="primitive-probe";
  VkPhysicalDeviceMeshShaderFeaturesEXT supported_mesh{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
+ VkPhysicalDeviceSubgroupSizeControlFeatures supported_control{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES};
+ supported_mesh.pNext=&supported_control;
  VkPhysicalDeviceFeatures2 supported{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};supported.pNext=&supported_mesh;vkGetPhysicalDeviceFeatures2(gpu,&supported);
+ VkPhysicalDeviceSubgroupSizeControlProperties control_props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES};
+ VkPhysicalDeviceProperties2 control_properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};control_properties.pNext=&control_props;vkGetPhysicalDeviceProperties2(gpu,&control_properties);
+ const bool controlled32=output_probe && supported_control.subgroupSizeControl &&
+  (control_props.requiredSubgroupSizeStages & VK_SHADER_STAGE_MESH_BIT_EXT) &&
+  control_props.minSubgroupSize<=32 && control_props.maxSubgroupSize>=32;
+ if(output_probe && !controlled32)throw std::runtime_error("Explicit Mesh subgroup32 unavailable for control test");
  if(primitive_probe && !supported_mesh.meshShaderQueries) throw std::runtime_error("Mesh primitive queries unsupported");
  VkPhysicalDeviceMeshShaderFeaturesEXT mesh{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};mesh.meshShader=VK_TRUE;mesh.meshShaderQueries=primitive_probe;
+ VkPhysicalDeviceSubgroupSizeControlFeatures enabled_control{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES};
+ enabled_control.subgroupSizeControl=controlled32;
+ if(controlled32)mesh.pNext=&enabled_control;
  const char* extension=VK_EXT_MESH_SHADER_EXTENSION_NAME;VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};dci.pNext=&mesh;
  VkPhysicalDeviceFeatures device_features{};device_features.vertexPipelineStoresAndAtomics=output_probe ? supported.features.vertexPipelineStoresAndAtomics : VK_FALSE;
  if(output_probe && !device_features.vertexPipelineStoresAndAtomics)throw std::runtime_error("Mesh storage writes unavailable");
@@ -89,6 +100,9 @@ int main(int argc,char** argv){try{
  VkFramebuffer framebuffer;VK_CHECK(vkCreateFramebuffer(device,&fi,nullptr,&framebuffer));
  const auto mesh_shader=Shader(device,argv[1]),fragment_shader=Shader(device,argv[2]);
  VkPipelineShaderStageCreateInfo stages[2]{};for(auto& s:stages){s.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;s.pName="main";}
+ VkPipelineShaderStageRequiredSubgroupSizeCreateInfo required32{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO};
+ required32.requiredSubgroupSize=32;if(controlled32)stages[0].pNext=&required32;
+ if(controlled32)std::printf("[MESH-SUBGROUP-GPU] required_size=32 explicit_control=1 game_frame=0\n");
  stages[0].stage=vertex_probe ? VK_SHADER_STAGE_VERTEX_BIT : VK_SHADER_STAGE_MESH_BIT_EXT;stages[0].module=mesh_shader;stages[1].stage=VK_SHADER_STAGE_FRAGMENT_BIT;stages[1].module=fragment_shader;
  VkViewport viewport{0,0,float(width),float(height),0,1};VkRect2D scissor{{0,0},{width,height}};
  VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};vp.viewportCount=1;vp.pViewports=&viewport;vp.scissorCount=1;vp.pScissors=&scissor;
