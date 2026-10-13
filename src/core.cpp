@@ -5186,20 +5186,22 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 RegisterAllocSize(p, size);
                 ctx->Rax = reinterpret_cast<uint64_t>(p);
                 special_return_set = true;
-            } else if (readable_name == "sscanf_s") {
+            } else if (readable_name == "sscanf_s" || readable_name == "sscanf") {
                 const auto input = SafeReadCString(reinterpret_cast<const char*>(ctx->Rdi),256);
                 const auto format = SafeReadCString(reinterpret_cast<const char*>(ctx->Rsi),64);
                 int assigned = 0;
                 auto* destination = reinterpret_cast<uint32_t*>(ctx->Rdx);
                 if (format == "%x" && destination && SafeReadable(destination,sizeof(uint32_t))) {
                     assigned = GuestScanHex32(input.c_str(),destination);
+                } else if (format == "%d" && destination && SafeReadable(destination,sizeof(int32_t))) {
+                    assigned = GuestScanDecimal32(input.c_str(),reinterpret_cast<int32_t*>(destination));
                 }
                 ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(assigned));
                 special_return_set = true;
                 static std::atomic_uint scan_logs{0};
                 if (scan_logs.fetch_add(1,std::memory_order_relaxed)<8)
                     printf("[GUEST-SCAN] format=%s input=%.32s assigned=%d supported=%u\n",
-                           format.c_str(),input.c_str(),assigned,unsigned(format=="%x"));
+                           format.c_str(),input.c_str(),assigned,unsigned(format=="%x" || format=="%d"));
             } else if (readable_name == "atoi" || readable_name == "atol" || readable_name == "atoll") {
                 const auto input = SafeReadCString(reinterpret_cast<const char*>(ctx->Rdi),256);
                 const int64_t parsed = GuestDecimalInteger(input.c_str());

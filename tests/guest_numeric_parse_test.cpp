@@ -14,6 +14,13 @@ int main(){
  Require(GuestScanHex32("invalid",&output)==0 && output==0xfeedface);
  Require(GuestScanHex32("",&output)==EOF && output==0xfeedface);
  Require(GuestScanHex32("   ",&output)==EOF && output==0xfeedface);
+ int32_t decimal=-999;
+ Require(GuestScanDecimal32(" -42suffix",&decimal)==1 && decimal==-42);
+ Require(GuestScanDecimal32("2147483647",&decimal)==1 && decimal==2147483647);
+ Require(GuestScanDecimal32("-2147483648",&decimal)==1 && decimal==(-2147483647-1));
+ decimal=-999;
+ Require(GuestScanDecimal32("invalid",&decimal)==0 && decimal==-999);
+ Require(GuestScanDecimal32("",&decimal)==EOF && decimal==-999);
  Require(GuestDecimalInteger(" +123suffix")==123);
  Require(GuestDecimalInteger("-2147483648")==-2147483648LL);
  Require(GuestDecimalInteger("4294967297")==4294967297LL);
