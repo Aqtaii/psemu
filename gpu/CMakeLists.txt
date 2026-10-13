@@ -51,6 +51,7 @@ file(GLOB_RECURSE GPU_KERNEL_SRC   CONFIGURE_DEPENDS ${GPU_SRC}/kernel/*.cpp)
 file(GLOB_RECURSE GPU_GRAPHICS_SRC CONFIGURE_DEPENDS ${GPU_SRC}/graphics/*.cpp)
 
 set(GPU_LIBS_SRC
+    ${GPU_SRC}/libs/libFiber.cpp
     ${GPU_SRC}/libs/libFont.cpp
     ${GPU_SRC}/libs/libFontFt.cpp
     ${GPU_SRC}/libs/agc.cpp
