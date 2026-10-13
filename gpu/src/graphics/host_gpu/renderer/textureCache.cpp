@@ -3066,11 +3066,81 @@ void TextureCache::SynchronizeColorImageToBufferLocked(CachedImage& cached, uint
 	cached.buffer_modified = true;
 }
 
+void TextureCache::ReconstructDepthStencilForBufferLocked(CachedImage& cached,
+                                                         uint64_t address, uint64_t size) {
+	const auto info = cached.depth;
+	const bool stencil = address == info.stencil_address && size == info.stencil_size;
+	const bool depth = address == info.address && size == info.size;
+	TileSizeAlign expected_stencil {}, expected_htile {}, expected_depth {};
+	const auto z = info.bytes_per_element == 2 ? Prospero::DepthFormat::kZ16 : Prospero::DepthFormat::kZ32F;
+	const bool layout = TileGetDepthSize(info.width, info.height, 0, Prospero::GpuEnumValue(z),
+	    Prospero::GpuEnumValue(Prospero::StencilFormat::k8UInt), false,
+	    &expected_stencil, &expected_htile, &expected_depth);
+	if ((!stencil && !depth) || !cached.gpu_modified || cached.buffer_modified ||
+	    !cached.stencil_initialized || !IsSupportedDepthTargetFormat(info) ||
+	    info.layers != 1 || !layout || info.size != expected_depth.size ||
+	    info.stencil_size != expected_stencil.size || info.stencil_htile_compressed ||
+	    info.htile_address != 0 || info.htile_size != 0 ||
+	    cached.image->format != info.format || cached.image->layers != 1 ||
+	    cached.image->extent.width != info.width || cached.image->extent.height != info.height ||
+	    ImagePageRangesOverlap(info.address, info.size, info.stencil_address, info.stencil_size) ||
+	    HasMetaOverlapLocked(info.address, info.size) ||
+	    HasMetaOverlapLocked(info.stencil_address, info.stencil_size)) {
+		EXIT("TextureCache: unsupported combined depth/stencil buffer reconstruction, "
+		     "depth=0x%016" PRIx64 "+0x%016" PRIx64 " stencil=0x%016" PRIx64 "+0x%016" PRIx64
+		     " htile=0x%016" PRIx64 "+0x%016" PRIx64 " compressed=%u initialized=%u\n",
+		     info.address, info.size, info.stencil_address, info.stencil_size,
+		     info.htile_address, info.htile_size, info.stencil_htile_compressed, cached.stencil_initialized);
+	}
+	RequireRetirementIsolation({&cached}, "depth/stencil buffer reconstruction", address, size);
+	Transfer::WaitForGraphicsIdle(cached.ctx);
+	std::array<std::vector<uint8_t>, 2> backing;
+	for (uint32_t plane = 0; plane < 2; plane++) {
+		const uint64_t plane_address = plane == 0 ? info.address : info.stencil_address;
+		const uint64_t plane_size = plane == 0 ? info.size : info.stencil_size;
+		const uint32_t format = plane == 0 ? info.guest_format : Prospero::GpuEnumValue(Prospero::BufferFormat::k8UInt);
+		const uint32_t pitch = TileGetTexturePitch(format, info.width, 1, info.tile_mode);
+		const auto aspect = plane == 0 ? vk::ImageAspectFlagBits::eDepth : vk::ImageAspectFlagBits::eStencil;
+		std::vector<uint8_t> linear(plane_size, 0);
+		const auto regions = Transfer::MakeLayeredImageBufferCopies(1, plane_size, pitch, info.width, info.height, aspect);
+		Transfer::DownloadImage(cached.ctx, linear.data(), plane_size, regions, cached.image, cached.image->layout);
+		backing[plane].resize(plane_size);
+		if (!LibKernel::Memory::TryReadBacking(plane_address, backing[plane].data(), plane_size)) {
+			EXIT("TextureCache: cannot preserve depth/stencil backing padding\n");
+		}
+		TileConvertLinearToTiledDepthPreservePadding(backing[plane].data(), linear.data(), format,
+		                                           info.width, info.height, pitch, plane_size);
+	}
+	m_buffer_cache.ReconstructImageBackingPair(info.address, info.size, info.stencil_address,
+	    info.stencil_size, [&] {
+		LibKernel::Memory::WriteBacking(info.address, backing[0].data(), info.size);
+		LibKernel::Memory::WriteBacking(info.stencil_address, backing[1].data(), info.stencil_size);
+	});
+	for (uint32_t plane = 0; plane < 2; plane++) {
+		m_memory_tracker.ForEachDownloadRange<true>(cached.Address(plane), cached.Size(plane),
+		                                          [](uint64_t, uint64_t) noexcept {});
+	}
+	cached.gpu_modified = false;
+	// Backing owns both aspects. Retire the native cache entry rather than refreshing
+	// only depth and accidentally overwriting the independently-written stencil plane.
+	RetireImages({&cached});
+	static std::atomic_uint logs {0};
+	if (logs.fetch_add(1, std::memory_order_relaxed) < 8) {
+		printf("[DEPTH-STENCIL-BUFFER-SYNC] depth=0x%016" PRIx64 " stencil=0x%016" PRIx64
+		       " write=0x%016" PRIx64 " both_aspects=1 padding_preserved=1 retired=1\n",
+		       info.address, info.stencil_address, address);
+	}
+}
+
 void TextureCache::SynchronizeDepthImageToBufferLocked(CachedImage& cached, uint64_t write_address,
                                                        uint64_t write_size) {
 	const auto&   info        = cached.depth;
 	const bool    has_stencil = info.stencil_address != 0 || info.stencil_size != 0;
 	const bool    has_htile   = info.htile_address != 0 || info.htile_size != 0;
+	if (has_stencil) {
+		ReconstructDepthStencilForBufferLocked(cached, write_address, write_size);
+		return;
+	}
 	TileSizeAlign expected_stencil {};
 	TileSizeAlign expected_htile {};
 	TileSizeAlign expected_depth {};
@@ -3151,7 +3221,12 @@ bool TextureCache::InvalidateMemoryFromGPU(uint64_t vaddr, uint64_t size,
 		if (!cached.OverlapsRange(vaddr, size, false)) {
 			continue;
 		}
-		const auto next = ClassifyBufferImageWrite(vaddr, size, cached.Address(), cached.Size(),
+		uint32_t plane = 0;
+		if (cached.kind == CachedImage::Kind::DepthTarget && cached.RangeCount() == 2 &&
+		    vaddr == cached.Address(1) && size == cached.Size(1)) {
+			plane = 1;
+		}
+		const auto next = ClassifyBufferImageWrite(vaddr, size, cached.Address(plane), cached.Size(plane),
 		                                           cached.BufferBinding(), cached.gpu_modified,
 		                                           formatted_buffer_write, cached.buffer_modified);
 		if (match != m_images.end() || next == BufferImageWrite::None ||
@@ -3175,7 +3250,14 @@ bool TextureCache::InvalidateMemoryFromGPU(uint64_t vaddr, uint64_t size,
 		case BufferImageWrite::InvalidateVideoOut:
 		case BufferImageWrite::InvalidateStorageTexture:
 		case BufferImageWrite::InvalidateDepthTarget:
-		case BufferImageWrite::InvalidateRenderTarget: cached.buffer_modified = true; return true;
+		case BufferImageWrite::InvalidateRenderTarget:
+			if (cached.kind == CachedImage::Kind::DepthTarget && cached.RangeCount() == 2) {
+				RequireRetirementIsolation({&cached}, "clean depth/stencil buffer rebind", vaddr, size);
+				RetireImages({&cached});
+				return true;
+			}
+			cached.buffer_modified = true;
+			return true;
 		case BufferImageWrite::SynchronizeRenderTarget:
 		case BufferImageWrite::SynchronizeStorageTexture:
 			SynchronizeColorImageToBufferLocked(cached, vaddr, size);

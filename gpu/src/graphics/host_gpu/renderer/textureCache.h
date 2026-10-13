@@ -163,6 +163,7 @@ private:
 	                  const CachedImage*               native_image_source = nullptr);
 	void SynchronizeColorImageToBufferLocked(CachedImage& cached, uint64_t write_address,
 	                                         uint64_t write_size, bool preserve_storage_padding = false);
+	void ReconstructDepthStencilForBufferLocked(CachedImage& cached, uint64_t address, uint64_t size);
 	void SynchronizeDepthImageToBufferLocked(CachedImage& cached, uint64_t write_address,
 	                                         uint64_t write_size);
 

@@ -1598,6 +1598,36 @@ void BufferCache::ReconstructImageBacking(uint64_t vaddr, uint64_t size,
 	}
 }
 
+// Validate both independently-addressed aspects before any guest bytes change.
+void BufferCache::ReconstructImageBackingPair(uint64_t first_address, uint64_t first_size,
+                                             uint64_t second_address, uint64_t second_size,
+                                             const std::function<void()>& reconstruct) {
+	FaultSafeCacheLock lock(this, m_mutex);
+	const std::array<std::pair<uint64_t, uint64_t>, 2> ranges {{{first_address, first_size},
+	                                                         {second_address, second_size}}};
+	for (const auto& [address, size]: ranges) {
+		if (address == 0 || size == 0 || size > UINT64_MAX - address ||
+		    m_memory_tracker.IsRegionGpuModified(address, size) ||
+		    !m_gpu_modified_ranges.Intersections(address, size).empty()) {
+			EXIT("BufferCache: reconstructed aspect conflicts with GPU buffer ownership\n");
+		}
+		for (const auto& [base, cached]: m_buffers) {
+			const auto begin = std::max(address, base);
+			const auto end = std::min(address + size, base + cached->size);
+			if (begin < end && m_memory_tracker.IsRegionCpuModified(begin, end - begin)) {
+				EXIT("BufferCache: reconstructed aspect conflicts with CPU buffer ownership\n");
+			}
+		}
+	}
+	if (first_address < second_address + second_size && second_address < first_address + first_size) {
+		EXIT("BufferCache: reconstructed aspects overlap\n");
+	}
+	reconstruct();
+	for (const auto& [address, size]: ranges) {
+		m_memory_tracker.MarkRegionAsCpuModified(address, size);
+	}
+}
+
 void BufferCache::ValidateGpuAccess(uint64_t vaddr, uint64_t size, bool is_read,
                                     bool is_written) const {
 	if ((!is_read && !is_written) || vaddr == 0 || size == 0 || size > UINT64_MAX - vaddr) {

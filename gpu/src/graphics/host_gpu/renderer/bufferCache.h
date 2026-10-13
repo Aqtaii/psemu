@@ -85,6 +85,9 @@ public:
 	void               PublishImageBacking(uint64_t vaddr, uint64_t size);
 	void               PublishReconstructedImageBacking(uint64_t vaddr, uint64_t size);
 	// Validate ownership, reconstruct backing and dirty cached fragments under one cache lock.
+	void ReconstructImageBackingPair(uint64_t first_address, uint64_t first_size,
+	                                 uint64_t second_address, uint64_t second_size,
+	                                 const std::function<void()>& reconstruct);
 	void ReconstructImageBacking(uint64_t vaddr, uint64_t size,
 	                             const std::function<void()>& reconstruct, uint64_t pending_fault_page = 0);
 	void ValidateGpuAccess(uint64_t vaddr, uint64_t size, bool is_read, bool is_written) const;

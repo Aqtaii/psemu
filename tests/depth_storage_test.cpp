@@ -1,5 +1,45 @@
 static void Require(bool ok) {if(!ok) throw std::runtime_error("regression failed");}
 int main() {
+ // Both aspects publish together; a conflict in either must leave all bytes untouched.
+ for(int conflict=0;conflict<6;conflict++) {
+  BufferCache cache;
+  auto owner=std::make_unique<BufferCache::CachedBuffer>();owner->size=0x20000;
+  cache.m_buffers.emplace(0x10000,std::move(owner));
+  owner=std::make_unique<BufferCache::CachedBuffer>();owner->size=0x20000;
+  cache.m_buffers.emplace(0x50000,std::move(owner));
+  if(conflict==1)cache.m_memory_tracker.gpu={{0x10000,0x1000}};
+  if(conflict==2)cache.m_memory_tracker.gpu={{0x50000,0x1000}};
+  if(conflict==3)cache.m_gpu_modified_ranges.dirty={{0x50000,0x1000}};
+  if(conflict==4)cache.m_memory_tracker.cpu={{0x50000,0x1000}};
+  if(conflict==5)cache.m_memory_tracker.cpu={{0x10000,0x1000}};
+  bool called=false,rejected=false;std::array<unsigned,2> pixels{11,22};
+  try {cache.ReconstructImageBackingPair(0x10000,0x20000,0x50000,0x20000,[&]{called=true;pixels={33,44};});}
+  catch(const std::runtime_error&){rejected=true;}
+  Require(rejected==(conflict!=0));Require(called==(conflict==0));
+  Require(pixels==(conflict==0?std::array<unsigned,2>{33,44}:std::array<unsigned,2>{11,22}));
+  Require(cache.m_memory_tracker.published.size()==(conflict==0?2:0));
+ }
+ for(int invalid=0;invalid<4;invalid++) {
+  BufferCache cache;bool called=false,rejected=false;
+  uint64_t second=0x50000,size=0x20000;
+  if(invalid==0)second=0x20000;if(invalid==1)second=0;
+  if(invalid==2)size=0;if(invalid==3)second=UINT64_MAX-0x10000;
+  try {cache.ReconstructImageBackingPair(0x10000,0x20000,second,size,[&]{called=true;});}
+  catch(const std::runtime_error&){rejected=true;}
+  Require(rejected && !called && cache.m_memory_tracker.published.empty());
+ }
+ // Preserve independent R8 stencil padding while reconstructing all visible pixels.
+ {
+  const auto format=Prospero::GpuEnumValue(Prospero::BufferFormat::k8UInt);
+  constexpr uint32_t width=1920,height=1080,pitch=2048;constexpr size_t bytes=0x280000;
+  std::vector<uint8_t> linear(bytes,0),tiled(bytes,0xa5),roundtrip(bytes,0);
+  for(uint32_t y=0;y<height;y++)for(uint32_t x=0;x<width;x++)linear[y*pitch+x]=uint8_t(x*3+y*7);
+  TileConvertLinearToTiledDepthPreservePadding(tiled.data(),linear.data(),format,width,height,pitch,bytes);
+  TileConvertTiledToLinearDepth(roundtrip.data(),tiled.data(),format,width,height,pitch,bytes);
+  for(uint32_t y=0;y<1280;y++)for(uint32_t x=0;x<pitch;x++)
+   Require(roundtrip[y*pitch+x]==(x<width && y<height?linear[y*pitch+x]:0xa5));
+ }
+
  // Actual Astro descriptor: zero PerfMod is valid, as are the other hardware hints.
  {
   ShaderTextureResource d{{0xfa3e3900,0xc1600001,0x010dc1df,0x91800924,0,0,0,0}};

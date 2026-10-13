@@ -68,6 +68,7 @@ struct BufferCache {
  void RefreshCpuImageFragmentsLocked(uint64_t,uint64_t);
  bool IsCachedRegionCpuModified(uint64_t,uint64_t);
  void PublishReconstructedImageBacking(uint64_t,uint64_t);
+ void ReconstructImageBackingPair(uint64_t,uint64_t,uint64_t,uint64_t,const std::function<void()>&);
  void ReconstructImageBacking(uint64_t,uint64_t,const std::function<void()>&,uint64_t pending_fault_page=0);
 };
 struct FaultSafeCacheLock {FaultSafeCacheLock(BufferCache*,int&){}};
