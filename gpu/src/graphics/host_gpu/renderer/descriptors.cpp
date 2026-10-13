@@ -488,7 +488,8 @@ static bool IsSupportedDepthTextureEncoding(const ShaderTextureResource& descrip
 	constexpr uint32_t field1_reserved_mask = 0x200fff00u;
 	constexpr uint32_t field2_reserved_mask = 0xf0003000u;
 	constexpr uint32_t field3_common        = 0x01800000u;
-	constexpr uint32_t field5_expected      = 0x00700000u;
+	// PerfMod is a hardware performance hint, independent of depth sampling.
+	const uint32_t field5_expected = uint32_t(descriptor.PerfMod5()) << 20u;
 	const uint32_t     field3_expected =
 	    (descriptor.Type() << 28u) | field3_common | descriptor.DstSelXYZW();
 	return (descriptor.fields[1] & field1_reserved_mask) == 0 &&

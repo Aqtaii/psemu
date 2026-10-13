@@ -1,5 +1,24 @@
 static void Require(bool ok) {if(!ok) throw std::runtime_error("regression failed");}
 int main() {
+ // Actual Astro descriptor: zero PerfMod is valid, as are the other hardware hints.
+ {
+  ShaderTextureResource d{{0xfa3e3900,0xc1600001,0x010dc1df,0x91800924,0,0,0,0}};
+  for(uint32_t hint=0;hint<8;hint++) {
+   d.fields[5]=hint<<20;Require(IsSupportedDepthTextureEncoding(d));
+  }
+  d.fields[5]=0;
+  // Only PerfMod bits may vary: reject array pitch, LOD warning, corner sampling,
+  // mip statistics and all other reserved bits, and retain metadata rejection.
+  for(uint32_t bit=0;bit<32;bit++) {
+   if(bit>=20 && bit<=22) continue;
+   auto bad=d;bad.fields[5]=1u<<bit;Require(!IsSupportedDepthTextureEncoding(bad));
+  }
+  for(uint32_t word=4;word<8;word++) {
+   if(word==5) continue;
+   auto bad=d;bad.fields[word]=1;Require(!IsSupportedDepthTextureEncoding(bad));
+  }
+ }
+
  // Astro: the sampled R8 plane is adjacent to, rather than overlapping, depth.
  {
   DepthTargetInfo d{};d.address=0x25b3a3f0000ull;d.size=0x870000;
