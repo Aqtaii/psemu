@@ -521,7 +521,7 @@ bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst) {
    case IR::Opcode::RcpF32: case IR::Opcode::InverseSqrtF32: case IR::Opcode::SinF32:
    case IR::Opcode::IMulU32: case IR::Opcode::UMulU24U32: case IR::Opcode::UMaxU32:
    case IR::Opcode::ShiftLeftOrU32: case IR::Opcode::ShiftRightLogicalU32:
-   case IR::Opcode::BitReverseU32: case IR::Opcode::PackLowLowU16:
+   case IR::Opcode::BitReverseU32: case IR::Opcode::PackLowLowU16: case IR::Opcode::BitwiseOr3U32:
    case IR::Opcode::CompareMaskEqU32: case IR::Opcode::CompareMaskNeU32:
    case IR::Opcode::CompareMaskLtU32: case IR::Opcode::CompareMaskGtU32:
    case IR::Opcode::CompareMaskLtF32: break;

@@ -352,6 +352,7 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
   run(IR::Opcode::ShiftRightLogicalU32,{v,Imm(1)});expect(9,17);
   banks(0x00000001,0x00000002);run(IR::Opcode::BitReverseU32,{v});expect(0x80000000,0x40000000);
   banks(0xaaaa1234,0xbbbb5678);run(IR::Opcode::PackLowLowU16,{v,Imm(0xcccc9876)});expect(0x98761234,0x98765678);
+  banks(1,2);run(IR::Opcode::BitwiseOr3U32,{Imm(4),Imm(8),v});expect(13,14);
   banks(7,13);run(IR::Opcode::UMaxU32,{v,Imm(10)});expect(10,13);
   for(uint32_t half=0;half<2;++half){state.lane_half=half;EmitStoreU32(&state,v,EmitSubgroupLocalInvocationId(&state));}
   state.lane_half=0;
