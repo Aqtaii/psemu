@@ -1214,8 +1214,7 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 	}
 	if (ShaderRecompiler::IR::FindBinding(program.bindings,
             ShaderRecompiler::IR::DescriptorBindingKind::GuestAddressFault)) {
-		descriptors.guest_address_fault = NativeGuestAddressFault(buffer, program.stage==ShaderType::Mesh &&
-            ShaderRecompiler::MeshOutputProbeEnabled());
+		descriptors.guest_address_fault = NativeGuestAddressFault(buffer, program.bindings.mesh_output_probe);
 	}
 	if (ShaderRecompiler::IR::FindBinding(
 	        program.bindings, ShaderRecompiler::IR::DescriptorBindingKind::FlattenedSrt) !=

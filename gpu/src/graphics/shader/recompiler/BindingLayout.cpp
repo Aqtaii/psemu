@@ -212,6 +212,7 @@ bool AllocateBindings(Program* program, const BindingLayoutOptions& options, std
   return false;
  }
 	BindingLayout next;
+ next.mesh_output_probe=options.mesh_output_probe;
 	next.descriptor_set       = options.descriptor_set;
 	next.push_constant_offset = options.push_constant_offset;
 	if (!CollectUserData(*program, next.user_data_registers)) {

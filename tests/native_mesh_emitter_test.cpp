@@ -698,6 +698,7 @@ int main(int argc,char** argv){
   IR::BindingLayoutOptions probe_options;probe_options.mesh_output_probe=true;std::string e;
   Require(IR::AllocateBindings(&probe_plan,probe_options,&e),e);
   Require(IR::FindBinding(probe_plan.bindings,IR::DescriptorBindingKind::GuestAddressFault)!=nullptr);
+  Require(probe_plan.bindings.mesh_output_probe);
   Require(IR::FindBinding(probe_plan.bindings,IR::DescriptorBindingKind::GuestAddressTable)==nullptr);
   IR::Program rejected;rejected.stage=ShaderType::Vertex;rejected.shader_info_complete=true;
   Require(!IR::AllocateBindings(&rejected,probe_options,&e));Require(!rejected.binding_layout_complete);
@@ -780,6 +781,8 @@ int main(int argc,char** argv){
   auto probe_program=p;IR::DescriptorBinding diagnostic;
   diagnostic.kind=IR::DescriptorBindingKind::GuestAddressFault;diagnostic.binding=0;
   probe_program.bindings.descriptors.push_back(diagnostic);
+  Require(!Spirv::EmitProgram(probe_program,resources,&info,nullptr,nullptr,&words,&error));
+  probe_program.bindings.mesh_output_probe=true;
   std::vector<uint32_t> probe_words;
   Require(Spirv::EmitProgram(probe_program,resources,&info,nullptr,nullptr,&probe_words,&error),error);
   auto* probe_file=std::fopen("native_mesh_output_probe.spv","wb");Require(probe_file!=nullptr);

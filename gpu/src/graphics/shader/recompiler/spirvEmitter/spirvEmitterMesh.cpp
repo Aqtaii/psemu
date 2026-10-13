@@ -105,7 +105,7 @@ void EmitNativeMeshEntryPoint(EmitterState* state) {
  const auto vertices=MeshCount(state,allocation,0,10,mesh.max_vertices);
  const auto primitives=MeshCount(state,allocation,12,11,mesh.max_primitives);
  b.AddFunction({spv::OpSetMeshOutputsEXT,vertices,primitives});
- const bool probe=MeshOutputProbeEnabled() && state->guest_address_fault_variable!=0;
+ const bool probe=state->program->bindings.mesh_output_probe && state->guest_address_fault_variable!=0;
  const auto probe_store=[&](uint32_t offset,uint32_t value) {
   const auto ptr=b.AllocateId();
   b.AddFunction({spv::OpAccessChain,state->ptr_storage_buffer_uint,ptr,

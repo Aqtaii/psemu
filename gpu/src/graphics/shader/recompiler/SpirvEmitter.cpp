@@ -246,6 +246,10 @@ bool ValidateNativeProgram(const IR::Program& program, std::string* error) {
 	}
 	if (program.uses_guest_address_table) {
 		Expect(Kind::GuestAddressTable);
+	}
+	if (program.bindings.mesh_output_probe && program.stage!=ShaderType::Mesh)
+		return Fail(error,"output probe requires Mesh stage");
+	if (program.uses_guest_address_table || program.bindings.mesh_output_probe) {
 		Expect(Kind::GuestAddressFault);
 	}
 	if (!program.srt.reads.empty()) {
