@@ -14,6 +14,7 @@
 // altinda derlenir; agc.cpp yalnizca extern "C" PsemuKytyAgcCall'u cagirir.
 // ============================================================================
 #include <windows.h>
+#include <cstdlib>
 
 #include "common/abi.h"            // KYTY_SYSV_ABI
 #include "loader/symbolDatabase.h" // Loader::SymbolDatabase / FindByNid
@@ -27,6 +28,7 @@ void InitVideoOut_1(Loader::SymbolDatabase* s);
 void InitPad_1(Loader::SymbolDatabase* s);
 void InitFont_1(Loader::SymbolDatabase* s);
 void InitFontFt_1(Loader::SymbolDatabase* s);
+void InitFiber_1(Loader::SymbolDatabase* s);
 } // namespace Libs
 
 namespace {
@@ -41,6 +43,9 @@ void EnsureGraphicsDb() {
 	Libs::InitFont_1(db);
 	Libs::InitFontFt_1(db);
 	Libs::InitGraphicsDriver_1(db); // SADECE AGC Dcb + Graphics + GraphicsDriver
+ // Opt-in until the native context-switch regression and Astro boot are verified.
+ const char* native_fiber=std::getenv("PSEMU_NATIVE_FIBER");
+ if(native_fiber && native_fiber[0]=='1')Libs::InitFiber_1(db);
 	g_graphics_db = db;
 }
 

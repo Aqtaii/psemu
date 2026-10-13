@@ -3,6 +3,8 @@
 #include <vector>
 #include <string>
 #include <cstdlib>
+#include <cstring>
+extern "C" int PsemuFiberSelfTest();
 #include <map>
 #include <windows.h>
 #include "elf64.h"
@@ -1006,6 +1008,7 @@ int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     Logger::Init();
+    if (argc==2 && std::strcmp(argv[1],"--fiber-self-test")==0) return PsemuFiberSelfTest();
 
     if (argc < 2) {
         std::cout << "Kullanim: " << argv[0] << " <eboot.bin_yolu>" << std::endl;
