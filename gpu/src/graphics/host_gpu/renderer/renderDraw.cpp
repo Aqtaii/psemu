@@ -1049,13 +1049,42 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 	EXIT_IF(draw.name == nullptr);
 	EXIT_IF(state == nullptr);
 
+	// Diagnostic control only: preserve real shaders/resources, but isolate fragment-test
+	// rejection. Never treat output from this altered state as a correct game frame.
+	RenderDepthInfo pipeline_depth = state->depth_info;
+	const char* depth_probe_flag = std::getenv("PSEMU_ASTRO_DEPTH_PROBE");
+	const bool depth_probe = state->merged_mesh && depth_probe_flag &&
+	    std::strcmp(depth_probe_flag, "1") == 0;
+	if (depth_probe) {
+		pipeline_depth.depth_test_enable = false;
+		pipeline_depth.depth_write_enable = false;
+		pipeline_depth.depth_bounds_test_enable = false;
+		pipeline_depth.stencil_test_enable = false;
+	}
+	if (state->merged_mesh) {
+		static std::atomic_uint mesh_state_logs{0};
+		if (mesh_state_logs.fetch_add(1) < 16) {
+			const auto& d = state->depth_info;
+			const auto& vp = ctx->GetScreenViewport().viewports[0];
+			printf("[ASTRO-MESH-RASTER] diagnostic_tests_disabled=%u game_frame_candidate=%u "
+			       "depth_test=%u depth_write=%u compare=%u bounds=%u bounds_range=(%g,%g) "
+			       "stencil=%u depth_clear=%u load_clear=%u clear_value=%g depth_addr=0x%llx "
+			       "zscale=%g zoffset=%g\n", unsigned(depth_probe), unsigned(!depth_probe),
+			       unsigned(d.depth_test_enable), unsigned(d.depth_write_enable),
+			       unsigned(d.depth_compare_op), unsigned(d.depth_bounds_test_enable),
+			       d.depth_min_bounds, d.depth_max_bounds, unsigned(d.stencil_test_enable),
+			       unsigned(d.depth_clear_enable), unsigned(d.depth_load_clear_enable),
+			       d.depth_clear_value, static_cast<unsigned long long>(d.depth_buffer_vaddr),
+			       vp.zscale, vp.zoffset);
+		}
+	}
 	for (;;) {
 		const auto recording_generation = buffer->GetRecordingGeneration();
 		if (log_pipeline_phase) {
 			LogDrawPhase(draw.name, "CreatePipeline");
 		}
 		auto* pipeline = g_render_ctx->GetPipelineCache()->CreateGraphicsPipeline(
-		    state->framebuffer, state->color_info, state->color_count, &state->depth_info,
+		    state->framebuffer, state->color_info, state->color_count, &pipeline_depth,
 		    &state->vs_input_info, ctx, sh_ctx, &state->ps_input_info, topology, state->ps_active,
 		    state->vs_shader, state->ps_shader);
 
