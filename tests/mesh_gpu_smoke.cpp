@@ -53,7 +53,8 @@ int main(int argc,char** argv){try{
  VkDevice device;VK_CHECK(vkCreateDevice(gpu,&dci,nullptr,&device));VkQueue queue;vkGetDeviceQueue(device,family,0,&queue);
  const bool buffer_reads=argc==4 && std::string(argv[3])=="buffer-reads";
  const bool point_push=buffer_reads || (argc==4 && std::string(argv[3])=="point-push");
- if(argc==4 && !point_push) throw std::runtime_error("Unknown Mesh GPU test mode");
+ const bool vertex_probe=argc==4 && std::string(argv[3])=="vertex-probe";
+ if(argc==4 && !point_push && !vertex_probe) throw std::runtime_error("Unknown Mesh GPU test mode");
  auto draw=reinterpret_cast<PFN_vkCmdDrawMeshTasksEXT>(vkGetDeviceProcAddr(device,"vkCmdDrawMeshTasksEXT"));if(!draw)throw std::runtime_error("Mesh draw entry unavailable");
  constexpr uint32_t width=32,height=32,bytes=width*height*4;
  VkImageCreateInfo image_info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};image_info.imageType=VK_IMAGE_TYPE_2D;image_info.format=VK_FORMAT_R8G8B8A8_UNORM;
@@ -78,7 +79,7 @@ int main(int argc,char** argv){try{
  VkFramebuffer framebuffer;VK_CHECK(vkCreateFramebuffer(device,&fi,nullptr,&framebuffer));
  const auto mesh_shader=Shader(device,argv[1]),fragment_shader=Shader(device,argv[2]);
  VkPipelineShaderStageCreateInfo stages[2]{};for(auto& s:stages){s.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;s.pName="main";}
- stages[0].stage=VK_SHADER_STAGE_MESH_BIT_EXT;stages[0].module=mesh_shader;stages[1].stage=VK_SHADER_STAGE_FRAGMENT_BIT;stages[1].module=fragment_shader;
+ stages[0].stage=vertex_probe ? VK_SHADER_STAGE_VERTEX_BIT : VK_SHADER_STAGE_MESH_BIT_EXT;stages[0].module=mesh_shader;stages[1].stage=VK_SHADER_STAGE_FRAGMENT_BIT;stages[1].module=fragment_shader;
  VkViewport viewport{0,0,float(width),float(height),0,1};VkRect2D scissor{{0,0},{width,height}};
  VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};vp.viewportCount=1;vp.pViewports=&viewport;vp.scissorCount=1;vp.pScissors=&scissor;
  VkPipelineRasterizationStateCreateInfo raster{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};raster.polygonMode=VK_POLYGON_MODE_FILL;raster.cullMode=VK_CULL_MODE_NONE;raster.frontFace=VK_FRONT_FACE_COUNTER_CLOCKWISE;raster.lineWidth=1;
@@ -110,7 +111,10 @@ int main(int argc,char** argv){try{
  }
  VkPushConstantRange push_range{VK_SHADER_STAGE_MESH_BIT_EXT,0,24};
  VkPipelineLayoutCreateInfo li{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};if(point_push){li.pushConstantRangeCount=1;li.pPushConstantRanges=&push_range;}if(buffer_reads){li.setLayoutCount=1;li.pSetLayouts=&storage_layout;}VkPipelineLayout layout;VK_CHECK(vkCreatePipelineLayout(device,&li,nullptr,&layout));
+ VkPipelineVertexInputStateCreateInfo vertex_input{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+ VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};assembly.topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
  VkGraphicsPipelineCreateInfo pi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};pi.stageCount=2;pi.pStages=stages;pi.pViewportState=&vp;pi.pRasterizationState=&raster;pi.pMultisampleState=&ms;pi.pColorBlendState=&cb;pi.layout=layout;pi.renderPass=render_pass;
+ if(vertex_probe) {pi.pVertexInputState=&vertex_input;pi.pInputAssemblyState=&assembly;}
  VkPipeline pipeline;VK_CHECK(vkCreateGraphicsPipelines(device,VK_NULL_HANDLE,1,&pi,nullptr,&pipeline));
  VkCommandPoolCreateInfo ci{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};ci.queueFamilyIndex=family;ci.flags=VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;VkCommandPool pool;VK_CHECK(vkCreateCommandPool(device,&ci,nullptr,&pool));
  VkCommandBufferAllocateInfo cai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};cai.commandPool=pool;cai.level=VK_COMMAND_BUFFER_LEVEL_PRIMARY;cai.commandBufferCount=1;
@@ -125,7 +129,7 @@ int main(int argc,char** argv){try{
   const uint32_t payload[6]={0x87654321u,point_case?2u:1u,point_case?41u:25u,point_case?43u:27u,point_case?0xabcdef11u:0xabcdef01u,0x12345678u};
   vkCmdPushConstants(cmd,layout,VK_SHADER_STAGE_MESH_BIT_EXT,0,sizeof(payload),payload);
  }
- draw(cmd,1,1,1);vkCmdEndRenderPass(cmd);
+ if(vertex_probe) vkCmdDraw(cmd,3,1,0,0);else draw(cmd,1,1,1);vkCmdEndRenderPass(cmd);
  VkImageMemoryBarrier ib{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};ib.srcAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;ib.dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT;ib.oldLayout=ib.newLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
  ib.srcQueueFamilyIndex=ib.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;ib.image=image;ib.subresourceRange=vi.subresourceRange;
  vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,nullptr,0,nullptr,1,&ib);
@@ -138,7 +142,11 @@ int main(int argc,char** argv){try{
  for(uint32_t i=0;i<width*height;++i)if((point_case==1 ? (p[i*4]<10 && p[i*4+1]>240) : (p[i*4]>240 && p[i*4+1]<10)) && p[i*4+2]<10)++red;
  vkUnmapMemory(device,buffer_memory);
  std::printf("[MESH-GPU] case=%u expected=%s correct_pixels=%u total=%u Astro=not-executed\n",point_case,point_case==1?"green":"red",red,width*height);
- readbacks_passed=readbacks_passed && red>=1000;
+ if(vertex_probe) {
+  std::printf("[VERTEX-GPU-PROBE] captured_vertex_shader=1 colored_pixels=%u total=%u game_frame=0\n",red,width*height);
+  // The captured procedural shader forms the half-screen (-1,-1),(1,-1),(-1,1) triangle.
+  readbacks_passed=readbacks_passed && red>=480 && red<=544;
+ } else readbacks_passed=readbacks_passed && red>=1000;
  vkDestroyFence(device,fence,nullptr);
  }
 
