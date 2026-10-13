@@ -179,8 +179,8 @@ static bool SpirvDisassemble(const uint32_t* src_binary, size_t src_binary_size,
 }
 
 static bool SpirvValidateBinary(const char* label, uint64_t shader_hash,
-                                const std::vector<uint32_t>& spirv) {
-	if (!Config::ShaderValidationEnabled()) {
+                                const std::vector<uint32_t>& spirv, bool force = false) {
+	if (!force && !Config::ShaderValidationEnabled()) {
 		return true;
 	}
 
@@ -1149,7 +1149,7 @@ bool ShaderCompileInfoMesh(const HW::VertexShaderInfo& regs,const ShaderMeshInpu
  if(!R::CollectShaderInfo(&program,opts,error) || !R::AllocateBindings(&program,layout,error)) return false;
  auto next=std::make_unique<Entry>();
  if(!ShaderRecompiler::Spirv::EmitMergedPointMeshProgram(program,resources,*info,assembly,&next->spirv,error)) return false;
- if(!SpirvValidateBinary("Merged Mesh",regs.gs_regs.chksum,next->spirv)) {
+ if(!SpirvValidateBinary("Merged Mesh",regs.gs_regs.chksum,next->spirv,true)) {
   if(error) *error="merged Mesh SPIR-V validation failed";return false;
  }
  if(cache.size()>=64) {if(error) *error="merged Mesh program cache limit reached";return false;}

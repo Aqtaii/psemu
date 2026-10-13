@@ -54,6 +54,8 @@ $header+="`n"+(Slice $views '[[nodiscard]] inline bool IsSupportedStorageSwizzle
 $header+=([string][char]10)+'constexpr uint64_t TRACKER_PAGE_SIZE=4096;'+([string][char]10)
 $header+=Slice $info 'enum class BufferImageBinding' 'enum class StorageBufferRebind'
 $header+=Slice $info '[[nodiscard]] inline bool ImageRangeOverlaps(' '[[nodiscard]] inline SampledOverlap ClassifySampledOverlap('
+$header+=Slice $info 'struct DepthTargetInfo {' 'struct DepthFormatPolicy {'
+$header+=Slice $info '// A clean sampled stencil plane' '[[nodiscard]] inline DepthOverlap ClassifyDepthOverlap('
 $header+=Slice $info '[[nodiscard]] inline BufferImageWrite' '[[nodiscard]] inline StorageBufferRebind'
 $header+=([string][char]10)+"[[nodiscard]] inline bool"+([string][char]10)+(Slice $info 'CanReconstructStorageForRenderTarget(' '[[nodiscard]] inline DepthOverlap ClassifyDepthTargetOverlap(')
 $header+=[IO.File]::ReadAllText("$root\tests\render_target_publication_fixture.h")

@@ -2241,6 +2241,14 @@ DepthStencilVulkanImage* TextureCache::FindDepthTarget(CommandBuffer* command, G
 					sampled_depth_source = entry;
 				}
 				break;
+			case DepthOverlap::RetireSampledStencil:
+				// This source has no GPU-only writes. Recreate the stencil aspect from
+				// current guest backing, never from the unrelated sampled depth source.
+				supported = cached.kind == CachedImage::Kind::Texture &&
+				            (info.stencil_load_clear ||
+				             IsCoherentGuestImageSource(stencil_source, info.stencil_address,
+				                                        info.stencil_size));
+				break;
 			case DepthOverlap::RetireStorage:
 				supported = cached.kind == CachedImage::Kind::StorageTexture &&
 				            cached.gpu_modified && !cached.buffer_modified &&

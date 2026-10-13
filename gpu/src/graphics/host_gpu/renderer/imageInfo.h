@@ -332,6 +332,7 @@ inline constexpr std::array<VideoOutFormatPolicy, 6> VIDEO_OUT_FORMAT_POLICIES {
 enum class DepthOverlap : uint8_t {
 	None,
 	RetireSampled,
+	RetireSampledStencil,
 	RetireStorage,
 	ExpandTarget,
 	DiscardTarget,
@@ -821,6 +822,22 @@ ClassifyStorageBufferRebind(bool buffer_overlap, bool cached_gpu_modified,
 	           : StorageBufferRebind::Unsupported;
 }
 
+// A clean sampled stencil plane can be retired independently of its disjoint depth
+// plane. The cache must still require a clear or CPU-current backing before loading.
+[[nodiscard]] inline bool CanRetireSampledStencil(const ImageInfo& sampled,
+                                                  bool sampled_gpu_modified,
+                                                  const DepthTargetInfo& depth) {
+	return !sampled_gpu_modified && depth.stencil_address != 0 && depth.stencil_size != 0 &&
+	       !ImagePageRangesOverlap(sampled.address, sampled.size, depth.address, depth.size) &&
+	       sampled.address == depth.stencil_address && sampled.size == depth.stencil_size &&
+	       sampled.format == Prospero::GpuEnumValue(Prospero::BufferFormat::k8UInt) &&
+	       sampled.width == depth.width && sampled.height == depth.height &&
+	       sampled.pitch == depth.pitch && sampled.tile == depth.tile_mode &&
+	       sampled.base_level == 0 && sampled.levels == 1 && sampled.view_levels == 1 &&
+	       sampled.depth == 1 && sampled.base_array == 0 && depth.layers == 1 &&
+	       sampled.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor2D);
+}
+
 [[nodiscard]] inline DepthOverlap ClassifyDepthOverlap(const ImageInfo&       sampled,
                                                        bool                   sampled_gpu_modified,
                                                        const DepthTargetInfo& depth) {
@@ -831,6 +848,9 @@ ClassifyStorageBufferRebind(bool buffer_overlap, bool cached_gpu_modified,
 	                                                     depth.stencil_address, depth.stencil_size);
 	if (!depth_overlap && !stencil_overlap) {
 		return DepthOverlap::None;
+	}
+	if (CanRetireSampledStencil(sampled, sampled_gpu_modified, depth)) {
+		return DepthOverlap::RetireSampledStencil;
 	}
 	const bool  has_stencil  = depth.stencil_address != 0 || depth.stencil_size != 0;
 	const auto* depth_policy = FindGuestDepthFormatPolicy(depth.guest_format);

@@ -1,5 +1,32 @@
 static void Require(bool ok) {if(!ok) throw std::runtime_error("regression failed");}
 int main() {
+ // Astro: the sampled R8 plane is adjacent to, rather than overlapping, depth.
+ {
+  DepthTargetInfo d{};d.address=0x25b3a3f0000ull;d.size=0x870000;
+  d.stencil_address=d.address+d.size;d.stencil_size=0x280000;
+  d.width=d.pitch=1920;d.height=1080;d.tile_mode=24;
+  ImageInfo s{};s.address=d.stencil_address;s.size=d.stencil_size;
+  s.width=s.pitch=1920;s.height=1080;s.tile=24;
+  s.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k8UInt);
+  s.type=Prospero::GpuEnumValue(Prospero::ImageType::kColor2D);
+  Require(CanRetireSampledStencil(s,false,d));
+  Require(!CanRetireSampledStencil(s,true,d));
+  for(int i=0;i<12;i++) {
+   auto bad=s;
+   switch(i) {
+    case 0:bad.address-=0x10000;break;case 1:bad.size-=0x10000;break;
+    case 2:bad.format=22;break;case 3:bad.width--;break;
+    case 4:bad.height--;break;case 5:bad.pitch--;break;
+    case 6:bad.tile++;break;case 7:bad.base_level=1;break;
+    case 8:bad.levels=2;break;case 9:bad.view_levels=2;break;
+    case 10:bad.depth=2;break;case 11:bad.base_array=1;break;
+   }
+   Require(!CanRetireSampledStencil(bad,false,d));
+  }
+  d.layers=2;Require(!CanRetireSampledStencil(s,false,d));
+  d.layers=1;d.stencil_address=0;Require(!CanRetireSampledStencil(s,false,d));
+ }
+
  ImageInfo storage{};storage.address=0x247db190000;storage.size=0x280000;
  storage.width=960;storage.height=540;storage.pitch=1024;storage.depth=1;
  storage.type=Prospero::GpuEnumValue(Prospero::ImageType::kColor2D);
