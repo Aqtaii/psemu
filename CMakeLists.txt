@@ -28,7 +28,9 @@ if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
 endif()
 
 # loader.exe repo kokune ciksin ki mevcut run.bat degismeden calissin.
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR})
+if(NOT DEFINED CMAKE_RUNTIME_OUTPUT_DIRECTORY)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR})
+endif()
 
 # --- psemu cekirdegi (mevcut kaynaklar) -------------------------------------
 set(PSEMU_SOURCES

@@ -45,3 +45,6 @@ log*.txt
 
 # Topluluk NID veritabanlari (indirilen, lisansi belirsiz - repoya girmez)
 tools/nid_db/
+
+# Portable local CMake/Ninja cache
+/build-local/

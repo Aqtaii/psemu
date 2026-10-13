@@ -434,3 +434,7 @@ Contract reference: https://learn.microsoft.com/en-us/cpp/c-runtime-library/refe
 
 
 Bounded-copy CI d161748: first attempt failed downloading the Vulkan SDK (connection reset), retry passed the unit tests but full core compilation exposed Windows min/max macro collisions in the new header. Parenthesized standard-library function names and made the bounded-copy regression include windows.h before the helper, matching the core include environment. No game run or crash-fix success claimed for this source yet.
+
+
+### 2026-10-14: Portable D-only toolchain and first local build
+All installation payloads, extraction, caches and temporary paths under D:/Tools/psemu-build. No MSI/system setup or registry registration used. Local LLVM20.1.8/MSVC14.44/SDK26100/Vulkan1.4.350 build of ecade1d plus output-directory override succeeded in 98.33 seconds; unchanged-source repeat 0.97 seconds. Bounded copy, save transfer, numeric and native Fiber tests passed. Root Sarah loader.exe remains 6020096 bytes with 2026-10-10 timestamp; separate local loader is 6382080 bytes. Owned Astro local run started using the corrected strncpy_s implementation, logs tools/data/astro_local_ecade1d_log.txt. Runtime/frame result pending. See local-build.md.
