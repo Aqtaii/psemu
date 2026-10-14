@@ -247,3 +247,22 @@ No claim yet that this query explains all black geometry/targets.
 Local Windows build and --hdr-tone-map-self-test pass (canaries, exact12-byte
 output, allthree luminance values, null/invalidpointer error). Event-flag and
 native secure-copy regression self-tests also pass. Runtime result pending.
+
+## Actual output-status dispatch
+
+The first HDR run confirms [HDR-LUMINANCE] full80 max1000 min0 at startup.
+Read-through found sceVideoOutGetOutputStatus also missing from loader dispatch
+despite an existing public VideoOut implementation. Connected that call with
+full48-byte output span validation and actual handle/context, not hardcoded
+resolution overrides. Moved the existing output struct into its public header
+with size assertion; native implementation otherwise unchanged. Invalid
+output returns VideoOut invalid-address0x80290002; invalid handles reach its
+existing validation. Actual runtime logs resolution/range/refresh for first4.
+
+--video-output-status-self-test initializes the standard Common/Threads/Config/
+Log/Timer test subsystems then an actual3840x2160 VideoOut context. Passes
+resolution2, range1, nonzero refresh, flags/reserved initialization, adjacent
+canaries, null/invalidpointer, and invalidhandle paths. The first fixture lacked
+main-thread initialization and correctly hit its invariant; repaired the fixture,
+not the production invariant. HDR self-test still passes; Windows build passes.
+Prior HDR process9884 was intentionally stopped for this combined run.

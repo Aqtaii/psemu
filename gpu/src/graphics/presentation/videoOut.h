@@ -17,7 +17,14 @@ namespace Libs::VideoOut {
 struct VideoOutBufferAttribute2;
 struct VideoOutFlipStatus;
 struct VideoOutVblankStatus;
-struct VideoOutOutputStatus;
+struct VideoOutOutputStatus {
+	uint32_t resolution   = 0;
+	uint32_t dynamicRange = 0;
+	uint64_t refreshRate  = 0;
+	uint64_t flags        = 0;
+	uint64_t reserved[3]  = {};
+};
+static_assert(sizeof(VideoOutOutputStatus)==48);
 struct VideoOutOutputOptions;
 struct VideoOutBuffers;
 struct VideoOutColorSettings;
