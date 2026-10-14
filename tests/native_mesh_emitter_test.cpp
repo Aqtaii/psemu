@@ -823,6 +823,20 @@ int main(int argc,char** argv){
   auto* probe_file=std::fopen("native_mesh_output_probe.spv","wb");Require(probe_file!=nullptr);
   Require(std::fwrite(probe_words.data(),4,probe_words.size(),probe_file)==probe_words.size());
   Require(std::fclose(probe_file)==0);
+  // Same trace ABI, now with the dynamic instance in the five-word point payload.
+  probe_program.wave_size=64;probe_program.mesh_gs_user_data=true;probe_program.user_data_base=8;
+  probe_program.dispatcher_fallback=true;
+  probe_program.bindings.mesh_point_input_dword=0;
+  probe_program.bindings.push_constant_size=20;
+  for(auto& i:probe_program.blocks[0].instructions) i.execution=(i.op==IR::Opcode::Sendmsg ||
+   (i.dst.kind==IR::OperandKind::Register && i.dst.reg.file==IR::RegisterFile::M0)) ? IR::InstructionExecution::Scalar : IR::InstructionExecution::Vector;
+  auto point_probe_info=info;point_probe_info.mesh.invocations=32;
+  MeshAssemblyPlan point_probe_assembly;Require(PlanPointMeshAssembly(1,1,3,3,64,&point_probe_assembly));
+  Require(Spirv::EmitMergedPointMeshProgram(probe_program,resources,point_probe_info,point_probe_assembly,&probe_words,&error),error);
+  auto* point_probe_file=std::fopen("native_mesh_point_output_probe.spv","wb");Require(point_probe_file!=nullptr);
+  Require(std::fwrite(probe_words.data(),4,probe_words.size(),point_probe_file)==probe_words.size());
+  Require(std::fclose(point_probe_file)==0);
+
  }
  Require(Spirv::EmitProgram(p,resources,&info,nullptr,nullptr,&words,&error),error);
  auto* file=std::fopen(argc==2 ? "native_mesh_emitter_multiwave.spv" : "native_mesh_emitter.spv","wb");Require(file!=nullptr);

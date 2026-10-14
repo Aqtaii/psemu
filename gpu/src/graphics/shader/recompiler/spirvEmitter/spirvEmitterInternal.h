@@ -696,6 +696,7 @@ void AllocateInputVariables(EmitterState* state);
 
 void AllocateOutputVariables(EmitterState* state);
 uint32_t EmitMeshGuestLocalInvocationIndex(EmitterState* state);
+uint32_t EmitMeshProbeCaptureBool(EmitterState* state);
 void DefineNativeMeshVariables(EmitterState* state);
 void EmitNativeMeshEntryPoint(EmitterState* state);
 void EmitNativeMeshAllocate(EmitterState* state,const IR::Instruction& inst);

@@ -1,8 +1,19 @@
 #include "graphics/shader/recompiler/spirvEmitter/meshOutputs.h"
 #include <cstdio>
+#include <cassert>
+#include "graphics/shader/recompiler/meshOutputProbe.h"
 #include <map>
 using namespace Libs::Graphics::ShaderRecompiler::Spirv;
 int main() {
+ using Libs::Graphics::ShaderRecompiler::MeshOutputProbeIncludesDraw;
+ assert(MeshOutputProbeIncludesDraw(1,512,0,1));
+ assert(MeshOutputProbeIncludesDraw(1,512,0,511));
+ assert(!MeshOutputProbeIncludesDraw(1,512,0,512));
+ assert(!MeshOutputProbeIncludesDraw(1,1,0,1));
+ assert(MeshOutputProbeIncludesDraw(1,1,7,7));
+ assert(MeshOutputProbeIncludesDraw(1,2,UINT32_MAX,0));
+ assert(!MeshOutputProbeIncludesDraw(2,512,0,1));
+ assert(!MeshOutputProbeIncludesDraw(1,0,0,0));
  Builder b(0x00010400u);
  const auto v=b.AllocateId(), boolean=b.AllocateId(), u=b.AllocateId(), f=b.AllocateId();
  const auto vec4=b.AllocateId(), vec3=b.AllocateId(), ft=b.AllocateId(), main=b.AllocateId();

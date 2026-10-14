@@ -573,6 +573,22 @@ bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst) {
 	return true;
 }
 
+// Emit this in each calling SPIR-V function; function-local IDs cannot cross calls.
+uint32_t EmitMeshProbeCaptureBool(EmitterState* state) {
+ const auto& binding=state->program->bindings;
+ uint32_t instance=ConstantU32(state,0);
+ if(binding.mesh_point_input_dword!=IR::BindingLayout::NoMeshPointInputs && state->push_constant_variable!=0) {
+  const uint32_t word=binding.mesh_point_input_dword+2;
+  const auto pointer=state->builder.AllocateId();instance=state->builder.AllocateId();
+  state->builder.AddFunction({OpAccessChain,state->ptr_push_constant_uint,pointer,
+   state->push_constant_variable,ConstantU32(state,0),ConstantU32(state,word/4),ConstantU32(state,word%4)});
+  state->builder.AddFunction({OpLoad,state->uint_type,instance,pointer});
+ }
+ const auto selected=state->builder.AllocateId();
+ state->builder.AddFunction({OpIEqual,state->bool_type,selected,instance,ConstantU32(state,MeshOutputProbeInstance())});
+ return selected;
+}
+
 void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
  // Bounded opt-in capture of the actual Astro empty-input gate, before CMPX changes EXEC.
  // The selector includes the captured PC/op/register; it does not change guest operands.
@@ -586,8 +602,10 @@ void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
    const auto index=EmitMeshGuestLocalInvocationIndex(state);
    const auto bounded=b.AllocateId(),yes=b.AllocateId(),end=b.AllocateId();
    b.AddFunction({OpULessThan,state->bool_type,bounded,index,ConstantU32(state,MeshOutputProbe::Capacity)});
+   const auto capture=EmitMeshProbeCaptureBool(state),selected=b.AllocateId();
+   b.AddFunction({OpLogicalAnd,state->bool_type,selected,bounded,capture});
    b.AddFunction({OpSelectionMerge,end,SelectionControlNone});
-   b.AddFunction({OpBranchConditional,bounded,yes,end});
+   b.AddFunction({OpBranchConditional,selected,yes,end});
    b.AddFunction({OpLabel,yes});
    const auto base=EmitAddU32(state,ConstantU32(state,MeshOutputProbe::HeaderWords),
     EmitBinaryU32(state,OpIMul,index,ConstantU32(state,MeshOutputProbe::LaneWords)));

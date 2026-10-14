@@ -157,3 +157,26 @@ position(0,0,0,0), and empty-input gate PC0x104 value0 for instance0. Measured c
 readbacks and coverage remain zero. Four presentations have occurred, but the
 captured striped pattern remains invalid game-frame evidence. Next distinguish
 instance0 from the other actual instances in the 512-instance Mesh draw.
+
+## Selected instance trace extension
+
+Added opt-in PSEMU_ASTRO_MESH_PROBE_INSTANCE (default0) to select one actual
+instance. The host binds the trace only for one-point draws whose instance range
+contains the selector. Gate/header/position/index trace stores are guarded by the
+instance in the existing five-word push payload. The other instances keep executing
+their original shaders and render outputs; only diagnostic SSBO stores are omitted.
+The fault header layout remains intact. Changing selection requires a fresh run/cache.
+
+Draw-selector tests cover actual512 range, exclusions, singleton selection,
+wrapping u32 IDs, zero instances and multi-point rejection. Native Mesh emitter
+regressions and Vulkan1.2 spirv-val pass, including a new point-payload trace variant
+through the existing internal wave64 adapter. Full local Windows build passes.
+Arc B580 control smoke passes exact3 positions, packed(0,1,2), allocation3/1,
+fault header preservation and1024/1024 correct red test pixels; log
+local_selected_mesh_gpu_log.txt. This is explicitly a control, not Astro game output.
+
+Actual instance1 run started 2026-10-14 at13:06+03:00, owned PID5912;
+log astro_local_selected_mesh1_log.txt. Runtime result is pending.
+The preceding interrupted-run process was absent on this next turn. Its monitor
+left no exit JSON, and its last log established no fatal cause; do not call that
+absence a verified new crash. No recognizable Astro frame has been achieved.

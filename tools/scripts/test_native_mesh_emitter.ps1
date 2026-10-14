@@ -44,6 +44,8 @@ try {
   if($LASTEXITCODE -ne 0){throw 'Mesh output probe emission failed'}
   & "$env:VULKAN_SDK\Bin\spirv-val.exe" --target-env vulkan1.2 .\native_mesh_output_probe.spv
   if($LASTEXITCODE -ne 0){throw 'Mesh output probe SPIR-V validation failed'}
+  & "$env:VULKAN_SDK\Bin\spirv-val.exe" --target-env vulkan1.2 .\native_mesh_point_output_probe.spv
+  if($LASTEXITCODE -ne 0){throw 'Selected-instance point output probe SPIR-V validation failed'}
  } finally {[Environment]::SetEnvironmentVariable('PSEMU_ASTRO_MESH_OUTPUT_PROBE',$savedProbe,'Process')}
  Copy-Item -LiteralPath "$env:VULKAN_SDK\Bin\spirv-val.exe" -Destination .
  Copy-Item -LiteralPath "$env:VULKAN_SDK\Bin\spirv-dis.exe" -Destination .

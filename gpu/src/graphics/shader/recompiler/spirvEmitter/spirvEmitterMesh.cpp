@@ -112,12 +112,17 @@ void EmitNativeMeshEntryPoint(EmitterState* state) {
    state->guest_address_fault_variable,ConstantU32(state,0),offset});
   b.AddFunction({spv::OpStore,ptr,value});
  };
- if(probe) MeshIf(state,first,[&]{
+ const auto capture=probe ? EmitMeshProbeCaptureBool(state) : uint32_t(0);
+ if(probe) {
+  const auto selected_first=b.AllocateId();
+  b.AddFunction({spv::OpLogicalAnd,state->bool_type,selected_first,first,capture});
+  MeshIf(state,selected_first,[&]{
   probe_store(ConstantU32(state,4),ConstantU32(state,MeshOutputProbe::Magic));
   probe_store(ConstantU32(state,5),allocation);
   probe_store(ConstantU32(state,6),vertices);
   probe_store(ConstantU32(state,7),primitives);
- });
+  });
+ }
  const auto saved_half=state->lane_half;
  for(uint32_t half=0;half<state->lanes_per_invocation;++half) {
  state->lane_half=half;
@@ -125,7 +130,9 @@ void EmitNativeMeshEntryPoint(EmitterState* state) {
  if(probe) {
   const auto bounded=b.AllocateId();
   b.AddFunction({spv::OpULessThan,state->bool_type,bounded,index,ConstantU32(state,MeshOutputProbe::Capacity)});
-  MeshIf(state,bounded,[&]{
+  const auto selected=b.AllocateId();
+  b.AddFunction({spv::OpLogicalAnd,state->bool_type,selected,bounded,capture});
+  MeshIf(state,selected,[&]{
    const auto base=EmitAddU32(state,ConstantU32(state,MeshOutputProbe::HeaderWords),
     EmitBinaryU32(state,OpIMul,index,ConstantU32(state,MeshOutputProbe::LaneWords)));
    for(const auto& output:state->outputs) if(output.kind==IR::StageOutputKind::Position && output.index==0) {

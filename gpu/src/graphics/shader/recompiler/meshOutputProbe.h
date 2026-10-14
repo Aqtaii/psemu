@@ -9,6 +9,21 @@ inline bool MeshOutputProbeEnabled() {
  const char* flag=std::getenv("PSEMU_ASTRO_MESH_OUTPUT_PROBE");
  return flag && std::strcmp(flag,"1")==0;
 }
+// Fixed for one process; changing the selector requires a fresh shader cache/run.
+inline uint32_t MeshOutputProbeInstance() {
+ static const uint32_t selected=[] {
+  const char* value=std::getenv("PSEMU_ASTRO_MESH_PROBE_INSTANCE");
+  if(!value || !value[0])return uint32_t(0);
+  char* end=nullptr;const auto parsed=std::strtoull(value,&end,0);
+  return end && *end==0 && parsed<=UINT32_MAX ? uint32_t(parsed) : uint32_t(0);
+ }();
+ return selected;
+}
+inline bool MeshOutputProbeIncludesDraw(uint32_t points,uint32_t instances,
+                                       uint32_t first_instance,uint32_t selected) {
+ // Instance IDs wrap in the same u32 arithmetic as the actual draw loop.
+ return points==1 && instances!=0 && uint32_t(selected-first_instance)<instances;
+}
 // First four words retain GuestAddressFaultRecord. Trailing words are diagnostic only.
 struct MeshOutputProbe {
  static constexpr uint32_t Magic=0x4d505242, Capacity=256, HeaderWords=8, LaneWords=10;
