@@ -309,6 +309,23 @@ jobs:
           Get-Content -LiteralPath $taskErr
           if($taskProcess.ExitCode -ne 0){throw 'Fiber self-test failed'}
 
+      - name: Test native event flag wait and wakeup without a game
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $env:PSEMU_GPU_LOG='0'
+          $taskExe=(Resolve-Path 'dist/loader.exe').Path
+          $taskLog=Join-Path (Resolve-Path 'build/native-atomic-tests').Path 'event_flag_runtime_log.txt'
+          $taskErr=Join-Path (Resolve-Path 'build/native-atomic-tests').Path 'event_flag_runtime_stderr.txt'
+          $taskProcess=Start-Process -FilePath $taskExe -ArgumentList '--event-flag-self-test' -WindowStyle Hidden -PassThru -RedirectStandardOutput $taskLog -RedirectStandardError $taskErr
+          if(!$taskProcess.WaitForExit(10000)){
+            if($taskProcess.Path -eq $taskExe){Stop-Process -Id $taskProcess.Id}
+            throw 'Event flag self-test timed out'
+          }
+          Get-Content -LiteralPath $taskLog
+          Get-Content -LiteralPath $taskErr
+          if($taskProcess.ExitCode -ne 0){throw 'Event flag self-test failed'}
+
       - name: Upload downloadable Windows package
         uses: actions/upload-artifact@v4
         with:

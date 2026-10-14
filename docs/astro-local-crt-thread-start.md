@@ -93,3 +93,20 @@ New positioned-read regression verifies embedded zero bytes, guard bytes, unchan
 cursor, short read, >4GB offset without allocating a large file, invalid offset,
 bad descriptor and invalid buffer. It and the previous three suites pass locally;
 full local loader build also passes. Runtime log: astro_local_positioned_read_log.txt.
+
+## Event flag dispatch
+
+The positioned-read run read the real master audio bus .szd (4951/4951 bytes,
+T+67.53), then its log stopped after T+81.87. Sampled guest worker RIP
+0xdf26aa checks its own wrapper flags and skips the event wait when the stored
+handle is null. `sceKernelCreateEventFlag` was returning success without writing
+that handle. Connected create/wait/poll/set/clear/cancel/delete to the existing
+Kyty kernel event flag implementation (already built into psemu). HLE validates
+output spans and wait modes; no guest instruction skip or synthetic signal added.
+
+`loader.exe --event-flag-self-test` exercises a real worker wait/wakeup, AND/OR
+poll modes, bit clearing, timeout, cancel and delete without loading a game or
+creating a GPU. Passed locally; added it to the Windows workflow. Full local build
+passed. Runtime verification: tools/data/astro_local_event_flag_log.txt.
+The earlier stalled owned game was stopped after executable-path verification;
+its exit -1 is intentional termination, not a new measured crash.

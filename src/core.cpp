@@ -38,6 +38,7 @@
 #include "game_profile.h"
 #include "video.h"
 #include "kernel/eventQueue.h"
+#include "kernel/eventFlag.h"
 #include "graphics/presentation/videoOut.h"
 #include "libs/controller.h"
 #include "libs/padData.h"
@@ -6380,6 +6381,48 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     }
                     ctx->Rax = static_cast<uint64_t>(slen);
                 }
+                special_return_set = true;
+            } else if (readable_name == "sceKernelCreateEventFlag") {
+                using namespace Libs::LibKernel::EventFlag;
+                auto* output = reinterpret_cast<KernelEventFlag*>(ctx->Rdi);
+                int result = -2147352562;
+                if (SafeWritable(output,sizeof(*output)) && SafeReadable(reinterpret_cast<void*>(ctx->Rsi),1)) {
+                    const auto name = SafeReadCString(reinterpret_cast<const char*>(ctx->Rsi),32);
+                    result = KernelCreateEventFlag(output,name.c_str(),static_cast<uint32_t>(ctx->Rdx),
+                        ctx->Rcx,reinterpret_cast<const void*>(ctx->R8));
+                }
+                ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(result));
+                special_return_set = true;
+            } else if (readable_name == "sceKernelWaitEventFlag" || readable_name == "sceKernelPollEventFlag") {
+                using namespace Libs::LibKernel::EventFlag;
+                auto flag = reinterpret_cast<KernelEventFlag>(ctx->Rdi);
+                auto* pattern = reinterpret_cast<uint64_t*>(ctx->Rcx);
+                auto* timeout = reinterpret_cast<Libs::LibKernel::KernelUseconds*>(ctx->R8);
+                const auto mode = static_cast<uint32_t>(ctx->Rdx);
+                const bool polling = readable_name == "sceKernelPollEventFlag";
+                const bool valid_mode = (mode&~0x33u)==0 && ((mode&0xfu)==1 || (mode&0xfu)==2) &&
+                    ((mode&0xf0u)==0 || (mode&0xf0u)==0x10 || (mode&0xf0u)==0x20);
+                int result = -2147352554;
+                if (valid_mode && (!pattern || SafeWritable(pattern,sizeof(*pattern))) &&
+                    (polling || !timeout || SafeWritable(timeout,sizeof(*timeout)))) {
+                    result = polling ? KernelPollEventFlag(flag,ctx->Rsi,mode,pattern) :
+                        KernelWaitEventFlag(flag,ctx->Rsi,mode,pattern,timeout);
+                }
+                ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(result));
+                special_return_set = true;
+            } else if (readable_name == "sceKernelSetEventFlag" || readable_name == "sceKernelClearEventFlag" ||
+                       readable_name == "sceKernelDeleteEventFlag" || readable_name == "sceKernelCancelEventFlag") {
+                using namespace Libs::LibKernel::EventFlag;
+                auto flag = reinterpret_cast<KernelEventFlag>(ctx->Rdi);
+                int result = -2147352562;
+                if (readable_name == "sceKernelSetEventFlag") result = KernelSetEventFlag(flag,ctx->Rsi);
+                else if (readable_name == "sceKernelClearEventFlag") result = KernelClearEventFlag(flag,ctx->Rsi);
+                else if (readable_name == "sceKernelDeleteEventFlag") result = KernelDeleteEventFlag(flag);
+                else {
+                    auto* count = reinterpret_cast<int*>(ctx->Rdx);
+                    if (!count || SafeWritable(count,sizeof(*count))) result = KernelCancelEventFlag(flag,ctx->Rsi,count);
+                }
+                ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(result));
                 special_return_set = true;
             } else if (readable_name == "sceAudioOutOutput") {
                 // int sceAudioOutOutput(handle, ptr[, num])
