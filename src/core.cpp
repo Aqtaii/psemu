@@ -42,11 +42,6 @@
 #include "kernel/eventQueue.h"
 #include "kernel/eventFlag.h"
 #include "graphics/presentation/videoOut.h"
-#include "common/commonSubsystem.h"
-#include "common/emulatorConfig.h"
-#include "common/logging/log.h"
-#include "common/threads.h"
-#include "loader/timer.h"
 #include "libs/controller.h"
 #include "libs/padData.h"
 #include <immintrin.h>
@@ -149,32 +144,6 @@ extern "C" int PsemuHdrToneMapSelfTest() {
  if(CallGuestHdrToneMapLuminance(nullptr)!=-2136932349 ||
     CallGuestHdrToneMapLuminance(reinterpret_cast<void*>(1))!=-2136932349)return 2;
  std::printf("[HDR-HLE-TEST] reference_luminance=80/1000/0 exact_output_bounds=1 invalid_pointer_error=1\n");
- return 0;
-}
-static int CallGuestVideoOutputStatus(int handle,Libs::VideoOut::VideoOutOutputStatus* output) {
- if(!output || !SafeWritable(output,sizeof(*output)))return -2144796670; // 0x80290002
- return Libs::VideoOut::VideoOutGetOutputStatus(handle,output);
-}
-extern "C" int PsemuVideoOutputStatusSelfTest() {
- auto* list=Common::SubsystemsList::Instance();
- auto* common=Common::CommonSubsystem::Instance();auto* threads=Common::ThreadsSubsystem::Instance();
- auto* config=Config::ConfigSubsystem::Instance();auto* log=Log::LogSubsystem::Instance();
- auto* timer=Loader::Timer::TimerSubsystem::Instance();
- list->Add(common,{});list->Add(threads,{common});list->InitAll(true);
- list->Add(config,{common});list->InitAll(true);
- list->Add(log,{common,config});list->Add(timer,{common,log});list->InitAll(true);
- Libs::VideoOut::VideoOutInit(3840,2160);
- const auto handle=Libs::VideoOut::VideoOutOpen(255,0,0,nullptr);
- struct Guarded {uint64_t before;Libs::VideoOut::VideoOutOutputStatus status;uint64_t after;} data{0xaabbccdd,{},0x12345678};
- std::memset(&data.status,0xcd,sizeof(data.status));
- if(handle<=0 || CallGuestVideoOutputStatus(handle,&data.status)!=0 || data.status.resolution!=2 ||
-    data.status.dynamicRange!=1 || !data.status.refreshRate || data.status.flags ||
-    data.status.reserved[0] || data.status.reserved[1] || data.status.reserved[2] ||
-    data.before!=0xaabbccdd || data.after!=0x12345678)return 1;
- if(CallGuestVideoOutputStatus(handle,nullptr)!=-2144796670 ||
-    CallGuestVideoOutputStatus(handle,reinterpret_cast<Libs::VideoOut::VideoOutOutputStatus*>(1))!=-2144796670 ||
-    CallGuestVideoOutputStatus(-1,&data.status)==0)return 2;
- std::printf("[VIDEO-STATUS-HLE-TEST] actual_context_resolution=2 range=1 exact_output_bounds=1 error_paths=1\n");
  return 0;
 }
 static size_t SafeStrlen(const char* p, size_t max_len = SIZE_MAX) {
@@ -7266,16 +7235,6 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 Video::Flip(index);
                 ctx->Rax = Libs::VideoOut::VideoOutSubmitFlip(handle, index, flip_mode, arg);
                 special_return_set = true;
-            } else if (readable_name == "sceVideoOutGetOutputStatus") {
-                auto* status=reinterpret_cast<Libs::VideoOut::VideoOutOutputStatus*>(ctx->Rsi);
-                const int result=CallGuestVideoOutputStatus(static_cast<int>(ctx->Rdi),status);
-                if(result==0) {
-                    static std::atomic_uint logs{0};
-                    if(logs.fetch_add(1)<4)std::printf("[VIDEO-OUTPUT-STATUS] resolution=%u range=%u refresh=0x%llx\n",
-                        status->resolution,status->dynamicRange,static_cast<unsigned long long>(status->refreshRate));
-                }
-                ctx->Rax=static_cast<uint64_t>(static_cast<int64_t>(result));
-                special_return_set=true;
             } else if (readable_name == "sceVideoOutGetFlipStatus") {
                 int handle = static_cast<int>(ctx->Rdi);
                 Libs::VideoOut::VideoOutFlipStatus* status = reinterpret_cast<Libs::VideoOut::VideoOutFlipStatus*>(ctx->Rsi);

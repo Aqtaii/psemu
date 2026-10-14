@@ -112,6 +112,14 @@ struct VideoOutVblankStatus {
 	uint8_t  pad1[6]            = {};
 };
 
+struct VideoOutOutputStatus {
+	uint32_t resolution   = 0;
+	uint32_t dynamicRange = 0;
+	uint64_t refreshRate  = 0;
+	uint64_t flags        = 0;
+	uint64_t reserved[3]  = {};
+};
+
 struct VideoOutOutputOptions {
 	uint32_t internalData[16] = {};
 };
