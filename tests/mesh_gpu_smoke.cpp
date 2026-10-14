@@ -191,7 +191,8 @@ int main(int argc,char** argv){try{
   for(const auto word:probe.fault)valid=valid && word==0;
   bool gate_valid=true;
   for(uint32_t i=0;i<31;++i)gate_valid=gate_valid && probe.lanes[i].gate_seen==1 &&
-   probe.lanes[i].gate_pc==0x104 && probe.lanes[i].gate_record==7 && probe.lanes[i].gate_value==(i==30 ? 0u : 0x3f800000u);
+   probe.lanes[i].gate_descriptor==std::array<uint32_t,4>{0x11111111,0x22222222,0x33333333,0x44444444} &&
+   probe.lanes[i].gate_xyz[0]==i && probe.lanes[i].gate_pc==0x104 && probe.lanes[i].gate_record==7 && probe.lanes[i].gate_value==(i==30 ? 0u : 0x3f800000u);
   gate_valid=gate_valid && probe.lanes[31].gate_seen==0 && probe.lanes[255].gate_seen==0;
   std::printf("[MESH-INPUT-GPU] exact_value_record_pc=%u untouched_outside_dispatch=%u game_frame=0\n",
    unsigned(gate_valid),unsigned(probe.lanes[255].gate_seen==0));

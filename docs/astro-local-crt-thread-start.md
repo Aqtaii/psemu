@@ -190,3 +190,21 @@ and nonselected instance1 leaves the entire trace buffer untouched. Both
 render1024/1024 correct red control pixels, verifying that trace selection
 does not suppress geometry. Log local_point_selection_gpu_log.txt.
 These are control fixtures, not recognizable Astro game-frame evidence.
+
+## Actual instance1 result and descriptor trace
+
+Owned PID5912 completed the actual512-instance Mesh draw. Instance1 reaches
+PC0x104 with record1 and value0; allocation1/1, indices(0,0,0), clip(0,0,0,0).
+The primitive query counts512 generated primitives with zero covered samples.
+This rules out instance0 alone accounting for the sampled empty-input branch;
+it does not prove all512 input records are empty. Later fullscreen draws do
+cover their targets, but measured RGB readbacks remain zero. The process was
+intentionally stopped to replace our diagnostic executable (exit-1).
+
+Extended the opt-in lane trace from10 to17 words to capture scalar descriptor
+s8:s11 and record xyz v5:v7 immediately before CMPX. Existing fault-header
+words and first10 lane fields retain their meaning. No guest inputs change.
+Vulkan1.2 validation, full local Windows build, and Arc B580 selected/miss
+control tests pass. Known descriptor words11111111/22222222/33333333/44444444
+and record X equal to lane ID are captured exactly; the miss buffer stays zero.
+Log local_input_sharp_verified_log.txt. Actual descriptor runtime is pending.

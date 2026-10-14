@@ -816,6 +816,7 @@ int main(int argc,char** argv){
   add_gate(IR::Opcode::CompareEqU32,mask,{vector(5),Imm(30)},0xe4);
   add_gate(IR::Opcode::SelectMaskU32,vector(8),{mask,Imm(0),Imm(0x3f800000)},0xf8);
   add_gate(IR::Opcode::MoveU32,vector(9),{Imm(7)},0xfc);
+  for(uint32_t i=0;i<4;++i)add_gate(IR::Opcode::MoveU32,Reg(IR::RegisterFile::Scalar,8+i),{Imm(0x11111111u*(i+1))},0xfc);
   add_gate(IR::Opcode::CompareMaskLtF32,Reg(IR::RegisterFile::Exec,0),{Imm(0),vector(8)},0x104);
   probe_program.blocks[0].instructions.insert(probe_program.blocks[0].instructions.begin(),gate.begin(),gate.end());
   std::vector<uint32_t> probe_words;

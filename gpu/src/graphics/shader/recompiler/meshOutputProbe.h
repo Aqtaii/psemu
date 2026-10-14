@@ -26,15 +26,16 @@ inline bool MeshOutputProbeIncludesDraw(uint32_t points,uint32_t instances,
 }
 // First four words retain GuestAddressFaultRecord. Trailing words are diagnostic only.
 struct MeshOutputProbe {
- static constexpr uint32_t Magic=0x4d505242, Capacity=256, HeaderWords=8, LaneWords=10;
+ static constexpr uint32_t Magic=0x4d505242, Capacity=256, HeaderWords=8, LaneWords=17;
  std::array<uint32_t,4> fault{};
  uint32_t magic=0, allocation=0, vertices=0, primitives=0;
  struct Lane {std::array<uint32_t,4> position{};uint32_t primitive=0,seen=0;
-  uint32_t gate_value=0,gate_record=0,gate_seen=0,gate_pc=0;};
+  uint32_t gate_value=0,gate_record=0,gate_seen=0,gate_pc=0;
+  std::array<uint32_t,4> gate_descriptor{};std::array<uint32_t,3> gate_xyz{};};
  std::array<Lane,Capacity> lanes{};
 };
-static_assert(sizeof(MeshOutputProbe::Lane)==40);
-static_assert(sizeof(MeshOutputProbe)==(8+256*10)*4);
+static_assert(sizeof(MeshOutputProbe::Lane)==68);
+static_assert(sizeof(MeshOutputProbe)==(8+256*17)*4);
 inline bool MeshProbePosition(const MeshOutputProbe& probe,uint32_t index,
                               std::array<float,4>* result) {
  if(!result || probe.magic!=MeshOutputProbe::Magic || index>=probe.vertices ||

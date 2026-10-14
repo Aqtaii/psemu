@@ -610,8 +610,12 @@ void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
    const auto base=EmitAddU32(state,ConstantU32(state,MeshOutputProbe::HeaderWords),
     EmitBinaryU32(state,OpIMul,index,ConstantU32(state,MeshOutputProbe::LaneWords)));
    const uint32_t values[]={EmitValueLoad(state,inst.src[1]),
-    EmitRegisterLoad(state,{IR::RegisterFile::Vector,9}),ConstantU32(state,1),ConstantU32(state,inst.pc)};
-   for(uint32_t i=0;i<4;++i) {
+    EmitRegisterLoad(state,{IR::RegisterFile::Vector,9}),ConstantU32(state,1),ConstantU32(state,inst.pc),
+    EmitRegisterLoad(state,{IR::RegisterFile::Scalar,8}),EmitRegisterLoad(state,{IR::RegisterFile::Scalar,9}),
+    EmitRegisterLoad(state,{IR::RegisterFile::Scalar,10}),EmitRegisterLoad(state,{IR::RegisterFile::Scalar,11}),
+    EmitRegisterLoad(state,{IR::RegisterFile::Vector,5}),EmitRegisterLoad(state,{IR::RegisterFile::Vector,6}),
+    EmitRegisterLoad(state,{IR::RegisterFile::Vector,7})};
+   for(uint32_t i=0;i<std::size(values);++i) {
     const auto ptr=b.AllocateId();
     b.AddFunction({OpAccessChain,state->ptr_storage_buffer_uint,ptr,state->guest_address_fault_variable,
      ConstantU32(state,0),EmitAddU32(state,base,ConstantU32(state,6+i))});
