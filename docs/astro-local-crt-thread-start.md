@@ -208,3 +208,22 @@ Vulkan1.2 validation, full local Windows build, and Arc B580 selected/miss
 control tests pass. Known descriptor words11111111/22222222/33333333/44444444
 and record X equal to lane ID are captured exactly; the miss buffer stays zero.
 Log local_input_sharp_verified_log.txt. Actual descriptor runtime is pending.
+
+## Actual descriptor and presentation capture correction
+
+Instance1 GPU sharp is raw9fb86010/005001f8/00020000/00005204,
+base0x000001f89fb86010, stride80, records131072 (10MiB). Its xyz and gate
+W are all zero across observed repeated draws. DMA also accesses a counter
+at base-16. This may be an inactive effect pool, not proof of the whole scene
+being empty. Do not force this gate positive or call it the established cause.
+
+Astro registers video format0x8100000000000000, decoded by existing policy
+to A2R10G10B10UnormPack32. Screenshot previously interpreted packed10-bit
+bytes as BGRA8. Corrected BMP and scene-signature channels using rounded
+10-to8-bit conversion for both packed channel orders. Existing8-bit paths
+remain unchanged; unsupported formats are explicitly skipped instead of
+using an incorrect4-byte footprint. Capture every initial8 presentations,
+then every4th, retaining distinct-scene and60-shot bounds. Capture pixel
+regressions cover channel order, black/white, midpoint, and all alpha bits.
+Tests and local Windows build pass. This changes diagnostic readback only,
+not shader outputs or presentation. Prior striped BMPs are invalid evidence.

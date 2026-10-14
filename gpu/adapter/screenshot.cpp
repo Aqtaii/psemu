@@ -6,6 +6,7 @@
 // 4x kucultulur (4K -> 960x540) ki dosyalar makul kalsin.
 // ============================================================================
 #include <windows.h>
+#include "capture_pixel.h"
 
 #include <atomic>
 #include <cstdint>
@@ -43,7 +44,7 @@ static const std::string& EnsureRunDir() {
 
 // 24-bit, bottom-up BGR BMP yaz (4x downscale).
 static void WriteBmpDownscaled(const std::string& path, const uint8_t* bgra, uint32_t w,
-                               uint32_t h, bool source_is_rgba) {
+                               uint32_t h, CapturePixelFormat source_format) {
 	constexpr uint32_t F = 4; // kucultme faktoru
 	const uint32_t ow = w / F;
 	const uint32_t oh = h / F;
@@ -75,9 +76,8 @@ static void WriteBmpDownscaled(const std::string& path, const uint8_t* bgra, uin
 		const uint32_t sy = (oh - 1u - oy) * F;
 		for (uint32_t ox = 0; ox < ow; ox++) {
 			const uint8_t* px = bgra + (static_cast<size_t>(sy) * w + static_cast<size_t>(ox) * F) * 4u;
-			uint8_t b, g, r;
-			if (source_is_rgba) { r = px[0]; g = px[1]; b = px[2]; }
-			else                { b = px[0]; g = px[1]; r = px[2]; }
+			const auto channels=CapturePixelBgr(px,source_format);
+			const auto b=channels[0],g=channels[1],r=channels[2];
 			row[ox * 3u + 0u] = static_cast<char>(b);
 			row[ox * 3u + 1u] = static_cast<char>(g);
 			row[ox * 3u + 2u] = static_cast<char>(r);
@@ -162,9 +162,22 @@ void PsemuDumpGuestTexture(uint64_t addr, uint32_t w, uint32_t h) {
 void PsemuCaptureFrame(GraphicContext* ctx, const VulkanImage* image) {
 	if (ctx == nullptr || image == nullptr || image->image == nullptr) return;
 	if (image->format == vk::Format::eUndefined) return;
+ CapturePixelFormat source_format;
+ switch(image->format) {
+ case vk::Format::eR8G8B8A8Unorm: case vk::Format::eR8G8B8A8Srgb: case vk::Format::eR8G8B8A8Uint:
+  source_format=CapturePixelFormat::Rgba8;break;
+ case vk::Format::eB8G8R8A8Unorm: case vk::Format::eB8G8R8A8Srgb:
+  source_format=CapturePixelFormat::Bgra8;break;
+ case vk::Format::eA2R10G10B10UnormPack32:source_format=CapturePixelFormat::Bgr10;break;
+ case vk::Format::eA2B10G10R10UnormPack32:source_format=CapturePixelFormat::Rgb10;break;
+ default:
+  static std::atomic_bool reported{false};
+  if(!reported.exchange(true))std::fprintf(stderr,"[SHOT] unsupported readback pixel format=%u; capture omitted\n",unsigned(image->format));
+  return;
+ }
 
 	const uint64_t p = g_present_seq.fetch_add(1);
-	if ((p % 4ull) != 0) return;              // her 4 present'te bir readback
+	if (p >= 8 && (p % 4ull) != 0) return;              // her 4 present'te bir readback
 	if (g_shot_seq.load() >= 60) return;      // en fazla 60 DISTINCT sahne
 	if (p >= 40000ull) return;                // guvenlik ust siniri
 
@@ -222,7 +235,8 @@ void PsemuCaptureFrame(GraphicContext* ctx, const VulkanImage* image) {
 					const uint32_t sx = (static_cast<uint32_t>(gx) * 2u + 1u) * w / 32u;
 					const uint32_t sy = (static_cast<uint32_t>(gy) * 2u + 1u) * h / 32u;
 					const uint8_t* q = px + (static_cast<size_t>(sy) * w + sx) * 4u;
-					sig[k++] = static_cast<uint8_t>((q[0] + q[1] + q[2]) / 3u); // luma
+					const auto rgb=CapturePixelBgr(q,source_format);
+					sig[k++] = static_cast<uint8_t>((rgb[0] + rgb[1] + rgb[2]) / 3u); // luma
 				}
 			}
 		}
@@ -237,16 +251,13 @@ void PsemuCaptureFrame(GraphicContext* ctx, const VulkanImage* image) {
 		if (scene_changed) {
 			std::memcpy(s_last_sig, sig, sizeof(sig));
 			s_have_last = true;
-			const bool rgba = (image->format == vk::Format::eR8G8B8A8Unorm ||
-			                   image->format == vk::Format::eR8G8B8A8Srgb ||
-			                   image->format == vk::Format::eR8G8B8A8Uint);
 			const uint64_t seq = g_shot_seq.fetch_add(1);
 			char fname[64];
 			std::snprintf(fname, sizeof(fname), "\\frame_%05llu.bmp",
 			              static_cast<unsigned long long>(seq));
-			WriteBmpDownscaled(EnsureRunDir() + fname, px, w, h, rgba);
-			std::fprintf(stderr, "[SHOT] SAHNE kare: %s%s (%ux%u, present#%llu, diff=%u)\n",
-			             g_run_dir.c_str(), fname, w, h, static_cast<unsigned long long>(p), diff);
+			WriteBmpDownscaled(EnsureRunDir() + fname, px, w, h, source_format);
+			std::fprintf(stderr, "[SHOT] SAHNE kare: %s%s (%ux%u, present#%llu, diff=%u, format=%u)\n",
+			             g_run_dir.c_str(), fname, w, h, static_cast<unsigned long long>(p), diff, unsigned(image->format));
 		}
 		VulkanUnmapMemory(ctx, &readback.memory);
 	}
