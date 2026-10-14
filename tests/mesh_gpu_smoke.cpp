@@ -48,7 +48,9 @@ int main(int argc,char** argv){try{
  }
  if(!gpu)throw std::runtime_error("No suitable Mesh GPU");
  const float priority=1;VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};qci.queueFamilyIndex=family;qci.queueCount=1;qci.pQueuePriorities=&priority;
- const bool output_probe=argc==4 && std::string(argv[3])=="output-probe";
+ const bool point_output_probe=argc==4 && std::string(argv[3])=="point-output-probe";
+ const bool point_output_miss=argc==4 && std::string(argv[3])=="point-output-miss";
+ const bool output_probe=point_output_probe || point_output_miss || (argc==4 && std::string(argv[3])=="output-probe");
  const bool primitive_probe=argc==4 && std::string(argv[3])=="primitive-probe";
  VkPhysicalDeviceMeshShaderFeaturesEXT supported_mesh{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
  VkPhysicalDeviceSubgroupSizeControlFeatures supported_control{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES};
@@ -74,7 +76,7 @@ int main(int argc,char** argv){try{
  VkDevice device;VK_CHECK(vkCreateDevice(gpu,&dci,nullptr,&device));VkQueue queue;vkGetDeviceQueue(device,family,0,&queue);
  const bool buffer_reads=argc==4 && std::string(argv[3])=="buffer-reads";
  const VkDeviceSize input_bytes=output_probe ? sizeof(Libs::Graphics::ShaderRecompiler::MeshOutputProbe) : 4096;
- const bool point_push=buffer_reads || (argc==4 && std::string(argv[3])=="point-push");
+ const bool point_push=point_output_probe || point_output_miss || buffer_reads || (argc==4 && std::string(argv[3])=="point-push");
  const bool vertex_probe=argc==4 && std::string(argv[3])=="vertex-probe";
  if(argc==4 && !point_push && !vertex_probe && !primitive_probe && !output_probe) throw std::runtime_error("Unknown Mesh GPU test mode");
  auto draw=reinterpret_cast<PFN_vkCmdDrawMeshTasksEXT>(vkGetDeviceProcAddr(device,"vkCmdDrawMeshTasksEXT"));if(!draw)throw std::runtime_error("Mesh draw entry unavailable");
@@ -147,7 +149,7 @@ int main(int argc,char** argv){try{
  VkCommandBuffer cmd;VK_CHECK(vkAllocateCommandBuffers(device,&cai,&cmd));VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};bool readbacks_passed=true;
  VkQueryPool primitive_pool=VK_NULL_HANDLE;
  if(primitive_probe){VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};qi.queryType=VK_QUERY_TYPE_MESH_PRIMITIVES_GENERATED_EXT;qi.queryCount=1;VK_CHECK(vkCreateQueryPool(device,&qi,nullptr,&primitive_pool));}
- for(uint32_t point_case=0;point_case<(point_push?2u:1u);++point_case) {
+ for(uint32_t point_case=0;point_case<((point_push && !output_probe)?2u:1u);++point_case) {
  if(point_case!=0) VK_CHECK(vkResetCommandBuffer(cmd,0));
  VK_CHECK(vkBeginCommandBuffer(cmd,&begin));
  if(primitive_probe)vkCmdResetQueryPool(cmd,primitive_pool,0,1);
@@ -156,7 +158,10 @@ int main(int argc,char** argv){try{
  if(buffer_reads || output_probe) vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,layout,0,1,&storage_set,0,nullptr);
  if(point_push) {
   const uint32_t payload[6]={0x87654321u,point_case?2u:1u,point_case?41u:25u,point_case?43u:27u,point_case?0xabcdef11u:0xabcdef01u,0x12345678u};
-  vkCmdPushConstants(cmd,layout,VK_SHADER_STAGE_MESH_BIT_EXT,0,sizeof(payload),payload);
+  if(output_probe) {
+   const uint32_t point_payload[5]={1,0,point_output_miss ? 1u : 0u,0,0};
+   vkCmdPushConstants(cmd,layout,VK_SHADER_STAGE_MESH_BIT_EXT,0,sizeof(point_payload),point_payload);
+  } else vkCmdPushConstants(cmd,layout,VK_SHADER_STAGE_MESH_BIT_EXT,0,sizeof(payload),payload);
  }
  if(primitive_probe)vkCmdBeginQuery(cmd,primitive_pool,0,0);
  if(vertex_probe) vkCmdDraw(cmd,3,1,0,0);else draw(cmd,1,1,1);
@@ -177,7 +182,9 @@ int main(int argc,char** argv){try{
   using namespace Libs::Graphics::ShaderRecompiler;
   void* raw;VK_CHECK(vkMapMemory(device,input_memory,0,input_bytes,0,&raw));
   MeshOutputProbe probe;std::memcpy(&probe,raw,sizeof(probe));vkUnmapMemory(device,input_memory);
-  bool valid=probe.magic==MeshOutputProbe::Magic && probe.vertices==3 && probe.primitives==1 &&
+  bool valid=false;
+  if(!point_output_miss) {
+  valid=probe.magic==MeshOutputProbe::Magic && probe.vertices==3 && probe.primitives==1 &&
    probe.lanes[0].primitive==((1u<<10)|(2u<<20));
   const std::array<std::array<float,4>,3> expected{{{-1,-1,0,1},{3,-1,0,1},{-1,3,0,1}}};
   for(uint32_t i=0;i<3;++i){std::array<float,4> position{};valid=MeshProbePosition(probe,i,&position) && position==expected[i] && valid;}
@@ -190,6 +197,11 @@ int main(int argc,char** argv){try{
    unsigned(gate_valid),unsigned(probe.lanes[255].gate_seen==0));
   valid=valid && gate_valid;
   std::printf("[MESH-OUTPUT-GPU] vertices=%u primitives=%u exact_positions_indices=%u fault_header_preserved=%u game_frame=0\n",probe.vertices,probe.primitives,unsigned(valid),unsigned(probe.fault==std::array<uint32_t,4>{}));
+  } else {
+   const MeshOutputProbe untouched{};
+   valid=std::memcmp(&probe,&untouched,sizeof(probe))==0;
+   std::printf("[MESH-SELECTION-GPU] nonselected_instance=1 trace_untouched=%u game_frame=0\n",unsigned(valid));
+  }
   readbacks_passed=readbacks_passed && valid;
  }
  void* pixels;VK_CHECK(vkMapMemory(device,buffer_memory,0,bytes,0,&pixels));auto* p=static_cast<unsigned char*>(pixels);uint32_t red=0;

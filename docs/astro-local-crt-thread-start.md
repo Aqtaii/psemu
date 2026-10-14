@@ -180,3 +180,13 @@ log astro_local_selected_mesh1_log.txt. Runtime result is pending.
 The preceding interrupted-run process was absent on this next turn. Its monitor
 left no exit JSON, and its last log established no fatal cause; do not call that
 absence a verified new crash. No recognizable Astro frame has been achieved.
+
+## Dynamic point-payload GPU verification
+
+Extended mesh_gpu_smoke with point-output-probe and point-output-miss modes.
+Both use the same internal wave64 merged point fixture and actual five-word
+push payload. Arc B580 passes selected instance0 exact geometry/gate trace,
+and nonselected instance1 leaves the entire trace buffer untouched. Both
+render1024/1024 correct red control pixels, verifying that trace selection
+does not suppress geometry. Log local_point_selection_gpu_log.txt.
+These are control fixtures, not recognizable Astro game-frame evidence.
