@@ -5,6 +5,8 @@
 #include "guest_numeric_parse.h"
 #include "guest_save_transfer.h"
 #include "guest_bounded_string.h"
+#include "guest_safe_memory_copy.h"
+#include "guest_thread_start.h"
 #include "host_allocation_size.h"
 #include "sarah_tls_sites.h"
 #include "shared_direct_memory.h"
@@ -2569,6 +2571,31 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                         for (int k = 0; k < 8; k++) bs << " 0x" << std::hex << q[k];
                     }
                 }
+                // Opt-in inspection of the captured linked resource-argument layout.
+                // Read-only, bounded to eight nodes; no replacement guest values.
+                static const bool s_resource_args = [] {
+                    const char* value = std::getenv("PSEMU_BP_RESOURCE_ARGS");
+                    return value != nullptr && value[0] == '1';
+                }();
+                if (s_resource_args && SafeReadable(reinterpret_cast<void*>(ctx->Rsi),8)) {
+                    uint64_t node = *reinterpret_cast<const uint64_t*>(ctx->Rsi);
+                    for (unsigned k=0; k<8 && node; ++k) {
+                        const auto* fields = reinterpret_cast<const uint64_t*>(node);
+                        if (!SafeReadable(fields,64)) break;
+                        bs << "\n     [resource-node " << std::dec << k << std::hex << "] @0x" << node;
+                        for (unsigned f=0; f<8; ++f) bs << " 0x" << fields[f];
+                        if (fields[0] && SafeReadable(reinterpret_cast<void*>(fields[0]),32))
+                            bs << " tag=" << SafeReadCString(reinterpret_cast<const char*>(fields[0]),32);
+                        if (fields[2] && SafeReadable(reinterpret_cast<void*>(fields[2]),64)) {
+                            const auto* data = reinterpret_cast<const uint64_t*>(fields[2]);
+                            bs << " data->";
+                            for (unsigned f=0; f<8; ++f) bs << " 0x" << data[f];
+                        }
+                        const uint64_t next=fields[1];
+                        if (next==node) break;
+                        node=next;
+                    }
+                }
                 LOG_INFO(bs.str());
             }
             // "push rbp"yi elde canlandir
@@ -4628,6 +4655,30 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 }
                 ctx->Rax = ctx->Rdi; // memset hedef pointer'i doner
                 special_return_set = true;
+            } else if (readable_name == "memcpy_s" || readable_name == "memmove_s") {
+                const bool moving=readable_name=="memmove_s";
+                void* dst=reinterpret_cast<void*>(ctx->Rdi);
+                const auto* src=reinterpret_cast<const void*>(ctx->Rdx);
+                const auto capacity=static_cast<size_t>(ctx->Rsi);
+                const auto count=static_cast<size_t>(ctx->Rcx);
+                int status=22;
+                if (count==0) status=0;
+                else if (dst && capacity<=UINTPTR_MAX-ctx->Rdi && SafeWritable(dst,capacity)) {
+                    if (!src || count>capacity) status=moving ? GuestMemmoveS(dst,capacity,src,count) : GuestMemcpyS(dst,capacity,src,count);
+                    else {
+                        const bool readable=count<=UINTPTR_MAX-ctx->Rdx && SafeReadable(src,count);
+                        status=moving ? GuestMemmoveS(dst,capacity,readable ? src : nullptr,count) : GuestMemcpyS(dst,capacity,readable ? src : nullptr,count);
+                    }
+                    const auto written=status==0 ? count : (moving ? size_t(0) : capacity);
+                    if (written) PsemuMarkCpuModified(ctx->Rdi,written);
+                }
+                if (status!=0) g_guest_errno=status;
+                ctx->Rax=status;
+                special_return_set=true;
+                static std::atomic<unsigned> samples[2]{};
+                if (samples[moving ? 1 : 0].fetch_add(1,std::memory_order_relaxed)<8)
+                    LOG_INFO(std::string(moving ? "[MEMMOVE-S] capacity=" : "[MEMCPY-S] capacity=")+std::to_string(capacity)+" count="+std::to_string(count)+
+                        " status="+std::to_string(status));
             } else if (readable_name == "memcpy") {
                 // memcpy(dst, src, n): RDI=dst, RSI=src, RDX=n
                 void* dst = reinterpret_cast<void*>(ctx->Rdi);
@@ -4718,6 +4769,28 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 std::string s = SafeReadCString(reinterpret_cast<const char*>(ctx->Rdi), maxn);
                 ctx->Rax = static_cast<uint64_t>(s.size() < maxn ? s.size() : maxn);
                 special_return_set = true;
+            } else if (readable_name == "strcpy_s") {
+                auto* dst=reinterpret_cast<char*>(ctx->Rdi);
+                const auto* src=reinterpret_cast<const char*>(ctx->Rdx);
+                const auto capacity=static_cast<size_t>(ctx->Rsi);
+                int status=22;
+                if (dst && capacity>0 && capacity<=UINTPTR_MAX-ctx->Rdi && SafeWritable(dst,capacity)) {
+                    if (src) {
+                        const auto sample=SafeReadCString(src,capacity);
+                        const auto bytes=sample.size()+(sample.size()<capacity ? 1 : 0);
+                        const bool overlaps=ctx->Rdi>=ctx->Rdx ? ctx->Rdi-ctx->Rdx<bytes : ctx->Rdx-ctx->Rdi<capacity;
+                        if (!overlaps && bytes<=UINTPTR_MAX-ctx->Rdx && SafeReadable(src,bytes))
+                            status=GuestStrcpyS(dst,capacity,sample);
+                        else dst[0]=0;
+                    } else dst[0]=0;
+                }
+                if (status!=0) g_guest_errno=status;
+                ctx->Rax=status;
+                special_return_set=true;
+                static std::atomic<unsigned> samples{0};
+                if (samples.fetch_add(1,std::memory_order_relaxed)<8)
+                    LOG_INFO("[STRCPY-S] capacity="+std::to_string(capacity)+" status="+std::to_string(status)+
+                        " text="+(status==0 ? SafeReadCString(dst,(std::min)(capacity,size_t(64))) : "<error>"));
             } else if (readable_name == "strcpy") {
                 char* dst = reinterpret_cast<char*>(ctx->Rdi);
                 std::string s = SafeReadCString(reinterpret_cast<const char*>(ctx->Rsi));
@@ -4765,6 +4838,30 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 }
                 ctx->Rax = ctx->Rdi;
                 special_return_set = true;
+            } else if (readable_name == "strncat_s") {
+                auto* dst = reinterpret_cast<char*>(ctx->Rdi);
+                const auto* src = reinterpret_cast<const char*>(ctx->Rdx);
+                const auto capacity = static_cast<size_t>(ctx->Rsi);
+                const auto count = static_cast<size_t>(ctx->Rcx);
+                int status = 22;
+                if (dst && capacity > 0 && capacity <= UINTPTR_MAX-ctx->Rdi && SafeWritable(dst,capacity)) {
+                    if (count == 0) status = GuestStrncatS(dst,capacity,{},0);
+                    else if (SafeReadable(src,1)) {
+                        const auto bound = (std::min)(capacity,count);
+                        const auto sample = SafeReadCString(src,bound);
+                        const auto bytes = sample.size() + (sample.size()<bound ? 1 : 0);
+                        const bool overlaps = ctx->Rdi>=ctx->Rdx ? ctx->Rdi-ctx->Rdx<bytes : ctx->Rdx-ctx->Rdi<capacity;
+                        if (!overlaps && bytes <= UINTPTR_MAX-ctx->Rdx && SafeReadable(src,bytes))
+                            status = GuestStrncatS(dst,capacity,sample,count);
+                    }
+                }
+                if (status!=0) g_guest_errno=status;
+                ctx->Rax=status;
+                special_return_set=true;
+                static std::atomic<unsigned> samples{0};
+                if (samples.fetch_add(1,std::memory_order_relaxed)<16)
+                    LOG_INFO("[STRNCAT-S] capacity="+std::to_string(capacity)+" count="+std::to_string(count)+
+                        " status="+std::to_string(status)+" text="+(status==0 || status==80 ? SafeReadCString(dst,128) : "<error>"));
             } else if (readable_name == "strcat") {
                 char* dst = reinterpret_cast<char*>(ctx->Rdi);
                 std::string d = SafeReadCString(dst);
@@ -6534,12 +6631,12 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
 
                 void* stub = BuildSysVTramp(entry, arg, 0, 0); // RDI=arg
                 HANDLE h = nullptr;
-                if (stub) {
+                if (stub && thread_out != nullptr && SafeWritable(thread_out, sizeof(void*))) {
                     // Genis stack (64MB reserve) ver: mesru derin ozyineleme
                     // basarsin, runaway ozyinelemede de watchdog ornek alacak
                     // zamani bulsun. STACK_SIZE_PARAM_IS_A_RESERVATION.
-                    h = CreateThread(NULL, 64ull * 1024 * 1024, GamePthreadProc, stub,
-                                     STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
+                    h = CreatePublishedGuestThread(GamePthreadProc, stub,
+                        64ull * 1024 * 1024, thread_out);
                 }
                 if (h) {
                     // Watchdog icin BAGIMSIZ bir handle kopyasi al; oyuna verilen
@@ -6554,9 +6651,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     }
                     g_last_activity = GetTickCount64();
                 }
-                if (thread_out != nullptr && SafeWritable(thread_out, sizeof(void*))) {
-                    *thread_out = reinterpret_cast<void*>(h); // ScePthread = Windows HANDLE
-                }
+                if (!h && stub) VirtualFree(stub, 0, MEM_RELEASE);
                 ctx->Rax = h ? 0 : static_cast<uint64_t>(-1LL);
                 special_return_set = true;
 
@@ -6953,6 +7048,29 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             // Oyun kendi log mesajlarini bu fonksiyonlarla uretiyor. Eskiden
             // RAX=0 donup mesaji YUTUYORDUK; artik gercekten formatlayip
             // [GAME-LOG] olarak gosteriyoruz - oyun bize ne yaptigini soyler.
+            else if (readable_name == "sprintf_s") {
+                auto* buffer=reinterpret_cast<char*>(ctx->Rdi);
+                const auto capacity=static_cast<size_t>(ctx->Rsi);
+                const auto* format=reinterpret_cast<const char*>(ctx->Rdx);
+                int result=-1;
+                std::string text,fmt;
+                if (buffer && capacity>0 && SafeReadable(format,1)) {
+                    fmt=SafeReadCString(format,1024);
+                    text=FormatVariadicFromCtx(fmt.c_str(),ctx,3);
+                    const auto written=text.size()<capacity ? text.size()+1 : size_t(1);
+                    if (SafeWritable(buffer,written))
+                        result=GuestWriteFormattedString(buffer,capacity,text);
+                } else if (buffer && capacity>0 && SafeWritable(buffer,1)) buffer[0]=0;
+                if (result<0) g_guest_errno=buffer && capacity>0 && text.size()>=capacity ? kGuestERANGE : 22;
+                ctx->Rax=static_cast<uint64_t>(static_cast<int64_t>(result));
+                special_return_set=true;
+                static std::atomic<unsigned> samples{0},paths{0};
+                const bool path=text.find('/')!=std::string::npos;
+                if (samples.fetch_add(1,std::memory_order_relaxed)<8 ||
+                    (path && paths.fetch_add(1,std::memory_order_relaxed)<8))
+                    LOG_INFO("[SPRINTF-S] result="+std::to_string(result)+" format="+fmt.substr(0,64)+
+                        " text="+text.substr(0,128));
+            }
             else if (readable_name == "vsprintf_s") {
                 // (buffer, capacity, format, SysV va_list): RDI, RSI, RDX, RCX.
                 const int result = GuestVsprintfSecure(reinterpret_cast<char*>(ctx->Rdi),

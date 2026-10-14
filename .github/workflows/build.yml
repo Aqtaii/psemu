@@ -53,6 +53,14 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_semaphore_dispatch.ps1
 
+      - name: Test guest thread handle publication before entry
+        shell: pwsh
+        run: ./tools/scripts/test_guest_thread_start.ps1
+
+      - name: Test secure guest binary copies
+        shell: pwsh
+        run: ./tools/scripts/test_guest_safe_memory_copy.ps1
+
       - name: Test captured Astro bounded path copies
         shell: pwsh
         run: ./tools/scripts/test_guest_bounded_string.ps1

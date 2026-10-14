@@ -20,4 +20,31 @@ int main() {
     assert(GuestStrncpyS(out,1,"",0)==0 && out[0]==0);
     assert(GuestStrncpyS(nullptr,5,"abc",3)==22);
     out[0]='!';assert(GuestStrncpyS(out,0,"abc",3)==22 && out[0]=='!');
+    assert(GuestStrcpyS(out,256,"hero_respawn_icon_01")==0);
+    assert(std::string_view(out)=="hero_respawn_icon_01");
+    assert(GuestStrcpyS(out,4,"long-name")==34 && out[0]==0);
+    assert(GuestStrncpyS(out,256,path,19)==0);
+    const auto suffix=std::string_view("skel/hero_respawn_icon_01.skel");
+    assert(GuestWriteFormattedString(out+19,256-19,suffix)==static_cast<int>(suffix.size()));
+    assert(std::string_view(out)=="data/prein/effects/skel/hero_respawn_icon_01.skel");
+    assert(guarded.front()=='!' && guarded.back()=='!');
+    assert(GuestWriteFormattedString(out,4,"long-name")==-1 && out[0]==0);
+    assert(GuestWriteFormattedString(out,1,"")==0 && out[0]==0);
+    out[0]='!';assert(GuestWriteFormattedString(out,0,"abc")==-1 && out[0]=='!');
+
+    assert(GuestStrcpyS(out,256,"data/prein/effects/")==0);
+    assert(GuestStrncatS(out,256,"skel/",5)==0);
+    assert(GuestStrncatS(out,256,"hero_respawn_icon_01",20)==0);
+    assert(GuestStrncatS(out,256,".skel",5)==0);
+    assert(std::string_view(out)=="data/prein/effects/skel/hero_respawn_icon_01.skel");
+    assert(guarded.front()=='!' && guarded.back()=='!');
+    assert(GuestStrncatS(out,256,"ignored",0)==0);
+    assert(std::string_view(out)=="data/prein/effects/skel/hero_respawn_icon_01.skel");
+    assert(GuestStrcpyS(out,256,"abc")==0);
+    assert(GuestStrncatS(out,5,"de",2)==34 && out[0]==0);
+    assert(GuestStrcpyS(out,256,"abc")==0);
+    assert(GuestStrncatS(out,5,"def",SIZE_MAX)==80 && std::string_view(out)=="abcd");
+    std::memset(out,'x',4);
+    assert(GuestStrncatS(out,4,"y",1)==22 && out[0]==0);
+    assert(GuestStrncatS(nullptr,4,"y",1)==22);
 }
