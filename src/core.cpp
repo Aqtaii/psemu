@@ -47,6 +47,7 @@
 #include <immintrin.h>
 #include <timeapi.h>  // timeBeginPeriod: Sleep granulerligi
 
+#include "../gpu/adapter/hdr_luminance.h"
 extern "C" void PsemuMarkCpuModified(uint64_t vaddr, uint64_t size);
 extern "C" void PsemuRegisterGpuMemory(uint64_t vaddr, uint64_t size, uint32_t protection);
 extern "C" bool PsemuHandleGpuMemoryFault(uint64_t vaddr, bool write);
@@ -131,6 +132,20 @@ static bool SafeWritable(void* p, size_t n) {
     return true;
 }
 
+static int CallGuestHdrToneMapLuminance(void* output) {
+ if(!output || !SafeWritable(output,3*sizeof(float)))return -2136932349; // 0x80a10003
+ const auto defaults=GuestHdrToneMapDefaults();
+ std::memcpy(output,&defaults,sizeof(defaults));return 0;
+}
+extern "C" int PsemuHdrToneMapSelfTest() {
+ struct Guarded {uint32_t before;float values[3];uint32_t after;} data{0xaabbccdd,{-1,-1,-1},0x12345678};
+ if(CallGuestHdrToneMapLuminance(data.values)!=0 || data.values[0]!=80 || data.values[1]!=1000 ||
+    data.values[2]!=0 || data.before!=0xaabbccdd || data.after!=0x12345678)return 1;
+ if(CallGuestHdrToneMapLuminance(nullptr)!=-2136932349 ||
+    CallGuestHdrToneMapLuminance(reinterpret_cast<void*>(1))!=-2136932349)return 2;
+ std::printf("[HDR-HLE-TEST] reference_luminance=80/1000/0 exact_output_bounds=1 invalid_pointer_error=1\n");
+ return 0;
+}
 static size_t SafeStrlen(const char* p, size_t max_len = SIZE_MAX) {
     if (p == nullptr) return 0;
     const uint8_t* cur = reinterpret_cast<const uint8_t*>(p);
@@ -6338,6 +6353,15 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 if (value != nullptr && SafeWritable(value, sizeof(int))) *value = v;
                 ctx->Rax = 0;
                 special_return_set = true;
+            } else if (readable_name == "sceSystemServiceGetHdrToneMapLuminance") {
+                auto* values=reinterpret_cast<float*>(ctx->Rdi);
+                const int result=CallGuestHdrToneMapLuminance(values);
+                if(result==0) {
+                    static std::atomic_uint logs{0};
+                    if(logs.fetch_add(1)<4)std::printf("[HDR-LUMINANCE] full=%.9g max=%.9g min=%.9g\n",values[0],values[1],values[2]);
+                }
+                ctx->Rax=static_cast<uint64_t>(static_cast<int64_t>(result));
+                special_return_set=true;
             } else if (readable_name == "sceSystemServiceGetStatus") {
                 // (SystemServiceStatus* status RDI). Sifirla (event_num=0 =
                 // olay yok). Struct ~134 byte (int + 3 bool + reserved[127]).

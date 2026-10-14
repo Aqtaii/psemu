@@ -8,6 +8,7 @@
 #include "loader/symbolDatabase.h"
 
 #include <cstring>
+#include "../../adapter/hdr_luminance.h"
 
 namespace Libs {
 
@@ -207,9 +208,9 @@ SystemServiceGetHdrToneMapLuminance(SystemServiceHdrToneMapLuminance* luminance)
 		return SYSTEM_SERVICE_ERROR_PARAMETER;
 	}
 
-	luminance->max_full_frame_tone_map_luminance = 80.0f;
-	luminance->max_tone_map_luminance            = 1000.0f;
-	luminance->min_tone_map_luminance            = 0.0f;
+	const auto defaults=GuestHdrToneMapDefaults();
+	static_assert(sizeof(*luminance)==sizeof(defaults));
+	std::memcpy(luminance,&defaults,sizeof(defaults));
 
 	return OK;
 }

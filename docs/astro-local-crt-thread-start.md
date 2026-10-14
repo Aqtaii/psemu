@@ -227,3 +227,23 @@ then every4th, retaining distinct-scene and60-shot bounds. Capture pixel
 regressions cover channel order, black/white, midpoint, and all alpha bits.
 Tests and local Windows build pass. This changes diagnostic readback only,
 not shader outputs or presentation. Prior striped BMPs are invalid evidence.
+
+## Correct capture runtime and missing HDR query
+
+Corrected run PID8484 produces format58 (A2R10G10B10UnormPack32) capture
+images/run_20261014_134056/frame_00000.bmp. It is nearly black with a faint
+pattern, not a recognizable Astro frame. Measured intermediate RGB remains
+zero; repeated selected Mesh record stays empty. Four flips are observed.
+The process was intentionally stopped to replace our diagnostic executable.
+
+Actual Astro invokes sceSystemServiceGetHdrToneMapLuminance at startup and
+every observed frame. Loader dispatch previously returned success without
+writing its12-byte output. Connected this path using shared typed defaults
+80/1000/0 from existing Kyty SystemService source. The existing library
+implementation also uses this same helper. Full guest span is validated;
+invalid output returns SystemService parameter error0x80a10003.
+No claim yet that this query explains all black geometry/targets.
+
+Local Windows build and --hdr-tone-map-self-test pass (canaries, exact12-byte
+output, allthree luminance values, null/invalidpointer error). Event-flag and
+native secure-copy regression self-tests also pass. Runtime result pending.
