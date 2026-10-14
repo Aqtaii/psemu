@@ -8,6 +8,8 @@
 #include "guest_safe_memory_copy.h"
 #include "guest_thread_start.h"
 #include "guest_positioned_read.h"
+#include "guest_audio_queue.h"
+#include <chrono>
 #include "host_allocation_size.h"
 #include "sarah_tls_sites.h"
 #include "shared_direct_memory.h"
@@ -298,6 +300,14 @@ static std::map<FILE*, std::string> g_open_names;
 // serilestiriyoruz (yukleme darbogaz degil; dogruluk > hiz).
 static std::mutex g_vfs_mutex;
 static std::unordered_map<int, FILE*> g_kernel_files;
+static std::mutex g_audio_queue_mutex;
+static std::unordered_map<uint64_t,GuestAudioQueue> g_audio_queues;
+static uint64_t g_next_audio_context=1;
+static uint64_t AudioQueueTimeMicros() {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count());
+}
+
 
 // Guest yolunu host yoluna cevirir. PS4/PS5'te "/app0/" oyunun kendi
 // klasorudur; diger mutlak yollari da ayni koke baglariz.
@@ -6472,6 +6482,67 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 }
                 ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(result));
                 special_return_set = true;
+            } else if (readable_name == "sceAudioOut2ContextResetParam") {
+                auto* param=reinterpret_cast<GuestAudioContextParam*>(ctx->Rdi);
+                const int result=SafeWritable(param,sizeof(*param)) ? (*param=GuestAudioContextParam{},0) : -2147352562;
+                ctx->Rax=static_cast<uint64_t>(static_cast<int64_t>(result));
+                special_return_set=true;
+            } else if (readable_name == "sceAudioOut2ContextQueryMemory" || readable_name == "sceAudioOut2ContextCreate") {
+                const auto* param=reinterpret_cast<const GuestAudioContextParam*>(ctx->Rdi);
+                const bool creating=readable_name=="sceAudioOut2ContextCreate";
+                auto* output=reinterpret_cast<uint64_t*>(creating ? ctx->Rcx : ctx->Rsi);
+                int result=-2147352562;
+                if (SafeReadable(param,sizeof(*param)) && SafeWritable(output,sizeof(*output))) {
+                    if (!creating) *output=0x10000ull+uint64_t(param->queue_depth ? param->queue_depth : 4)*0x590;
+                    else {
+                        std::lock_guard<std::mutex> lock(g_audio_queue_mutex);
+                        const auto handle=g_next_audio_context++;
+                        g_audio_queues.emplace(handle,GuestAudioQueue(param->queue_depth,param->num_grains));
+                        *output=handle;
+                    }
+                    result=0;
+                    LOG_INFO(std::string(creating ? "[AUDIO-QUEUE] context=" : "[AUDIO-QUEUE] memory=")+std::to_string(*output));
+                }
+                ctx->Rax=static_cast<uint64_t>(static_cast<int64_t>(result));
+                special_return_set=true;
+            } else if (readable_name == "sceAudioOut2ContextGetQueueLevel" || readable_name == "sceAudioOut2ContextAdvance" ||
+                       readable_name == "sceAudioOut2ContextDestroy" || readable_name == "sceAudioOut2ContextPush") {
+                const bool querying=readable_name=="sceAudioOut2ContextGetQueueLevel";
+                const bool pushing=readable_name=="sceAudioOut2ContextPush";
+                const bool destroying=readable_name=="sceAudioOut2ContextDestroy";
+                auto* level=reinterpret_cast<uint32_t*>(ctx->Rsi);
+                auto* available=reinterpret_cast<uint32_t*>(ctx->Rdx);
+                int result=-2147352554;
+                if (!querying || ((!level || SafeWritable(level,sizeof(*level))) &&
+                                  (!available || SafeWritable(available,sizeof(*available))))) {
+                    for (;;) {
+                        uint64_t sleep_micros=0;
+                        {
+                            std::lock_guard<std::mutex> lock(g_audio_queue_mutex);
+                            const auto found=g_audio_queues.find(ctx->Rdi);
+                            if (found==g_audio_queues.end()) break;
+                            auto& queue=found->second;
+                            const auto now=AudioQueueTimeMicros();
+                            queue.Advance(now);
+                            if (querying) {
+                                if (level) *level=queue.queued;
+                                if (available) *available=queue.Available();
+                                static std::atomic<unsigned> samples{0};
+                                if (samples.fetch_add(1,std::memory_order_relaxed)<8)
+                                    LOG_INFO("[AUDIO-QUEUE] context="+std::to_string(ctx->Rdi)+" queued="+
+                                        std::to_string(queue.queued)+" available="+std::to_string(queue.Available()));
+                                result=0;
+                            } else if (destroying) {g_audio_queues.erase(found);result=0;}
+                            else if (!pushing || queue.Push(now)) result=0;
+                            else if (!ctx->Rsi) result=-2144960504; // Kyty AUDIO_OUT2_ERROR_NOT_READY
+                            else sleep_micros=queue.grain_micros;
+                        }
+                        if (!sleep_micros) break;
+                        Sleep(static_cast<DWORD>((std::min)(sleep_micros/1000+1,uint64_t(1000))));
+                    }
+                }
+                ctx->Rax=static_cast<uint64_t>(static_cast<int64_t>(result));
+                special_return_set=true;
             } else if (readable_name == "sceAudioOutOutput") {
                 // int sceAudioOutOutput(handle, ptr[, num])
                 // GERCEK donanimda bu cagri ses tamponu tuketilene kadar BLOKLAR

@@ -132,3 +132,28 @@ overlap, range/null errors, guest errno, invalid pointers, and a read-only page.
 It and native event flag tests pass; full local build passes. Startup speed and
 strnstr integration remain pending in astro_local_native_secure_strnstr_log.txt.
 No first recognizable Astro frame has been achieved.
+
+## AudioOut2 context metadata and queue model
+
+Implemented the existing Kyty 64-byte context parameter defaults, memory query,
+context handles and time-based queue advance/push/level/destroy operations. The
+queue model uses the requested grain count at 48 kHz; full nonblocking push returns
+Kyty's 0x80268008 NOT_READY code. Queue-state locking does not span the blocking
+sleep. This is context/queue support, not an implemented PCM device, AudioOut2
+port backend, ACM batch engine or complete PS5 error ABI.
+
+Queue regression covers full/available states, precise grain boundary consumption,
+partial elapsed grains, repush after emptying, backward time, zero-default fields
+and overflow-safe large grain arithmetic. It passes; local loader build and direct
+secure-copy/event-flag self-tests pass. Actual game log
+astro_local_audio_queue_probe_log.txt confirms memory size 66960, context handle1,
+and queued1/available0 for the game's one-entry queue after push. Real .szd reads
+still return all requested bytes. Material lookup succeeds at T+297.51.
+
+The previous uninstrumented run passed four GPU flips without the earlier
+image-ownership assertion. It was intentionally stopped for the next local build.
+The new Mesh output trace still records dummy allocation1/1, packed indices0/0/0,
+position(0,0,0,0), and empty-input gate PC0x104 value0 for instance0. Measured color
+readbacks and coverage remain zero. Four presentations have occurred, but the
+captured striped pattern remains invalid game-frame evidence. Next distinguish
+instance0 from the other actual instances in the 512-instance Mesh draw.
