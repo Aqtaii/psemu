@@ -7,6 +7,7 @@
 #include "guest_bounded_string.h"
 #include "guest_safe_memory_copy.h"
 #include "guest_thread_start.h"
+#include "guest_positioned_read.h"
 #include "host_allocation_size.h"
 #include "sarah_tls_sites.h"
 #include "shared_direct_memory.h"
@@ -5987,6 +5988,31 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     special_return_set = true;
                     LOG_INFO("[KernelIO] sceKernelOpen(\"" + guest + "\") -> -1 (ENOENT: dosya bulunamadi)");
                 }
+            } else if (readable_name == "sceKernelPread" || readable_name == "pread") {
+                const auto fd = static_cast<int>(ctx->Rdi);
+                auto* buffer = reinterpret_cast<void*>(ctx->Rsi);
+                const auto bytes = static_cast<size_t>(ctx->Rdx);
+                const auto offset = static_cast<int64_t>(ctx->Rcx);
+                int64_t result = GuestReadBadFd;
+                {
+                    std::lock_guard<std::mutex> lock(g_vfs_mutex);
+                    const auto file = g_kernel_files.find(fd);
+                    if (file != g_kernel_files.end()) {
+                        if (offset < 0) result = GuestReadInvalid;
+                        else if (bytes && (bytes > UINTPTR_MAX-ctx->Rsi || !SafeWritable(buffer,bytes)))
+                            result = GuestReadFault;
+                        else result = GuestPositionedRead(file->second,buffer,bytes,offset);
+                    }
+                }
+                if (readable_name == "pread" && result < 0) {
+                    g_guest_errno = static_cast<int>(static_cast<uint64_t>(result) & 0xffff);
+                    ctx->Rax = static_cast<uint64_t>(-1LL);
+                } else ctx->Rax = static_cast<uint64_t>(result);
+                special_return_set = true;
+                static std::atomic<unsigned> samples{0};
+                if (samples.fetch_add(1,std::memory_order_relaxed)<16)
+                    LOG_INFO("[KERNEL-PREAD] fd="+std::to_string(fd)+" offset="+std::to_string(offset)+
+                        " requested="+std::to_string(bytes)+" read="+std::to_string(result));
             } else if (readable_name == "sceKernelRead" || readable_name == "libc_read" ||
                        func_name.find("Cg4srZ6TKbU") != std::string::npos) {
                 // sceKernelRead(fd, buf, nbyte): RDI=fd, RSI=buf, RDX=nbyte

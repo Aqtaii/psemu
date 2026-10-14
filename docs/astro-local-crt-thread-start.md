@@ -75,3 +75,21 @@ All three regressions and local full loader link passed again. Follow-up game ru
 not recognizable game content. Completed draw coverage/readbacks still report zero
 covered samples/zero RGB for measured targets. A nonblack capture of an unwritten
 presentation image is not evidence of correct rendering. No first game frame achieved.
+
+## Positioned reads (next failure)
+
+The copy-tracking follow-up failed earlier during parallel resource loading at
+RVA 0x705147f (null nested payload); exit 0xc0000005. This does not validate the
+GPU-copy correction past the prior assertion yet. The preceding log reveals
+`sceKernelPread` of real .szd resources returning zero through the default stub.
+Implemented positioned binary reads under the existing VFS mutex, preserving the
+shared file cursor across seek/read/restore. SysV offset is RCX; kernel errors use
+negative 0x800200xx codes, while libc pread converts errors to -1 plus guest errno.
+This is an independently missing API; its causality for the new null read is not
+claimed until runtime evidence. Kyty and Jetsku KernelPread use the same
+save-position / seek / read / restore approach under a file mutex.
+
+New positioned-read regression verifies embedded zero bytes, guard bytes, unchanged
+cursor, short read, >4GB offset without allocating a large file, invalid offset,
+bad descriptor and invalid buffer. It and the previous three suites pass locally;
+full local loader build also passes. Runtime log: astro_local_positioned_read_log.txt.
