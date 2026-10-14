@@ -1157,6 +1157,22 @@ CanRetireCleanRenderTargetForStorage(const RenderTargetInfo& cached, bool gpu_mo
         cached.levels == 1 && cached.layers == 1;
 }
 
+// A clean view can straddle a pool reuse boundary; backing, including exterior
+// bytes, remains authoritative. Retain its Vulkan view through the existing fence.
+[[nodiscard]] inline bool
+CanRetireCleanRenderTargetEdgeForStorage(const RenderTargetInfo& cached,bool gpu,bool buffer,
+                                        bool tracker_gpu,bool same_context,bool coherent,
+                                        bool cached_buffer_gpu,const ImageInfo& requested) {
+ if(gpu || buffer || tracker_gpu || !same_context || !coherent || cached_buffer_gpu ||
+    cached.address==0 || cached.size==0 || cached.size>UINT64_MAX-cached.address ||
+    requested.address==0 || requested.size==0 || requested.size>UINT64_MAX-requested.address ||
+    ((cached.address|cached.size|requested.address|requested.size)&(TRACKER_PAGE_SIZE-1))!=0 ||
+    cached.levels!=1 || cached.layers!=1 || requested.depth!=1 || requested.levels!=1 ||
+    requested.base_level!=0 || requested.type!=Prospero::GpuEnumValue(Prospero::ImageType::kColor2D))return false;
+ const auto old_end=cached.address+cached.size,new_end=requested.address+requested.size;
+ return (cached.address<requested.address && requested.address<old_end && old_end<new_end) ||
+        (requested.address<cached.address && cached.address<new_end && new_end<old_end);
+}
 [[nodiscard]] inline bool
 CanRetireCleanRenderTargetForRenderTarget(const RenderTargetInfo& cached,bool gpu,bool buffer,
                                         bool tracker_gpu,bool same_context,bool coherent,

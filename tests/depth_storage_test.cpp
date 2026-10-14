@@ -385,6 +385,28 @@ int main() {
   storage.address=UINT64_MAX-0xfff;storage.size=0x2000;Require(!proof());storage=captured;
   target.layers=2;Require(!proof());
  }
+ // Actual clean RT crosses a new depth-storage allocation by0x30000.
+ {
+  RenderTargetInfo target{};target.address=0x19c696f0000ull;target.size=0xc0000;target.levels=1;target.layers=1;
+  ImageInfo storage{};storage.address=0x19c69780000ull;storage.size=0x3c0000;
+  storage.depth=1;storage.levels=1;storage.type=Prospero::GpuEnumValue(Prospero::ImageType::kColor2D);
+  auto proof=[&](bool gpu=false,bool buffer=false,bool tracker=false,bool context=true,bool coherent=true,bool buffer_gpu=false){
+   return CanRetireCleanRenderTargetEdgeForStorage(target,gpu,buffer,tracker,context,coherent,buffer_gpu,storage);
+  };
+  Require(proof());Require(!proof(true));Require(!proof(false,true));Require(!proof(false,false,true));
+  Require(!proof(false,false,false,false));Require(!proof(false,false,false,true,false));Require(!proof(false,false,false,true,true,true));
+  auto initial=storage;
+  storage.address=target.address-0x30000;storage.size=0x40000;Require(proof());storage=initial;
+  storage.address=target.address+target.size;Require(!proof());storage=initial;
+  storage.address=target.address;Require(!proof());storage=initial;
+  storage.address++;Require(!proof());storage=initial;
+  storage.size++;Require(!proof());storage=initial;
+  storage.depth=2;Require(!proof());storage=initial;
+  storage.levels=2;Require(!proof());storage=initial;
+  storage.base_level=1;Require(!proof());storage=initial;
+  storage.address=UINT64_MAX-0xfff;storage.size=0x2000;Require(!proof());storage=initial;
+  target.layers=2;Require(!proof());target.layers=1;target.levels=2;Require(!proof());
+ }
  // Production fragment refresh: partial native owners, cache holes and exterior bytes.
  for(int conflict=0;conflict<4;conflict++) {
   BufferCache cache;GraphicContext context;

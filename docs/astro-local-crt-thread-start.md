@@ -338,3 +338,26 @@ EOF, rejected overlength input with unchanged output and empty directories.
 Loader integration reads actual test files/directories, verifies canaries and
 invalid/closed descriptors. Tests, full Windows build, secure-copy and event-flag
 self-tests pass. Log local_directory_tests_log.txt. Actual SPX enumeration pending.
+
+## Directory run blocked before its actual directory call
+
+Owned PID5480 exits321 aroundT729 before SPX access: unsupported storage-image
+byte alias in textureCache.cpp. Requested0x19c69780000+0x3c0000 is1216x684
+pitch1280 tile24 fmt22 (single-depth/single-mip); old RenderTarget kind2
+0x19c696f0000+0xc0000 is480x270 pitch512 tile27 bpe4 (single-layer/mip).
+The ranges cross by0x30000. Both cached/tracker GPU flags0, buffer flag0,
+same context1, CPUdirty0 and no resident buffer over requested range.
+No actual SPX enumeration has yet been proved by that run; retain pending status.
+
+Added a separate clean RT/storage edge-retirement predicate; the existing
+containment and RT/RT rules remain unchanged. It requires actual byte-crossing,
+valid aligned nonwrapping ranges, same context, coherent requested backing,
+no cached/tracker GPU owner, no yielded buffer, no GPU-dirty buffer anywhere
+in the old range, and single-mip/layer/depth/base-level0 2D storage. It uses
+existing RequireRetirementIsolation and RetainResourceUntilFence, without
+writing backing or inventing pixels. RT-STORAGE-EDGE-RETIRE measures acceptance.
+Captured/both-edge policy regressions and negative owner/context/backing/shape/
+alignment/adjacency/overflow cases pass. Existing depth-storage data roundtrips
+and fragment preservation tests pass. Full30-step Windows build passes and
+actual directory integration self-test still passes. Logs local_clean_storage_edge
+_tests/build_log.txt. Runtime proof and first recognized game frame remain pending.

@@ -1120,7 +1120,18 @@ void TextureCache::ResolveStorageImageOverlaps(CommandBuffer* command, GraphicCo
 					retire.push_back(cached);
 					continue;
 				}
-				EXIT("TextureCache: unsupported storage-image byte alias, requested=0x%016" PRIx64
+				if(cached->kind==CachedImage::Kind::RenderTarget &&
+                   CanRetireCleanRenderTargetEdgeForStorage(cached->target,cached->gpu_modified,
+                    cached->buffer_modified,tracker_gpu,cached->ctx==ctx,coherent_requested_backing,
+                    m_buffer_cache.IsRegionGpuModified(cached->Address(),cached->Size()),requested)) {
+                    retire.push_back(cached);
+                    static std::atomic_uint edge_logs{0};
+                    if(edge_logs.fetch_add(1)<8)printf("[RT-STORAGE-EDGE-RETIRE] old=0x%016" PRIx64
+                     "+0x%016" PRIx64 " requested=0x%016" PRIx64 "+0x%016" PRIx64 " backing_current=1\n",
+                     cached->Address(),cached->Size(),requested.address,requested.size);
+                    continue;
+                }
+                EXIT("TextureCache: unsupported storage-image byte alias, requested=0x%016" PRIx64
 				     "+0x%016" PRIx64 " existing=0x%016" PRIx64 "+0x%016" PRIx64
 				     " kind=%u same_context=%d gpu=%d/%d buffer=%d"
 				     " requested=%ux%u pitch=%u tile=%u fmt=%u depth=%u levels=%u"
