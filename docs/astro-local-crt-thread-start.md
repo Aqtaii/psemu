@@ -247,3 +247,16 @@ No claim yet that this query explains all black geometry/targets.
 Local Windows build and --hdr-tone-map-self-test pass (canaries, exact12-byte
 output, allthree luminance values, null/invalidpointer error). Event-flag and
 native secure-copy regression self-tests also pass. Runtime result pending.
+
+## Dispatch audit correction
+
+sceVideoOutGetOutputStatus already reaches registered native NIDutPrVdxio-8
+through the earlier Agc::Dispatch path. The added later core branch is unreachable
+in the normal game call and was unnecessary. Reverted2714b11, retaining HDR
+query correction and packed10-bit capture correction. Do not report output
+status as a missing implementation or as a game-progress fix.
+
+The active combined-run binary contains that unreachable extra branch, so
+normal game behavior is equivalent to the corrected source for this call.
+Owned PID5180 continues; no need to restart it just for this source cleanup.
+Actual HDR output80/1000/0 has been confirmed in game. No recognizable frame yet.
