@@ -177,7 +177,7 @@ void PsemuCaptureFrame(GraphicContext* ctx, const VulkanImage* image) {
  }
 
 	const uint64_t p = g_present_seq.fetch_add(1);
-	if (p >= 8 && (p % 4ull) != 0) return;              // her 4 present'te bir readback
+	if (p >= 8 && (p % 4ull) != 0) return;              // ilk8 present, sonra her4 present readback
 	if (g_shot_seq.load() >= 60) return;      // en fazla 60 DISTINCT sahne
 	if (p >= 40000ull) return;                // guvenlik ust siniri
 
@@ -247,7 +247,7 @@ void PsemuCaptureFrame(GraphicContext* ctx, const VulkanImage* image) {
 				diff += static_cast<uint32_t>(d < 0 ? -d : d);
 			}
 		}
-		const bool scene_changed = !s_have_last || diff >= 1200; // ~ort 5/nokta * 256
+		const bool scene_changed = p < 8 || !s_have_last || diff >= 1200; // ~ort 5/nokta * 256
 		if (scene_changed) {
 			std::memcpy(s_last_sig, sig, sizeof(sig));
 			s_have_last = true;

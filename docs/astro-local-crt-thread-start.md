@@ -260,3 +260,24 @@ The active combined-run binary contains that unreachable extra branch, so
 normal game behavior is equivalent to the corrected source for this call.
 Owned PID5180 continues; no need to restart it just for this source cleanup.
 Actual HDR output80/1000/0 has been confirmed in game. No recognizable frame yet.
+
+## Longer boot and missing CPU float calls
+
+HDR output is confirmed in real repeated game queries. Intermediate RGB
+readbacks still zero; no recognizable frame. Let the run continue beyond the
+first4 presentations: prein.xml processing atT570/605/642/673, Transition.xml
+atT710, then HTTP empty-response fallback atT745. The game is progressing
+its startup work even though render content is still black. Working set6.7GiB
+at longer run; process was intentionally stopped for the next actual fix.
+
+Observed exp2f and atanf imports had neither native PLT mapping nor HLE float
+output handling, and are not registered in the GPU library fallback. Old stub
+returns integerzero without computing XMM0. Added real SysV unary wrappers
+and HLE XMM0 copyback. --unary-float-self-test verifies XMM0 upper bits/flags,
+zero/negative/infinity/NaN and volatile SysV function pointers, including
+exp2f(0)=1, exp2f(-3)=0.125, atanf(1)=pi/4. Bounded real input/output log.
+No claim yet that these two calls alone explain missing scene geometry.
+
+Initial8 capture images are now saved unconditionally, retaining every4th
+subsequent readback and60-shot limit. This prevents small visible logos/text
+from being hidden by a sparse scene-signature threshold. All artifacts onD.

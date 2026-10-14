@@ -944,12 +944,43 @@ static PSEMU_SYSV float NativePowf(float x, float y) { return powf(x, y); }
 static PSEMU_SYSV float NativeLogf(float x) { return logf(x); }
 static PSEMU_SYSV float NativeLog10f(float x) { return log10f(x); }
 static PSEMU_SYSV float NativeExpf(float x) { return expf(x); }
+static PSEMU_SYSV float NativeExp2f(float x) {
+ const float result=exp2f(x);static std::atomic_uint logs{0};
+ if(logs.fetch_add(1)<8)std::printf("[NATIVE-UNARY-FLOAT] exp2f input=%.9g output=%.9g\n",x,result);return result;
+}
+static PSEMU_SYSV float NativeAtanf(float x) {
+ const float result=atanf(x);static std::atomic_uint logs{0};
+ if(logs.fetch_add(1)<8)std::printf("[NATIVE-UNARY-FLOAT] atanf input=%.9g output=%.9g\n",x,result);return result;
+}
 static PSEMU_SYSV float NativeFmodf(float x, float y) { return fmodf(x, y); }
 static PSEMU_SYSV float NativeFloorf(float x) { return floorf(x); }
 static PSEMU_SYSV float NativeCeilf(float x) { return ceilf(x); }
 static PSEMU_SYSV float NativeSqrtf(float x) { return sqrtf(x); }
 static PSEMU_SYSV float NativeFabsf(float x) { return fabsf(x); }
 
+static float CallGuestAdditionalUnaryFloat(CONTEXT* ctx,bool exponential) {
+ float input;std::memcpy(&input,&ctx->Xmm0.Low,sizeof(input));
+ const float output=exponential ? NativeExp2f(input) : NativeAtanf(input);
+ uint64_t low=0;std::memcpy(&low,&output,sizeof(output));
+ ctx->Xmm0.Low=low;ctx->Xmm0.High=0;ctx->ContextFlags|=CONTEXT_FLOATING_POINT;
+ return output;
+}
+extern "C" int PsemuUnaryFloatSelfTest() {
+ const float inputs[]={0,1,-3,2,INFINITY,-INFINITY,NAN};
+ for(bool exponential:{false,true})for(float input:inputs) {
+  CONTEXT context{};context.Xmm0.Low=UINT64_MAX;context.Xmm0.High=UINT64_MAX;
+  std::memcpy(&context.Xmm0.Low,&input,sizeof(input));
+  const auto actual=CallGuestAdditionalUnaryFloat(&context,exponential);
+  const auto expected=exponential ? exp2f(input) : atanf(input);
+  float stored;std::memcpy(&stored,&context.Xmm0.Low,sizeof(stored));
+  if(std::isnan(expected) ? (!std::isnan(actual) || !std::isnan(stored)) : (actual!=expected || stored!=expected))return 1;
+  if(context.Xmm0.High || (uint64_t(context.Xmm0.Low)>>32) || !(context.ContextFlags&CONTEXT_FLOATING_POINT))return 2;
+ }
+ using UnaryFunction=float(PSEMU_SYSV *)(float);
+ UnaryFunction volatile exp_pointer=&NativeExp2f,atan_pointer=&NativeAtanf;
+ if(exp_pointer(0)!=1 || exp_pointer(-3)!=0.125f || std::fabs(atan_pointer(1)-0.7853981634f)>0.000001f)return 3;
+ std::puts("[UNARY-FLOAT-HLE-TEST] exp2f/atanf XMM0 output, SysV result, negative/zero/infinity/NaN passed");return 0;
+}
 static PSEMU_SYSV void NativeSincosf(float x, float* s, float* c) {
     if (s) *s = sinf(x);
     if (c) *c = cosf(x);
@@ -1310,6 +1341,8 @@ extern "C" void* PsemuNativePltStub(int plt_index) {
     if (n == "logf") return reinterpret_cast<void*>(&NativeLogf);
     if (n == "log10f") return reinterpret_cast<void*>(&NativeLog10f);
     if (n == "expf") return reinterpret_cast<void*>(&NativeExpf);
+    if (n == "exp2f") return reinterpret_cast<void*>(&NativeExp2f);
+    if (n == "atanf") return reinterpret_cast<void*>(&NativeAtanf);
     if (n == "fmodf") return reinterpret_cast<void*>(&NativeFmodf);
     if (n == "floorf") return reinterpret_cast<void*>(&NativeFloorf);
     if (n == "ceilf") return reinterpret_cast<void*>(&NativeCeilf);
@@ -5463,6 +5496,12 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 ctx->Xmm0.Low = low; ctx->Xmm0.High = 0;
                 ctx->ContextFlags |= CONTEXT_FLOATING_POINT;
                 special_return_set = true;
+            } else if (readable_name == "exp2f" || readable_name == "atanf") {
+                float input;std::memcpy(&input,&ctx->Xmm0.Low,sizeof(input));
+                const float output=CallGuestAdditionalUnaryFloat(ctx,readable_name=="exp2f");
+                static std::atomic_uint logs{0};
+                if(logs.fetch_add(1)<8)std::printf("[UNARY-FLOAT] %s input=%.9g output=%.9g\n",readable_name.c_str(),input,output);
+                special_return_set=true;
             } else if (readable_name == "ldexpf") {
                 // float ldexpf(float x, int exp): XMM0=x, EDI=exp -> XMM0
                 float x;
