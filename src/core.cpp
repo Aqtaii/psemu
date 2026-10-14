@@ -771,6 +771,49 @@ static GuestMutex* GetOrCreateMutex(uint64_t* slot) {
 // ============================================================================
 #define PSEMU_SYSV __attribute__((sysv_abi))
 
+// Shared by VEH fallback and direct SysV imports; identical bounds/error behavior.
+static int CallGuestSecureCopy(void* destination,size_t capacity,const void* source,size_t count,bool moving) {
+    const auto dst = reinterpret_cast<uintptr_t>(destination);
+    const auto src = reinterpret_cast<uintptr_t>(source);
+    int status = 22;
+    if (count==0) status=0;
+    else if (destination && capacity<=UINTPTR_MAX-dst && SafeWritable(destination,capacity)) {
+        if (!source || count>capacity)
+            status=moving ? GuestMemmoveS(destination,capacity,source,count) : GuestMemcpyS(destination,capacity,source,count);
+        else {
+            const bool readable=count<=UINTPTR_MAX-src && SafeReadable(source,count);
+            status=moving ? GuestMemmoveS(destination,capacity,readable ? source : nullptr,count) :
+                GuestMemcpyS(destination,capacity,readable ? source : nullptr,count);
+        }
+    }
+    if (status!=0) g_guest_errno=status;
+    return status;
+}
+static PSEMU_SYSV int NativeMemcpySecure(void* dst,size_t capacity,const void* src,size_t count) {
+    return CallGuestSecureCopy(dst,capacity,src,count,false);
+}
+static PSEMU_SYSV int NativeMemmoveSecure(void* dst,size_t capacity,const void* src,size_t count) {
+    return CallGuestSecureCopy(dst,capacity,src,count,true);
+}
+extern "C" int PsemuSecureCopySelfTest() {
+    std::array<unsigned char,8> out{};
+    const unsigned char source[]={1,0,3,4};
+    if (NativeMemcpySecure(out.data(),out.size(),source,4)!=0 || std::memcmp(out.data(),source,4)!=0) return 1;
+    if (NativeMemmoveSecure(out.data()+1,7,out.data(),4)!=0 || out[1]!=1 || out[2]!=0 || out[3]!=3 || out[4]!=4) return 2;
+    if (NativeMemcpySecure(out.data(),2,source,4)!=34 || out[0]!=0 || out[1]!=0 || out[3]!=3 || g_guest_errno!=34) return 3;
+    if (NativeMemcpySecure(out.data(),4,nullptr,4)!=22 || out[3]!=0 || g_guest_errno!=22) return 4;
+    if (NativeMemmoveSecure(nullptr,0,nullptr,0)!=0) return 5;
+    if (NativeMemcpySecure(reinterpret_cast<void*>(1),4,source,4)!=22) return 6;
+    void* protected_page=VirtualAlloc(nullptr,4096,MEM_RESERVE|MEM_COMMIT,PAGE_READONLY);
+    if (!protected_page) return 7;
+    const int guarded=NativeMemcpySecure(protected_page,4,source,4);
+    VirtualFree(protected_page,0,MEM_RELEASE);
+    if (guarded!=22) return 8;
+    std::puts("Native SysV secure copy ABI, bounds, errno, overlap and protected page checks passed");
+    return 0;
+}
+
+
 static PSEMU_SYSV void* NativeMemcpy(void* d, const void* s, size_t n) {
     return (d && s && n) ? memcpy(d, s, n) : d;
 }
@@ -1204,6 +1247,8 @@ extern "C" void* PsemuNativePltStub(int plt_index) {
         return reinterpret_cast<void*>(&NativeMalloc);
     if (n == "calloc") return reinterpret_cast<void*>(&NativeCalloc);
     if (n == "memcpy")  return reinterpret_cast<void*>(&NativeMemcpy);
+    if (n == "memcpy_s") return reinterpret_cast<void*>(&NativeMemcpySecure);
+    if (n == "memmove_s") return reinterpret_cast<void*>(&NativeMemmoveSecure);
     if (n == "memset")  return reinterpret_cast<void*>(&NativeMemset);
     if (n == "memmove") return reinterpret_cast<void*>(&NativeMemmove);
     if (n == "memcmp" || n == "bcmp") return reinterpret_cast<void*>(&NativeMemcmp);
@@ -4663,16 +4708,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 const auto* src=reinterpret_cast<const void*>(ctx->Rdx);
                 const auto capacity=static_cast<size_t>(ctx->Rsi);
                 const auto count=static_cast<size_t>(ctx->Rcx);
-                int status=22;
-                if (count==0) status=0;
-                else if (dst && capacity<=UINTPTR_MAX-ctx->Rdi && SafeWritable(dst,capacity)) {
-                    if (!src || count>capacity) status=moving ? GuestMemmoveS(dst,capacity,src,count) : GuestMemcpyS(dst,capacity,src,count);
-                    else {
-                        const bool readable=count<=UINTPTR_MAX-ctx->Rdx && SafeReadable(src,count);
-                        status=moving ? GuestMemmoveS(dst,capacity,readable ? src : nullptr,count) : GuestMemcpyS(dst,capacity,readable ? src : nullptr,count);
-                    }
-                }
-                if (status!=0) g_guest_errno=status;
+                const int status=CallGuestSecureCopy(dst,capacity,src,count,moving);
                 ctx->Rax=status;
                 special_return_set=true;
                 static std::atomic<unsigned> samples[2]{};
@@ -5867,6 +5903,18 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 Sleep(ms ? ms : 1);
                 ctx->Rax = 0;
                 special_return_set = true;
+            } else if (readable_name == "strnstr") {
+                const auto limit = static_cast<size_t>(ctx->Rdx);
+                const auto haystack = SafeReadCString(reinterpret_cast<const char*>(ctx->Rdi),limit);
+                const auto needle = SafeReadCString(reinterpret_cast<const char*>(ctx->Rsi));
+                const auto offset = GuestStrnstrOffset(haystack,needle,limit);
+                ctx->Rax = offset == std::string_view::npos ? 0 : ctx->Rdi+offset;
+                special_return_set = true;
+                static std::atomic<unsigned> samples{0};
+                if (samples.fetch_add(1,std::memory_order_relaxed)<12)
+                    LOG_INFO("[STRNSTR] limit="+std::to_string(limit)+" needle="+needle.substr(0,64)+
+                        " text="+haystack.substr(0,128)+" offset="+
+                        (offset==std::string_view::npos ? "not-found" : std::to_string(offset)));
             } else if (readable_name == "strstr") {
                 std::string h = SafeReadCString(reinterpret_cast<const char*>(ctx->Rdi));
                 std::string nd = SafeReadCString(reinterpret_cast<const char*>(ctx->Rsi));

@@ -47,3 +47,13 @@ inline int GuestStrncatS(char* destination, std::size_t capacity,
     destination[length + copied] = 0;
     return truncate && requested > available ? 80 : 0;
 }
+
+inline std::size_t GuestStrnstrOffset(std::string_view haystack, std::string_view needle,
+                                    std::size_t limit) {
+    haystack = haystack.substr(0,(std::min)(haystack.size(),limit));
+    if (const auto end=haystack.find('\0'); end!=std::string_view::npos)
+        haystack=haystack.substr(0,end);
+    if (const auto end=needle.find('\0'); end!=std::string_view::npos)
+        needle=needle.substr(0,end);
+    return haystack.find(needle);
+}

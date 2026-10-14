@@ -47,4 +47,16 @@ int main() {
     std::memset(out,'x',4);
     assert(GuestStrncatS(out,4,"y",1)==22 && out[0]==0);
     assert(GuestStrncatS(nullptr,4,"y",1)==22);
+
+    const auto material=std::string_view("D:/asobi/target\\data/prein/bg/gfx/tree_leaves.gnfp");
+    const auto marker=std::string_view("target\\data");
+    assert(GuestStrnstrOffset(material,marker,material.size())==9);
+    assert(GuestStrnstrOffset(material,marker,19)==std::string_view::npos);
+    assert(GuestStrnstrOffset(material,marker,20)==9);
+    assert(GuestStrnstrOffset(material,"TARGET",material.size())==std::string_view::npos);
+    assert(GuestStrnstrOffset("abc","",0)==0);
+    assert(GuestStrnstrOffset("abc","a",0)==std::string_view::npos);
+    assert(GuestStrnstrOffset(std::string_view("abc\0target",10),"target",10)==std::string_view::npos);
+    assert(GuestStrnstrOffset(std::string_view("abcd",4),"cd",4)==2);
+    assert(GuestStrnstrOffset(std::string_view("abcd",4),"cd",3)==std::string_view::npos);
 }

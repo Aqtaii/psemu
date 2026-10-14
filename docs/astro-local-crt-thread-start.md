@@ -110,3 +110,25 @@ creating a GPU. Passed locally; added it to the Windows workflow. Full local bui
 passed. Runtime verification: tools/data/astro_local_event_flag_log.txt.
 The earlier stalled owned game was stopped after executable-path verification;
 its exit -1 is intentional termination, not a new measured crash.
+
+## Material substring lookup and direct copy imports
+
+Event-flag run progressed past the initial quiet interval: a second real .szd read
+completed (21363/21363 at T+129.93), then loaded actual graphics/skeleton/animation
+resources through T+322.49. Event flag output and set calls execute; this is not a
+verified permanent stall. The process ultimately exited 0xc0000005 at RVA
+0x74e3242: immediately after PLT#1570 `strnstr`, the guest reads returned_pointer+7.
+The import had no implementation and returned zero. The captured needle is
+`target\data`. Added a bounded substring search returning an offset into the
+original guest string; no guest crash-site branch was bypassed. Regression covers
+bounded fit/exclusion, case sensitivity, zero length, empty needle, embedded NUL,
+and a source without a terminator inside its bounded span.
+
+Sampled hot audio/resource worker stacks contain repeated secure-copy calls.
+`memcpy_s`/`memmove_s` now share one validated routine between HLE fallback and
+direct SysV imports. No copy/error/ownership semantics change in the fast path.
+Actual loader --secure-copy-self-test validates SysV argument passing, binary copy,
+overlap, range/null errors, guest errno, invalid pointers, and a read-only page.
+It and native event flag tests pass; full local build passes. Startup speed and
+strnstr integration remain pending in astro_local_native_secure_strnstr_log.txt.
+No first recognizable Astro frame has been achieved.

@@ -326,6 +326,23 @@ jobs:
           Get-Content -LiteralPath $taskErr
           if($taskProcess.ExitCode -ne 0){throw 'Event flag self-test failed'}
 
+      - name: Test direct SysV secure copy ABI and protected pointers
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $env:PSEMU_GPU_LOG='0'
+          $taskExe=(Resolve-Path 'dist/loader.exe').Path
+          $taskLog=Join-Path (Resolve-Path 'build/native-atomic-tests').Path 'secure_copy_runtime_log.txt'
+          $taskErr=Join-Path (Resolve-Path 'build/native-atomic-tests').Path 'secure_copy_runtime_stderr.txt'
+          $taskProcess=Start-Process -FilePath $taskExe -ArgumentList '--secure-copy-self-test' -WindowStyle Hidden -PassThru -RedirectStandardOutput $taskLog -RedirectStandardError $taskErr
+          if(!$taskProcess.WaitForExit(10000)){
+            if($taskProcess.Path -eq $taskExe){Stop-Process -Id $taskProcess.Id}
+            throw 'Secure copy self-test timed out'
+          }
+          Get-Content -LiteralPath $taskLog
+          Get-Content -LiteralPath $taskErr
+          if($taskProcess.ExitCode -ne 0){throw 'Secure copy self-test failed'}
+
       - name: Upload downloadable Windows package
         uses: actions/upload-artifact@v4
         with:

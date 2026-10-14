@@ -1005,6 +1005,7 @@ bool LoadEboot(const std::string& filePath) {
 }
 
 extern "C" int PsemuEventFlagSelfTest();
+extern "C" int PsemuSecureCopySelfTest();
 
 int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -1012,6 +1013,7 @@ int main(int argc, char** argv) {
     Logger::Init();
     if (argc==2 && std::strcmp(argv[1],"--fiber-self-test")==0) return PsemuFiberSelfTest();
     if (argc==2 && std::strcmp(argv[1],"--event-flag-self-test")==0) return PsemuEventFlagSelfTest();
+    if (argc==2 && std::strcmp(argv[1],"--secure-copy-self-test")==0) return PsemuSecureCopySelfTest();
 
     if (argc < 2) {
         std::cout << "Kullanim: " << argv[0] << " <eboot.bin_yolu>" << std::endl;
