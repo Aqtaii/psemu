@@ -58,3 +58,20 @@ animation paths at T+88.04..88.08. The game opens
 at T+88.21. The prior null Animation crash has not recurred at that stage.
 Vulkan proceeds into compute shader translation and `TileBasedLighting` markers.
 This is resource/render progress; no visible frame is claimed from it.
+
+## CPU copy notification correction
+
+The append run reached three GPU flips, then exited with code 321 at
+`BufferCache::PublishImageBacking`: a 16-byte secure copy was already CPU-dirty
+inside a cached buffer. The new copy handler incorrectly called
+`PsemuMarkCpuModified`, whose implementation actually performs image-backing
+ownership publication and requires clean buffer owners. Removed this extra call;
+secure copies now use the same writable-page checks and tracking route as the
+existing ordinary memcpy/memmove handlers. Image ownership assertions remain intact.
+All three regressions and local full loader link passed again. Follow-up game run:
+`tools/data/astro_local_copy_tracking_log.txt` (verification still in progress).
+
+`images/run_20261014_032505/frame_00000.bmp` contains a striped color pattern,
+not recognizable game content. Completed draw coverage/readbacks still report zero
+covered samples/zero RGB for measured targets. A nonblack capture of an unwritten
+presentation image is not evidence of correct rendering. No first game frame achieved.

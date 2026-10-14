@@ -4669,8 +4669,6 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                         const bool readable=count<=UINTPTR_MAX-ctx->Rdx && SafeReadable(src,count);
                         status=moving ? GuestMemmoveS(dst,capacity,readable ? src : nullptr,count) : GuestMemcpyS(dst,capacity,readable ? src : nullptr,count);
                     }
-                    const auto written=status==0 ? count : (moving ? size_t(0) : capacity);
-                    if (written) PsemuMarkCpuModified(ctx->Rdi,written);
                 }
                 if (status!=0) g_guest_errno=status;
                 ctx->Rax=status;
