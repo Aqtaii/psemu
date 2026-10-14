@@ -445,6 +445,25 @@ int main() {
  // Expanding render-target support must not expand the exact video/depth contract.
  for(auto kind:{BufferImageBinding::VideoOut,BufferImageBinding::DepthTarget})
   Require(ClassifyBufferImageWrite(0x19d6ee60000ull,0x480000,image,image_size,kind,true,true)==BufferImageWrite::Unsupported);
+ // Actual Astro sampled texture has already yielded to a buffer, then a new
+ // formatted write overlaps only its first256KiB. Preserve the existing owner.
+ {
+  constexpr uint64_t sampled=0x2a3b9500000ull,sampled_size=0x800000;
+  auto sampled_write=[&](uint64_t address,uint64_t size,bool gpu=false,bool yielded=true,bool formatted=true) {
+   return ClassifyBufferImageWrite(address,size,sampled,sampled_size,BufferImageBinding::Texture,gpu,formatted,yielded);
+  };
+  Require(sampled_write(0x2a3b9180000ull,0x3c0000)==BufferImageWrite::InvalidateTexture);
+  Require(sampled_write(sampled+sampled_size-0x40000,0x3c0000)==BufferImageWrite::InvalidateTexture);
+  Require(sampled_write(0x2a3b9180000ull,0x3c0000,true)==BufferImageWrite::Unsupported);
+  Require(sampled_write(0x2a3b9180000ull,0x3c0000,false,false)==BufferImageWrite::Unsupported);
+  Require(sampled_write(0x2a3b9180000ull,0x3c0000,false,true,false)==BufferImageWrite::Unsupported);
+  Require(sampled_write(0x2a3b9180001ull,0x3c0000)==BufferImageWrite::Unsupported);
+  Require(sampled_write(0x2a3b9180000ull,0x3c0001)==BufferImageWrite::Unsupported);
+  Require(sampled_write(sampled-0x10000,0x10000)==BufferImageWrite::None);
+  Require(sampled_write(sampled+sampled_size,0x10000)==BufferImageWrite::None);
+  // The original contained CPU-current sampled write stays supported.
+  Require(sampled_write(sampled+0x10000,0x10000,false,false,false)==BufferImageWrite::InvalidateTexture);
+ }
  // Captured Astro failure: BDA snapshot rereads a resident 32 KiB buffer after
  // its GPU write invalidated the overlapping image. Reuse the buffer, not backing.
  Require(IsCoherentBufferImageRead(true,false,true,false,true));

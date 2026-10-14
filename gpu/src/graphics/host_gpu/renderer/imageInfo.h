@@ -768,7 +768,13 @@ ClassifyBufferImageWrite(uint64_t buffer_address, uint64_t buffer_size, uint64_t
 	const bool image_page_aligned = ((image_address | image_size) & (TRACKER_PAGE_SIZE - 1)) == 0;
 	switch (binding) {
 		case BufferImageBinding::Texture:
-			return contained && image_page_aligned && !image_gpu_modified
+			// A sampled view already yielded to the resident buffer may be invalidated by
+			// another bounded formatted write that crosses its edge. No native GPU bytes
+			// are discarded: later sampling refreshes through the existing buffer owner.
+			return image_page_aligned && !image_gpu_modified &&
+			               (contained || (image_buffer_modified && buffer_formatted &&
+			                              buffer_page_aligned && ImageRangeOverlaps(
+			                                  buffer_address, buffer_size, image_address, image_size)))
 			           ? BufferImageWrite::InvalidateTexture
 			           : BufferImageWrite::Unsupported;
 		case BufferImageBinding::VideoOut:

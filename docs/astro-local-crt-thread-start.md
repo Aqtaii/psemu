@@ -281,3 +281,31 @@ No claim yet that these two calls alone explain missing scene geometry.
 Initial8 capture images are now saved unconditionally, retaining every4th
 subsequent readback and60-shot limit. This prevents small visible logos/text
 from being hidden by a sparse scene-signature threshold. All artifacts onD.
+
+## Actual float proof and later sampled alias crash
+
+Real Astro now calls exp2f(16)=65536, exp2f(0)=1 and atanf(1)=0.785398185.
+Guest callerRVA0x1100f6e uses the exp2 result for a power-of-two table capacity
+(stored fields+0x78/+0x80), so the old unchanged exponent was not valid output.
+The four initial format58 captures remain identical/nearly black, no game frame.
+Boot passes Resident load, prein.xml and Transition.xml, then opens plaza camera
+animations atT701. Normal-runtime failure (exit321) occursT~702 at textureCache
+unsupported GPU invalidation alias, not a CPU access violation.
+
+Captured write0x2a3b9180000+0x3c0000 ends0x2a3b9540000; sampled image
+0x2a3b9500000+0x800000 overlaps only first0x40000. Native image clean,
+buffer_modified1, formatted1, ambiguous0. Added only already-buffer-owned
+sampled-view invalidation for byte-overlapping page-aligned formatted writes
+that cross the image edge. No native GPU bytes are discarded/downloaded;
+sampling uses its existing dirty-buffer refresh path. Native-image owners,
+unaligned/unformatted writes, absent buffer ownership and ambiguous aliases
+remain rejected. Original contained-write behavior remains unchanged.
+Reference Jetsku's ownership-aware invalidation/download serial model informed
+review; the local existing yielded-buffer path is retained instead of copying
+incompatible cache machinery. New bounded BUFFER-OWNED-TEXTURE-WRITE log.
+
+Captured-range classification regressions plus both edges, owner conflicts,
+alignment, format, disjoint boundaries and original contained writes pass.
+All existing depth-storage roundtrip/fragment preservation tests and full30-step
+Windows build pass. Logs local_sampled_crossing_tests/build_log.txt.
+Actual rerun across this crash is pending.

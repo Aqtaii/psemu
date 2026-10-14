@@ -3297,6 +3297,14 @@ bool TextureCache::InvalidateMemoryFromGPU(uint64_t vaddr, uint64_t size,
 				RetireImages({&cached});
 				return true;
 			}
+			if (cached.kind == CachedImage::Kind::Texture && cached.buffer_modified &&
+			    (vaddr < cached.Address() || size > cached.Size() ||
+			     vaddr - cached.Address() > cached.Size() - size)) {
+				static std::atomic_uint crossing_logs{0};
+				if(crossing_logs.fetch_add(1)<8)printf("[BUFFER-OWNED-TEXTURE-WRITE] write=0x%016" PRIx64
+				    "+0x%016" PRIx64 " image=0x%016" PRIx64 "+0x%016" PRIx64 " native_image_owner=0 buffer_owner=1\n",
+				    vaddr,size,cached.Address(),cached.Size());
+			}
 			cached.buffer_modified = true;
 			return true;
 		case BufferImageWrite::SynchronizeRenderTarget:
