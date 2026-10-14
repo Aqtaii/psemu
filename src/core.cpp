@@ -8,6 +8,10 @@
 #include "guest_safe_memory_copy.h"
 #include "guest_thread_start.h"
 #include "guest_positioned_read.h"
+#include "guest_directory.h"
+#include "common/hash.h"
+#include <filesystem>
+#include <algorithm>
 #include "guest_audio_queue.h"
 #include <chrono>
 #include "host_allocation_size.h"
@@ -315,6 +319,60 @@ static std::map<FILE*, std::string> g_open_names;
 // serilestiriyoruz (yukleme darbogaz degil; dogruluk > hiz).
 static std::mutex g_vfs_mutex;
 static std::unordered_map<int, FILE*> g_kernel_files;
+static std::atomic<int> g_kernel_fd_counter{100};
+static std::unordered_map<int,GuestDirectorySnapshot> g_kernel_directories;
+static int OpenGuestDirectory(const std::string& host,uint32_t flags) {
+ if((flags&3u)!=0 || (flags&(0x200u|0x400u|0x8u)))return -2147352555; // EISDIR
+ std::error_code error;
+ if(!std::filesystem::is_directory(host,error))return -2147352556; // ENOTDIR
+ std::vector<GuestDirectoryEntry> entries;
+ for(std::filesystem::directory_iterator it(host,error),end;!error && it!=end;it.increment(error)) {
+  auto utf8=it->path().filename().u8string();std::string name(utf8.begin(),utf8.end());
+  const bool directory=it->is_directory(error);if(error)break;
+  entries.push_back({name,!directory,Common::hash(name.data(),uint32_t(name.size()))});
+ }
+ if(error)return -2147352571; // EIO
+ std::sort(entries.begin(),entries.end(),[](const auto& a,const auto& b){return a.name<b.name;});
+ GuestDirectorySnapshot snapshot;snapshot.path=host;
+ if(!GuestPackDirectory(entries,&snapshot.bytes))return -2147352513; // ENAMETOOLONG
+ const auto bytes=snapshot.bytes.size();const auto count=entries.size();
+ const int fd=g_kernel_fd_counter.fetch_add(1,std::memory_order_relaxed);
+ {std::lock_guard<std::mutex> lock(g_vfs_mutex);g_kernel_directories.emplace(fd,std::move(snapshot));}
+ static std::atomic_uint logs{0};if(logs.fetch_add(1)<16)
+  std::printf("[KERNEL-DIRECTORY-OPEN] fd=%d entries=%zu bytes=%zu path=%s\n",fd,count,bytes,host.c_str());
+ return fd;
+}
+static int64_t ReadGuestDirectory(int fd,void* buffer,int bytes,int64_t* base=nullptr) {
+ std::lock_guard<std::mutex> lock(g_vfs_mutex);
+ const auto found=g_kernel_directories.find(fd);
+ if(found==g_kernel_directories.end())return g_kernel_files.count(fd) ? -2147352554LL : -2147352567LL;
+ if(bytes<512)return -2147352554LL;
+ if(!buffer || !SafeWritable(buffer,size_t(bytes)) || (base && !SafeWritable(base,sizeof(*base))))return -2147352562LL;
+ return GuestReadDirectory(found->second,buffer,bytes,base);
+}
+extern "C" int PsemuDirectorySelfTest(const char* path) {
+ const int fd=OpenGuestDirectory(path,0x20000);if(fd<0)return 1;
+ std::array<uint8_t,514> block{};int64_t base=-1;size_t total=0;bool file=false,directory=false;
+ for(;;) {
+  block.fill(0xa5);const auto count=ReadGuestDirectory(fd,block.data()+1,512,&base);
+  if(count<0 || base!=int64_t(total) || block.front()!=0xa5 || block.back()!=0xa5)return 2;
+  if(count==0)break;total+=size_t(count);
+  for(size_t offset=1;offset<513;) {
+   uint16_t record;std::memcpy(&record,block.data()+offset+4,2);
+   if(record<12 || offset+record>513)return 3;
+   const std::string name(reinterpret_cast<char*>(block.data()+offset+8),block[offset+7]);
+   if(name=="astro.spx")file=block[offset+6]==8;
+   if(name=="rooms")directory=block[offset+6]==4;
+   offset+=record;
+  }
+ }
+ if(!file || !directory || ReadGuestDirectory(fd,block.data(),511)!=-2147352554LL ||
+    ReadGuestDirectory(fd,nullptr,512)!=-2147352562LL ||
+    ReadGuestDirectory(fd,reinterpret_cast<void*>(1),512)!=-2147352562LL)return 4;
+ {std::lock_guard<std::mutex> lock(g_vfs_mutex);g_kernel_directories.erase(fd);}
+ if(ReadGuestDirectory(fd,block.data(),512)!=-2147352567LL)return 5;
+ std::puts("[DIRECTORY-HLE-TEST] actual directory enumeration, file/directory types, EOF, bounds, closed descriptor passed");return 0;
+}
 static std::mutex g_audio_queue_mutex;
 static std::unordered_map<uint64_t,GuestAudioQueue> g_audio_queues;
 static uint64_t g_next_audio_context=1;
@@ -4438,6 +4496,19 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
             // ELF'in disassembly'si (fonksiyon 0x2e13a0) ile dogrulandi.
             // Sahte RAX=0 yerine artik gercek VirtualAlloc destekli bellek
             // donduruyoruz.
+            // Directory descriptors share our file namespace; do not pass them to
+            // a different SDK registry. Existing regular-file handling follows below.
+            if(readable_name=="sceKernelOpen" || readable_name=="libc_open" || func_name.find("1G3lF1Gg1k8")!=std::string::npos) {
+                const auto guest=SafeReadCString(reinterpret_cast<const char*>(ctx->Rdi));
+                const auto host=TranslateGuestPath(guest);const uint32_t flags=uint32_t(ctx->Rsi);
+                const auto attributes=GetFileAttributesA(host.c_str());
+                if((flags&0x20000u) || (attributes!=INVALID_FILE_ATTRIBUTES && (attributes&FILE_ATTRIBUTE_DIRECTORY))) {
+                    const int result=OpenGuestDirectory(host,flags);
+                    ctx->Rax=static_cast<uint64_t>(static_cast<int64_t>(result));
+                    ctx->Rip=*reinterpret_cast<uint64_t*>(ctx->Rsp);ctx->Rsp+=8;
+                    return EXCEPTION_CONTINUE_EXECUTION;
+                }
+            }
             bool special_return_set = false;
             
             // RENDER (sceAgc/Graphics/sceVideoOut) cagrilarini psemu'nun eski
@@ -6084,8 +6155,8 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 }
                 if (f) {
                     // Gercek dosya var: fd olarak FILE* saklayip dondur
-                    static std::atomic<int> s_fd_counter{100};
-                    int fd = s_fd_counter.fetch_add(1, std::memory_order_relaxed);
+
+                    int fd = g_kernel_fd_counter.fetch_add(1, std::memory_order_relaxed);
                     {
                         std::lock_guard<std::mutex> vlk(g_vfs_mutex);
                         // fd -> FILE* esleme tablosu
@@ -6101,7 +6172,12 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     special_return_set = true;
                     LOG_INFO("[KernelIO] sceKernelOpen(\"" + guest + "\") -> -1 (ENOENT: dosya bulunamadi)");
                 }
-            } else if (readable_name == "sceKernelPread" || readable_name == "pread") {
+            } else if (readable_name=="sceKernelGetdents" || readable_name=="sceKernelGetdirentries") {
+                const auto result=ReadGuestDirectory(int(ctx->Rdi),reinterpret_cast<void*>(ctx->Rsi),int(ctx->Rdx),
+                    readable_name=="sceKernelGetdirentries" ? reinterpret_cast<int64_t*>(ctx->Rcx) : nullptr);
+                ctx->Rax=static_cast<uint64_t>(result);special_return_set=true;
+                static std::atomic_uint logs{0};if(logs.fetch_add(1)<16)
+                    std::printf("[KERNEL-GETDENTS] fd=%d requested=%d result=%lld\n",int(ctx->Rdi),int(ctx->Rdx),static_cast<long long>(result));            } else if (readable_name == "sceKernelPread" || readable_name == "pread") {
                 const auto fd = static_cast<int>(ctx->Rdi);
                 auto* buffer = reinterpret_cast<void*>(ctx->Rsi);
                 const auto bytes = static_cast<size_t>(ctx->Rdx);
@@ -6135,7 +6211,12 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 std::lock_guard<std::mutex> vlk(g_vfs_mutex);
                 const auto file = g_kernel_files.find(fd);
                 int64_t bytes_read = -1;
-                if (file != g_kernel_files.end() && (nbyte == 0 || SafeWritable(buf, nbyte)))
+                const auto directory=g_kernel_directories.find(fd);
+                if(directory!=g_kernel_directories.end()) {
+                    bytes_read=nbyte>INT32_MAX || nbyte<512 ? -2147352554LL :
+                        (!buf || !SafeWritable(buf,nbyte)) ? -2147352562LL :
+                        GuestReadDirectory(directory->second,buf,int(nbyte));
+                } else if (file != g_kernel_files.end() && (nbyte == 0 || SafeWritable(buf, nbyte)))
                     bytes_read = static_cast<int64_t>(fread(buf, 1, nbyte, file->second));
                 ctx->Rax = static_cast<uint64_t>(bytes_read);
                 special_return_set = true;
@@ -6156,6 +6237,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 {
                     std::lock_guard<std::mutex> vlk(g_vfs_mutex);
                     auto& fd_map = g_kernel_files;
+                    g_kernel_directories.erase(fd);
                     if (fd_map.count(fd)) {
                         fclose(fd_map[fd]);
                         fd_map.erase(fd);
@@ -6182,9 +6264,15 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     std::lock_guard<std::mutex> vlk(g_vfs_mutex);
                     const auto file = g_kernel_files.find(static_cast<int>(ctx->Rdi));
                     struct _stat64 info{};
-                    rc = file != g_kernel_files.end() && _fstat64(_fileno(file->second), &info) == 0
-                        ? 0 : -2147352567; // EBADF
-                    if (rc == 0) *sb = MakeGuestFileStat(info);
+                    const auto directory=g_kernel_directories.find(int(ctx->Rdi));
+                    if(directory!=g_kernel_directories.end()) {
+                        rc=_stat64(directory->second.path.c_str(),&info)==0 ? 0 : -2147352567;
+                        if(rc==0) { *sb=MakeGuestFileStat(info);sb->size=int64_t(directory->second.bytes.size());sb->blocks=sb->size/512; }
+                    } else {
+                        rc = file != g_kernel_files.end() && _fstat64(_fileno(file->second), &info) == 0
+                            ? 0 : -2147352567; // EBADF
+                        if (rc == 0) *sb = MakeGuestFileStat(info);
+                    }
                 }
                 ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(rc));
                 special_return_set = true;

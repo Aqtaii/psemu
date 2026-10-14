@@ -309,3 +309,32 @@ alignment, format, disjoint boundaries and original contained writes pass.
 All existing depth-storage roundtrip/fragment preservation tests and full30-step
 Windows build pass. Logs local_sampled_crossing_tests/build_log.txt.
 Actual rerun across this crash is pending.
+
+## Longer post-alias boot and real SPX directory failure
+
+Run PID9920 passes the earlier plaza-camera load stage, logs Armadillo Load
+end atT723.76 and opens astro.jxm/astro.skel atT729. No recognized game frame;
+first8 format58 captures remain near-black. Exact crossing-write acceptance
+marker was not observed, so do not claim the captured ownership case has
+been pinned in runtime merely from elapsed-time/boot progress. Process was
+intentionally stopped for the next filesystem fix.
+
+Game opens /app0/data/prein/spx and gets ENOENT, but that directory exists
+and contains real SPX files (aerial_aquarium.spx etc). Core KernelOpen treated
+directories as FILE* and fopen fails. Added separate directory snapshots in
+the same monotonically allocated fd namespace, never mixing native registries.
+Open enumerates actual UTF8 names/types, applies existing Common::hash inode
+policy, packs Kyty FreeBSD dirents in512-byte blocks. Getdents/getdirentries
+return bytes/cursor/base offset; close releases snapshots; directory fstat
+reports directory type and packed size. KernelRead shares the same snapshot
+cursor. No generated game data or asset patching. Original regular-file path
+retained. Native registered SDK database only owns graphics/font/pad/fiber,
+so directory dispatch is not another unreachable VideoOut-style branch.
+
+Reference existing gpu/src/kernel/fileSystem.cpp KernelGetdirentries and
+original Kyty PackDirents implementation. Package regression validates long
+name255, mixed types, duplicate-free multi-block traversal, null/short output,
+EOF, rejected overlength input with unchanged output and empty directories.
+Loader integration reads actual test files/directories, verifies canaries and
+invalid/closed descriptors. Tests, full Windows build, secure-copy and event-flag
+self-tests pass. Log local_directory_tests_log.txt. Actual SPX enumeration pending.
