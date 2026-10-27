@@ -157,6 +157,10 @@ jobs:
           if errorlevel 1 exit /b 1
           build\\native-atomic-tests\\buffer_image_read_range_test.exe
 
+      - name: Test exact sub-page image source coherence
+        shell: pwsh
+        run: ./tools/scripts/test_buffer_image_source.ps1
+
       - name: Test sparse GPU guest address table
         shell: pwsh
         run: ./tools/scripts/test_guest_address_table.ps1

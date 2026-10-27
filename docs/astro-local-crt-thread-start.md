@@ -941,3 +941,11 @@ one-byte views, CPU page refresh, exact source offset/extent, cache-hole fallbac
 and invalid/boundary addresses. PASS. This is a CPU harness, not an Astro frame.
 Local subpage-image-output build completed; real retryPID7300 starts23:29:37.
 First eight previous captures remained black/dither; recognizable image pending.
+
+Follow-up validation: aligned existing image requests perform no redundant
+transfers; two cached fragments separated by a hole refresh both complete edge
+pages, preserve CPU ownership in the hole, and return the exact guest fallback
+extent. PASS. Added test_buffer_image_source.ps1 to Windows CI. Local Jetsku
+reference src/graphics/host_gpu/renderer/cache/bufferCache.cpp likewise accepts
+any valid GuestRange in ObtainBufferForImage and returns the exact buffer offset;
+it does not impose a tracker-page-aligned texture address.

@@ -36,6 +36,27 @@ int main(){
   Require(Transfer::uploads==1);
   for(size_t i=0;i<0x2000;i++)Require(native->bytes[i]==0x72);
   Require(native->bytes[0x2000]==0xa5);
+  // Existing aligned callers keep their extent and avoid redundant transfers.
+  auto old_downloads=Transfer::downloads,old_uploads=Transfer::uploads;
+  source=cache.ObtainBufferForImage(base,0x1000);
+  Require(source.buffer==native.get()&&source.offset==0&&source.size==0x1000&&!source.cpu_dirty);
+  Require(Transfer::downloads==old_downloads&&Transfer::uploads==old_uploads);
+  // Two resident fragments with a cache hole cannot return a containing buffer.
+  // Both complete edge pages refresh, while CPU ownership in the hole remains.
+  BufferCache split;
+  for(uint64_t off:{0,0x2000}){
+   auto fragment=std::make_unique<BufferCache::CachedBuffer>();fragment->vaddr=base+off;
+   fragment->size=4096;fragment->ctx=&ctx;fragment->buffer=std::make_shared<VulkanBuffer>();
+   fragment->buffer->buffer_size=4096;fragment->buffer->bytes.resize(4096,0);
+   split.m_buffers.emplace(base+off,std::move(fragment));
+  }
+  split.m_memory_tracker.cpu.Add(base,0x3000);
+  auto fragmented=split.ObtainBufferForImage(base+0x800,0x2000);
+  Require(!fragmented.buffer&&fragmented.offset==0&&fragmented.address==base+0x800&&fragmented.size==0x2000&&fragmented.cpu_dirty);
+  Require(Transfer::uploads==old_uploads+2);
+  Require(split.m_memory_tracker.IsRegionCpuModified(base+0x1000,4096));
+  Require(!split.m_memory_tracker.IsRegionCpuModified(base,4096)&&!split.m_memory_tracker.IsRegionCpuModified(base+0x2000,4096));
+  for(const auto& [a,f]:split.m_buffers)for(size_t i=0;i<4096;i++)Require(f->buffer->bytes[i]==backing[a-base+i]);
   // Cache holes use coherent guest backing; never widen the returned extent.
   BufferCache empty;auto fallback=empty.ObtainBufferForImage(base+0x801,3);
   Require(!fallback.buffer&&fallback.offset==0&&fallback.address==base+0x801&&fallback.size==3&&fallback.cpu_current);
