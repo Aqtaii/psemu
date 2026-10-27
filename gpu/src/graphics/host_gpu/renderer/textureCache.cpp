@@ -1159,7 +1159,7 @@ void TextureCache::ResolveStorageImageOverlaps(CommandBuffer* command, GraphicCo
 				     " kind=%u same_context=%d gpu=%d/%d buffer=%d"
 				     " requested=%ux%u pitch=%u tile=%u fmt=%u depth=%u levels=%u"
 				     " target=%ux%u pitch=%u tile=%u bpe=%u layers=%u levels=%u"
-				     " cpu=%d buffers=%d\n",
+				     " cpu=%d buffers=%d existing_info={fmt=%u width=%u height=%u pitch=%u tile=%u levels=%u base=%u view=%u swizzle=0x%03x}\n",
 				     requested.address, requested.size, cached->Address(), cached->Size(),
 				     static_cast<uint32_t>(cached->kind), cached->ctx == ctx, cached->gpu_modified,
 				     tracker_gpu, cached->buffer_modified,
@@ -1168,7 +1168,9 @@ void TextureCache::ResolveStorageImageOverlaps(CommandBuffer* command, GraphicCo
 				     cached->target.pitch,cached->target.tile_mode,cached->target.bytes_per_element,
 				     cached->target.layers,cached->target.levels,
 				     m_memory_tracker.IsRegionCpuModified(cached->Address(),cached->Size()),
-				     m_buffer_cache.HasPageOverlap(requested.address,requested.size));
+				     m_buffer_cache.HasPageOverlap(requested.address,requested.size),
+                     cached->info.format,cached->info.width,cached->info.height,cached->info.pitch,cached->info.tile,
+                     cached->info.levels,cached->info.base_level,cached->info.view_levels,cached->info.swizzle);
 		}
 	}
 	RequireRetirementIsolation(retire, "storage neighbor", requested.address, requested.size);

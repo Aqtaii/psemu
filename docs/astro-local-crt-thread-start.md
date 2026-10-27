@@ -1030,3 +1030,29 @@ with explicit buffer/cached/tracker diagnostics. Bounded STORAGE-SAMPLED-CLEAN
 logs identify actual reuse. Production tests cover captured packed clean state,
 R32 full-chain clean views, GPU-current views, stale buffers, CPU dirtiness and
 tracker mismatch. PASS. Full local clean-storage-sampled-output build pending.
+
+## 2026-10-28: depth storage backing reused as packed-color storage
+
+1a73b96 retryPID16584 successfully logs STORAGE-SAMPLED-CLEAN twice atT506.8
+for the previously rejected R11G11B10 source. Next fatal exits321 at00:22:20:
+requested960x540 R11G11B10, pitch1024, tile27, same address/size0x280000 as an
+existing storage owner; GPU/tracker current, CPU clean, same context, no buffers.
+Earlier TEX#10 identifies that address as R32Float tile24. The fatal omitted old
+storage info; diagnostics now include its full format/shape/mip/tile/swizzle.
+
+Extend the existing strict depth-storage readback admission to a validated single
+mip packed-color/RGBA16F destination. Old owner must STILL satisfy the R32 depth
+layout validator; no arbitrary storage old-owner acceptance. Shared color-backing
+validator reuses the existing render-target physical-footprint logic and preserves
+bounds/type/mip/alignment and competing CPU/GPU/buffer rejection. Existing full
+readback retains old image through its fence, publishes every guest-layout byte,
+retires it, then uploads a native image of the requested format.
+
+Captured960x540/1024/0x280000 CPU test passes: production depth retile preserves
+padding/canaries, production render-target detile reads the published bits,
+full per-pixel comparison passes, malformed bounds/pitch/ownership reject.
+The 32-bit depth and render-target permutations match for this footprint; an
+initial test expectation of DIFFERENT permutations was wrong and corrected to
+equality. The format transition must preserve bits rather than convert float
+numeric values. Regression failures now print source location. Local build pending;
+first recognizable image remains pending.

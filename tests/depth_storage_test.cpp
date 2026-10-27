@@ -1,4 +1,5 @@
-static void Require(bool ok) {if(!ok) throw std::runtime_error("regression failed");}
+#include <source_location>
+static void Require(bool ok,std::source_location where=std::source_location::current()) {if(!ok) {std::fprintf(stderr,"Regression failed at %s:%u\n",where.file_name(),where.line());throw std::runtime_error("regression failed");}}
 int main() {
  {
   ShaderTextureResource d{};
@@ -592,6 +593,34 @@ int main() {
   }
   d.fields[3]=0x91811324;resource.read=true;
   Require(!IsSupportedStorageTextureDescriptor(resource,d));
+ }
+ // Captured same allocation changes from R32 depth tiling to R11G11B10 color tiling.
+ {
+  ImageInfo old{};old.address=0x1795a550000ull;old.size=0x280000;old.width=960;old.height=540;
+  old.pitch=1024;old.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float);
+  old.type=Prospero::GpuEnumValue(Prospero::ImageType::kColor2D);old.depth=old.levels=old.view_levels=1;
+  old.tile=Prospero::GpuEnumValue(Prospero::TileMode::kDepth);
+  auto color=old;color.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k11_11_10Float);
+  color.tile=Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget);color.swizzle=0x3ac;
+  Require(IsSupportedColorStorageBacking(color));
+  Require(CanReconstructStorageForStorage(old,true,false,true,false,true,false,color));
+  for(int bad=0;bad<6;bad++)Require(!CanReconstructStorageForStorage(old,bad!=0,bad==1,bad!=2,bad==3,bad!=4,bad==5,color));
+  auto malformed=color;malformed.pitch=960;Require(!CanReconstructStorageForStorage(old,true,false,true,false,true,false,malformed));
+  malformed=color;malformed.size-=0x10000;Require(!CanReconstructStorageForStorage(old,true,false,true,false,true,false,malformed));
+  std::vector<uint32_t> linear(old.size/4),guest(linear.size()+2,0xa5a5a5a5),mask(linear.size()),ones(linear.size(),1),sampled(linear.size(),0);
+  for(size_t i=0;i<linear.size();i++)linear[i]=uint32_t(i*17+7);
+  TileDepthStorageMipsPreservePadding(guest.data()+1,linear.data(),old);
+  TileConvertLinearToTiledDepth(mask.data(),ones.data(),old.format,old.width,old.height,old.pitch,old.size);
+  Require(guest.front()==0xa5a5a5a5 && guest.back()==0xa5a5a5a5);
+  for(size_t i=0;i<mask.size();i++)if(!mask[i])Require(guest[i+1]==0xa5a5a5a5);
+  ConvertRenderTargetTyped<uint32_t,true>(color.width,color.height,color.pitch,sampled.data(),guest.data()+1,color.size);
+  size_t different=0;
+  for(uint32_t y=0;y<color.height;y++)for(uint32_t x=0;x<color.width;x++){
+   const auto physical=((y/128)*8+x/128)*16384+Gen5RenderTargetOffsetInBlock<uint32_t>(x%128,y%128)/4;
+   Require(sampled[y*color.pitch+x]==guest[1+physical]);
+   different+=sampled[y*color.pitch+x]!=linear[y*old.pitch+x];
+  }
+  Require(different==0); // Captured 32-bit permutations agree; preserve bits across the typed format transition.
  }
  // Captured ps_logo output: R32Float, RRR1, mip0 view of eight depth mips.
  Require(IsSupportedStorageSwizzle(Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float),0x324));

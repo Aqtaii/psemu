@@ -1130,13 +1130,38 @@ CanReconstructStorageForRenderTarget(const ImageInfo& storage, bool gpu_modified
         target.levels == 1 && target.layers == 1;
 }
 
+[[nodiscard]] inline bool IsSupportedRenderTargetReconstructionFootprint(const RenderTargetInfo& t) {
+ if(IsSupportedStandard64RenderTarget(t)) return true;
+ if(t.tile_mode!=Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) ||
+    (t.bytes_per_element!=2 && t.bytes_per_element!=4 && t.bytes_per_element!=8) ||
+    t.address==0 || (t.address&0xffffu)!=0 || t.width==0 || t.height==0 || t.levels!=1 || t.layers!=1) return false;
+ const uint64_t bw=t.bytes_per_element==2 ? 256u : 128u,bh=t.bytes_per_element==8 ? 64u : 128u;
+ const uint64_t pitch=(static_cast<uint64_t>(t.width)+bw-1)&~(bw-1);
+ const uint64_t height=(static_cast<uint64_t>(t.height)+bh-1)&~(bh-1);
+ return t.pitch==pitch && pitch<=UINT64_MAX/height/t.bytes_per_element &&
+        t.size==pitch*height*t.bytes_per_element && t.size<=UINT32_MAX;
+}
+[[nodiscard]] inline bool IsSupportedColorStorageBacking(const ImageInfo& storage) {
+ RenderTargetInfo backing{};backing.address=storage.address;backing.size=storage.size;
+ backing.width=storage.width;backing.height=storage.height;backing.pitch=storage.pitch;
+ backing.bytes_per_element=storage.format==Prospero::GpuEnumValue(Prospero::BufferFormat::k11_11_10Float)?4:8;
+ backing.tile_mode=storage.tile;backing.levels=storage.levels;
+ return (storage.format==Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float) ||
+         storage.format==Prospero::GpuEnumValue(Prospero::BufferFormat::k11_11_10Float)) &&
+        storage.tile==Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) &&
+        storage.type==Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) && storage.depth==1 &&
+        storage.base_level==0 && storage.levels==1 && storage.view_levels==1 && storage.base_array==0 &&
+        IsSupportedRenderTargetReconstructionFootprint(backing);
+}
+
 // Distinct transient storage owners must publish their complete GPU backing before reuse.
-// Restrict this path to validated R32 depth mip layouts without competing buffer/CPU owners.
+// Publish validated R32 depth mip layouts before depth/color storage reuse; no competing owners.
 [[nodiscard]] inline bool
 CanReconstructStorageForStorage(const ImageInfo& old,bool gpu,bool buffer,bool tracker_gpu,
                                bool cpu,bool same_context,bool buffers,const ImageInfo& requested) {
  return gpu && tracker_gpu && !buffer && !cpu && same_context && !buffers &&
-        IsSupportedDepthStorageBacking(old) && IsSupportedDepthStorageBacking(requested) &&
+        IsSupportedDepthStorageBacking(old) &&
+        (IsSupportedDepthStorageBacking(requested) || IsSupportedColorStorageBacking(requested)) &&
         old.size<=UINT64_MAX-old.address && requested.size<=UINT64_MAX-requested.address &&
         ImageRangeOverlaps(old.address,old.size,requested.address,requested.size);
 }
@@ -1151,30 +1176,11 @@ CanReconstructStorageForSampled(const ImageInfo& old,bool gpu,bool buffer,bool t
  return CanReconstructStorageForStorage(old,gpu,buffer,tracker_gpu,cpu,same_context,buffers,backing);
 }
 
-[[nodiscard]] inline bool IsSupportedRenderTargetReconstructionFootprint(const RenderTargetInfo& t) {
- if(IsSupportedStandard64RenderTarget(t)) return true;
- if(t.tile_mode!=Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) ||
-    (t.bytes_per_element!=2 && t.bytes_per_element!=4 && t.bytes_per_element!=8) ||
-    t.address==0 || (t.address&0xffffu)!=0 || t.width==0 || t.height==0 || t.levels!=1 || t.layers!=1) return false;
- const uint64_t bw=t.bytes_per_element==2 ? 256u : 128u,bh=t.bytes_per_element==8 ? 64u : 128u;
- const uint64_t pitch=(static_cast<uint64_t>(t.width)+bw-1)&~(bw-1);
- const uint64_t height=(static_cast<uint64_t>(t.height)+bh-1)&~(bh-1);
- return t.pitch==pitch && pitch<=UINT64_MAX/height/t.bytes_per_element &&
-        t.size==pitch*height*t.bytes_per_element && t.size<=UINT32_MAX;
-}
 [[nodiscard]] inline bool
 CanReconstructRenderTargetForStorage(const RenderTargetInfo& target,bool gpu,bool buffer,
                                     bool tracker_gpu,bool cpu,bool same_context,bool buffers,const ImageInfo& storage) {
- RenderTargetInfo backing{};backing.address=storage.address;backing.size=storage.size;
- backing.width=storage.width;backing.height=storage.height;backing.pitch=storage.pitch;
- backing.bytes_per_element=storage.format==Prospero::GpuEnumValue(Prospero::BufferFormat::k11_11_10Float)?4:8;backing.tile_mode=storage.tile;backing.levels=storage.levels;
- const bool color_storage=(storage.format==Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float) ||
-     storage.format==Prospero::GpuEnumValue(Prospero::BufferFormat::k11_11_10Float)) &&
-     storage.type==Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) && storage.depth==1 &&
-     storage.base_level==0 && storage.levels==1 && storage.view_levels==1 && storage.base_array==0 &&
-     IsSupportedRenderTargetReconstructionFootprint(backing);
  if(!gpu || !tracker_gpu || buffer || cpu || !same_context || buffers ||
-    !IsSupportedRenderTargetReconstructionFootprint(target) || (!IsSupportedDepthStorageBacking(storage) && !color_storage) ||
+    !IsSupportedRenderTargetReconstructionFootprint(target) || (!IsSupportedDepthStorageBacking(storage) && !IsSupportedColorStorageBacking(storage)) ||
     target.size>UINT64_MAX-target.address || storage.size>UINT64_MAX-storage.address ||
     ((target.address|target.size|storage.address|storage.size)&(TRACKER_PAGE_SIZE-1))!=0) return false;
  // Readback publishes the complete old allocation, including a straddling tail.
