@@ -732,15 +732,20 @@ ClassifyStorageSampledOverlap(const ImageInfo& requested, const ImageInfo& cache
 	const bool same_backing =
 	    requested.address == cached.address && requested.size == cached.size &&
 	    requested.width == cached.width && requested.height == cached.height &&
-	    requested.pitch == cached.pitch && requested.base_level == cached.base_level &&
-	    requested.levels == cached.levels && requested.view_levels == cached.view_levels &&
+	    requested.pitch == cached.pitch && requested.levels == cached.levels &&
 	    requested.tile == cached.tile && requested.depth == cached.depth &&
 	    requested.type == cached.type && requested.base_array == cached.base_array;
+    // Base/view mip ranges select a view, not a different physical image backing.
+    // Each side must independently describe a nonempty in-bounds view.
+    const auto valid_view=[](const ImageInfo& value) {
+     return value.levels!=0 && value.levels<=16 && value.base_level<value.levels &&
+            value.view_levels!=0 && value.view_levels<=value.levels-value.base_level;
+    };
 	const bool compatible_format =
 	    (requested.format == cached.format && requested_view_format == cached_image_format) ||
 	    IsRgba8SrgbReinterpretation(cached_image_format, requested_view_format) ||
 	    IsR32UintFloatReinterpretation(cached_image_format, requested_view_format);
-	return same_backing && compatible_format && cached_gpu_modified && !cached_cpu_dirty &&
+	return same_backing && valid_view(requested) && valid_view(cached) && compatible_format && cached_gpu_modified && !cached_cpu_dirty &&
 	               same_context
 	           ? StorageSampledOverlap::ExactImage
 	           : StorageSampledOverlap::Unsupported;

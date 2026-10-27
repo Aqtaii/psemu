@@ -831,3 +831,33 @@ previous Arc B5808-mip upload/compute-write/download test remains passing eviden
 for the mip data path, not proof of this full game alias transition. Candidate
 D:/Tools/psemu-build/storage-alias-output includes matching map. First recognizable
 Astro frame and actual alias/telemetry retry remain pending.
+
+## 2026-10-27: share storage backing across independent sampled mip views
+
+f6b4138 runtimePID15468 confirms STORAGE-STORAGE-RETIRE and complete publication
+of old247e3cf0000+c0000 before requested247e3bd0000+160000; previous partial-alias
+fatal is passed. Telemetry int41 traps are absent after native float classification.
+ps_logo startsT616; next fatal exit321 at19:29:12, owned prefix
+astro_20261027_storage_alias. Exact new failure is sampled/storage alias on the
+SAME R32Float backing480x270, pitch512, depth tile24,8 mips,swizzle324: sampled
+view_levels8 versus cached storage view_levels1, both base0. It is a view mismatch,
+not changed backing or permission to discard GPU pixels. All captures remain black.
+
+ClassifyStorageSampledOverlap now compares physical backing independently of
+base/view mip selection. Both views must separately be nonempty and wholly
+inside1..16 backing mips. Format compatibility, CPU-clean/GPU-current ownership,
+same context, physical shape/address/size/pitch/type/base-array checks remain.
+Existing GetStorageTextureSampledView creates the real in-bounds Vulkan sampled
+view on the retained image; no CPU reupload, fake result or descriptor replacement.
+Tests cover the captured8-mip view over1-mip storage view, valid last-mip subset,
+empty/overflowing views, physical backing mismatches and ownership/context errors.
+
+Extended offscreen Arc B580 test binds the SAME R32Float8-mip image as storage
+mip0 and a real sampled RRR1 view of all8 levels. Compute checks textureQueryLevels
+and texelFetch of every unchanged mip1..7 including RGB replication/alpha1, then
+writes129600 mip0 pixels using actual production inverse-swizzle selection.
+All sampled checks, unchanged lower mips and host padding pass; glslang/spirv-val
+and production depth tests pass. Full local build sampled-mips-output completed
+19:35:32 with matching loader.map; review quota paused subsequent commands until
+user resumed22:40. Targeted tests and native-backing/clock self-tests pass again.
+First recognizable Astro frame and actual game sampled-view retry remain pending.

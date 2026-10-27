@@ -23,7 +23,7 @@ $header=@'
 #define KYTY_PROFILER_FUNCTION()
 #define EXIT(...) throw std::runtime_error("invalid conversion")
 #define EXIT_IF(x) do {if(x) EXIT();} while(0)
-namespace vk {enum class Format {eUndefined};}
+namespace vk {enum class Format {eUndefined,eR32Sfloat,eR32Uint,eR8G8B8A8Unorm,eR8G8B8A8Srgb,eB8G8R8A8Unorm,eB8G8R8A8Srgb};}
 namespace Common {struct LockGuard {explicit LockGuard(int&) {}};}
 struct Job {template<class F> void Execute(F f) {f();} void Wait() {}};
 struct TilerTest {int m_mutex;Job m_job1;};
@@ -69,6 +69,14 @@ $header+=Slice $buffers 'void BufferCache::PublishReconstructedImageBacking(' 'v
 $header+=Slice $buffers 'void BufferCache::RefreshCpuImageFragmentsLocked(' 'BufferImageCopySource BufferCache::ObtainBufferForImage('
 $tiler=[IO.File]::ReadAllText("$root\gpu\src\graphics\host_gpu\renderer\tiler.cpp")
 $header+=Slice $tiler 'void TileDepthStorageMipsPreservePadding(' 'void Tiler::TileImage(void* dst, const void* src, const ImageInfo& info)'
+$header+=[regex]::Match($info,'enum class StorageSampledOverlap : uint8_t \{[^}]+\};').Value
+$header+=Slice $info '[[nodiscard]] inline bool IsR32UintFloatReinterpretation(' '[[nodiscard]] inline bool IsRgba16UintFloatReinterpretation('
+$rgbaStart=$info.IndexOf('[[nodiscard]] inline bool IsRgba8SrgbReinterpretation(')
+$rgbaStart=$info.IndexOf('[[nodiscard]] inline bool IsRgba8SrgbReinterpretation(',$rgbaStart+1)
+$rgbaEnd=$info.IndexOf('[[nodiscard]]',$rgbaStart+10)
+if($rgbaStart -lt 0 -or $rgbaEnd -le $rgbaStart){throw 'Production RGBA reinterpretation missing'}
+$header+=$info.Substring($rgbaStart,$rgbaEnd-$rgbaStart)
+$header+=Slice $info '[[nodiscard]] inline StorageSampledOverlap' '[[nodiscard]] inline HostWriteOverlap'
 $source=Join-Path $out 'depth_storage_production.cpp'
 [IO.File]::WriteAllText($source,$header+"`n"+[IO.File]::ReadAllText("$root\tests\depth_storage_test.cpp"),[Text.UTF8Encoding]::new($false))
 Push-Location $out

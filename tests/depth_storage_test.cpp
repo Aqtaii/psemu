@@ -516,6 +516,22 @@ int main() {
   chain.type=Prospero::GpuEnumValue(Prospero::ImageType::kColor2D);
   chain.tile=Prospero::GpuEnumValue(Prospero::TileMode::kDepth);
   DepthStorageMipLayout plan{};Require(PlanDepthStorageMipLayout(chain,&plan));
+  auto sampled=chain;sampled.view_levels=8;
+  const auto classify=[&](const ImageInfo& view,bool gpu=true,bool dirty=false,bool context=true) {
+   return ClassifyStorageSampledOverlap(view,chain,vk::Format::eR32Sfloat,vk::Format::eR32Sfloat,gpu,dirty,context);
+  };
+  Require(classify(sampled)==StorageSampledOverlap::ExactImage);
+  sampled.base_level=7;sampled.view_levels=1;Require(classify(sampled)==StorageSampledOverlap::ExactImage);
+  for(int field=0;field<7;++field){
+   auto bad=chain;bad.view_levels=8;
+   switch(field){case 0:bad.view_levels=0;break;case 1:bad.view_levels=9;break;case 2:bad.base_level=8;break;
+    case 3:bad.base_level=7;bad.view_levels=2;break;case 4:++bad.pitch;break;case 5:--bad.size;break;case 6:++bad.width;break;}
+   Require(classify(bad)==StorageSampledOverlap::Unsupported);
+  }
+  sampled=chain;sampled.view_levels=8;
+  Require(classify(sampled,false)==StorageSampledOverlap::Unsupported);
+  Require(classify(sampled,true,true)==StorageSampledOverlap::Unsupported);
+  Require(classify(sampled,true,false,false)==StorageSampledOverlap::Unsupported);
   const std::array<uint64_t,8> offsets{0,0xc0000,0x100000,0x110000,0x120000,0x130000,0x140000,0x150000};
   for(uint32_t i=0;i<8;++i)Require(plan[i].offset==offsets[i]);
   for(uint32_t field=0;field<9;++field) {
