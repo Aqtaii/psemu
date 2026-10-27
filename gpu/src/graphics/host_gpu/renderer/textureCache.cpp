@@ -494,6 +494,7 @@ struct TextureCache::ReadbackWorker {
 		const bool linear = info.tile_mode == Prospero::GpuEnumValue(Prospero::TileMode::kLinear);
 		const bool tiled_target = target && IsTiledRenderTarget(cached.target);
         const bool depth_storage=storage && IsSupportedDepthStorageBacking(cached.info);
+        const bool color_storage=storage && IsSupportedColorStorageBacking(cached.info);
 		const bool tiled_storage =
 		    storage && (info.tile_mode == Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) ||
 		                IsSupportedDepthStorageBacking(cached.info));
@@ -582,9 +583,7 @@ struct TextureCache::ReadbackWorker {
                  if(!LibKernel::Memory::TryReadBacking(info.address,guest.data(),info.size))
                   EXIT("TextureCache: cannot preserve depth mip readback backing\n");
                  TileDepthStorageMipsPreservePadding(guest.data(),download.data(),cached.info);
-                } else if (storage) {
-                    cache.m_tiler.TileImage(guest.data(),download.data(),cached.info);
-				} else if (preserve_target_padding) {
+                } else if (preserve_target_padding || color_storage) {
 					if (!IsTiledRenderTarget(layout) || (layout.bytes_per_element != 2 && layout.bytes_per_element != 4 && layout.bytes_per_element != 8) ||
 					    !Libs::LibKernel::Memory::TryReadBacking(info.address, guest.data(), info.size)) {
 						EXIT("TextureCache: cannot preserve target reconstruction padding\n");
@@ -601,6 +600,8 @@ struct TextureCache::ReadbackWorker {
 						TileConvertLinearToTiledStandard64KB32PreservePadding(
 						    guest.data(),download.data(),info.width,info.height,info.pitch,info.size);
 					}
+                } else if (storage) {
+                    cache.m_tiler.TileImage(guest.data(),download.data(),cached.info);
 				} else {
 					cache.m_tiler.TileImage(guest.data(), download.data(), layout);
 				}

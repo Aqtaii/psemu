@@ -1056,3 +1056,24 @@ initial test expectation of DIFFERENT permutations was wrong and corrected to
 equality. The format transition must preserve bits rather than convert float
 numeric values. Regression failures now print source location. Local build pending;
 first recognizable image remains pending.
+
+## 2026-10-28: preserve color storage padding on reverse depth reuse
+
+52319a9 retryPID21996 passes depth -> packed color, compiles53 shaders, and then
+exits321 at00:37:42 on the reverse transition. Full diagnostic confirms exact
+same960x540,pitch1024,0x280000 allocation: old format36/tile27/RGB1 storage,
+new format22/tile24 R32 depth, GPU/tracker current, CPU clean, no buffers.
+
+Allow either validated color or depth footprint as the old storage owner, keeping
+all existing context/ownership/layout/bounds/isolation conditions. DownloadColorImage
+now routes validated single-mip color storage through the existing padding-
+preserving RT32/RT64 reconstruction, using original guest backing for padding.
+Other storage layouts keep their old handling; no unknown compressed formats or
+buffer conflicts are accepted. Full old allocation/fence lifetime publication
+and retirement remain unchanged before the new depth image upload.
+
+Production CPU test covers both directions and negative ownership/bounds. After
+packed-color retile, preserved canaries/padding match prior backing and every
+R32 depth pixel contains the exact packed bits. PASS. Existing CPU regression
+suite passes. Local storage-layout-roundtrip-output build pending; recognizable
+Astro image still pending.

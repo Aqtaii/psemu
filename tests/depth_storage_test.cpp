@@ -621,6 +621,16 @@ int main() {
    different+=sampled[y*color.pitch+x]!=linear[y*old.pitch+x];
   }
   Require(different==0); // Captured 32-bit permutations agree; preserve bits across the typed format transition.
+  Require(CanReconstructStorageForStorage(color,true,false,true,false,true,false,old));
+  for(int bad=0;bad<6;bad++)Require(!CanReconstructStorageForStorage(color,bad!=0,bad==1,bad!=2,bad==3,bad!=4,bad==5,old));
+  const auto before_color=guest;
+  for(size_t i=0;i<linear.size();i++)linear[i]=0x781c0340u+uint32_t(i&31);
+  TileConvertLinearToTiledRenderTarget32PreservePadding(guest.data()+1,linear.data(),color.width,color.height,color.pitch,color.size);
+  Require(guest.front()==before_color.front() && guest.back()==before_color.back());
+  for(size_t i=0;i<mask.size();i++)if(!mask[i])Require(guest[i+1]==before_color[i+1]);
+  TileConvertTiledToLinearDepth(sampled.data(),guest.data()+1,old.format,old.width,old.height,old.pitch,old.size);
+  for(uint32_t y=0;y<old.height;y++)for(uint32_t x=0;x<old.width;x++)Require(sampled[y*old.pitch+x]==linear[y*old.pitch+x]);
+
  }
  // Captured ps_logo output: R32Float, RRR1, mip0 view of eight depth mips.
  Require(IsSupportedStorageSwizzle(Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float),0x324));

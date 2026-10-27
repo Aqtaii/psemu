@@ -1155,12 +1155,12 @@ CanReconstructStorageForRenderTarget(const ImageInfo& storage, bool gpu_modified
 }
 
 // Distinct transient storage owners must publish their complete GPU backing before reuse.
-// Publish validated R32 depth mip layouts before depth/color storage reuse; no competing owners.
+// Publish validated depth/color storage layouts before reuse; no competing owners.
 [[nodiscard]] inline bool
 CanReconstructStorageForStorage(const ImageInfo& old,bool gpu,bool buffer,bool tracker_gpu,
                                bool cpu,bool same_context,bool buffers,const ImageInfo& requested) {
  return gpu && tracker_gpu && !buffer && !cpu && same_context && !buffers &&
-        IsSupportedDepthStorageBacking(old) &&
+        (IsSupportedDepthStorageBacking(old) || IsSupportedColorStorageBacking(old)) &&
         (IsSupportedDepthStorageBacking(requested) || IsSupportedColorStorageBacking(requested)) &&
         old.size<=UINT64_MAX-old.address && requested.size<=UINT64_MAX-requested.address &&
         ImageRangeOverlaps(old.address,old.size,requested.address,requested.size);
