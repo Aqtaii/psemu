@@ -1179,17 +1179,20 @@ bool BufferCache::IsCachedRegionCpuModified(uint64_t vaddr, uint64_t size) {
 
 BufferImageCopySource BufferCache::ObtainBufferForImage(uint64_t vaddr, uint64_t size) {
 	if (vaddr == 0 || size == 0 || vaddr >= TRACKER_ADDRESS_SIZE ||
-	    size > TRACKER_ADDRESS_SIZE - vaddr || (vaddr & (TRACKER_PAGE_SIZE - 1)) != 0 ||
-	    (size & (TRACKER_PAGE_SIZE - 1)) != 0) {
-		EXIT("BufferCache: invalid image source, addr=0x%016" PRIx64 " size=0x%016" PRIx64
-		     " page_aligned=%d\n",
-		     vaddr, size,
-		     (vaddr & (TRACKER_PAGE_SIZE - 1)) == 0 && (size & (TRACKER_PAGE_SIZE - 1)) == 0);
+	    size > TRACKER_ADDRESS_SIZE - vaddr) {
+		EXIT("BufferCache: invalid image source, addr=0x%016" PRIx64 " size=0x%016" PRIx64 "\n",
+		     vaddr, size);
 	}
+	// Track complete pages, but keep the caller's exact texture address and extent.
+	// Downloads must include dirty neighbour bytes on the same edge pages before
+	// clearing page ownership; otherwise a sub-page texture could discard them.
+	const auto sync_address = vaddr & ~(TRACKER_PAGE_SIZE - 1);
+	const auto sync_end = (vaddr + size + TRACKER_PAGE_SIZE - 1) & ~(TRACKER_PAGE_SIZE - 1);
+	const auto sync_size = sync_end - sync_address;
 	FaultSafeCacheLock lock(this, m_mutex);
-	const bool         cpu_modified = m_memory_tracker.IsRegionCpuModified(vaddr, size);
-	const bool         gpu_modified = m_memory_tracker.IsRegionGpuModified(vaddr, size);
-	const auto         dirty_ranges = m_gpu_modified_ranges.Intersections(vaddr, size);
+	const bool         cpu_modified = m_memory_tracker.IsRegionCpuModified(sync_address, sync_size);
+	const bool         gpu_modified = m_memory_tracker.IsRegionGpuModified(sync_address, sync_size);
+	const auto         dirty_ranges = m_gpu_modified_ranges.Intersections(sync_address, sync_size);
 	if (gpu_modified != !dirty_ranges.empty()) {
 		EXIT("BufferCache: image-source tracker and byte ownership disagree, addr=0x%016" PRIx64
 		     " size=0x%016" PRIx64 " tracker_dirty=%d byte_ranges=%zu\n",
@@ -1229,7 +1232,7 @@ BufferImageCopySource BufferCache::ObtainBufferForImage(uint64_t vaddr, uint64_t
 		auto     backing_writes = ReserveBackingWrites(m_page_manager, dirty_ranges);
 		uint64_t downloaded     = 0;
 		m_memory_tracker.ForEachDownloadRange<true>(
-		    vaddr, size,
+		    sync_address, sync_size,
 		    [&](uint64_t address, uint64_t bytes) noexcept {
 			    ValidateDirtyPages(m_gpu_modified_ranges, address, bytes, "image");
 		    },
@@ -1255,10 +1258,10 @@ BufferImageCopySource BufferCache::ObtainBufferForImage(uint64_t vaddr, uint64_t
 			     " size=0x%016" PRIx64 "\n",
 			     vaddr, size);
 		}
-		m_gpu_modified_ranges.Subtract(vaddr, size);
+		m_gpu_modified_ranges.Subtract(sync_address, sync_size);
 	}
 	// Refresh every resident fragment even when no one buffer contains the whole image.
-	RefreshCpuImageFragmentsLocked(vaddr, size);
+	RefreshCpuImageFragmentsLocked(sync_address, sync_size);
 	auto owner = m_buffers.upper_bound(vaddr);
 	if (owner == m_buffers.begin()) {
 		return {nullptr, 0, vaddr, size, true, cpu_modified};
@@ -1272,9 +1275,9 @@ BufferImageCopySource BufferCache::ObtainBufferForImage(uint64_t vaddr, uint64_t
 	if (cached.ctx == nullptr || cached.buffer == nullptr || cached.buffer->buffer == nullptr) {
 		EXIT("BufferCache: containing image source is inconsistent\n");
 	}
-	if (m_memory_tracker.IsRegionCpuModified(vaddr, size) ||
-	    m_memory_tracker.IsRegionGpuModified(vaddr, size) ||
-	    !m_gpu_modified_ranges.Intersections(vaddr, size).empty()) {
+	if (m_memory_tracker.IsRegionCpuModified(sync_address, sync_size) ||
+	    m_memory_tracker.IsRegionGpuModified(sync_address, sync_size) ||
+	    !m_gpu_modified_ranges.Intersections(sync_address, sync_size).empty()) {
 		EXIT("BufferCache: image source did not become coherent, addr=0x%016" PRIx64
 		     " size=0x%016" PRIx64 "\n",
 		     vaddr, size);

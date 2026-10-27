@@ -899,7 +899,7 @@ Vulkan-rendered title/game frame, not a fabricated or externally decoded image.
 
 7d43a47 retryPID20700 reached title_controller_ship loading and exited321 at
 23:06:41.503. The next sampled/storage alias was a 480x270 R32Float depth view,
-address backing+0x120000, size0xc0000, levels1, RRR0 (0x924), overlapping an
+address backing+0x120000, size0xc0000, levels1, RRRR (0x924), overlapping an
 8-mip storage backing of size0x160000, RRR1 (0x324). This is a different physical
 allocation, so sharing a Vulkan mip view would be incorrect.
 
@@ -916,3 +916,28 @@ production depth conversion preserves all out-of-allocation bytes and decodes
 the shared sampled tile to the known mip4 pixels. Local full build completed
 23:14:15 in sampled-reconstruct-output with matching loader.map. Real Astro
 retryPID9508 started23:17:57. First recognizable game frame remains pending.
+
+
+## 2026-10-27: exact sub-page image sources with complete page coherence
+
+b73331e retryPID9508 passes the real previous storage/sampled alias: atT534.37
+STORAGE-SAMPLED-RECONSTRUCT publishes the eight-mip owner, then game loading and
+shader compilation continue (46 -> 48 shaders). Next fatal exits321 at23:26:54:
+ObtainBufferForImage rejected address0x1f51b12a800 size0x1000, page_aligned=0.
+This is a sub-page texture source, not an invalid or out-of-address-space range.
+
+Keep the exact requested image address/size/native-buffer offset. Expand ONLY
+coherence operations to enclosing tracker pages: collect and download every
+exact dirty byte range on those pages before clearing tracker/byte ownership,
+then upload CPU-dirty cached page fragments. Edge-page bytes outside the image
+must not be dropped or overwritten with stale guest data. Address-space and
+empty/overflow guards remain. Existing page-aligned requests keep their range.
+
+New test_buffer_image_source.ps1 compiles actual production ObtainBufferForImage
+and RefreshCpuImageFragmentsLocked with the production RangeSet. Simulated
+tracker/transfer/backing dependencies check both edge-page GPU writes outside
+the texture, exact GPU byte copies/canaries, next-page ownership retention,
+one-byte views, CPU page refresh, exact source offset/extent, cache-hole fallback
+and invalid/boundary addresses. PASS. This is a CPU harness, not an Astro frame.
+Local subpage-image-output build completed; real retryPID7300 starts23:29:37.
+First eight previous captures remained black/dither; recognizable image pending.
