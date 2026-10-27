@@ -1169,11 +1169,9 @@ CanReconstructRenderTargetForStorage(const RenderTargetInfo& target,bool gpu,boo
     !IsSupportedRenderTargetReconstructionFootprint(target) || (!IsSupportedDepthStorageBacking(storage) && !rgba16) ||
     target.size>UINT64_MAX-target.address || storage.size>UINT64_MAX-storage.address ||
     ((target.address|target.size|storage.address|storage.size)&(TRACKER_PAGE_SIZE-1))!=0) return false;
- const bool inside=storage.address>=target.address && storage.address-target.address<=target.size &&
-                   storage.size<=target.size-(storage.address-target.address);
- const bool contains=target.address>=storage.address && target.address-storage.address<=storage.size &&
-                     target.size<=storage.size-(target.address-storage.address);
- return inside || contains;
+ // Readback publishes the complete old allocation, including a straddling tail.
+ // View containment is unnecessary once both physical layouts and owners are valid.
+ return ImageRangeOverlaps(target.address,target.size,storage.address,storage.size);
 }
 [[nodiscard]] inline bool
 CanReconstructRenderTargetForRenderTarget(const RenderTargetInfo& cached,bool gpu,bool buffer,

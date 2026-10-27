@@ -155,8 +155,8 @@ int main() {
    return CanReconstructRenderTargetForStorage(target,true,false,true,false,true,false,image);
   };
   Require(accepted(sub));
-  auto bad=sub;bad.address=target.address-0x10000;Require(!accepted(bad));
-  bad=sub;bad.address=target.address+target.size-0x10000;Require(!accepted(bad));
+  auto bad=sub;bad.address=target.address-0x10000;Require(accepted(bad));
+  bad=sub;bad.address=target.address+target.size-0x10000;Require(accepted(bad));
   bad=sub;bad.address++;Require(!accepted(bad));
   bad=sub;bad.size=0;Require(!accepted(bad));
   bad=sub;bad.address=UINT64_MAX-0xffff;Require(!accepted(bad));
@@ -196,6 +196,8 @@ int main() {
   auto bad=image;bad.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float);
   Require(!CanReconstructRenderTargetForStorage(target,true,false,true,false,true,false,bad));
   bad=image;bad.address+=0x10000;
+  Require(CanReconstructRenderTargetForStorage(target,true,false,true,false,true,false,bad));
+  bad.address=target.address+target.size;
   Require(!CanReconstructRenderTargetForStorage(target,true,false,true,false,true,false,bad));
   std::vector<uint64_t> linear(image.size/8),expected(linear.size()),actual(linear.size()+2);
   actual.front()=0x1122334455667788ull;actual.back()=0x8877665544332211ull;
@@ -249,6 +251,40 @@ int main() {
   bool published=false;
   cache.ReconstructImageBacking(old.address,old.size,[&]{published=true;});
   Require(published && cache.m_memory_tracker.published.size()==1);
+  Require(cache.m_memory_tracker.published[0]==std::pair<uint64_t,uint64_t>{old.address,old.size});
+ }
+
+ // Captured straddling RGBA8 target -> RGBA16F storage: publish the full old
+ // target, including 0x2c0000 bytes beyond the new allocation's upper bound.
+ {
+  auto image=storage;image.address=0x183de6c0000ull;image.size=0x1a20000;
+  image.width=image.pitch=2432;image.height=1368;
+  image.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float);
+  image.tile=Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget);
+  RenderTargetInfo old{};old.address=image.address+0x1470000;old.size=0x870000;
+  old.width=old.pitch=1920;old.height=1080;old.bytes_per_element=4;old.tile_mode=image.tile;
+  Require(CanReconstructRenderTargetForStorage(old,true,false,true,false,true,false,image));
+  for(int bad=0;bad<6;bad++)Require(!CanReconstructRenderTargetForStorage(old,bad!=0,bad==1,bad!=2,bad==3,bad!=4,bad==5,image));
+  auto disjoint=image;disjoint.address=old.address+old.size;
+  Require(!CanReconstructRenderTargetForStorage(old,true,false,true,false,true,false,disjoint));
+  auto malformed=image;malformed.size-=0x10000;
+  Require(!CanReconstructRenderTargetForStorage(old,true,false,true,false,true,false,malformed));
+  const size_t offset=(old.address-image.address)/4,total=(offset+old.size/4);
+  std::vector<uint32_t> actual(total+2,0xa5a5a5a5),expected=actual,linear(old.size/4);
+  for(size_t i=0;i<linear.size();i++)linear[i]=static_cast<uint32_t>(i*17+7);
+  size_t tail_pixels=0;
+  for(uint32_t y=0;y<old.height;y++)for(uint32_t x=0;x<old.width;x++){
+   const auto physical=((y/128)*15+x/128)*16384+Gen5RenderTargetOffsetInBlock<uint32_t>(x%128,y%128)/4;
+   expected[1+offset+physical]=linear[y*old.pitch+x];
+   tail_pixels+=(offset+physical)*4>=image.size;
+  }
+  BufferCache cache;
+  cache.m_buffers.emplace(image.address+image.size,std::make_unique<BufferCache::CachedBuffer>(BufferCache::CachedBuffer{0x2c0000}));
+  cache.ReconstructImageBacking(old.address,old.size,[&]{
+   TileConvertLinearToTiledRenderTarget32PreservePadding(actual.data()+1+offset,linear.data(),old.width,old.height,old.pitch,old.size);
+  });
+  Require(tail_pixels>0 && actual==expected);
+  Require(cache.m_memory_tracker.published.size()==1);
   Require(cache.m_memory_tracker.published[0]==std::pair<uint64_t,uint64_t>{old.address,old.size});
  }
 

@@ -949,3 +949,26 @@ extent. PASS. Added test_buffer_image_source.ps1 to Windows CI. Local Jetsku
 reference src/graphics/host_gpu/renderer/cache/bufferCache.cpp likewise accepts
 any valid GuestRange in ObtainBufferForImage and returns the exact buffer offset;
 it does not impose a tracker-page-aligned texture address.
+
+## 2026-10-27: straddling render target to storage reconstruction
+
+126cc13 retryPID7300 passes the sampled/storage handoff and sub-page source
+(previous BufferCache fatal absent), compiling49 shaders. Next real fatal
+exits321 at23:38:45: storage0x183de6c0000+0x1a20000,2432x1368 RGBA16Float,
+render-target tile27, intersects old target0x183dfb30000+0x870000,1920x1080,
+4bytes/pixel. Same context, GPU/tracker current, no CPU/yielded ownership.
+Old target begins at new+0x1470000 and extends0x2c0000 beyond the new allocation.
+Both footprints are already supported, but CanReconstructRenderTargetForStorage
+required one allocation to contain the other.
+
+Allow actual byte overlap once all existing ownership/layout/page/bounds checks
+pass. Existing ResolveStorageImageOverlaps still validates retirement isolation,
+retains old images until their fences, downloads/publishes the FULL old target,
+and refreshes clean cached buffer fragments before replacing the allocation.
+No tail truncation and no simultaneous stale owner is permitted.
+
+Production CPU regression passes the exact captured shape: full old RGBA8 retile,
+independently expected per-pixel permutation, nonempty pixel tail outside the new
+storage allocation, unchanged padding/prefix/canaries, and full-range publication
+across a cached buffer tail. Ownership/conflict/malformed/disjoint checks remain
+negative; formerly rejected valid partial overlaps now pass. Local build pending.
