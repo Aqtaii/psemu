@@ -484,3 +484,13 @@ edges, yielding exactly the same3553 sites. It requires the pinned plaintext
 SELF unwind layout and emits no game assets. Runtime static-TLS retry reaches
 all initial compute pipelines, including293827/310885 SPIR-V words, successfully
 at~T375 without the historical early patch crash. First presentation still pending.
+Static-TLS runtime follow-up at14:00: PID18760 remains alive pastT1092 and
+>2300 actual resource opens; no new crash. Runtime PERF explicitly measures
+tls0/s. It opened eff_hero_death_firetrap_fire.jpx atT961.37 versusT1097.84
+in the prior D-backed run (specific-resource comparison, not a general FPS
+claim). First eight presents remain identical black/dithered (diff0); first
+recognized game frame is not achieved. A sampled GPU engine counter reports
+~1%3D at13:54, so43s frame time cannot be attributed solely to GPU execution
+from elapsed time. High semaphore/VEH CPU traffic and pending source loading
+need further measurement. Owned test remains running; root Sarah loader and
+user launcher edits were not overwritten. Latest code commit27ec070.
