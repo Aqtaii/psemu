@@ -654,3 +654,31 @@ with native VideoOut-producing functions. It reports native_hz3700000000 vs
 qpc_hz10000000. Full local build and clock/semaphore/HTTP/backing tests pass.
 Candidate D:/Tools/psemu-build/clock-output includes its matching loader.map.
 Runtime effect on frame time and first recognized game frame remain pending.
+## 2026-10-27: direct, bounded native character searches
+
+Clock candidate 8426dc0 runs through actual Vulkan submission. Captures at
+18:17:23 and18:18:25 are still black/dither (~62s interval); no first-image or
+frame-speed success is claimed. Native clock coherence fixes a real interface
+inconsistency, but did not remove this observed long frame interval.
+
+A read-only live sample during parsing reports ~6248 strchr/s,6247 strrchr/s,
+2107 sscanf_s/s and32374 core VirtualQuery/s. Existing searches first scan and
+copy the entire remaining NUL-terminated XML suffix before searching, and still
+trap through VEH. Add NativeStrchr/NativeStrrchr to the existing native PLT
+selection. GuestFindCharacter queries each current readable region, scans in
+<=4096-byte chunks, stops first-search at its first match, and does not allocate
+or copy the remaining document. It does not cache page permissions. Reverse
+search retains the final match, NUL searches require an actual terminator, and
+int search values are narrowed to unsigned char as required by libc. Native
+PLT disabled retains the existing VEH fallback. Invalid input handling is
+bounded by current mappings; concurrent unmapping retains existing HLE lifetime
+requirements, with no new claim of transactional memory access.
+
+Production-extracted /Od SysV pointer tests compare CRT semantics, byte
+truncation, empty strings, adjacent readonly regions, NOACCESS/GUARD boundaries,
+unterminated input and a2MiB suffix with10000 early searches. Tests pass; full
+local build, secure-format and clock/semaphore/HTTP self-tests also pass.
+Candidate D:/Tools/psemu-build/search-output includes matching loader.map.
+Next runtime disables heavy per-draw pixel/coverage/mesh-output probes while
+retaining actual framebuffer captures; instrumentation cost and search effect
+will therefore not be attributed separately without a controlled comparison.

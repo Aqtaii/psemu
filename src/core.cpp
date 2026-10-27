@@ -967,6 +967,61 @@ static PSEMU_SYSV int NativeMemcmp(const void* a, const void* b, size_t n) {
 }
 static PSEMU_SYSV size_t NativeStrlen(const char* s) { return s ? strlen(s) : 0; }
 
+// Scan only readable regions, in bounded chunks, without allocating/copying the
+// remaining XML document for every search. Never retain protection information
+// across calls: direct-memory mappings and guest guards may change.
+static const char* GuestFindCharacter(const char* s, int c, bool reverse) {
+    if (!s) return nullptr;
+    const auto needle = static_cast<unsigned char>(c);
+    auto cursor = reinterpret_cast<uintptr_t>(s);
+    const char* last = nullptr;
+    for (;;) {
+        MEMORY_BASIC_INFORMATION mbi{};
+        g_vq_calls.fetch_add(1, std::memory_order_relaxed);
+        if (!VirtualQuery(reinterpret_cast<const void*>(cursor), &mbi, sizeof(mbi)) ||
+            mbi.State != MEM_COMMIT || (mbi.Protect & PAGE_GUARD)) return last;
+        const DWORD protection = mbi.Protect & 0xff;
+        if (protection != PAGE_READONLY && protection != PAGE_READWRITE &&
+            protection != PAGE_WRITECOPY && protection != PAGE_EXECUTE_READ &&
+            protection != PAGE_EXECUTE_READWRITE && protection != PAGE_EXECUTE_WRITECOPY) return last;
+        const auto region = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
+        if (mbi.RegionSize > UINTPTR_MAX - region) return last;
+        const auto end = region + mbi.RegionSize;
+        if (end <= cursor) return last;
+        while (cursor < end) {
+            const auto* begin = reinterpret_cast<const char*>(cursor);
+            const size_t chunk = (std::min)(size_t(4096), size_t(end - cursor));
+            const auto* zero = static_cast<const char*>(std::memchr(begin, 0, chunk));
+            const size_t length = zero ? size_t(zero - begin) : chunk;
+            if (needle == 0) {
+                if (zero) return zero;
+            } else if (!reverse) {
+                if (const auto* found = static_cast<const char*>(std::memchr(begin, needle, length)))
+                    return found;
+            } else {
+                // At most one bounded region chunk; retain the last match.
+                auto* scan = begin;
+                size_t remaining = length;
+                while (const auto* found = static_cast<const char*>(std::memchr(scan, needle, remaining))) {
+                    last = found;
+                    const size_t consumed = size_t(found - scan) + 1;
+                    scan += consumed;
+                    remaining -= consumed;
+                }
+            }
+            if (zero) return last;
+            cursor += chunk;
+        }
+    }
+}
+static PSEMU_SYSV const char* NativeStrchr(const char* s, int c) {
+    return GuestFindCharacter(s, c, false);
+}
+static PSEMU_SYSV const char* NativeStrrchr(const char* s, int c) {
+    return GuestFindCharacter(s, c, true);
+}
+
+
 // VEH'teki "scePthreadGetthreadid" dali ile BIREBIR ayni deger; tek fark
 // exception turu olmadan calismasi.
 static PSEMU_SYSV uint64_t NativeGetThreadId() { return GetCurrentThreadId(); }
@@ -1427,6 +1482,8 @@ extern "C" void* PsemuNativePltStub(int plt_index) {
     if (n == "memmove") return reinterpret_cast<void*>(&NativeMemmove);
     if (n == "memcmp" || n == "bcmp") return reinterpret_cast<void*>(&NativeMemcmp);
     if (n == "strlen") return reinterpret_cast<void*>(&NativeStrlen);
+    if (n == "strchr") return reinterpret_cast<void*>(&NativeStrchr);
+    if (n == "strrchr") return reinterpret_cast<void*>(&NativeStrrchr);
     if (n == "strcmp") return reinterpret_cast<void*>(&NativeStrcmp);
     if (n == "strncmp") return reinterpret_cast<void*>(&NativeStrncmp);
     if (n == "strcpy") return reinterpret_cast<void*>(&NativeStrcpy);
