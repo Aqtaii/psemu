@@ -14,6 +14,10 @@ int main() {
   RenderTargetInfo old{};old.address=packed.address;old.size=packed.size;
   old.width=old.pitch=1920;old.height=1080;old.bytes_per_element=4;old.tile_mode=packed.tile;
   Require(CanReconstructRenderTargetForStorage(old,true,false,true,false,true,false,packed));
+  Require(ClassifyStorageSampledOverlap(packed,packed,vk::Format::eB10G11R11UfloatPack32,
+   vk::Format::eB10G11R11UfloatPack32,false,false,true)==StorageSampledOverlap::CleanImage);
+  Require(IsCoherentSampledStorageOwner(false,false,false,false,false));
+
   auto wrong=packed;wrong.size-=0x10000;
   Require(!CanReconstructRenderTargetForStorage(old,true,false,true,false,true,false,wrong));
 
@@ -612,8 +616,14 @@ int main() {
    Require(classify(bad)==StorageSampledOverlap::Unsupported);
   }
   sampled=chain;sampled.view_levels=8;
-  Require(classify(sampled,false)==StorageSampledOverlap::Unsupported);
+  Require(classify(sampled,false)==StorageSampledOverlap::CleanImage);
   Require(classify(sampled,true,true)==StorageSampledOverlap::Unsupported);
+  Require(classify(sampled,false,true)==StorageSampledOverlap::Unsupported);
+  Require(IsCoherentSampledStorageOwner(false,false,false,false,false));
+  Require(IsCoherentSampledStorageOwner(true,false,false,true,false));
+  for(int bad=0;bad<4;bad++)Require(!IsCoherentSampledStorageOwner(false,bad==0,bad==1,bad==2,bad==3));
+  Require(!IsCoherentSampledStorageOwner(true,false,false,false,false));
+
   Require(classify(sampled,true,false,false)==StorageSampledOverlap::Unsupported);
   const std::array<uint64_t,8> offsets{0,0xc0000,0x100000,0x110000,0x120000,0x130000,0x140000,0x150000};
   for(uint32_t i=0;i<8;++i)Require(plan[i].offset==offsets[i]);

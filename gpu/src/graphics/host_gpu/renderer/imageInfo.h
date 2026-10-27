@@ -348,7 +348,7 @@ enum class RenderTargetOverlap : uint8_t {
 	Unsupported
 };
 enum class SampledOverlap : uint8_t { None, ReadOnlyAlias, Unsupported };
-enum class StorageSampledOverlap : uint8_t { None, ExactImage, Unsupported };
+enum class StorageSampledOverlap : uint8_t { None, ExactImage, CleanImage, Unsupported };
 enum class StorageSampledViewShape : uint8_t { Image2D, Image2DArray, Image3D, Unsupported };
 enum class StorageImageOverlap : uint8_t { None, RetireSampled, PageNeighbor, Unsupported };
 enum class HostWriteOverlap : uint8_t { None, InvalidateImage, Unsupported };
@@ -745,10 +745,17 @@ ClassifyStorageSampledOverlap(const ImageInfo& requested, const ImageInfo& cache
 	    (requested.format == cached.format && requested_view_format == cached_image_format) ||
 	    IsRgba8SrgbReinterpretation(cached_image_format, requested_view_format) ||
 	    IsR32UintFloatReinterpretation(cached_image_format, requested_view_format);
-	return same_backing && valid_view(requested) && valid_view(cached) && compatible_format && cached_gpu_modified && !cached_cpu_dirty &&
+	return same_backing && valid_view(requested) && valid_view(cached) && compatible_format && !cached_cpu_dirty &&
 	               same_context
-	           ? StorageSampledOverlap::ExactImage
+	           ? (cached_gpu_modified ? StorageSampledOverlap::ExactImage : StorageSampledOverlap::CleanImage)
 	           : StorageSampledOverlap::Unsupported;
+}
+
+// Readback can leave native image and guest backing equally current. Sampling
+// does not need to claim a write; reject stale buffer owners and tracker mismatch.
+[[nodiscard]] inline bool IsCoherentSampledStorageOwner(bool gpu,bool buffer,bool cpu,
+                                                       bool tracker_gpu,bool tracker_cpu) {
+ return !buffer && !cpu && !tracker_cpu && gpu==tracker_gpu;
 }
 
 [[nodiscard]] inline HostWriteOverlap

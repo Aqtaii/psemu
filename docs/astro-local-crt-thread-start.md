@@ -1011,3 +1011,22 @@ clear(1,1,1,0), samples through RGB1 to verify(1,1,1,1), performs formatless wri
 barriers and samples again before checking all2073600 packed pixels and padding.
 PASS on Arc B580. R32mip0/1/7 regressions PASS. No production change for this added
 clear check. Actual complete Astro run is still loading; first image pending.
+
+## 2026-10-28: sampled use of a readback-clean storage image
+
+Complete ea5df10 retryPID20136 passes packed RGB1 DCC descriptor/storage creation
+and compiles51 shaders. Next fatal exits321 at00:09:43: exact same R11G11B10
+1920x1080 backing+0x870000, swizzle3ac, native storage gpu_modified=0,
+cached cpu_dirty=0, same_context=1. Existing ClassifyStorageSampledOverlap
+required gpu_modified=1 even after a readback leaves BOTH copies current.
+
+Add a distinct CleanImage classification for exact compatible physical backing
+with valid sampled/storage views and clean cached CPU state. Before reuse,
+IsCoherentSampledStorageOwner requires no yielded buffer ownership, no cached
+or tracker CPU dirtiness, and identical cached/tracker GPU state (both dirty or
+both clean). Native view validity and fence retention remain. Sampling the clean
+copy does not falsely mark it as a GPU write. Inconsistent ownership remains fatal
+with explicit buffer/cached/tracker diagnostics. Bounded STORAGE-SAMPLED-CLEAN
+logs identify actual reuse. Production tests cover captured packed clean state,
+R32 full-chain clean views, GPU-current views, stale buffers, CPU dirtiness and
+tracker mismatch. PASS. Full local clean-storage-sampled-output build pending.

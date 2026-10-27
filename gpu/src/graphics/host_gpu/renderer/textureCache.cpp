@@ -1335,6 +1335,7 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
 		                                      cached->info.IsCpuDirty(), cached->ctx == ctx)) {
 			case StorageSampledOverlap::None: break;
 			case StorageSampledOverlap::ExactImage:
+			case StorageSampledOverlap::CleanImage:
 				if (storage_match != nullptr) {
 					EXIT("TextureCache: duplicate exact storage image for sampled binding, "
 					     "addr=0x%016" PRIx64 " size=0x%016" PRIx64 "\n",
@@ -1361,14 +1362,19 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
 		}
 	}
 	if (storage_match != nullptr) {
-		if (m_memory_tracker.IsRegionCpuModified(info.address, info.size) ||
-		    !m_memory_tracker.IsRegionGpuModified(info.address, info.size) ||
+		if (!IsCoherentSampledStorageOwner(storage_match->gpu_modified,storage_match->buffer_modified,
+             storage_match->info.IsCpuDirty(),m_memory_tracker.IsRegionGpuModified(info.address,info.size),
+             m_memory_tracker.IsRegionCpuModified(info.address,info.size)) ||
 		    storage_match->image->type != VulkanImageType::StorageTexture ||
 		    storage_match->image->image_view[VulkanImage::VIEW_DEFAULT] == nullptr) {
 			EXIT("TextureCache: sampled storage-image ownership or view is inconsistent, "
-			     "addr=0x%016" PRIx64 " size=0x%016" PRIx64 "\n",
-			     info.address, info.size);
+			     "addr=0x%016" PRIx64 " size=0x%016" PRIx64 " gpu=%d buffer=%d cpu=%d tracker_gpu=%d tracker_cpu=%d\n",
+			     info.address, info.size,storage_match->gpu_modified,storage_match->buffer_modified,
+             storage_match->info.IsCpuDirty(),m_memory_tracker.IsRegionGpuModified(info.address,info.size),
+             m_memory_tracker.IsRegionCpuModified(info.address,info.size));
 		}
+        if(!storage_match->gpu_modified){static std::atomic_uint clean_logs{0};
+         if(clean_logs.fetch_add(1)<8)printf("[STORAGE-SAMPLED-CLEAN] addr=0x%016" PRIx64 " size=0x%016" PRIx64 " native_and_backing_current=1\n",info.address,info.size);}
 		command->RetainResourceUntilFence(storage_match);
 		return storage_match->image;
 	}
