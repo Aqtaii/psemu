@@ -92,6 +92,8 @@ list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/fiber_self_test.cpp)
 list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/event_flag_self_test.cpp)
 list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/http_bridge.cpp)
 list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/http_self_test.cpp)
+list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/semaphore_bridge.cpp)
+list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/semaphore_self_test.cpp)
 list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/screenshot.cpp)
 list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/metrics.cpp)
 

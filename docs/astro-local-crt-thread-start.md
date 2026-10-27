@@ -591,3 +591,37 @@ through export_mapping, not the logged zero CB_SHADER_MASK. Clock-zero suspicion
 also rejected: graphicsRun.cpp writes ReadReferenceClock() before recording the
 sync diagnostic. CPU/GPU label ordering still needs a separate audit against
 Kyty TryDeferLabel; no speculative synchronization change has been applied.
+## 2026-10-27: native counted semaphore dispatch, opt-in
+
+Format retryPID22404 confirms actual HTTP error now prints exactly80431068 at
+T226.68; no new fatal diagnostic. First capture is still black. Read-only
+snapshot validates image timestamp/map/owned executable, then reads the writable
+physical backing alias for the actual GS descriptor0x1aa99856010, stride80,
+131072 records /10MiB. All CPU records, including offset44 gate values, are zero;
+selected GPU record1 probe also reads zeros. CPU/GPU ownership/coherency has NOT
+been established, so this is not proof of a shader or game-side initialization
+root cause. No complete captured CS buffer binding in the prior1097-bindings
+log overlaps its descriptor range; incomplete/indirect producers remain possible.
+GPU process memory ~1.23GB dedicated +3.19GB shared rules out filling12GB VRAM
+in that sample, not every possible bandwidth or paging issue.
+
+Live counters in previous candidate show~9451 core VirtualQuery/s and~4666
+wait/signal pairs/s; the mutex-cache test improvement did not establish an
+end-to-end frame-speed improvement. Add PSEMU_NATIVE_SEMA=1 to register all6
+sceKernel semaphore NIDs together in both SDK tables. This reuses the existing
+Kyty kernel/semaphore.cpp counted, ordered waiting/cancellation implementation,
+not a fake-success bypass. Private unnamed semaphores retain existing psemu
+compatibility by passing an empty debug label to the real primitive. Every
+create still returns a real independent semaphore. Counts, actual blocking,
+remaining timeout, overflow and cancellation are now native. Existing default
+remains off; changing backend requires a fresh process, never mixed WinHANDLEs
+and native pointers. Old core poll-empty returnedESRCH; native returnsEBUSY.
+
+--kernel-semaphore-self-test validates real SysV/NID pointers, unnamed create,
+failed multi-count poll leaves count intact, blocked need2 remains blocked after
+one signal, second signal actually releases it, timeout writes0, overflow and
+invalid need errors, cancellation reports the pending waiter and sets count3,
+and real cleanup. Full local build and semaphore, HTTP, native-backing and
+secure-copy tests pass. Candidate is D:/Tools/psemu-build/sema-output/loader.exe
+with its matching loader.map. Native game runtime/performance and first visible
+frame remain pending. Shader mask/clock/label hypotheses are not claimed fixed.
