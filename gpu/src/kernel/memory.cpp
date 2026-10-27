@@ -1027,6 +1027,15 @@ static bool ReleaseReservedRange(uint64_t vaddr, uint64_t size) {
 
 static bool ReplaceFixedRangeWithReserved(uint64_t start, uint64_t size, bool* placeholder_backed);
 
+extern "C" int PsemuNativeBackingSelfTest() {
+	Common::VirtualMemory::Init();
+	DirectMemoryBacking backing(PhysicalMemory::Size());
+	if (!backing.SparseCommitSelfTest()) {
+		return 1;
+	}
+    std::puts("[NATIVE-BACKING-TEST] 13.5GiB reserved, mapped pages committed, exterior uncommitted, protected aliases coherent");
+    return 0;
+}
 KYTY_SUBSYSTEM_INIT(Memory) {
 	g_flexible_memory_size      = DEFAULT_FLEXIBLE_MEMORY_SIZE;
 	g_physical_memory           = new PhysicalMemory;

@@ -18,6 +18,10 @@
 
 #include <algorithm>
 #include <limits>
+#include <exception>
+#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+#include <windows.h>
+#endif
 #include <span>
 
 namespace Libs::Graphics {
@@ -1083,7 +1087,22 @@ void CreatePipelineInternal(PipelineCache::ComputePipeline* pipeline,
 
 	LOGF("PipelineTrace: vkCreateComputePipelines begin layout=%p\n",
 	     static_cast<void*>(pipeline->pipeline_layout));
-	result = gctx->device.createComputePipelines(nullptr, 1, &info, nullptr, &pipeline->pipeline);
+    try {
+        result = gctx->device.createComputePipelines(nullptr, 1, &info, nullptr, &pipeline->pipeline);
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "[COMPUTE-PIPELINE-EXCEPTION] words=%llu what=%s\n",
+                     static_cast<unsigned long long>(cs_shader.size()), error.what());
+#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+        MEMORYSTATUSEX memory{};
+        memory.dwLength = sizeof(memory);
+        if (GlobalMemoryStatusEx(&memory))
+            std::fprintf(stderr, "[COMPUTE-PIPELINE-MEMORY] available_commit=%llu available_ram=%llu\n",
+                         static_cast<unsigned long long>(memory.ullAvailPageFile),
+                         static_cast<unsigned long long>(memory.ullAvailPhys));
+#endif
+        std::fflush(stderr);
+        throw;
+    }
 	LOGF("PipelineTrace: vkCreateComputePipelines done result=%s pipeline=%p\n",
 	     VulkanToString(result).c_str(), static_cast<void*>(pipeline->pipeline));
 	EXIT_NOT_IMPLEMENTED(result != vk::Result::eSuccess);

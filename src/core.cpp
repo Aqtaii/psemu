@@ -2591,6 +2591,11 @@ struct VehTimer {
 LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
     if (NativeAtomicGuard::DeferException(ExceptionInfo->ExceptionRecord->ExceptionCode))
         return EXCEPTION_CONTINUE_SEARCH;
+    // MSVC C++ exceptions are first-chance notifications, including exceptions
+    // handled inside the Vulkan driver. Let normal C++ unwinding find its catch;
+    // crash logging here allocates memory and can recursively fail on bad_alloc.
+    if (ExceptionInfo->ExceptionRecord->ExceptionCode == 0xe06d7363u)
+        return EXCEPTION_CONTINUE_SEARCH;
     VehTimer veh_timer;
     DWORD code = ExceptionInfo->ExceptionRecord->ExceptionCode;
     PCONTEXT ctx = ExceptionInfo->ContextRecord;
@@ -4566,8 +4571,11 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     uint8_t* dbase = DmemBase();
                     uint64_t need  = static_cast<uint64_t>(chosen) + len;
                     if (dbase != nullptr && need <= kDmemSize) {
-                        VirtualAlloc(dbase + chosen, static_cast<size_t>(len),
-                                     MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+                        if(!VirtualAlloc(dbase + chosen, static_cast<size_t>(len),MEM_COMMIT,PAGE_EXECUTE_READWRITE)) {
+                            const DWORD error=GetLastError();MEMORYSTATUSEX memory{};memory.dwLength=sizeof(memory);GlobalMemoryStatusEx(&memory);
+                            std::printf("[DIRECT-COMMIT-FAIL] phase=allocate phys=0x%llx bytes=0x%llx error=%lu available_commit=0x%llx\n",
+                                static_cast<unsigned long long>(chosen),static_cast<unsigned long long>(len),error,memory.ullAvailPageFile);
+                        }
                     }
                 }
 
@@ -4639,8 +4647,13 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 }
                 if (mem == nullptr) {
                     // Havuz disi/basarisiz: eski davranisa dus (en azindan bellek ver)
-                    mem = VirtualAlloc(nullptr, alloc_size,
-                                       MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+                    const DWORD original_error=GetLastError();
+                    mem = VirtualAlloc(nullptr,alloc_size,MEM_COMMIT|MEM_RESERVE,PAGE_EXECUTE_READWRITE);
+                    if(!mem) {
+                        const DWORD fallback_error=GetLastError();MEMORYSTATUSEX memory{};memory.dwLength=sizeof(memory);GlobalMemoryStatusEx(&memory);
+                        std::printf("[DIRECT-COMMIT-FAIL] phase=map phys=0x%llx bytes=0x%llx original_error=%lu fallback_error=%lu available_commit=0x%llx\n",
+                            static_cast<unsigned long long>(phys),static_cast<unsigned long long>(alloc_size),original_error,fallback_error,memory.ullAvailPageFile);
+                    }
                 }
 
                 if (mem && Game::Current().title_id == "PPSA21564" && (ctx->Rdx & 0x30)) {

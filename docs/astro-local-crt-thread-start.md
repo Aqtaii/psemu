@@ -361,3 +361,40 @@ alignment/adjacency/overflow cases pass. Existing depth-storage data roundtrips
 and fragment preservation tests pass. Full30-step Windows build passes and
 actual directory integration self-test still passes. Logs local_clean_storage_edge
 _tests/build_log.txt. Runtime proof and first recognized game frame remain pending.
+
+
+## 2026-10-27: remove unused native physical-pool commit charge
+
+Fresh runs failed all large primary direct-memory maps with Windows error1455,
+then passed null video buffers into the correctly rejecting video-out guard.
+At the first failure only ~350-800MiB system commit remained, despite process
+private bytes being ~1.75GiB. The native Kyty physical backing constructor was
+implicitly SEC_COMMIT for its entire13.5GiB section. psemu already uses a separate
+primary physical backing; creating the unused native section exhausted commit.
+
+Native DirectMemoryBacking now creates SEC_RESERVE and commits only physical
+spans mapped through MapView/ReplacePlaceholderView. Recommit preserves data
+and does not change guest-view protection. Out-of-range/failing commits remain
+errors. Primary allocation/map failures log actual Windows errors and available
+commit; no system/pagefile configuration or game assets were changed.
+
+--native-backing-self-test verifies the actual13.5GiB section begins reserved,
+only mapped pages become committed, the final untouched page remains reserved,
+and NOACCESS plus writable aliases remain coherent. Primary backing regression
+also verifies repeated commit preserves bytes. Full local build, native backing,
+shared backing, secure-copy ABI and actual-directory integration tests pass.
+
+Runtime astro_20261027_sparse_backing maps all six initial primary ranges,
+including0xc8000000,0x87400000 and0x120000000 bytes; no DIRECT-COMMIT-FAIL remains.
+It reaches frame4 / vkCreateComputePipelines for258230 SPIR-V words before a
+0xe06d7363 C++ notification and truncated allocation-heavy VEH diagnostics.
+This proves the early map failure is fixed; no recognized frame is claimed.
+
+MSVC first-chance C++ exceptions now continue normal exception search before
+stringstream/PLT crash logging, so driver-internal catches can operate without
+recursive diagnostic allocations. Actual escaping std::exception at compute
+creation logs what(), shader length and Windows available commit/RAM, then
+rethrows without replacing the shader or fabricating a successful pipeline.
+Vulkan mesh control regression passes1024/1024 pixels on Arc B580; this is a
+control fixture, not game output. Owned retry astro_20261027_compute_exception
+is running; actual SPX enumeration and first recognized game frame are pending.

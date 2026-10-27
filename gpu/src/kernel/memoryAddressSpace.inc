@@ -13,6 +13,7 @@ public:
 	enum class FailureReason {
 		None,
 		BackingUnavailable,
+		CommitFailed,
 		PhysicalRangeOutOfBounds,
 		HostAddressNotGranularityAligned,
 		SizeNotGranularityAligned,
@@ -35,7 +36,7 @@ public:
 		GetSystemInfo(&info);
 		m_granularity = info.dwAllocationGranularity;
 
-		m_handle = CreateFileMappingA(INVALID_HANDLE_VALUE, nullptr, PAGE_EXECUTE_READWRITE,
+		m_handle = CreateFileMappingA(INVALID_HANDLE_VALUE, nullptr, PAGE_EXECUTE_READWRITE | SEC_RESERVE,
 		                              static_cast<DWORD>(m_size >> 32u),
 		                              static_cast<DWORD>(m_size & 0xffffffffu), nullptr);
 		if (m_handle == nullptr) {
@@ -102,6 +103,7 @@ public:
 		switch (reason) {
 			case FailureReason::None: return "n/a";
 			case FailureReason::BackingUnavailable: return "backing-unavailable";
+			case FailureReason::CommitFailed: return "backing-commit-failed";
 			case FailureReason::PhysicalRangeOutOfBounds: return "physical-range-out-of-bounds";
 			case FailureReason::HostAddressNotGranularityAligned:
 				return "host-address-not-64k-aligned";
@@ -471,6 +473,20 @@ public:
 		return true;
 	}
 
+	bool SparseCommitSelfTest() {
+#if KYTY_PLATFORM == KYTY_PLATFORM_WINDOWS
+		MEMORY_BASIC_INFORMATION before {}, used {}, untouched {};
+		if (!IsAvailable() || !VirtualQuery(m_backing_base, &before, sizeof(before)) ||
+		    before.State != MEM_RESERVE || !SelfTest()) {
+			return false;
+		}
+		return VirtualQuery(m_backing_base, &used, sizeof(used)) && used.State == MEM_COMMIT &&
+		       VirtualQuery(m_backing_base + m_size - 0x1000, &untouched, sizeof(untouched)) &&
+		       untouched.State == MEM_RESERVE;
+#else
+		return SelfTest();
+#endif
+	}
 	bool SelfTest() {
 		const uint64_t test_size = GetMappableTestSize();
 		if (test_size == 0 || !RangeOk(0, test_size)) {
@@ -785,8 +801,24 @@ private:
 		return ok;
 	}
 
+	bool EnsureBackingCommitted(uint64_t offset, uint64_t size, FailureReason* failure) {
+		if (!IsAvailable() || !RangeOk(offset, size)) {
+			SetFailure(failure, FailureReason::PhysicalRangeOutOfBounds);
+			return false;
+		}
+		// Recommit preserves existing bytes; committing this writable backing view
+		// does not change protection on any guest alias.
+		if (!VirtualAlloc(m_backing_base + offset, static_cast<SIZE_T>(size), MEM_COMMIT, PAGE_READWRITE)) {
+			SetFailure(failure, FailureReason::CommitFailed);
+			return false;
+		}
+		return true;
+	}
 	void* ReplacePlaceholderView(uint64_t vaddr, uint64_t size, uint64_t backing_offset,
 	                             VirtualMemory::Mode mode, FailureReason* failure_reason) {
+		if (!EnsureBackingCommitted(backing_offset, size, failure_reason)) {
+			return nullptr;
+		}
 		const DWORD map_protect =
 		    mode == VirtualMemory::Mode::NoAccess ? PAGE_READWRITE : GetProtect(mode);
 		void* ptr =
@@ -992,6 +1024,9 @@ private:
 
 	void* MapView(uint64_t vaddr, uint64_t size, uint64_t backing_offset, VirtualMemory::Mode mode,
 	              FailureReason* failure_reason) {
+		if (!EnsureBackingCommitted(backing_offset, size, failure_reason)) {
+			return nullptr;
+		}
 		constexpr DWORD access = FILE_MAP_READ | FILE_MAP_WRITE | FILE_MAP_EXECUTE;
 		void* ptr = MapViewOfFileEx(m_handle, access, static_cast<DWORD>(backing_offset >> 32u),
 		                            static_cast<DWORD>(backing_offset & 0xffffffffu), size,

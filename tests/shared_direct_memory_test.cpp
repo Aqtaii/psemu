@@ -9,6 +9,9 @@ int main() {
  CHECK(memory.Initialize(capacity));
  auto guest=memory.GuestBase();CHECK(guest);
  CHECK(VirtualAlloc(guest+65536,8192,MEM_COMMIT,PAGE_EXECUTE_READWRITE)==guest+65536);
+ guest[65536]=0x67;
+ CHECK(VirtualAlloc(guest+65536,8192,MEM_COMMIT,PAGE_EXECUTE_READWRITE)==guest+65536);
+ CHECK(guest[65536]==0x67);
  const auto address=reinterpret_cast<uint64_t>(guest+65536);
  std::array<unsigned char,8192> source{},readback{};
  for(size_t i=0;i<source.size();++i) source[i]=static_cast<unsigned char>(i*17+3);
