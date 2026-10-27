@@ -4,7 +4,10 @@ $source = [IO.File]::ReadAllText((Join-Path $root 'src\core.cpp'))
 $first = $source.IndexOf('static bool SafeReadable(')
 $last = $source.IndexOf('// printf/fprintf gibi DOGRUDAN', $first)
 if ($first -lt 0 -or $last -le $first) { throw 'Production secure formatting not found' }
-$production = $source.Substring($first, $last - $first)
+$memoryEnd=$source.IndexOf('static int CallGuestHdrToneMapLuminance(', $first)
+$stringStart=$source.IndexOf('static size_t SafeStrlen(', $memoryEnd)
+if($memoryEnd -le $first -or $stringStart -le $memoryEnd){throw 'Memory/formatter production boundaries missing'}
+$production=$source.Substring($first,$memoryEnd-$first)+$source.Substring($stringStart,$last-$stringStart)
 $prefix = @"
 #include <windows.h>
 #include <atomic>
@@ -14,6 +17,7 @@ $prefix = @"
 #include <cctype>
 #include <cstdio>
 #include <string>
+#include <initializer_list>
 std::atomic<uint64_t> g_vq_calls{0};
 "@
 $tests = @"
@@ -61,7 +65,31 @@ int main() {
     CHECK(VirtualProtect(page,4096,PAGE_READONLY,&old));
     CHECK(GuestVsprintfSecure(page,4096,"depth",reinterpret_cast<uint8_t*>(&args)) == -1 && page[0] == 'P');
     VirtualFree(page,0,MEM_RELEASE);
-    std::puts("PASS: distinct Astro resource names and hashes, SysV GP/FP/stack arguments, bounded output and invalid buffers");
+    auto check_format=[](const char* format,const char* expected,std::initializer_list<uint64_t> values,double fp=1.5) {
+        alignas(16) uint8_t regs[176]{};uint64_t stack[8]{};size_t index=0;
+        for(auto value:values){if(index<4)memcpy(regs+16+index*8,&value,8);else stack[index-4]=value;++index;}
+        memcpy(regs+48,&fp,8);Args va{16,48,stack,regs};char output[1024]{};
+        const int n=GuestVsprintfSecure(output,sizeof(output),format,reinterpret_cast<uint8_t*>(&va));
+        if(n!=static_cast<int>(strlen(expected)) || strcmp(output,expected)){std::printf("format=%s got=%s expected=%s\n",format,output,expected);return false;}
+        return true;
+    };
+    CHECK(check_format("__UNKNOWN__%d","__UNKNOWN__0",{0xfeedface00000000ULL}));
+    CHECK(check_format("%08x","80431068",{0xfeedface80431068ULL}));
+    CHECK(check_format("%d","-2147483648",{0xfeedface80000000ULL}));
+    CHECK(check_format("%u","4294967295",{0xfeedfaceffffffffULL}));
+    CHECK(check_format("%hhd/%hd","-2/-2",{0xfeedfacefffffffeULL,0xfeedfacefffffffeULL}));
+    CHECK(check_format("%hhu/%hu","171/43981",{0xfeedfaceffffffabULL,0xfeedfaceffffabcdULL}));
+    CHECK(check_format("%ld/%lld/%zu/%td","4294967296/-2/4294967296/-2",{0x100000000ULL,~1ULL,0x100000000ULL,~1ULL}));
+    CHECK(check_format("%jx","123456789abcdef0",{0x123456789abcdef0ULL}));
+    CHECK(check_format("%0*x","80431068",{0xfeedface00000008ULL,0xfeedface80431068ULL}));
+    CHECK(check_format("%*d","-2   ",{0xfeedfacefffffffbULL,0xfeedfacefffffffeULL}));
+    CHECK(check_format("%*.*f","    1.50",{8,2}));
+    CHECK(check_format("%*.*s","     abc",{8,3,reinterpret_cast<uint64_t>("abcdef")}));
+    CHECK(check_format("%u/%u/%u/%u/%u","1/2/3/4/4294967295",{1,2,3,4,0xfeedfaceffffffffULL}));
+    CHECK(check_format("%p","0x123456789abcdef0",{0x123456789abcdef0ULL}));
+    std::string long_text(2048,'A');char long_buffer[2100]{};args.gp=16;const char* long_ptr=long_text.c_str();memcpy(registers+16,&long_ptr,8);
+    CHECK(GuestVsprintfSecure(long_buffer,sizeof(long_buffer),"%s",reinterpret_cast<uint8_t*>(&args))==2048 && long_text==long_buffer);
+    std::puts("PASS: resource identities, poisoned upper GP bits, LP64/narrow integers, star width/precision, FP/stack arguments, long strings and bounded output");
 }
 "@
 $out = Join-Path $root 'build\native-atomic-tests'

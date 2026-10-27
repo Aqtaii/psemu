@@ -555,3 +555,39 @@ recognized frame or fatal error; identical output makes a controlled restart
 with the tested mutex+HTTP candidate appropriate. Native HTTP runtime acceptance
 and first recognized image remain pending; do not mark these complete from the
 standalone test. Existing Sarah executable/launchers remain untouched.
+## 2026-10-27: correct SysV printf integer width and star arguments
+
+Real HTTP runPID22308 logs sceHttpSendRequest error atT227.58 with low32 bits
+0x80431068, then progresses through prein.xml andTransition.xml. This confirms
+the offline error path is accepted by the game. Its pointer-like upper digits
+are a separate formatter bug: FormatSysVPrintf normalized every integer to
+64 bits without truncating promoted32-bit int values from64-bit GP save slots.
+The same formatter supplies vsprintf_s resource identities, so this affects
+names as well as diagnostics. The earlier pointer-like status display alone
+was not proof of uninitialized SDK outputs; the missing HTTP output contract
+was independently established from the absent dispatch implementation.
+
+Integer conversions now apply signed/unsigned32-bit promotion,8/16-bit h/hh
+narrowing, and retain LP64 long/long-long/size_t/intmax_t/ptrdiff_t on Windows.
+Dynamic width/precision arguments are passed to snprintf with their actual int
+width instead of being discarded while leaving stars in the host format.
+Narrow strings obey precision/width after a bounded guest read and preserve
+longer-than1024 content using correctly sized output. Existing unsupported
+wide-string fallback is unchanged; this is not a claim of full printf coverage.
+
+Production-extracted test_secure_format now poisons upper GP bits, checks
+__UNKNOWN__0, exact80431068 hex, sign extension, narrow types, LP64 types,
+register/stack overflow arguments, negative dynamic width, dynamic FP/string
+precision,2048-byte strings and existing canary/readonly/short-buffer checks.
+It passes at/Od (same core optimization policy). Full local build in
+D:/Tools/psemu-build/format-output passes HTTP, secure-copy, native backing and
+actual-directory self-tests. Mutex production regression also still passes.
+
+On resume at17:28, no loader process remained and the prior run has no exit
+JSON or conclusive fatal diagnostic; do not report a proved crash. Last actual
+file progress reachesT1601/fd4312 hero_scarf resources; captures stay black.
+Color-mask hypothesis rejected: pipeline write masks use render-target mask
+through export_mapping, not the logged zero CB_SHADER_MASK. Clock-zero suspicion
+also rejected: graphicsRun.cpp writes ReadReferenceClock() before recording the
+sync diagnostic. CPU/GPU label ordering still needs a separate audit against
+Kyty TryDeferLabel; no speculative synchronization change has been applied.

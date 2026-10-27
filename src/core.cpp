@@ -215,19 +215,39 @@ static std::string FormatSysVPrintf(const char* fmt, uint8_t* va) {
         if (*p != '%') { out += *p++; continue; }
         const char* start = p++;             // '%'
         if (*p == '%') { out += '%'; p++; continue; }
-        while (*p && strchr("-+ #0", *p)) p++;                 // bayraklar
-        while (*p && (isdigit((unsigned char)*p) || *p == '.' || *p == '*')) {
-            if (*p == '*') (void)nextGP();                     // dinamik genislik/hassasiyet
-            p++;
+        while (*p && strchr("-+ #0", *p)) p++;
+        int stars[2]{}, star_count=0, string_precision=-1;
+        if (*p=='*') {stars[star_count++]=static_cast<int32_t>(nextGP());++p;}
+        else while (isdigit(static_cast<unsigned char>(*p))) ++p;
+        if (*p=='.') {
+            ++p;
+            if (*p=='*') {string_precision=stars[star_count++]=static_cast<int32_t>(nextGP());++p;}
+            else {
+                uint32_t precision=0;
+                while (isdigit(static_cast<unsigned char>(*p))) {
+                    const uint32_t digit=static_cast<uint32_t>(*p++-'0');
+                    precision=precision>(0x7fffffffU-digit)/10 ? 0x7fffffffU : precision*10+digit;
+                }
+                string_precision=static_cast<int>(precision);
+            }
         }
-        int longness = 0;                                     // uzunluk belirteci
+        int longness=0, shortness=0;
         while (*p == 'l' || *p == 'h' || *p == 'z' || *p == 'j' || *p == 't' || *p == 'L') {
-            if (*p == 'l' || *p == 'z' || *p == 'j' || *p == 't') longness++;
-            p++;
+            if (*p == 'l' || *p == 'z' || *p == 'j' || *p == 't') ++longness;
+            if (*p == 'h') ++shortness;
+            ++p;
         }
         char conv = *p ? *p++ : 0;
         std::string spec(start, p - start);                   // tam "%...conv"
         tmp[0] = 0;
+        auto print_value = [&](char* buffer, size_t size, const std::string& format, auto value) {
+            if (star_count==0) return std::snprintf(buffer,size,format.c_str(),value);
+            if (star_count==1) return std::snprintf(buffer,size,format.c_str(),stars[0],value);
+            return std::snprintf(buffer,size,format.c_str(),stars[0],stars[1],value);
+        };
+        auto format_value = [&](const std::string& format, auto value) {
+            print_value(tmp,sizeof(tmp),format,value);
+        };
         switch (conv) {
             case 'd': case 'i': case 'u': case 'o': case 'x': case 'X': {
                 uint64_t a = nextGP();
@@ -237,20 +257,43 @@ static std::string FormatSysVPrintf(const char* fmt, uint8_t* va) {
                 // uzunluk harflerini temizle
                 std::string cleaned; for (char ch : s2) if (!strchr("lhzjtL", ch)) cleaned += ch;
                 cleaned += "ll"; cleaned += conv;
-                snprintf(tmp, sizeof(tmp), cleaned.c_str(), a);
+                // A SysV GP save slot is64 bits, but promoted int is32 bits.
+                // Guest long/size_t/intmax_t/ptrdiff_t are LP64 even on Windows.
+                if (conv=='d' || conv=='i') {
+                    int64_t value=static_cast<int64_t>(a);
+                    if (shortness>=2) value=static_cast<int8_t>(a);
+                    else if (shortness==1) value=static_cast<int16_t>(a);
+                    else if (!longness) value=static_cast<int32_t>(a);
+                    format_value(cleaned,static_cast<long long>(value));
+                } else {
+                    if (shortness>=2) a=static_cast<uint8_t>(a);
+                    else if (shortness==1) a=static_cast<uint16_t>(a);
+                    else if (!longness) a=static_cast<uint32_t>(a);
+                    format_value(cleaned,static_cast<unsigned long long>(a));
+                }
                 break;
             }
             case 'p': { snprintf(tmp, sizeof(tmp), "0x%llx", nextGP()); break; }
             case 'c': { snprintf(tmp, sizeof(tmp), "%c", (int)nextGP()); break; }
             case 'f': case 'F': case 'e': case 'E': case 'g': case 'G': case 'a': case 'A': {
-                snprintf(tmp, sizeof(tmp), spec.c_str(), nextFP());
+                format_value(spec,nextFP());
                 break;
             }
             case 's': {
                 const char* sp = reinterpret_cast<const char*>(nextGP());
-                if (SafeReadable(sp, 1)) { out += SafeReadCString(sp); }
-                else { out += "(null)"; }
-                tmp[0] = 0;
+                const auto text=SafeReadable(sp,1)
+                    ? SafeReadCString(sp,string_precision<0?SIZE_MAX:static_cast<size_t>(string_precision))
+                    : std::string("(null)");
+                // Narrow strings use the host formatter only after a bounded guest read.
+                if (!longness) {
+                    const int needed=print_value(nullptr,0,spec,text.c_str());
+                    if (needed>=0) {
+                        std::string formatted(static_cast<size_t>(needed)+1,'\0');
+                        print_value(formatted.data(),formatted.size(),spec,text.c_str());
+                        out.append(formatted.data(),static_cast<size_t>(needed));
+                    }
+                } else out+=text; // Preserve the existing unsupported wide-string fallback.
+                tmp[0]=0;
                 break;
             }
             default: { out += spec; tmp[0] = 0; break; }
