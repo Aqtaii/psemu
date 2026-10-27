@@ -2,6 +2,8 @@
 #include "shared_direct_memory.h"
 #include <cstdio>
 #include <array>
+#include <thread>
+#include <atomic>
 #define CHECK(x) do { if(!(x)) { std::printf("FAIL line %d: %s error=%lu\n",__LINE__,#x,GetLastError()); return 1; } } while(0)
 int main(int argc, char** argv) {
  SharedDirectMemory memory;
@@ -50,6 +52,27 @@ int main(int argc, char** argv) {
  CHECK(guest[65536]==99);CHECK(guest[65536+8192]==0);
  CHECK(!memory.Commit(capacity-4096,8192));CHECK(!memory.Commit(UINT64_MAX-1,2));
  CHECK(!memory.Commit(0,0));
+ // Allocation coverage must preserve holes and merge adjacent/overlapping commits.
+ const auto base=reinterpret_cast<uint64_t>(guest);
+ CHECK(memory.Commit(131073,1));
+ CHECK(memory.Commit(143360,4096));
+ CHECK(memory.TryWrite(base+131072,source.data(),1));
+ CHECK(!memory.TryRead(base+135168,readback.data(),1));
+ CHECK(!memory.TryWrite(base+131072,source.data(),16384));
+ CHECK(memory.Commit(135168,8192));
+ CHECK(memory.TryWrite(base+131072,source.data(),8192));
+ CHECK(memory.TryRead(base+131072,readback.data(),8192) && readback==source);
+ CHECK(memory.Commit(139264,8192));
+ CHECK(memory.TryRead(base+147455,readback.data(),1));
+ CHECK(!memory.TryRead(base+147456,readback.data(),1));
+ std::atomic<bool> copy_ok{true};
+ std::thread reader([&] {
+  std::array<unsigned char,8192> bytes{};
+  for(int i=0;i<1000;++i)if(!memory.TryRead(address,bytes.data(),bytes.size()) || bytes!=source)copy_ok=false;
+ });
+ const bool committed=memory.Commit(196608,4096);
+ reader.join();CHECK(committed && copy_ok);
+ CHECK(memory.TryRead(base+196608,readback.data(),1));
  SharedDirectMemory rejected;CHECK(!rejected.InitializeFileBacked(capacity,L"C:\\"));
  std::printf("mode=%s\n",file_mode?"D-file":"pagefile");
  std::puts("PASS: actual shared section commits, NOACCESS/READONLY guest protection preserved, exact backing read/write, uncommitted and overflow rejection");

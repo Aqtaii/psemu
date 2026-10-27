@@ -718,3 +718,34 @@ reader/globals and verified its real open/write/read/stat/canary/close test.
 Full local build and clock, native-semaphore, HTTP, secure-copy, native-backing
 self-tests pass. Candidate D:/Tools/psemu-build/query-output has matching map.
 Actual runtime timing and first recognizable Astro frame remain pending.
+
+## 2026-10-27: track private backing allocation coverage
+
+Page-query candidatePID5048 first capture~115s (18:30:59) vs search-only~375s;
+first intervals18/17/15/14s, later~13s. All first8 captures remain black/dither.
+Actual UI-transition asset opens occur~38s vs prior~228s. This is measured
+loading/frame-time progress, not a recognizable first game image. ByT471 the
+game continues opening real effects resources throughfd2383, without a fatal.
+
+Three complete thread samples identify remaining graphics thread15288 inside
+NtQueryVirtualMemory -> SharedDirectMemory::Readable(+0x74) -> TryRead ->
+LibKernel::Memory::TryReadBacking -> BufferCache::ObtainBuffer. Private backing
+permissions are changed ONLY by SharedDirectMemory (no exported alias accessor,
+no decommit API); guest GPU guards live independently on the guest view.
+Record successful page-aligned Commit coverage under the existing commit mutex,
+merging adjacent/overlapping intervals. TryRead/TryWrite validate the full range
+against that owned allocation map without querying mutable guest permissions or
+walking gigabytes of private backing mapping. Allocation holes are still
+rejected before any bytes copy; failed/out-of-bounds commits do not add coverage.
+Commit's original backing-query/new-page/guest-guard logic remains unchanged.
+This uses actual owned allocation state, not a stale cache of guest page flags.
+
+Both backing regression modes pass: pagefile and16GiB D-sparse file,10GiB logical
+allocation within commit headroom, repeated/extended commit preserving guest
+NOACCESS/READONLY and bytes, exact bounds/overflow, disjoint allocation holes,
+unaligned page commitment, adjacent/overlapping coverage merging, and1000 real
+reads concurrent with a separate commit. D scratch deletion also verified.
+Full local build and secure-copy/native-backing self-tests pass. Candidate
+D:/Tools/psemu-build/backing-query-output includes matching map. Runtime frame
+speed/first visible image pending; old query-only run stopped intentionally for
+this candidate, not classified as a crash.
