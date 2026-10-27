@@ -792,13 +792,10 @@ static std::mutex          g_sync_create_mutex;
 static std::set<uint64_t>  g_known_mutexes;
 static std::set<uint64_t>  g_known_conds;
 
-// SICAK YOL ONBELLEGI (thread'e ozel, kilitsiz).
-// Olcum: oyun menude saniyede ~85.000 kez mutex kilitleyip aciyor ve eski hal
-// HER cagride (a) SafeWritable -> VirtualQuery, (b) TUM threadleri seri hale
-// getiren tek bir global std::mutex, (c) std::set agac aramasi yapiyordu.
-// Olculen maliyet: cagri basina ~83.000 CPU dongusu (~18 us) -> tek basina
-// kare suresinin buyuk kismi. Ayni mutex arka arkaya kilitlenip acildigi icin
-// kucuk bir dogrudan-eslemeli onbellek neredeyse %100 isabet ediyor.
+// Thread-local mutex cache. Slot content must still match the cached handle;
+// reused/changed slots take the existing validated creation/registry path.
+// Four ways plus folded address bits retain aligned slots that used to thrash
+// the sixteen-entry direct-mapped cache. Guest mutex ownership is unchanged.
 namespace {
 struct MtxCacheEnt {
     uint64_t*   slot = nullptr;
@@ -806,7 +803,9 @@ struct MtxCacheEnt {
     uint64_t    val  = 0; // onbellege alindigi andaki *slot degeri
 };
 } // namespace
-static thread_local MtxCacheEnt t_mtx_cache[16];
+// Four ways retain colliding mutex slots without extra Windows memory queries.
+static thread_local MtxCacheEnt t_mtx_cache[64][4];
+static thread_local uint8_t t_mtx_replace[64]{};
 
 static GuestMutex* GetOrCreateMutex(uint64_t* slot) {
     if (slot == nullptr) return nullptr;
@@ -814,9 +813,12 @@ static GuestMutex* GetOrCreateMutex(uint64_t* slot) {
     // Isabet sarti: ayni slot adresi VE slot icerigi degismemis olsun. Icerigi
     // okumak guvenli, cunku bu adresi onbellege almadan once SafeWritable ile
     // dogruladik; oyun slotu degistirirse esitlik tutmaz ve yavas yola duseriz.
-    MtxCacheEnt& e = t_mtx_cache[(reinterpret_cast<uintptr_t>(slot) >> 4) & 15u];
-    if (e.slot == slot && e.m != nullptr && *slot == e.val) {
-        return e.m;
+    const auto address = reinterpret_cast<uintptr_t>(slot);
+    const size_t bucket = ((address >> 3) ^ (address >> 11) ^ (address >> 19)) & 63u;
+    for (const auto& cached : t_mtx_cache[bucket]) {
+        if (cached.slot == slot && cached.m != nullptr && *slot == cached.val) {
+            return cached.m;
+        }
     }
 
     if (!SafeWritable(slot, sizeof(uint64_t))) return nullptr;
@@ -834,6 +836,7 @@ static GuestMutex* GetOrCreateMutex(uint64_t* slot) {
             result = m;
         }
     }
+    auto& e = t_mtx_cache[bucket][t_mtx_replace[bucket]++ & 3u];
     e.slot = slot;
     e.m    = result;
     e.val  = *slot;
@@ -929,6 +932,10 @@ static PSEMU_SYSV int NativeMutexLock(uint64_t* slot) {
     GuestMutex* m = GetOrCreateMutex(slot);
     if (m != nullptr) EnterCriticalSection(&m->cs);
     return 0;
+}
+static PSEMU_SYSV int NativeMutexTrylock(uint64_t* slot) {
+    GuestMutex* m = GetOrCreateMutex(slot);
+    return m && TryEnterCriticalSection(&m->cs) ? 0 : 16; // Existing VEH EBUSY contract.
 }
 static PSEMU_SYSV int NativeMutexUnlock(uint64_t* slot) {
     GuestMutex* m = GetOrCreateMutex(slot);
@@ -1429,6 +1436,8 @@ extern "C" void* PsemuNativePltStub(int plt_index) {
         return reinterpret_cast<void*>(&NativeMutexLock);
     if (n == "scePthreadMutexUnlock" || n == "pthread_mutex_unlock")
         return reinterpret_cast<void*>(&NativeMutexUnlock);
+    if (n == "scePthreadMutexTrylock" || n == "pthread_mutex_trylock")
+        return reinterpret_cast<void*>(&NativeMutexTrylock);
     if (n == "scePthreadYield" || n == "pthread_yield" || n == "sched_yield")
         return reinterpret_cast<void*>(&NativePthreadYield);
     if (n == "scePthreadCondSignal" || n == "pthread_cond_signal")

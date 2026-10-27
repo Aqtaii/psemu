@@ -494,3 +494,31 @@ recognized game frame is not achieved. A sampled GPU engine counter reports
 from elapsed time. High semaphore/VEH CPU traffic and pending source loading
 need further measurement. Owned test remains running; root Sarah loader and
 user launcher edits were not overwritten. Latest code commit27ec070.
+
+## 2026-10-27: mutex cache collision handling and native trylock
+
+Continued owned static-TLS runPID18760 is alive pastT1649 and4698 resource
+opens. No recognized image yet; first eight captures remain black/dithered.
+Thread sampling atT~1200 finds hottest thread18980 in SafeWritable called from
+GetOrCreateMutex (exact map offsets0x37890/0x37a3b). Worker threads mostly wait
+on real semaphores. Live counters separately show~9061 core VirtualQuery/s,
+~4498 wait/signal pairs/s. Call counts alone do not prove semaphores are the
+main CPU cost; their existing blocking semantics have not been weakened.
+
+Replace the16-entry direct-mapped TLS mutex cache with64 four-way buckets,
+folding address bits so256-byte-strided slots do not repeatedly evict each
+other. Same pointer AND unchanged handle are still required for hits. Misses
+retain SafeWritable, synchronized registry lookup and existing real critical
+section creation. No mutex ownership or destroy/attribute semantics changed.
+Add direct SysV scePthreadMutexTrylock/pthread_mutex_trylock using exactly the
+existing TryEnterCriticalSection/EBUSY16 behavior, as lock/unlock already do.
+
+Production-extracted regression uses32 slots that collide in the original
+cache, then32000 warm accesses with zero extra VirtualQuery. Also verifies
+slot-content reuse, real contention/busy then successful acquisition,8000
+protected updates across8 threads and unchanged NOACCESS rejection. Local full
+build and native-backing/secure-copy/directory tests pass. Candidate executable
+is D:/Tools/psemu-build/mutex-output/loader.exe with its own loader.map; the
+still-running PID18760 uses the older output/loader.exe. No game-runtime FPS
+improvement from this candidate has yet been measured. build-local/loader.map
+now belongs to the candidate and must not be used to symbolize the old PID.
