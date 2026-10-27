@@ -450,25 +450,45 @@ IsSupportedStandard64RenderTarget(const RenderTargetInfo& info) noexcept {
 	       info.size == expected_pitch * padded_height * info.bytes_per_element;
 }
 
+struct DepthStorageMip {
+ uint64_t offset=0,size=0;
+ uint32_t width=0,height=0,pitch=0;
+};
+using DepthStorageMipLayout=std::array<DepthStorageMip,16>;
+[[nodiscard]] inline constexpr bool PlanDepthStorageMipLayout(const ImageInfo& info,
+                                                             DepthStorageMipLayout* output) noexcept {
+ if(info.tile!=Prospero::GpuEnumValue(Prospero::TileMode::kDepth) ||
+    (info.format!=Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float) &&
+     info.format!=Prospero::GpuEnumValue(Prospero::BufferFormat::k32UInt)) ||
+    info.type!=Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) || info.depth!=1 ||
+    info.address==0 || (info.address&0xffffu)!=0 || info.width==0 || info.height==0 ||
+    info.base_level!=0 || info.levels==0 || info.levels>16 || info.view_levels!=1 || info.base_array!=0)
+  return false;
+ const uint64_t expected_pitch=(uint64_t(info.width)+127u)&~uint64_t(127u);
+ if(expected_pitch>UINT32_MAX || info.pitch!=expected_pitch)return false;
+ uint32_t max_levels=1,max_dimension=info.width>info.height?info.width:info.height;
+ while(max_dimension>1){max_dimension>>=1;++max_levels;}
+ if(info.levels>max_levels)return false;
+ DepthStorageMipLayout result{};
+ uint64_t offset=0,raw_pitch=info.pitch;
+ uint32_t width=info.width,height=info.height;
+ for(uint32_t i=0;i<info.levels;++i) {
+  const uint64_t pitch=(raw_pitch+127u)&~uint64_t(127u);
+  const uint64_t rows=(uint64_t(height)+127u)&~uint64_t(127u);
+  if(pitch>UINT32_MAX || pitch>UINT32_MAX/rows/4u)return false;
+  const uint64_t bytes=pitch*rows*4u;
+  if(offset>UINT32_MAX-bytes)return false;
+  result[i]={offset,bytes,width,height,uint32_t(pitch)};
+  offset+=bytes;
+  raw_pitch=raw_pitch>1?raw_pitch/2:1;
+  width=width>1?width/2:1;height=height>1?height/2:1;
+ }
+ if(offset!=info.size)return false;
+ if(output)*output=result;
+ return true;
+}
 [[nodiscard]] inline constexpr bool IsSupportedDepthStorageBacking(const ImageInfo& info) noexcept {
-	if (info.tile != Prospero::GpuEnumValue(Prospero::TileMode::kDepth) ||
-	    (info.format != Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float) &&
-	     info.format != Prospero::GpuEnumValue(Prospero::BufferFormat::k32UInt)) ||
-	    info.type != Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) || info.depth != 1 ||
-	    info.base_level != 0 || info.levels != 1 || info.view_levels != 1 || info.base_array != 0) {
-		return false;
-	}
-	// The 32-bit depth layout has the same 128x128 allocation footprint as Standard64KB,
-	// but a different pixel permutation. Only reuse the footprint check.
-	RenderTargetInfo footprint {};
-	footprint.address = info.address;
-	footprint.size = info.size;
-	footprint.width = info.width;
-	footprint.height = info.height;
-	footprint.pitch = info.pitch;
-	footprint.bytes_per_element = 4;
-	footprint.tile_mode = Prospero::GpuEnumValue(Prospero::TileMode::kStandard64KB);
-	return IsSupportedStandard64RenderTarget(footprint);
+ return PlanDepthStorageMipLayout(info,nullptr);
 }
 
 [[nodiscard]] inline constexpr bool IsTiledRenderTarget(const RenderTargetInfo& info) noexcept {

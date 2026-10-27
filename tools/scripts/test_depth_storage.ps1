@@ -67,6 +67,8 @@ $buffers=[IO.File]::ReadAllText("$root\gpu\src\graphics\host_gpu\renderer\buffer
 $header+=Slice $buffers 'bool CanMergeBufferCacheQueueMask(' 'struct BufferCache::CachedBuffer'
 $header+=Slice $buffers 'void BufferCache::PublishReconstructedImageBacking(' 'void BufferCache::ValidateGpuAccess('
 $header+=Slice $buffers 'void BufferCache::RefreshCpuImageFragmentsLocked(' 'BufferImageCopySource BufferCache::ObtainBufferForImage('
+$tiler=[IO.File]::ReadAllText("$root\gpu\src\graphics\host_gpu\renderer\tiler.cpp")
+$header+=Slice $tiler 'void TileDepthStorageMipsPreservePadding(' 'void Tiler::TileImage(void* dst, const void* src, const ImageInfo& info)'
 $source=Join-Path $out 'depth_storage_production.cpp'
 [IO.File]::WriteAllText($source,$header+"`n"+[IO.File]::ReadAllText("$root\tests\depth_storage_test.cpp"),[Text.UTF8Encoding]::new($false))
 Push-Location $out

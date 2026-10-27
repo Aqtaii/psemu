@@ -2959,7 +2959,7 @@ void TextureCache::SynchronizeColorImageToBufferLocked(CachedImage& cached, uint
 	}
 	const bool layered_size =
 	    single_slice && static_cast<uint64_t>(exact.size) * target.layers == target.size;
-	if (storage && target.levels > 1) {
+	if (storage && target.levels > 1 && !depth_storage) {
 		single_slice = TileGetRenderTargetMipLayout(target.width, target.height, target.pitch,
 		                                            target.bytes_per_element, target.levels, &exact,
 		                                            nullptr, nullptr);
@@ -3032,16 +3032,14 @@ void TextureCache::SynchronizeColorImageToBufferLocked(CachedImage& cached, uint
 	                        cached.image, cached.image->layout);
 	if (storage) {
 		m_buffer_transition_guest.resize(target.size);
-		if (preserve_storage_padding) {
+		if (preserve_storage_padding || depth_storage) {
 			if (!depth_storage ||
 			    !LibKernel::Memory::TryReadBacking(target.address, m_buffer_transition_guest.data(),
 			                                      target.size)) {
 				EXIT("TextureCache: cannot preserve storage reconstruction padding\n");
 			}
-			TileConvertLinearToTiledDepthPreservePadding(
-			    m_buffer_transition_guest.data(), m_buffer_transition_linear.data(),
-			    cached.info.format, cached.info.width, cached.info.height, cached.info.pitch,
-			    cached.info.size);
+            TileDepthStorageMipsPreservePadding(m_buffer_transition_guest.data(),
+             m_buffer_transition_linear.data(),cached.info);
 		} else {
 			m_tiler.TileImage(m_buffer_transition_guest.data(), m_buffer_transition_linear.data(),
 			                  cached.info);

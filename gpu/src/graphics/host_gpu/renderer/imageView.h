@@ -19,7 +19,7 @@ namespace Libs::Graphics {
 	    format == Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float);
 	return swizzle == DstSel(4, 5, 6, 7) ||
 	       (single_channel && (swizzle == DstSel(4, 0, 0, 0) || swizzle == DstSel(4, 0, 0, 1) ||
-	                           swizzle == DstSel(4, 4, 4, 4))) ||
+	                           swizzle == DstSel(4, 4, 4, 4) || swizzle == DstSel(4, 4, 4, 1))) ||
 	       ((format == Prospero::GpuEnumValue(Prospero::BufferFormat::k8_8UNorm) ||
 	         format == Prospero::GpuEnumValue(Prospero::BufferFormat::k8_8SNorm) ||
 	         format == Prospero::GpuEnumValue(Prospero::BufferFormat::k8_8UInt) ||
@@ -187,7 +187,7 @@ IsSupportedSampledDepthUintResource(const ShaderRecompiler::IR::ImageResource& r
 	const bool swizzle_ok =
 	    swizzle == DstSel(4, 5, 6, 7) ||
 	    (single_channel && (swizzle == DstSel(4, 0, 0, 0) || swizzle == DstSel(4, 0, 0, 1) ||
-	                        swizzle == DstSel(4, 4, 4, 4))) ||
+	                        swizzle == DstSel(4, 4, 4, 4) || swizzle == DstSel(4, 4, 4, 1))) ||
 	    ((view_format == vk::Format::eR8G8Unorm ||
 	      view_format == vk::Format::eR8G8Snorm ||
 	      view_format == vk::Format::eR8G8Uint ||

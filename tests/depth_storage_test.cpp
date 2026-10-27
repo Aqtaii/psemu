@@ -506,6 +506,46 @@ int main() {
   Require(IsSupportedStorageSwizzle(Prospero::GpuEnumValue(f),0x22c));
   Require(!IsSupportedStorageSwizzle(Prospero::GpuEnumValue(f),DstSel(5,4,0,1)));
  }
+ // Captured ps_logo output: R32Float, RRR1, mip0 view of eight depth mips.
+ Require(IsSupportedStorageSwizzle(Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float),0x324));
+ Require(!IsSupportedStorageSwizzle(Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16Float),0x324));
+ {
+  ImageInfo chain{};chain.address=0x10000;chain.size=0x160000;chain.width=480;chain.height=270;
+  chain.pitch=512;chain.levels=8;chain.view_levels=1;chain.depth=1;
+  chain.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float);
+  chain.type=Prospero::GpuEnumValue(Prospero::ImageType::kColor2D);
+  chain.tile=Prospero::GpuEnumValue(Prospero::TileMode::kDepth);
+  DepthStorageMipLayout plan{};Require(PlanDepthStorageMipLayout(chain,&plan));
+  const std::array<uint64_t,8> offsets{0,0xc0000,0x100000,0x110000,0x120000,0x130000,0x140000,0x150000};
+  for(uint32_t i=0;i<8;++i)Require(plan[i].offset==offsets[i]);
+  for(uint32_t field=0;field<9;++field) {
+   auto bad=chain;
+   switch(field){case 0:--bad.size;break;case 1:++bad.pitch;break;case 2:bad.levels=0;break;
+    case 3:bad.levels=10;break;case 4:bad.base_level=1;break;case 5:bad.view_levels=2;break;
+    case 6:bad.depth=2;break;case 7:bad.address+=4;break;case 8:bad.width=0;break;}
+   DepthStorageMipLayout untouched{};untouched[0].offset=0xabc;
+   Require(!PlanDepthStorageMipLayout(bad,&untouched) && untouched[0].offset==0xabc);
+  }
+  std::vector<uint32_t> linear(chain.size/4+2,0xaaaaaaaa),guest(chain.size/4+2,0xdeadbeef),decoded(chain.size/4+2,0);
+  for(uint32_t l=0;l<8;++l)for(uint32_t y=0;y<plan[l].height;++y)for(uint32_t x=0;x<plan[l].width;++x)
+   linear[1+plan[l].offset/4+y*plan[l].pitch+x]=0x3f000000u+l*0x10000u+y*512u+x;
+  TileDepthStorageMipsPreservePadding(guest.data()+1,linear.data()+1,chain);
+  Require(guest.front()==0xdeadbeef && guest.back()==0xdeadbeef);
+  for(uint32_t l=0;l<8;++l) {
+   const auto& m=plan[l];
+   TileConvertTiledToLinearDepth(decoded.data()+1+m.offset/4,guest.data()+1+m.offset/4,
+     chain.format,m.width,m.height,m.pitch,m.size);
+   for(uint32_t y=0;y<m.height;++y)for(uint32_t x=0;x<m.width;++x)
+    Require(decoded[1+m.offset/4+y*m.pitch+x]==linear[1+m.offset/4+y*m.pitch+x]);
+   std::vector<uint32_t> mask(m.size/4,0),ones(m.size/4,0xffffffff);
+   TileConvertLinearToTiledDepth(mask.data(),ones.data(),chain.format,m.width,m.height,m.pitch,m.size);
+   for(size_t word=0;word<mask.size();++word)if(!mask[word])Require(guest[1+m.offset/4+word]==0xdeadbeef);
+  }
+  const auto before=guest;
+  linear[1]=0x3e800000; // A mip0-only edit must retain all other mip bytes.
+  TileDepthStorageMipsPreservePadding(guest.data()+1,linear.data()+1,chain);
+  Require(std::equal(guest.begin()+1+plan[1].offset/4,guest.end(),before.begin()+1+plan[1].offset/4));
+ }
  ImageInfo info{};
  info.address=0x10000;info.size=0x280000;info.width=960;info.height=540;info.pitch=1024;
  info.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float);
@@ -549,5 +589,5 @@ int main() {
   catch(const std::runtime_error&) {rejected=true;}
   Require(rejected);
  }
- std::puts("PASS: R32Float depth storage footprint, bit-exact round trips and buffer boundaries");
+ std::puts("PASS: R32Float single/eight-mip depth storage, RRR1, bit-exact round trips, untouched mips/padding and buffer boundaries");
 }

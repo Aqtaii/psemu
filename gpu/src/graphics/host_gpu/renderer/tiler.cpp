@@ -171,10 +171,20 @@ void Tiler::TileImage(void* dst, const void* src, const RenderTargetInfo& info) 
 	}
 }
 
+void TileDepthStorageMipsPreservePadding(void* dst,const void* src,const ImageInfo& info) {
+ DepthStorageMipLayout layout{};
+ EXIT_IF(!dst || !src || !PlanDepthStorageMipLayout(info,&layout));
+ for(uint32_t level=0;level<info.levels;++level) {
+  const auto& mip=layout[level];
+  TileConvertLinearToTiledDepthPreservePadding(static_cast<uint8_t*>(dst)+mip.offset,
+   static_cast<const uint8_t*>(src)+mip.offset,info.format,mip.width,mip.height,mip.pitch,mip.size);
+ }
+}
+
 void Tiler::TileImage(void* dst, const void* src, const ImageInfo& info) const {
 	if (IsSupportedDepthStorageBacking(info)) {
-		TileConvertLinearToTiledDepth(dst, src, info.format, info.width, info.height,
-		                              info.pitch, info.size);
+        std::memset(dst,0,info.size);
+        TileDepthStorageMipsPreservePadding(dst,src,info);
 		return;
 	}
 	const bool image_2d =

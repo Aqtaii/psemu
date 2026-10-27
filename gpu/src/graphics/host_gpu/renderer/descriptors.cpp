@@ -558,7 +558,7 @@ static bool IsSupportedStorageTextureDescriptor(const ShaderRecompiler::IR::Imag
 	    tile == Prospero::GpuEnumValue(Prospero::TileMode::kDepth) && !resource.read &&
 	    (resource.kind == ShaderRecompiler::IR::ResourceKind::StorageImageUint ||
 	     (is_2d && descriptor.Format() == Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float) &&
-	      descriptor.BaseLevel() == 0 && descriptor.LastLevel() == 0 && descriptor.MaxMip() == 0)) &&
+	      descriptor.BaseLevel() == 0 && descriptor.LastLevel() == 0)) &&
 	    IsSupportedStorageDepthTile(descriptor.Format(), descriptor.Type(), width, height, depth);
 	const bool supported_tile = tile == Prospero::GpuEnumValue(Prospero::TileMode::kLinear) ||
 	                            tile == Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) ||

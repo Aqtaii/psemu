@@ -749,3 +749,40 @@ Full local build and secure-copy/native-backing self-tests pass. Candidate
 D:/Tools/psemu-build/backing-query-output includes matching map. Runtime frame
 speed/first visible image pending; old query-only run stopped intentionally for
 this candidate, not classified as a crash.
+
+## 2026-10-27: reach ps_logo; implement captured R32Float RRR1 depth mip store
+
+Owned df6e8fd runPID2384 first capture~99s, steady~0.8-1.2s/frame (0.8-1.3FPS)
+vs prior~13s/frame and older~60s/frame. Still black, not a recognizable frame.
+ui_pause_hub loadedT358 (~2295 in older run), real resource opens passfd6449.
+StartLevel ps_logoT518 and Level has started: ps_logoT541 are actual guest logs.
+Guest also emits pool-membership warnings/int41; their cause remains unresolved.
+They are not the terminal cause observed here. AtT561 the renderer exits321:
+R32Float storage image480x270, depth tile24, swizzle0x324(RRR1), base/last0,
+MaxMip7, backing0x160000, write-only. Exact descriptor:
+5a625f00 c1600001 00434077 91800324 00000000 00700070 00000000 00000000.
+Log prefix tools/data/astro_20261027_backing_query, captures run_20261027_183920.
+
+Support RRR1 for already-supported single-channel storage formats and identity
+Vulkan storage views; existing production inverse-store mapping selects sourceX
+for physical R. Nonidentity storage reads remain rejected. Permit write-only
+R32Float depth mip0 views backed by a validated full mip chain. New constexpr
+PlanDepthStorageMipLayout validates 2D/base0/view1, format/depth, dimensions,
+64KiB alignment, exact pitch, mip count and checked exact total size. Each mip
+uses its actual128x128 depth allocation/pixel permutation, not render-target
+mip tails. Captured eight offsets are0,c0000,100000,110000,120000,130000,140000,
+150000; total160000. Existing depth upload already detiles each native mip.
+Tiler and image-to-buffer reconstruction now retile every mip and preserve
+all backing padding; all native mip data is downloaded, so unmodified mip
+pixels remain intact. No descriptor bypass, dummy output or game-byte patch.
+
+Production-extracted depth tests verify the real captured8-mip layout, invalid
+shape/overflow-style constraints without altering output, bit-exact roundtrip
+of every mip, padding/canaries and unchanged trailing mips after a mip0 edit.
+New offscreen Vulkan test uses actual production InverseStorageSwizzleComponent
+selector, an identity R32Float mip0 view of an8-level image, GLSL compute write,
+and real upload/download. Arc B580 passes129600 mip0 pixels with7 unchanged
+mips and all host padding preserved. This device test is NOT the actual Astro
+shader and not a recognized game frame. glslang + spirv-val pass. Full local
+build succeeds at D:/Tools/psemu-build/depth-mips-output with its matching map.
+Actual Astro retry remains pending.

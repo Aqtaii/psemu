@@ -11,6 +11,8 @@ struct DepthStencilVulkanImage;
 struct GpuTextureVulkanImage;
 struct GraphicContext;
 
+void TileDepthStorageMipsPreservePadding(void* dst,const void* src,const ImageInfo& info);
+
 class Tiler final {
 public:
 	Tiler() = default;
