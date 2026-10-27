@@ -447,3 +447,40 @@ AtT~974 the process remains alive while loading additional character/effect
 resources, ~7.2GiB private and ~25GB system commit /30GB limit. Runtime memory
 samples are in astro_20261027_file_backing_memory.csv. First recognized game
 frame and subsequent pipeline correctness remain unresolved.
+## 2026-10-27: opt-in pre-entry Astro TLS preparation
+
+D-backed runPID19444 was intentionally stopped at~T2004 after >3700 actual
+source opens. It remained alive, but its first eight framebuffer captures were
+black/dithered. Thread samples resolve hot VirtualQuery callers to SafeReadable
+in the FS-load fault decoder. Existing log explicitly says fast TLS is disabled;
+read-only live counters measure~5810 core VirtualQuery calls/s and~770 wait/signal
+semaphore pairs/s. The historical dynamic TLS patch is known to race, so it was
+not enabled on the running process.
+
+Offline analysis uses this build's real PT_GNU_EH_FRAME header (312697 sorted
+function entries), then follows reachable direct CFG edges within each candidate
+function. 3630 raw FS0 candidates occur in3087 functions;3553 are reached as
+complete instructions, all exact12-byte padded mov rax,fs:[0]. Unknown indirect
+edges and unmatched sites are deliberately left to VEH. Each prepared site
+requires both the full instruction and8-byte contexts before/after it to match.
+No runtime cross-thread code mutation is used for this mode.
+
+PSEMU_ASTRO_STATIC_TLS=1 opts into allocating/verifying the existing Windows
+TEB slot and preparing the verified sites before game execution. All newly
+created guest threads retain the existing thread-local slot initialization.
+Astro dynamic TryPatchFsMov is disabled in this mode; unknown FS instructions
+continue the interpreter/fault path. Sarah behavior is unchanged.
+
+New actual-machine-code regression executes the patched GS load on8 threads
+with distinct values (1000 reads each), validates slot bounds and all28 single-
+byte context mutations fail without modifying output. Full local build passes.
+Owned retryPID18760 / astro_20261027_static_tls confirms3553 prepared sites and
+verified slot15/offset0x14f8 before guest threads, and passes the first minute
+without the historical early dynamic-patch crash. Later runtime speed, stability
+and first recognized frame remain pending; this mode remains opt-in.
+The reproducible generate_astro_tls_sites.py --check also passes using Capstone
+instruction groups for conditional/unconditional branches, returns and indirect
+edges, yielding exactly the same3553 sites. It requires the pinned plaintext
+SELF unwind layout and emits no game assets. Runtime static-TLS retry reaches
+all initial compute pipelines, including293827/310885 SPIR-V words, successfully
+at~T375 without the historical early patch crash. First presentation still pending.

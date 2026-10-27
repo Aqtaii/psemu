@@ -16,6 +16,7 @@
 #include <chrono>
 #include "host_allocation_size.h"
 #include "sarah_tls_sites.h"
+#include "astro_tls_sites.h"
 #include "shared_direct_memory.h"
 #include <io.h>
 #include <unordered_map>
@@ -1685,7 +1686,9 @@ void PsemuInitTlsFastPath() {
     const char* e = getenv("PSEMU_TLS_PATCH");
     const bool static_sarah = Game::Current().title_id == "PPSA02929" &&
         !(e && e[0] == '0');
-    if (!static_sarah && (e == nullptr || e[0] == '0')) {
+    const char* astro_static = std::getenv("PSEMU_ASTRO_STATIC_TLS");
+    const bool static_astro = Game::Current().title_id == "PPSA21564" && astro_static && astro_static[0]=='1';
+    if (!static_sarah && !static_astro && (e == nullptr || e[0] == '0')) {
         printf("[TLS] Hizli yol KAPALI (varsayilan; PSEMU_TLS_PATCH=1 ile acilir) - "
                "her fs:[0] VEH'e dusecek\n");
         fflush(stdout);
@@ -2346,7 +2349,9 @@ static void LogPatchSkip(const uint8_t* code, const char* why) {
 }
 
 static void TryPatchFsMov(uint8_t* code, const FsMovInfo& info) {
-    if (g_teb_slot_off == 0 || Game::Current().title_id == "PPSA02929") return;
+    const char* astro_static = std::getenv("PSEMU_ASTRO_STATIC_TLS");
+    if (g_teb_slot_off == 0 || Game::Current().title_id == "PPSA02929" ||
+        (Game::Current().title_id == "PPSA21564" && astro_static && astro_static[0]=='1')) return;
     if (info.disp != 0) { LogPatchSkip(code, "disp!=0"); return; }
 
     int p = 0;
@@ -2411,6 +2416,26 @@ static void PrepareSarahTlsBeforeEntry(uint64_t image_base) {
         ++patched;
     }
     printf("[TLS-STATIC] Sarah: prepared %u verified TLS loads before guest entry; unmatched sites use VEH\\n",patched);
+}
+
+static void PrepareAstroTlsBeforeEntry(uint64_t image_base) {
+    const char* enabled=std::getenv("PSEMU_ASTRO_STATIC_TLS");
+    if (Game::Current().title_id!="PPSA21564" || !g_teb_slot_off || !enabled || enabled[0]!='1')return;
+    GetThreadTlsBase();
+    unsigned patched=0;
+    for(const auto& site:AstroTlsSites) {
+        if(site.rva<8 || site.rva>g_text_size || g_text_size-site.rva<20)continue;
+        auto* context=reinterpret_cast<uint8_t*>(image_base+site.rva-8);
+        std::array<uint8_t,12> replacement{};
+        if(!SafeReadable(context,28) || !PrepareAstroTlsPatch(context,site,g_teb_slot_off,&replacement))continue;
+        DWORD old=0;
+        if(!VirtualProtect(context+8,12,PAGE_EXECUTE_READWRITE,&old))continue;
+        std::memcpy(context+8,replacement.data(),12);
+        DWORD ignored=0;VirtualProtect(context+8,12,old,&ignored);
+        FlushInstructionCache(GetCurrentProcess(),context+8,12);
+        ++patched;
+    }
+    std::printf("[TLS-STATIC] Astro: prepared %u verified loads before guest threads; unmatched sites use VEH\n",patched);
 }
 
 // Cozulen hedef register koduna gore CONTEXT alanina yazan yardimci fonksiyon
@@ -8414,6 +8439,7 @@ void Core::StartExecution(uint64_t entry_point, uint64_t base_addr, uint64_t tex
     // icinde TlsAlloc gibi kilit alan is yapmiyoruz.
     PsemuInitTlsFastPath();
     PrepareSarahTlsBeforeEntry(base_addr);
+    PrepareAstroTlsBeforeEntry(base_addr);
 
     // DENENDI VE GERI ALINDI: timeBeginPeriod(1) + usleep icin yuksek
     // cozunurluklu bekleme zamanlayicisi. Beklenti kare suresini dusurmekti;
