@@ -26,13 +26,7 @@ extern "C" const struct cpuinfo_package* CPUINFO_ABI cpuinfo_get_package(uint32_
     return &s_pkg;
 }
 
-// --- Network (fileSystem.cpp -> soket fd'lerine yazma; bizde ag yok) ---------
-namespace Libs::Network::Net {
-int64_t KYTY_SYSV_ABI Send(int /*s*/, const void* /*buf*/, uint64_t /*len*/, int /*flags*/) { return -1; }
-int64_t KYTY_SYSV_ABI Recv(int /*s*/, void* /*buf*/, uint64_t /*len*/, int /*flags*/) { return -1; }
-bool    KYTY_SYSV_ABI IsSocket(int /*s*/) { return false; }
-int     KYTY_SYSV_ABI SocketClose(int /*s*/) { return 0; }
-} // namespace Libs::Network::Net
+// Network fd helpers are supplied by libs/network.cpp.
 
 // --- Posix::GetErrorAddr (errno adresi) -------------------------------------
 namespace Libs::Posix {

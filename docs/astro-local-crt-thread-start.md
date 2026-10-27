@@ -522,3 +522,36 @@ is D:/Tools/psemu-build/mutex-output/loader.exe with its own loader.map; the
 still-running PID18760 uses the older output/loader.exe. No game-runtime FPS
 improvement from this candidate has yet been measured. build-local/loader.map
 now belongs to the candidate and must not be used to symbolize the old PID.
+
+## 2026-10-27: wire existing Kyty offline HTTP into actual SDK dispatch
+
+Actual Astro calls sceHttpCreateRequestWithURL/SendRequest/WaitRequest/
+GetStatusCode/GetResponseContentLength, but no HTTP handler was registered in
+core or native SDK tables. Core generic success left outputs untouched; the
+runtime status log contains a pointer-like2370821947392. This proves an output
+contract gap, not that HTTP alone explains the black framebuffer.
+
+The local existing Kyty network.cpp already has typed pool/SSL/HTTP/template/
+connection/request IDs, before-send/timeout/invalid-ID results and zeroed status/
+length outputs. Compile and reuse that implementation (same Jetsku-style offline
+behavior). PSEMU_NATIVE_HTTP=1 registers only HTTP34 functions, SSL4 and pool2
+with their original libNet NIDs in both native SDK tables before first lookup.
+It does not register sockets/PSN or implement successful Internet responses.
+Actual socket-fd helper definitions replace the old stubs because network.cpp
+now owns those symbols; no socket can be created through this opt-in table.
+Windows dependency libraries ws2_32/iphlpapi are linked from the existing D SDK.
+
+--http-self-test sets its CRT-local flag before lookup and verifies actual NID
+pointers, real ID lifecycle, pre-send error, offline timeout, exact bounded
+status0/content-length0 outputs and canaries, empty nonblocking poll with
+unchanged event memory, deleted-ID rejection and cleanup. It makes no network
+request. Test and full10-step local build pass. Native-backing, secure-copy and
+actual-directory self-tests pass with HTTP flag disabled. New candidate remains
+in D:/Tools/psemu-build/mutex-output; normal default remains opt-in.
+
+Old owned runPID18760 reaches ui_pause_next LoadLevelResources complete atT2207
+(report997.230s), then opens ui_pause_hub/level.lvx atT2295/fd5409. It has no new
+recognized frame or fatal error; identical output makes a controlled restart
+with the tested mutex+HTTP candidate appropriate. Native HTTP runtime acceptance
+and first recognized image remain pending; do not mark these complete from the
+standalone test. Existing Sarah executable/launchers remain untouched.

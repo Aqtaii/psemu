@@ -31,6 +31,8 @@ void InitFontFt_1(Loader::SymbolDatabase* s);
 void InitFiber_1(Loader::SymbolDatabase* s);
 } // namespace Libs
 
+extern "C" void PsemuRegisterOfflineHttp(Loader::SymbolDatabase* db);
+
 namespace {
 Loader::SymbolDatabase* g_kyty_db = nullptr;
 Loader::SymbolDatabase* g_graphics_db = nullptr;
@@ -40,6 +42,7 @@ void EnsureGraphicsDb() {
 		return;
 	}
 	auto* db = new Loader::SymbolDatabase;
+    PsemuRegisterOfflineHttp(db);
 	Libs::InitFont_1(db);
 	Libs::InitFontFt_1(db);
 	Libs::InitGraphicsDriver_1(db); // SADECE AGC Dcb + Graphics + GraphicsDriver
@@ -54,6 +57,7 @@ void EnsureDb() {
 		return;
 	}
 	auto* db = new Loader::SymbolDatabase;
+    PsemuRegisterOfflineHttp(db);
 	Libs::InitFont_1(db);
 	Libs::InitFontFt_1(db);
 	Libs::InitGraphicsDriver_1(db); // AGC Dcb + Graphics + GraphicsDriver

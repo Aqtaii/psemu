@@ -59,6 +59,7 @@ set(GPU_LIBS_SRC
     ${GPU_SRC}/libs/libVideoOut.cpp
     ${GPU_SRC}/libs/libPad.cpp
     ${GPU_SRC}/libs/controller.cpp
+    ${GPU_SRC}/libs/network.cpp
 )
 
 # loader/'den yalnizca graphics/libs'in ihtiyac duydugu yardimcilar (timer,
@@ -89,6 +90,8 @@ list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/init.cpp)
 list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/agc_bridge.cpp)
 list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/fiber_self_test.cpp)
 list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/event_flag_self_test.cpp)
+list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/http_bridge.cpp)
+list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/http_self_test.cpp)
 list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/screenshot.cpp)
 list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/metrics.cpp)
 
@@ -110,4 +113,6 @@ target_link_libraries(psemu_gpu PUBLIC
     "${GPU_TP}/winpthread/lib/libwinpthread.dll.a"
     # onecore: VirtualAlloc2 / MapViewOfFile3 / UnmapViewOfFile2 (Kyty bellek yon.)
     onecore
+    ws2_32
+    iphlpapi
 )
