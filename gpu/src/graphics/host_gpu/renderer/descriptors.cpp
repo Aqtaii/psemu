@@ -1007,8 +1007,10 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 			    g_render_ctx->GetGraphicCtx(), static_cast<StorageTextureVulkanImage*>(image),
 			    base_level);
 		} else {
+            const auto generation=command_buffer->GetRecordingGeneration();
 			image = texture_cache->FindTexture(command_buffer, g_render_ctx->GetGraphicCtx(), info,
 			                                   metadata_read);
+            if(command_buffer->GetRecordingGeneration()!=generation)return {};
 			if (image->type == VulkanImageType::StorageTexture) {
 				image_view = texture_cache->GetStorageTextureSampledView(
 				    g_render_ctx->GetGraphicCtx(), static_cast<StorageTextureVulkanImage*>(image),

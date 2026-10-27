@@ -1274,16 +1274,42 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
 		     static_cast<const void*>(command), static_cast<const void*>(ctx), info.address,
 		     info.size, info.width, info.height, info.depth, info.levels);
 	}
+    const auto recording_generation=command->GetRecordingGeneration();
 	std::lock_guard transaction(m_resource_mutex);
 	{
 		FaultSafeTextureLock lock(this, m_lock);
 		RetireSampledTargetAliases(ctx, info);
+        if(command->GetRecordingGeneration()!=recording_generation)return nullptr;
+        bool reconstruct_storage=false;
+        for(const auto& cached:m_images) {
+         if(cached->kind!=CachedImage::Kind::StorageTexture)continue;
+         const auto overlap=ClassifyStorageSampledOverlap(info,cached->info,TextureGetFormat(info.format),
+          cached->image->format,cached->gpu_modified,cached->info.IsCpuDirty(),cached->ctx==ctx);
+         if(overlap!=StorageSampledOverlap::Unsupported)continue;
+         if(CanReconstructStorageForSampled(cached->info,cached->gpu_modified,cached->buffer_modified,
+           m_memory_tracker.IsRegionGpuModified(cached->Address(),cached->Size()),
+           cached->info.IsCpuDirty() || m_memory_tracker.IsRegionCpuModified(cached->Address(),cached->Size()),
+           cached->ctx==ctx,m_buffer_cache.HasPageOverlap(cached->Address(),cached->Size()),info)) {
+          reconstruct_storage=true;break;
+         }
+        }
+        if(reconstruct_storage) {
+         auto backing=info;backing.base_level=0;backing.view_levels=1;
+         // Publish full old GPU allocations (including out-of-request tails), then
+         // prepare the sampled buffer/image source from the newly authoritative bytes.
+         ResolveStorageImageOverlaps(command,ctx,backing,false);
+         if(command->GetRecordingGeneration()!=recording_generation)return nullptr;
+         static std::atomic_uint sampled_reconstruct_logs{0};
+         if(sampled_reconstruct_logs.fetch_add(1)<8)printf("[STORAGE-SAMPLED-RECONSTRUCT] requested=0x%016" PRIx64
+          "+0x%016" PRIx64 " full_gpu_backing_published=1\n",info.address,info.size);
+        }
 	}
 	BufferImageCopySource source {nullptr, 0, info.address, info.size, true};
 	if (m_buffer_cache.HasPageOverlap(info.address, info.size)) {
 		// ObtainBufferForImage publishes dirty native-buffer bytes when necessary and otherwise
 		// uses a CPU-current staging fallback through guest backing.
 		source = m_buffer_cache.ObtainBufferForImage(info.address, info.size);
+        if(command->GetRecordingGeneration()!=recording_generation)return nullptr;
 		if (!IsCoherentGuestImageSource(source, info.address, info.size)) {
 			EXIT("TextureCache: sampled-image buffer source is inconsistent, addr=0x%016" PRIx64
 			     " size=0x%016" PRIx64 " source=%p source_addr=0x%016" PRIx64

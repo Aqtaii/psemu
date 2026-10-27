@@ -1134,6 +1134,16 @@ CanReconstructStorageForStorage(const ImageInfo& old,bool gpu,bool buffer,bool t
         ImageRangeOverlaps(old.address,old.size,requested.address,requested.size);
 }
 
+[[nodiscard]] inline bool
+CanReconstructStorageForSampled(const ImageInfo& old,bool gpu,bool buffer,bool tracker_gpu,
+                               bool cpu,bool same_context,bool buffers,const ImageInfo& requested) {
+ if(requested.levels==0 || requested.levels>16 || requested.base_level>=requested.levels ||
+    requested.view_levels==0 || requested.view_levels>requested.levels-requested.base_level)return false;
+ // Validate the physical allocation independently of the sampled view selection.
+ auto backing=requested;backing.base_level=0;backing.view_levels=1;
+ return CanReconstructStorageForStorage(old,gpu,buffer,tracker_gpu,cpu,same_context,buffers,backing);
+}
+
 [[nodiscard]] inline bool IsSupportedRenderTargetReconstructionFootprint(const RenderTargetInfo& t) {
  if(IsSupportedStandard64RenderTarget(t)) return true;
  if(t.tile_mode!=Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) ||

@@ -894,3 +894,25 @@ Opening-sequence clarification from actual old logs: sceAvPlayerInit returns0,
 then Stop/Close run; game proceeds from ps_logo to title_controller_ship resource
 loading. ps_logo log is not a rendered-logo claim. Target remains a genuine
 Vulkan-rendered title/game frame, not a fabricated or externally decoded image.
+
+## 2026-10-27: publish overlapping GPU storage before sampled reconstruction
+
+7d43a47 retryPID20700 reached title_controller_ship loading and exited321 at
+23:06:41.503. The next sampled/storage alias was a 480x270 R32Float depth view,
+address backing+0x120000, size0xc0000, levels1, RRR0 (0x924), overlapping an
+8-mip storage backing of size0x160000, RRR1 (0x324). This is a different physical
+allocation, so sharing a Vulkan mip view would be incorrect.
+
+CanReconstructStorageForSampled validates the sampled view separately from the
+physical depth allocation and retains strict GPU/current/CPU-clean/same-context/
+no-buffer ownership checks. FindTexture now publishes the full old GPU storage
+allocation through existing readback/retile/retirement before preparing a sampled
+source. Bytes outside that allocation retain their prior contents. Command
+recording generation changes abort descriptor binding and retry, matching the
+existing storage path; no stale image pointer is dereferenced after submission.
+
+CPU tests pass for ownership/view rejection and the captured partial overlap:
+production depth conversion preserves all out-of-allocation bytes and decodes
+the shared sampled tile to the known mip4 pixels. Local full build completed
+23:14:15 in sampled-reconstruct-output with matching loader.map. Real Astro
+retryPID9508 started23:17:57. First recognizable game frame remains pending.

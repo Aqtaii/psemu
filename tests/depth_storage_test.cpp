@@ -589,6 +589,18 @@ int main() {
   }
   auto disjoint=old;disjoint.address=chain.address+chain.size;
   Require(!CanReconstructStorageForStorage(disjoint,true,false,true,false,true,false,chain));
+  auto sampled_neighbor=old;sampled_neighbor.swizzle=0x924;
+  Require(CanReconstructStorageForSampled(chain,true,false,true,false,true,false,sampled_neighbor));
+  for(int bad=0;bad<8;++bad) {
+   auto view=sampled_neighbor;
+   if(bad==6)view.view_levels=0;
+   if(bad==7)view.base_level=view.levels;
+   Require(!CanReconstructStorageForSampled(chain,bad!=0,bad==1,bad!=2,bad==3,bad!=4,bad==5,view));
+  }
+  auto sampled_chain=chain;sampled_chain.address+=0x10000;sampled_chain.view_levels=8;
+  Require(CanReconstructStorageForSampled(chain,true,false,true,false,true,false,sampled_chain));
+  sampled_chain.base_level=7;sampled_chain.view_levels=2;
+  Require(!CanReconstructStorageForSampled(chain,true,false,true,false,true,false,sampled_chain));
   std::vector<uint8_t> whole(0x1e0000+2,0xa5),old_linear(old.size,0);
   for(uint32_t y=0;y<old.height;++y)for(uint32_t x=0;x<old.width;++x){
    const uint32_t value=0x3e800000u+y*512+x;std::memcpy(old_linear.data()+(y*old.pitch+x)*4,&value,4);
@@ -600,6 +612,18 @@ int main() {
   TileConvertTiledToLinearDepth(old_decoded.data(),whole.data()+1+0x120000,old.format,old.width,old.height,old.pitch,old.size);
   for(uint32_t y=0;y<old.height;++y)for(uint32_t x=0;x<old.width;++x)
    Require(!std::memcmp(old_decoded.data()+(y*old.pitch+x)*4,old_linear.data()+(y*old.pitch+x)*4,4));
+  // Publish the newer full eight-mip owner, then sample the old straddling view.
+  // Its bytes beyond the published allocation must retain the earlier owner data.
+  const std::vector<uint8_t> outside(whole.begin()+1+chain.size,whole.end());
+  TileDepthStorageMipsPreservePadding(whole.data()+1,linear.data()+1,chain);
+  Require(std::equal(outside.begin(),outside.end(),whole.begin()+1+chain.size));
+  Require(whole.front()==0xa5 && whole.back()==0xa5);
+  TileConvertTiledToLinearDepth(old_decoded.data(),whole.data()+1+0x120000,old.format,old.width,old.height,old.pitch,old.size);
+  // Both views begin on the same depth64K block as backing mip4.
+  for(uint32_t y=0;y<plan[4].height;++y)for(uint32_t x=0;x<plan[4].width;++x) {
+   uint32_t pixel=0;std::memcpy(&pixel,old_decoded.data()+(y*old.pitch+x)*4,4);
+   Require(pixel==linear[1+plan[4].offset/4+y*plan[4].pitch+x]);
+  }
   const auto before=guest;
   linear[1]=0x3e800000; // A mip0-only edit must retain all other mip bytes.
   TileDepthStorageMipsPreservePadding(guest.data()+1,linear.data()+1,chain);
