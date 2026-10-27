@@ -625,3 +625,32 @@ and real cleanup. Full local build and semaphore, HTTP, native-backing and
 secure-copy tests pass. Candidate is D:/Tools/psemu-build/sema-output/loader.exe
 with its matching loader.map. Native game runtime/performance and first visible
 frame remain pending. Shader mask/clock/label hypotheses are not claimed fixed.
+## 2026-10-27: unify guest counter imports with VideoOut's native clock domain
+
+Native-semaphore retryPID6292 accepts real hkSemaphore objects (init0/max1).
+GPU-stage live core VirtualQuery sampling drops to~44.7/s from prior~9451/s,
+with no wait/signal PLT trap counters in the sample. This is a dispatch-load
+result, NOT a measured FPS gain: first capture360s, subsequent captures~46-60s
+apart, still black. prein.xml steps464.46/464.80/465.09 andTransition465.37 occur
+earlier than prior~659s, but scene/image correctness remains unresolved.
+
+Source audit establishes a separate cross-interface clock inconsistency:
+Core's sceKernelReadTsc/GetProcessTimeCounter return absolute QPC ticks and
+frequency10MHz; native VideoOut VblankBegin/VblankEnd/flip statuses use Kyty
+KernelGetProcessTimeCounter (process-relative TSC), KernelGetProcessTime and
+KernelReadTsc (raw TSC). Their native frequency is3.7GHz on this host. A guest
+interpreting VideoOut processTimeCounter using its imported frequency therefore
+mixes both units and epoch, even though Core's QPC pair is internally consistent.
+This is NOT proof yet that it causes the minute-long frame interval.
+
+PSEMU_NATIVE_CLOCK=1 registers all5 corresponding clock NIDs in both SDK tables
+to the exact existing Kyty functions used by VideoOut. No GPU reference-clock
+scaling, FPS forcing, timestamp fabrication, or Windows clock setting changes.
+Counter, frequency and microsecond outputs now share native domain by construction;
+POSIX clock_gettime/gettimeofday remain their existing separate interfaces.
+--clock-self-test verifies actual NID/SysV pointer identity, native frequency,
+monotonic tick/microsecond deltas against QPC wall duration, and common epoch
+with native VideoOut-producing functions. It reports native_hz3700000000 vs
+qpc_hz10000000. Full local build and clock/semaphore/HTTP/backing tests pass.
+Candidate D:/Tools/psemu-build/clock-output includes its matching loader.map.
+Runtime effect on frame time and first recognized game frame remain pending.

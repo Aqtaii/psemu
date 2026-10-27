@@ -33,6 +33,7 @@ void InitFiber_1(Loader::SymbolDatabase* s);
 
 extern "C" void PsemuRegisterOfflineHttp(Loader::SymbolDatabase* db);
 extern "C" void PsemuRegisterNativeSemaphores(Loader::SymbolDatabase* db);
+extern "C" void PsemuRegisterNativeClocks(Loader::SymbolDatabase* db);
 
 namespace {
 Loader::SymbolDatabase* g_kyty_db = nullptr;
@@ -45,6 +46,7 @@ void EnsureGraphicsDb() {
 	auto* db = new Loader::SymbolDatabase;
     PsemuRegisterOfflineHttp(db);
     PsemuRegisterNativeSemaphores(db);
+    PsemuRegisterNativeClocks(db);
 	Libs::InitFont_1(db);
 	Libs::InitFontFt_1(db);
 	Libs::InitGraphicsDriver_1(db); // SADECE AGC Dcb + Graphics + GraphicsDriver
@@ -61,6 +63,7 @@ void EnsureDb() {
 	auto* db = new Loader::SymbolDatabase;
     PsemuRegisterOfflineHttp(db);
     PsemuRegisterNativeSemaphores(db);
+    PsemuRegisterNativeClocks(db);
 	Libs::InitFont_1(db);
 	Libs::InitFontFt_1(db);
 	Libs::InitGraphicsDriver_1(db); // AGC Dcb + Graphics + GraphicsDriver

@@ -1012,6 +1012,7 @@ extern "C" int PsemuDirectorySelfTest(const char* path);
 extern "C" int PsemuNativeBackingSelfTest();
 extern "C" int PsemuHttpSelfTest();
 extern "C" int PsemuKernelSemaphoreSelfTest();
+extern "C" int PsemuClockSelfTest();
 
 int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -1019,6 +1020,7 @@ int main(int argc, char** argv) {
     Logger::Init();
     if (argc==2 && std::strcmp(argv[1],"--fiber-self-test")==0) return PsemuFiberSelfTest();
     if (argc==2 && std::strcmp(argv[1],"--event-flag-self-test")==0) return PsemuEventFlagSelfTest();
+    if (argc==2 && std::strcmp(argv[1],"--clock-self-test")==0) return PsemuClockSelfTest();
     if (argc==2 && std::strcmp(argv[1],"--kernel-semaphore-self-test")==0) return PsemuKernelSemaphoreSelfTest();
     if (argc==2 && std::strcmp(argv[1],"--http-self-test")==0) return PsemuHttpSelfTest();
     if (argc==2 && std::strcmp(argv[1],"--native-backing-self-test")==0) return PsemuNativeBackingSelfTest();
