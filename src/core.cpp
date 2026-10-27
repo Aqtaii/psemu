@@ -740,7 +740,15 @@ static uint8_t* DmemBase() {
     std::lock_guard<std::mutex> lock(g_dmem_mutex);
     if (g_dmem_base == nullptr) {
         if (Game::Current().title_id == "PPSA21564") {
-            if (g_shared_dmem.Initialize(kDmemSize)) g_dmem_base = g_shared_dmem.GuestBase();
+            const char* file_mode = std::getenv("PSEMU_DMEM_FILE_BACKED");
+            bool ready = false;
+            if (file_mode && file_mode[0] == '1') {
+                wchar_t directory[MAX_PATH]{};
+                const auto length = GetEnvironmentVariableW(L"TEMP", directory, MAX_PATH);
+                ready = length && length < MAX_PATH && g_shared_dmem.InitializeFileBacked(kDmemSize, directory);
+                std::printf("[DIRECT-BACKING] mode=D-file sparse=1 ready=%d\n", ready);
+            } else ready = g_shared_dmem.Initialize(kDmemSize);
+            if (ready) g_dmem_base = g_shared_dmem.GuestBase();
             else LOG_ERROR("[MEMORY-HLE] Shared direct-memory views could not be created");
         } else {
             g_dmem_base = reinterpret_cast<uint8_t*>(
@@ -751,7 +759,8 @@ static uint8_t* DmemBase() {
             // Geri kalan 4 GB bellek ihtiyac duyuldugunda On-Demand Committer
             // tarafindan otomatik commit edilir.
             const size_t kInitCommit = 64ULL * 1024 * 1024;
-            VirtualAlloc(g_dmem_base, kInitCommit, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+            if (Game::Current().title_id == "PPSA21564") g_shared_dmem.Commit(0, kInitCommit);
+            else VirtualAlloc(g_dmem_base, kInitCommit, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
         }
         g_dmem_base_addr = reinterpret_cast<uint64_t>(g_dmem_base);
     }
@@ -4571,7 +4580,9 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     uint8_t* dbase = DmemBase();
                     uint64_t need  = static_cast<uint64_t>(chosen) + len;
                     if (dbase != nullptr && need <= kDmemSize) {
-                        if(!VirtualAlloc(dbase + chosen, static_cast<size_t>(len),MEM_COMMIT,PAGE_EXECUTE_READWRITE)) {
+                        if (!(Game::Current().title_id == "PPSA21564"
+                              ? g_shared_dmem.Commit(chosen, len)
+                              : VirtualAlloc(dbase + chosen, static_cast<size_t>(len), MEM_COMMIT, PAGE_EXECUTE_READWRITE) != nullptr)) {
                             const DWORD error=GetLastError();MEMORYSTATUSEX memory{};memory.dwLength=sizeof(memory);GlobalMemoryStatusEx(&memory);
                             std::printf("[DIRECT-COMMIT-FAIL] phase=allocate phys=0x%llx bytes=0x%llx error=%lu available_commit=0x%llx\n",
                                 static_cast<unsigned long long>(chosen),static_cast<unsigned long long>(len),error,memory.ullAvailPageFile);
@@ -4642,8 +4653,9 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 void* mem = nullptr;
                 uint8_t* dbase = DmemBase();
                 if (dbase != nullptr && phys + alloc_size <= kDmemSize) {
-                    mem = VirtualAlloc(dbase + phys, alloc_size,
-                                       MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+                    if (Game::Current().title_id == "PPSA21564") {
+                        if (g_shared_dmem.Commit(phys, alloc_size)) mem = dbase + phys;
+                    } else mem = VirtualAlloc(dbase + phys, alloc_size, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
                 }
                 if (mem == nullptr) {
                     // Havuz disi/basarisiz: eski davranisa dus (en azindan bellek ver)

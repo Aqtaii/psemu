@@ -398,3 +398,35 @@ rethrows without replacing the shader or fabricating a successful pipeline.
 Vulkan mesh control regression passes1024/1024 pixels on Arc B580; this is a
 control fixture, not game output. Owned retry astro_20261027_compute_exception
 is running; actual SPX enumeration and first recognized game frame are pending.
+
+## 2026-10-27: compute initialization failure at system commit exhaustion
+
+Retry astro_20261027_compute_exception exits321 at13:04, after successful
+258230-word and278800-word compute pipelines. The293827-word shader returns
+vk::Result::eErrorInitializationFailed. No escaping std::exception is recorded.
+The monitor records5694MiB private /5058MiB resident and32334/32691MiB system
+commit at13:03:51; a new PowerShell process fails with OutOfMemoryException.
+The game had already exited before the attempted owned-process stop, so this
+is an actual exit, not an intentionally terminated test. Commit returns to
+~17.3GB after exit. First-chance C++ bypass allowed the earlier shader to finish,
+but does not by itself solve the measured global memory limit.
+
+Added opt-in PSEMU_DMEM_FILE_BACKED=1 for the Astro primary physical pool.
+TEMP must resolve to an existing D: directory. The new scratch file uses
+CREATE_NEW, FSCTL_SET_SPARSE and DELETE_ON_CLOSE, and shares actual file pages
+between guest/backing views. All unallocated spans start NOACCESS in both
+views. Commit enables only newly allocated pages; recommitting preserves data
+and previously established NOACCESS/READONLY guest tracking guards. This also
+fixes the pagefile Commit wrapper to avoid resetting existing guest guards.
+Backing read/write retains actual range and protection validation. No pagefile
+or other Windows settings, C: files, or game assets are changed. Normal mode
+and Dreaming Sarah retain their existing backing selection.
+
+New test_shared_direct_memory.ps1 compiles and runs both actual backends,
+including16GiB sparse file /10GiB logical allocation with <512MiB commit charge,
+zero-initialized pages, alias coherence, overlapping recommit that preserves
+old guards, invalid ranges, C: scratch rejection, and delete-on-close cleanup.
+Full local build, both backing regressions, native backing and directory HLE
+self-tests pass. The actual retry astro_20261027_file_backing reports D-file
+ready=1 and all six large maps succeed. At~T90 system commit is~20.15GB instead
+of~30GB; Vulkan compilation and recognized game output remain pending.
