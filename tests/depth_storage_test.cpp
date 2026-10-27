@@ -1,5 +1,36 @@
 static void Require(bool ok) {if(!ok) throw std::runtime_error("regression failed");}
 int main() {
+ {
+  ShaderTextureResource d{};
+  const uint32_t fields[]={0x5b632f00,0xc2400002,0x010dc1df,0x91b003ac,0,0x00700000,0x207b0000,0x025b96c3};
+  std::memcpy(d.fields,fields,sizeof(fields));
+  ShaderRecompiler::IR::ImageResource resource{ShaderRecompiler::IR::ResourceKind::StorageImage,ShaderRecompiler::Decoder::ImageDimension::Dim2D};
+  Require(IsSupportedStorageTextureDescriptor(resource,d));
+  Require(!IsSupportedStorageTextureEncoding(d) && IsCapturedDccStorageEncoding(d));
+  Require(IsSupportedStorageSwizzle(d.Format(),d.DstSelXYZW()));
+  ImageInfo packed{};packed.address=d.Base40()<<8u;packed.size=0x870000;
+  packed.format=d.Format();packed.width=packed.pitch=1920;packed.height=1080;
+  packed.depth=packed.levels=packed.view_levels=1;packed.type=d.Type();packed.tile=d.TileMode();
+  RenderTargetInfo old{};old.address=packed.address;old.size=packed.size;
+  old.width=old.pitch=1920;old.height=1080;old.bytes_per_element=4;old.tile_mode=packed.tile;
+  Require(CanReconstructRenderTargetForStorage(old,true,false,true,false,true,false,packed));
+  auto wrong=packed;wrong.size-=0x10000;
+  Require(!CanReconstructRenderTargetForStorage(old,true,false,true,false,true,false,wrong));
+
+  resource.read=true;Require(!IsSupportedStorageTextureDescriptor(resource,d));
+  resource.read=false;
+  for(int bad=0;bad<6;bad++){
+   auto invalid=d;
+   if(bad==0)invalid.fields[6]^=0x10000;
+   if(bad==1)invalid.fields[3]^=0x8;
+   if(bad==2)invalid.fields[5]|=1;
+   if(bad==3)invalid.fields[3]|=0x1000;
+   if(bad==4)invalid.fields[6]=invalid.fields[7]=0;
+   if(bad==5)invalid.fields[1]^=0x100000;
+   Require(!IsCapturedDccStorageEncoding(invalid));
+  }
+ }
+
  // Actual HTile allocation is adjacent to stencil; shared pages must retain ownership.
  {
   constexpr uint64_t htile=0x243c0e80000ull, bytes=0x30000;

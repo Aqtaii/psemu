@@ -1485,15 +1485,17 @@ StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   com
                                                             GraphicContext*  ctx,
                                                             const ImageInfo& info,
                                                             const DccBinding* dcc) {
+	const bool dcc_rgba16 = info.format == Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float) && info.swizzle == 0xfacu;
+	const bool dcc_rgb11 = info.format == Prospero::GpuEnumValue(Prospero::BufferFormat::k11_11_10Float) && info.swizzle == 0x3acu;
 	if (dcc != nullptr &&
-	    (!ValidRgba16fDccBinding(*dcc, info.width, info.height) ||
+	    (!ValidColorDccBinding(*dcc, info.width, info.height, Prospero::NumBytesPerElement(info.format)) ||
 	     info.tile != Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) ||
-	     info.swizzle != 0xfacu ||
+	     (!dcc_rgba16 && !dcc_rgb11) ||
 	     dcc->layout.total_bytes != dcc->layout.slice_bytes ||
 	     ImagePageRangesOverlap(info.address, info.size, dcc->address, dcc->layout.total_bytes) ||
 	     !CanInitializeDccClear({DccSliceKind::Clear, {}}, info.levels, info.base_level, info.depth,
 	                           info.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor2D),
-	                           info.format == Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float)))) {
+	                           (dcc_rgba16 || dcc_rgb11)))) {
 		EXIT("TextureCache: unsupported DCC storage binding\n");
 	}
 	DccSlice clear_slice {};

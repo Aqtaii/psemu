@@ -591,11 +591,12 @@ static bool IsSupportedStorageTextureEncoding(const ShaderTextureResource& descr
 }
 
 static bool IsCapturedDccStorageEncoding(const ShaderTextureResource& descriptor) {
-	if (descriptor.Format() != Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float) ||
+	const bool rgba16 = descriptor.Format() == Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float) && descriptor.DstSelXYZW() == 0xfacu;
+	const bool rgb11 = descriptor.Format() == Prospero::GpuEnumValue(Prospero::BufferFormat::k11_11_10Float) && descriptor.DstSelXYZW() == 0x3acu;
+	if ((!rgba16 && !rgb11) ||
 	    descriptor.TileMode() != Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) ||
 	    descriptor.Type() != Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) ||
 	    descriptor.BaseLevel() != 0 || descriptor.LastLevel() != 0 || descriptor.Depth() != 0 ||
-	    descriptor.DstSelXYZW() != 0xfacu ||
 	    descriptor.fields[4] != 0 || descriptor.fields[5] != 0x00700000u ||
 	    (descriptor.fields[6] & 0x00ffffffu) != 0x007b0000u || descriptor.MetaAddr() == 0) {
 		return false;
@@ -774,7 +775,7 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 		DccBinding dcc {};
 		dcc.address = descriptor.MetaAddr() << 8u;
 		dcc.alpha_msb = descriptor.DccAlphaPos();
-		if (!ComputeDccLayout(width, height, 1, 8, 1, &dcc.layout)) {
+		if (!ComputeDccLayout(width, height, 1, Prospero::NumBytesPerElement(format), 1, &dcc.layout)) {
 			EXIT("Unsupported DCC storage footprint\n");
 		}
 		g_render_ctx->GetBufferCache()->ValidateGpuAccess(dcc.address, dcc.layout.total_bytes, true, true);

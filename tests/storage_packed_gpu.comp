@@ -1,0 +1,12 @@
+#version 450
+layout(local_size_x=8,local_size_y=8) in;
+layout(set=0,binding=0) uniform writeonly image2D output_image;
+layout(set=0,binding=1) uniform sampler2D sampled_image;
+layout(push_constant) uniform Push {int source_component;int sample_pass;} pc;
+void main(){
+ ivec2 p=ivec2(gl_GlobalInvocationID.xy);if(any(greaterThanEqual(p,imageSize(output_image))))return;
+ vec4 values=vec4(0.25,0.5,1.0,0.0);
+ vec3 rgb=vec3(values[pc.source_component],values[pc.source_component+1],values[pc.source_component+2]);
+ if(pc.sample_pass!=0){vec4 sampled=texelFetch(sampled_image,p,0);if(textureQueryLevels(sampled_image)!=1 || any(notEqual(sampled,vec4(rgb,1))))rgb=vec3(0);}
+ imageStore(output_image,p,vec4(rgb,0));
+}

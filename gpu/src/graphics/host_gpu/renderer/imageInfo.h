@@ -1160,13 +1160,14 @@ CanReconstructRenderTargetForStorage(const RenderTargetInfo& target,bool gpu,boo
                                     bool tracker_gpu,bool cpu,bool same_context,bool buffers,const ImageInfo& storage) {
  RenderTargetInfo backing{};backing.address=storage.address;backing.size=storage.size;
  backing.width=storage.width;backing.height=storage.height;backing.pitch=storage.pitch;
- backing.bytes_per_element=8;backing.tile_mode=storage.tile;backing.levels=storage.levels;
- const bool rgba16=storage.format==Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float) &&
+ backing.bytes_per_element=storage.format==Prospero::GpuEnumValue(Prospero::BufferFormat::k11_11_10Float)?4:8;backing.tile_mode=storage.tile;backing.levels=storage.levels;
+ const bool color_storage=(storage.format==Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float) ||
+     storage.format==Prospero::GpuEnumValue(Prospero::BufferFormat::k11_11_10Float)) &&
      storage.type==Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) && storage.depth==1 &&
      storage.base_level==0 && storage.levels==1 && storage.view_levels==1 && storage.base_array==0 &&
      IsSupportedRenderTargetReconstructionFootprint(backing);
  if(!gpu || !tracker_gpu || buffer || cpu || !same_context || buffers ||
-    !IsSupportedRenderTargetReconstructionFootprint(target) || (!IsSupportedDepthStorageBacking(storage) && !rgba16) ||
+    !IsSupportedRenderTargetReconstructionFootprint(target) || (!IsSupportedDepthStorageBacking(storage) && !color_storage) ||
     target.size>UINT64_MAX-target.address || storage.size>UINT64_MAX-storage.address ||
     ((target.address|target.size|storage.address|storage.size)&(TRACKER_PAGE_SIZE-1))!=0) return false;
  // Readback publishes the complete old allocation, including a straddling tail.

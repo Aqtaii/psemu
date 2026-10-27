@@ -41,14 +41,17 @@ inline bool SameDccBinding(const DccBinding& a,const DccBinding& b) {
  return a.address==b.address && a.layout.total_bytes==b.layout.total_bytes &&
         a.layout.slice_bytes==b.layout.slice_bytes && a.alpha_msb==b.alpha_msb;
 }
-inline bool ValidRgba16fDccBinding(const DccBinding& binding,uint32_t width,uint32_t height) {
+inline bool ValidColorDccBinding(const DccBinding& binding,uint32_t width,uint32_t height,uint32_t element_bytes) {
  DccLayout expected;
- return ValidDccRange(binding.address,binding.layout) &&
-        ComputeDccLayout(width,height,1,8,1,&expected) &&
+ return (element_bytes==4 || element_bytes==8) && ValidDccRange(binding.address,binding.layout) &&
+        ComputeDccLayout(width,height,1,element_bytes,1,&expected) &&
         binding.layout.block_width==expected.block_width &&
         binding.layout.block_height==expected.block_height &&
         binding.layout.slice_bytes==expected.slice_bytes &&
         binding.layout.total_bytes==expected.total_bytes;
+}
+inline bool ValidRgba16fDccBinding(const DccBinding& binding,uint32_t width,uint32_t height) {
+ return ValidColorDccBinding(binding,width,height,8);
 }
 enum class DccSliceKind { Unsupported, Expanded, Clear };
 struct DccSlice {
@@ -58,9 +61,9 @@ struct DccSlice {
 // Native initialization is deliberately narrower than metadata inspection: no arrays,
 // mip chains, register clears, or arbitrary colors can reach the transfer-clear path.
 inline bool CanInitializeDccClear(const DccSlice& slice,uint32_t levels,uint32_t base_level,
-                                  uint32_t depth,bool color_2d,bool rgba16f) {
+                                  uint32_t depth,bool color_2d,bool supported_color) {
  if(slice.kind!=DccSliceKind::Clear || levels!=1 || base_level || depth!=1 ||
-    !color_2d || !rgba16f) return false;
+    !color_2d || !supported_color) return false;
  for(float lane:slice.color) if(lane!=0.f && lane!=1.f) return false;
  return true;
 }

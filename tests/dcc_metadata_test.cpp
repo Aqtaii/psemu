@@ -5,6 +5,14 @@
 using namespace Libs::Graphics;
 #define CHECK(x) do {if(!(x)){std::printf("FAIL line %d: %s\\n",__LINE__,#x);return 1;}}while(0)
 int main() {
+ DccLayout packed;
+ CHECK(ComputeDccLayout(1920,1080,1,4,1,&packed));
+ CHECK(packed.block_width==512 && packed.block_height==512 && packed.total_bytes==49152);
+ DccBinding packed_binding{0x25b96c32000ull,packed,true};
+ CHECK(ValidColorDccBinding(packed_binding,1920,1080,4));
+ CHECK(!ValidColorDccBinding(packed_binding,1920,1080,8));
+ CHECK(!ValidColorDccBinding(packed_binding,1920,1080,2));
+ CHECK(!ValidRgba16fDccBinding(packed_binding,1920,1080));
  DccLayout layout;
  CHECK(ComputeDccLayout(1920,1080,1,8,1,&layout));
  CHECK(layout.block_width==512 && layout.block_height==256);

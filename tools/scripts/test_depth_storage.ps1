@@ -84,7 +84,7 @@ $resourceKind=[regex]::Match($ir,'enum class ResourceKind \{[\s\S]*?\};').Value
 if(!$dimension -or !$resourceKind){throw 'Production image enums missing'}
 $header+='namespace ShaderRecompiler { namespace Decoder {'+$dimension+'} namespace IR {'+$resourceKind+'struct ImageResource {ResourceKind kind;Decoder::ImageDimension dimension;bool read=false,written=true;};}}'
 $header+=Slice $views '[[nodiscard]] inline bool IsSupportedStorageDepthTile(' '[[noreturn]] inline void UnsupportedColorView('
-$header+=Slice $descriptorDefs 'static bool IsSupportedStorageTextureDescriptor(' 'static bool IsCapturedDccStorageEncoding('
+$header+=Slice $descriptorDefs 'static bool IsSupportedStorageTextureDescriptor(' 'void ValidateStorageTexture('
 $source=Join-Path $out 'depth_storage_production.cpp'
 [IO.File]::WriteAllText($source,$header+"`n"+[IO.File]::ReadAllText("$root\tests\depth_storage_test.cpp"),[Text.UTF8Encoding]::new($false))
 Push-Location $out

@@ -33,6 +33,8 @@ namespace Libs::Graphics {
 	       ((format == Prospero::GpuEnumValue(Prospero::BufferFormat::k8_8_8_8UNorm) ||
 	         format == Prospero::GpuEnumValue(Prospero::BufferFormat::k8_8_8_8UInt)) &&
 	        (swizzle == DstSel(4, 5, 6, 1) || swizzle == DstSel(6, 5, 4, 7))) ||
+	       (format == Prospero::GpuEnumValue(Prospero::BufferFormat::k11_11_10Float) &&
+	        swizzle == DstSel(4, 5, 6, 1)) ||
 	       (format == Prospero::GpuEnumValue(Prospero::BufferFormat::k32_32_32_32Float) &&
 	        swizzle == DstSel(5, 6, 7, 4));
 }
@@ -199,6 +201,7 @@ IsSupportedSampledDepthUintResource(const ShaderRecompiler::IR::ImageResource& r
      swizzle == DstSel(4, 5, 0, 1)) ||
 	    ((view_format == vk::Format::eR8G8B8A8Unorm || view_format == vk::Format::eR8G8B8A8Uint) &&
 	     (swizzle == DstSel(4, 5, 6, 1) || swizzle == DstSel(6, 5, 4, 7))) ||
+	    (view_format == vk::Format::eB10G11R11UfloatPack32 && swizzle == DstSel(4, 5, 6, 1)) ||
 	    (view_format == vk::Format::eR32G32B32A32Sfloat && swizzle == DstSel(5, 6, 7, 4));
 	if ((image_format != view_format &&
 	     !IsBgraSrgbStorageView(image_format, view_format, swizzle)) ||

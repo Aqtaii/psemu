@@ -13,10 +13,16 @@ try {
  if($LASTEXITCODE){throw 'Storage GPU shader compilation failed'}
  & "$env:VULKAN_SDK\Bin\spirv-val.exe" --target-env vulkan1.2 storage_mip_gpu.spv
  if($LASTEXITCODE){throw 'Storage GPU SPIR-V validation failed'}
+ & "$env:VULKAN_SDK\Bin\glslangValidator.exe" -V --target-env vulkan1.2 "$root\tests\storage_packed_gpu.comp" -o storage_packed_gpu.spv
+ if($LASTEXITCODE){throw 'Packed storage GPU shader compilation failed'}
+ & "$env:VULKAN_SDK\Bin\spirv-val.exe" --target-env vulkan1.2 storage_packed_gpu.spv
+ if($LASTEXITCODE){throw 'Packed storage GPU SPIR-V validation failed'}
  & clang-cl /nologo /std:c++20 /O2 /EHsc /MD "/I$env:VULKAN_SDK\Include" storage_mip_gpu_production.cpp /Fe:storage_mip_gpu_test.exe /link "/LIBPATH:$env:VULKAN_SDK\Lib" vulkan-1.lib
  if($LASTEXITCODE){throw 'Storage mip GPU test compilation failed'}
  foreach($target in @(0,1,7)) {
   & .\storage_mip_gpu_test.exe storage_mip_gpu.spv $target
   if($LASTEXITCODE){throw "Storage mip Vulkan test failed at mip $target"}
  }
+ & .\storage_mip_gpu_test.exe storage_packed_gpu.spv 0 packed
+ if($LASTEXITCODE){throw 'Packed float storage Vulkan test failed'}
 } finally {Pop-Location}

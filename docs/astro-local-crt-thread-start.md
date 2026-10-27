@@ -972,3 +972,32 @@ independently expected per-pixel permutation, nonempty pixel tail outside the ne
 storage allocation, unchanged padding/prefix/canaries, and full-range publication
 across a cached buffer tail. Ownership/conflict/malformed/disjoint checks remain
 negative; formerly rejected valid partial overlaps now pass. Local build pending.
+
+## 2026-10-27: packed R11G11B10 RGB1 DCC storage
+
+157dc0e retryPID21980 passes the straddling target guard, compiles50 shaders,
+then exits321 at23:50:51 on new R11G11B10Float(format36) output. Captured
+1920x1080+0x870000 RGB1(0x3ac), write-only2D, descriptor:
+5b632f00 c2400002 010dc1df 91b003ac 00000000 00700000 207b0000 025b96c3.
+Existing DCC-storage encoding accepted only RGBA16F and native storage views
+rejected the RGB1 swizzle for packed float.
+
+Accept this specific format/swizzle in descriptor/view validation; native storage
+view stays identity and the existing production inverse swizzle routes RGB to
+physical RGB, with absent alpha discarded by the packed format. Retain rejection
+of nonidentity storage reads. DCC storage now computes metadata from actual
+4/8 byte format: packed1920x1080 uses512x512 metadata blocks,49152 bytes, while
+RGBA16F keeps512x256 and81920 bytes. Only the two validated formats/swizzles and
+existing exact captured metadata-control bits are accepted; full-slice inspection,
+clear/expanded-only decoding, synchronization and alias/conflict checks remain.
+Render-target reconstruction validates packed storage's4-byte physical backing.
+
+Captured production descriptor/encoding/swizzle positives and malformed/reserved/
+read-access negatives PASS. Production DCC footprint/binding regression PASS.
+Arc B580 Vulkan test writes2073600 pixels via formatless OpImageWrite to native
+B10G11R11UfloatPack32, barriers, samples same image through RGB1, writes again,
+then checks exact packed(.25,.5,1) bits and untouched row padding on host readback.
+Production inverse swizzle is extracted for this test. GLSL/spirv-val PASS; existing
+R32 depth targets0/1/7 also PASS. Emulator device already enables the required
+shaderStorageImageWriteWithoutFormat feature. This fixture is not Astro execution.
+Initial packed-dcc-output build passes; full packed ownership build/test pending.
