@@ -430,3 +430,20 @@ Full local build, both backing regressions, native backing and directory HLE
 self-tests pass. The actual retry astro_20261027_file_backing reports D-file
 ready=1 and all six large maps succeed. At~T90 system commit is~20.15GB instead
 of~30GB; Vulkan compilation and recognized game output remain pending.
+## 2026-10-27: D-backed run passes the failing compute and real SPX enumeration
+
+Owned PID19444 / astro_20261027_file_backing reaches presentation successfully.
+The previously failing293827-word compute shader succeeds and the real draw
+pipeline continues. First six presentations remain visually black/dithered
+(diff=0), confirmed by viewing frame_00000.bmp in images/run_20261027_131603.
+Render-target nonzero data alone is not recognizable game output.
+
+Unlike the prior pending status, the actual game now opens data/prein/spx,
+enumerates411 entries /13824 dirent bytes (fd793 andfd1298), and opens the real
+SPX files, including world_map_selection_top.spx and zoo.spx. Armadillo Load end
+is logged atT834 and Transition Load end atT925. This is runtime proof of the
+directory fix; no generated assets or fabricated directory entries were used.
+AtT~974 the process remains alive while loading additional character/effect
+resources, ~7.2GiB private and ~25GB system commit /30GB limit. Runtime memory
+samples are in astro_20261027_file_backing_memory.csv. First recognized game
+frame and subsequent pipeline correctness remain unresolved.
