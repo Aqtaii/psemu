@@ -861,3 +861,36 @@ and production depth tests pass. Full local build sampled-mips-output completed
 19:35:32 with matching loader.map; review quota paused subsequent commands until
 user resumed22:40. Targeted tests and native-backing/clock self-tests pass again.
 First recognizable Astro frame and actual game sampled-view retry remain pending.
+
+## 2026-10-27: bind depth storage views to every valid backing mip
+
+eb97f1b retryPID18080 gets beyond the earlier sampled8/storage1 view mismatch.
+Next real fatal exits321 at22:51:43: same R32Float480x270 depth mip chain,
+size160000, MaxMip7, RRR1, but output now selects base_level1/last_level1.
+Exact descriptor8c689600 c1600002 00434077 91811324 00000000 00700070 0 0.
+IsSupportedStorageTextureDescriptor still required depth-float base0/last0;
+PlanDepthStorageMipLayout also conflated base view with physical mip layout.
+
+Allow any nonempty in-range single storage mip for the existing full R32 depth
+backing. Native descriptor predicate retains its base==last, last<=MaxMip,
+write-only/depth/format/type/swizzle/encoding checks. Physical mip plan validates
+base<levels while keeping the full unchanged allocation offsets. Native image
+creation already allocates the complete chain from physical mip0 and the existing
+GetStorageTextureStorageView supplies the selected single-mip identity Vulkan
+view; EqualStorageBacking already ignores view selection. No address/LOD spoofing.
+
+Actual production descriptor and encoding validators are now extracted in the
+CPU test: captured descriptor passes mip0..7 and rejects reversed/multimip/out-
+of-range storage views and nonidentity reads. Physical plans for all selected
+mips have identical offsets; existing invalid bounds/padding/ownership tests pass.
+Offscreen Vulkan test accepts target mip and samples all OTHER mips through the
+same full-chain RRR1 view, verifying query-level count/channel values before
+writing. Arc B580 passes targets0(129600 pixels),1(32400),7(6), with7 untouched
+mips and preserved host padding each time. GLSL/SPIR-V validation passes.
+Full local build storage-levels-output completed with matching map. Actual Astro
+retry and first recognizable game frame remain pending.
+
+Opening-sequence clarification from actual old logs: sceAvPlayerInit returns0,
+then Stop/Close run; game proceeds from ps_logo to title_controller_ship resource
+loading. ps_logo log is not a rendered-logo claim. Target remains a genuine
+Vulkan-rendered title/game frame, not a fabricated or externally decoded image.

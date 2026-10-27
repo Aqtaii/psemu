@@ -15,6 +15,8 @@ try {
  if($LASTEXITCODE){throw 'Storage GPU SPIR-V validation failed'}
  & clang-cl /nologo /std:c++20 /O2 /EHsc /MD "/I$env:VULKAN_SDK\Include" storage_mip_gpu_production.cpp /Fe:storage_mip_gpu_test.exe /link "/LIBPATH:$env:VULKAN_SDK\Lib" vulkan-1.lib
  if($LASTEXITCODE){throw 'Storage mip GPU test compilation failed'}
- & .\storage_mip_gpu_test.exe storage_mip_gpu.spv
- if($LASTEXITCODE){throw 'Storage mip Vulkan test failed'}
+ foreach($target in @(0,1,7)) {
+  & .\storage_mip_gpu_test.exe storage_mip_gpu.spv $target
+  if($LASTEXITCODE){throw "Storage mip Vulkan test failed at mip $target"}
+ }
 } finally {Pop-Location}

@@ -462,7 +462,7 @@ using DepthStorageMipLayout=std::array<DepthStorageMip,16>;
      info.format!=Prospero::GpuEnumValue(Prospero::BufferFormat::k32UInt)) ||
     info.type!=Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) || info.depth!=1 ||
     info.address==0 || (info.address&0xffffu)!=0 || info.width==0 || info.height==0 ||
-    info.base_level!=0 || info.levels==0 || info.levels>16 || info.view_levels!=1 || info.base_array!=0)
+    info.levels==0 || info.levels>16 || info.base_level>=info.levels || info.view_levels!=1 || info.base_array!=0)
   return false;
  const uint64_t expected_pitch=(uint64_t(info.width)+127u)&~uint64_t(127u);
  if(expected_pitch>UINT32_MAX || info.pitch!=expected_pitch)return false;

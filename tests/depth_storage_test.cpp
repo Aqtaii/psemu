@@ -506,6 +506,22 @@ int main() {
   Require(IsSupportedStorageSwizzle(Prospero::GpuEnumValue(f),0x22c));
   Require(!IsSupportedStorageSwizzle(Prospero::GpuEnumValue(f),DstSel(5,4,0,1)));
  }
+ // Exact captured image descriptor goes through the actual production validator.
+ {
+  ShaderTextureResource d{{0x8c689600,0xc1600002,0x00434077,0x91800324,0,0x00700070,0,0}};
+  ShaderRecompiler::IR::ImageResource resource{ShaderRecompiler::IR::ResourceKind::StorageImage,
+   ShaderRecompiler::Decoder::ImageDimension::Dim2D,false,true};
+  Require(d.Format()==22 && d.Width5()==479 && d.Height5()==269 && d.MaxMip()==7);
+  for(uint32_t mip=0;mip<8;++mip) {
+   d.fields[3]=0x91800324|(mip<<12)|(mip<<16);
+   Require(IsSupportedStorageTextureDescriptor(resource,d) && IsSupportedStorageTextureEncoding(d));
+  }
+  for(uint32_t flags:std::array<uint32_t,3>{0x91801324,0x91810324,0x91888324}) {
+   d.fields[3]=flags;Require(!IsSupportedStorageTextureDescriptor(resource,d));
+  }
+  d.fields[3]=0x91811324;resource.read=true;
+  Require(!IsSupportedStorageTextureDescriptor(resource,d));
+ }
  // Captured ps_logo output: R32Float, RRR1, mip0 view of eight depth mips.
  Require(IsSupportedStorageSwizzle(Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float),0x324));
  Require(!IsSupportedStorageSwizzle(Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16Float),0x324));
@@ -534,10 +550,15 @@ int main() {
   Require(classify(sampled,true,false,false)==StorageSampledOverlap::Unsupported);
   const std::array<uint64_t,8> offsets{0,0xc0000,0x100000,0x110000,0x120000,0x130000,0x140000,0x150000};
   for(uint32_t i=0;i<8;++i)Require(plan[i].offset==offsets[i]);
+  for(uint32_t mip=0;mip<8;++mip) {
+   auto write_view=chain;write_view.base_level=mip;DepthStorageMipLayout same_plan{};
+   Require(PlanDepthStorageMipLayout(write_view,&same_plan));
+   for(uint32_t l=0;l<8;++l)Require(same_plan[l].offset==plan[l].offset && same_plan[l].size==plan[l].size);
+  }
   for(uint32_t field=0;field<9;++field) {
    auto bad=chain;
    switch(field){case 0:--bad.size;break;case 1:++bad.pitch;break;case 2:bad.levels=0;break;
-    case 3:bad.levels=10;break;case 4:bad.base_level=1;break;case 5:bad.view_levels=2;break;
+    case 3:bad.levels=10;break;case 4:bad.base_level=8;break;case 5:bad.view_levels=2;break;
     case 6:bad.depth=2;break;case 7:bad.address+=4;break;case 8:bad.width=0;break;}
    DepthStorageMipLayout untouched{};untouched[0].offset=0xabc;
    Require(!PlanDepthStorageMipLayout(bad,&untouched) && untouched[0].offset==0xabc);

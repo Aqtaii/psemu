@@ -77,6 +77,14 @@ $rgbaEnd=$info.IndexOf('[[nodiscard]]',$rgbaStart+10)
 if($rgbaStart -lt 0 -or $rgbaEnd -le $rgbaStart){throw 'Production RGBA reinterpretation missing'}
 $header+=$info.Substring($rgbaStart,$rgbaEnd-$rgbaStart)
 $header+=Slice $info '[[nodiscard]] inline StorageSampledOverlap' '[[nodiscard]] inline HostWriteOverlap'
+$decoder=[IO.File]::ReadAllText("$root\gpu\src\graphics\shader\recompiler\ShaderDecoder.h")
+$ir=[IO.File]::ReadAllText("$root\gpu\src\graphics\shader\recompiler\ShaderIR.h")
+$dimension=[regex]::Match($decoder,'enum class ImageDimension : uint32_t \{[\s\S]*?\};').Value
+$resourceKind=[regex]::Match($ir,'enum class ResourceKind \{[\s\S]*?\};').Value
+if(!$dimension -or !$resourceKind){throw 'Production image enums missing'}
+$header+='namespace ShaderRecompiler { namespace Decoder {'+$dimension+'} namespace IR {'+$resourceKind+'struct ImageResource {ResourceKind kind;Decoder::ImageDimension dimension;bool read=false,written=true;};}}'
+$header+=Slice $views '[[nodiscard]] inline bool IsSupportedStorageDepthTile(' '[[noreturn]] inline void UnsupportedColorView('
+$header+=Slice $descriptorDefs 'static bool IsSupportedStorageTextureDescriptor(' 'static bool IsCapturedDccStorageEncoding('
 $source=Join-Path $out 'depth_storage_production.cpp'
 [IO.File]::WriteAllText($source,$header+"`n"+[IO.File]::ReadAllText("$root\tests\depth_storage_test.cpp"),[Text.UTF8Encoding]::new($false))
 Push-Location $out
