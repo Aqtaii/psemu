@@ -493,6 +493,7 @@ struct TextureCache::ReadbackWorker {
 		            : MakeColorImageTransferInfo(cached.target);
 		const bool linear = info.tile_mode == Prospero::GpuEnumValue(Prospero::TileMode::kLinear);
 		const bool tiled_target = target && IsTiledRenderTarget(cached.target);
+        const bool depth_storage=storage && IsSupportedDepthStorageBacking(cached.info);
 		const bool tiled_storage =
 		    storage && (info.tile_mode == Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) ||
 		                IsSupportedDepthStorageBacking(cached.info));
@@ -508,10 +509,10 @@ struct TextureCache::ReadbackWorker {
 		}
 		const bool basic_storage =
 		    !storage ||
-		    (single_layer_storage && cached.info.base_level == 0 && cached.info.levels == 1 &&
+		    (single_layer_storage && cached.info.base_level == 0 && (cached.info.levels == 1 || depth_storage) &&
 		     cached.info.base_array == 0 && (linear || tiled_storage));
 		const auto layers = target ? cached.target.layers : 1u;
-		if ((!linear && !tiled_target && !tiled_storage) || !basic_storage || info.levels != 1 ||
+		if ((!linear && !tiled_target && !tiled_storage) || !basic_storage || (info.levels != 1 && !depth_storage) ||
 		    info.size > UINT32_MAX) {
 			EXIT("TextureCache: unsupported color-image readback layout, addr=0x%016" PRIx64
 			     " size=0x%016" PRIx64 " extent=%ux%u pitch=%u bpe=%u levels=%u tile=%u kind=%u\n",
@@ -531,8 +532,15 @@ struct TextureCache::ReadbackWorker {
 		const auto reconstruct = [&] {
 			download.resize(info.size);
 			std::fill(download.begin(), download.end(), 0);
-			const auto regions = Transfer::MakeLayeredImageBufferCopies(layers, slice_size, info.pitch,
-			                                                            info.width, info.height);
+            auto regions=Transfer::MakeLayeredImageBufferCopies(layers,slice_size,info.pitch,info.width,info.height);
+            if(depth_storage) {
+             DepthStorageMipLayout mips{};EXIT_IF(!PlanDepthStorageMipLayout(cached.info,&mips));
+             regions.clear();regions.reserve(cached.info.levels);
+             for(uint32_t level=0;level<cached.info.levels;++level) {
+              const auto& m=mips[level];
+              regions.push_back({uint32_t(m.offset),m.pitch,level,m.width,m.height,m.height,0,0,0,0,vk::ImageAspectFlagBits::eColor});
+             }
+            }
 			Transfer::DownloadImage(cached.ctx, download.data(), info.size, regions, cached.image,
 			                        cached.image->layout);
 			static const bool diagnostics = [] {
@@ -570,8 +578,12 @@ struct TextureCache::ReadbackWorker {
 				                                               info.tile_mode,
 				                                               info.levels,
 				                                               1};
-				if (storage) {
-					cache.m_tiler.TileImage(guest.data(), download.data(), cached.info);
+                if(depth_storage) {
+                 if(!LibKernel::Memory::TryReadBacking(info.address,guest.data(),info.size))
+                  EXIT("TextureCache: cannot preserve depth mip readback backing\n");
+                 TileDepthStorageMipsPreservePadding(guest.data(),download.data(),cached.info);
+                } else if (storage) {
+                    cache.m_tiler.TileImage(guest.data(),download.data(),cached.info);
 				} else if (preserve_target_padding) {
 					if (!IsTiledRenderTarget(layout) || (layout.bytes_per_element != 2 && layout.bytes_per_element != 4 && layout.bytes_per_element != 8) ||
 					    !Libs::LibKernel::Memory::TryReadBacking(info.address, guest.data(), info.size)) {
@@ -1104,6 +1116,17 @@ void TextureCache::ResolveStorageImageOverlaps(CommandBuffer* command, GraphicCo
 			case StorageImageOverlap::RetireSampled: retire.push_back(cached); continue;
 			case StorageImageOverlap::PageNeighbor: continue;
 			case StorageImageOverlap::Unsupported:
+                if(cached->kind==CachedImage::Kind::StorageTexture &&
+                   CanReconstructStorageForStorage(cached->info,cached->gpu_modified,cached->buffer_modified,
+                    tracker_gpu,m_memory_tracker.IsRegionCpuModified(cached->Address(),cached->Size()),
+                    cached->ctx==ctx,m_buffer_cache.HasPageOverlap(cached->Address(),cached->Size()),requested)) {
+                 retire.push_back(cached);
+                 static std::atomic_uint storage_alias_logs{0};
+                 if(storage_alias_logs.fetch_add(1)<8)printf("[STORAGE-STORAGE-RETIRE] old=0x%016" PRIx64
+                  "+0x%016" PRIx64 " requested=0x%016" PRIx64 "+0x%016" PRIx64 " publish_full_backing=1\n",
+                  cached->Address(),cached->Size(),requested.address,requested.size);
+                 continue;
+                }
 				if (cached->kind == CachedImage::Kind::RenderTarget &&
 				    CanRetireCleanRenderTargetForStorage(
 				        cached->target, cached->gpu_modified, cached->buffer_modified, tracker_gpu,
@@ -1150,7 +1173,7 @@ void TextureCache::ResolveStorageImageOverlaps(CommandBuffer* command, GraphicCo
 	}
 	RequireRetirementIsolation(retire, "storage neighbor", requested.address, requested.size);
 	for (auto* cached: retire) {
-		if (cached->kind != CachedImage::Kind::RenderTarget) {
+		if (cached->kind != CachedImage::Kind::RenderTarget && cached->kind != CachedImage::Kind::StorageTexture) {
 			continue;
 		}
 		const auto owner = std::find_if(m_images.begin(), m_images.end(),

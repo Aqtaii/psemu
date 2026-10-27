@@ -1118,6 +1118,17 @@ CanReconstructStorageForRenderTarget(const ImageInfo& storage, bool gpu_modified
         target.levels == 1 && target.layers == 1;
 }
 
+// Distinct transient storage owners must publish their complete GPU backing before reuse.
+// Restrict this path to validated R32 depth mip layouts without competing buffer/CPU owners.
+[[nodiscard]] inline bool
+CanReconstructStorageForStorage(const ImageInfo& old,bool gpu,bool buffer,bool tracker_gpu,
+                               bool cpu,bool same_context,bool buffers,const ImageInfo& requested) {
+ return gpu && tracker_gpu && !buffer && !cpu && same_context && !buffers &&
+        IsSupportedDepthStorageBacking(old) && IsSupportedDepthStorageBacking(requested) &&
+        old.size<=UINT64_MAX-old.address && requested.size<=UINT64_MAX-requested.address &&
+        ImageRangeOverlaps(old.address,old.size,requested.address,requested.size);
+}
+
 [[nodiscard]] inline bool IsSupportedRenderTargetReconstructionFootprint(const RenderTargetInfo& t) {
  if(IsSupportedStandard64RenderTarget(t)) return true;
  if(t.tile_mode!=Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) ||

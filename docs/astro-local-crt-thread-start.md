@@ -800,3 +800,34 @@ Tests use actual production SysV functions and extracted VEH branch, known
 binary32 categories, poisoned upper XMM bits and unchanged MXCSR. Passed.
 No forced-finite result, bypassed game assertion or altered fp_isfinite(double).
 Local Jetsku reference search found no __isfinitef implementation to reuse.
+
+## 2026-10-27: preserve GPU storage owner across transient partial overlap
+
+c766b65 retryPID9492 accepts the previous R32Float RRR1/mip descriptor, but
+later exits321 at19:08:44 (~515s), with ps_logo startedT511. New exact error:
+requested184edd30000+160000 versus existing184ede50000+c0000, kind1(StorageTexture),
+same context, native/trackerGPU-dirty, CPU/buffer clean. Existing old single-mip
+owner straddles the new8-mip backing's right edge (offset120000; old end1e0000,
+new end160000). Never discard this GPU data or change descriptor addresses.
+
+Add a strict storage->storage reconstruction predicate for validated R32 depth
+mip backings, actual byte overlap, consistent native/tracker GPU ownership,
+same context, no CPU/yielded/buffer owner, and no cached-buffer page overlap.
+Existing exact-match reuse runs earlier and remains unchanged. Retirement
+isolation still rejects any retained page alias. Retain the old StorageTexture
+on the recording command until fence, as already done for render targets.
+Use the existing real readback/publication transaction before retirement.
+ReadbackWorker::DownloadColorImage now generates one correct region per depth
+mip, downloads all of them and retiles with original padding preserved. Other
+unsupported multi-mip storage layouts remain rejected. This also completes the
+worker path separately from the buffer-transition path fixed in c766b65.
+
+Production tests cover the captured partial overlap both directions, disjoint
+ranges, invalid old layout, and every rejected ownership/context state. Actual
+depth conversion publishes the complete old range including its out-of-request
+tail, with external canaries and pixel roundtrip checks. Depth and float tests
+pass. Full local build and secure-copy/clock/native-backing self-tests pass;
+previous Arc B5808-mip upload/compute-write/download test remains passing evidence
+for the mip data path, not proof of this full game alias transition. Candidate
+D:/Tools/psemu-build/storage-alias-output includes matching map. First recognizable
+Astro frame and actual alias/telemetry retry remain pending.

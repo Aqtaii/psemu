@@ -541,6 +541,28 @@ int main() {
    TileConvertLinearToTiledDepth(mask.data(),ones.data(),chain.format,m.width,m.height,m.pitch,m.size);
    for(size_t word=0;word<mask.size();++word)if(!mask[word])Require(guest[1+m.offset/4+word]==0xdeadbeef);
   }
+  // Captured transient owner straddles the requested mip chain's right edge.
+  auto old=chain;old.address+=0x120000;old.size=0xc0000;old.levels=1;
+  Require(CanReconstructStorageForStorage(old,true,false,true,false,true,false,chain));
+  Require(CanReconstructStorageForStorage(chain,true,false,true,false,true,false,old));
+  Require(old.address<chain.address+chain.size && old.address+old.size>chain.address+chain.size);
+  for(int bad=0;bad<7;++bad){
+   auto owner=old;if(bad==6)--owner.size;
+   Require(!CanReconstructStorageForStorage(owner,bad!=0,bad==1,bad!=2,bad==3,bad!=4,bad==5,chain));
+  }
+  auto disjoint=old;disjoint.address=chain.address+chain.size;
+  Require(!CanReconstructStorageForStorage(disjoint,true,false,true,false,true,false,chain));
+  std::vector<uint8_t> whole(0x1e0000+2,0xa5),old_linear(old.size,0);
+  for(uint32_t y=0;y<old.height;++y)for(uint32_t x=0;x<old.width;++x){
+   const uint32_t value=0x3e800000u+y*512+x;std::memcpy(old_linear.data()+(y*old.pitch+x)*4,&value,4);
+  }
+  TileDepthStorageMipsPreservePadding(whole.data()+1+0x120000,old_linear.data(),old);
+  for(size_t i=0;i<0x120000+1;++i)Require(whole[i]==0xa5);
+  Require(whole.back()==0xa5);
+  std::vector<uint8_t> old_decoded(old.size,0);
+  TileConvertTiledToLinearDepth(old_decoded.data(),whole.data()+1+0x120000,old.format,old.width,old.height,old.pitch,old.size);
+  for(uint32_t y=0;y<old.height;++y)for(uint32_t x=0;x<old.width;++x)
+   Require(!std::memcmp(old_decoded.data()+(y*old.pitch+x)*4,old_linear.data()+(y*old.pitch+x)*4,4));
   const auto before=guest;
   linear[1]=0x3e800000; // A mip0-only edit must retain all other mip bytes.
   TileDepthStorageMipsPreservePadding(guest.data()+1,linear.data()+1,chain);
