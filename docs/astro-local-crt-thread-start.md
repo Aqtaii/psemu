@@ -1001,3 +1001,13 @@ Production inverse swizzle is extracted for this test. GLSL/spirv-val PASS; exis
 R32 depth targets0/1/7 also PASS. Emulator device already enables the required
 shaderStorageImageWriteWithoutFormat feature. This fixture is not Astro execution.
 Initial packed-dcc-output build passes; full packed ownership build/test pending.
+
+Full packed-dcc-complete-output build finished successfully; matching loader.map
+copied. Intermediate PID19112 was intentionally stopped after verifying its exact
+executable path while still booting (not a game failure). Complete retryPID20136
+started2026-10-28T00:00:19, log prefixastro_20261028_packed_dcc_complete.
+The packed Vulkan fixture additionally initializes native image with transfer
+clear(1,1,1,0), samples through RGB1 to verify(1,1,1,1), performs formatless writes,
+barriers and samples again before checking all2073600 packed pixels and padding.
+PASS on Arc B580. R32mip0/1/7 regressions PASS. No production change for this added
+clear check. Actual complete Astro run is still loading; first image pending.
