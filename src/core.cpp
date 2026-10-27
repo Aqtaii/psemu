@@ -18,6 +18,7 @@
 #include "sarah_tls_sites.h"
 #include "astro_tls_sites.h"
 #include "shared_direct_memory.h"
+#include "guest_memory_query.h"
 #include <io.h>
 #include <unordered_map>
 #include "agc.h"
@@ -93,8 +94,7 @@ static bool SafeReadable(const void* p, size_t n) {
     const uint8_t* end = cur + n;
     while (cur < end) {
         MEMORY_BASIC_INFORMATION mbi;
-        g_vq_calls.fetch_add(1, std::memory_order_relaxed);
-        if (VirtualQuery(cur, &mbi, sizeof(mbi)) == 0) return false;
+        if (GuestMemoryQuery::Query(cur, &mbi, &g_vq_calls) == 0) return false;
         if (mbi.State != MEM_COMMIT) return false;
         DWORD prot = mbi.Protect & 0xFF;
         if (prot == PAGE_NOACCESS) return false;
@@ -123,8 +123,7 @@ static bool SafeWritable(void* p, size_t n) {
     uint8_t* const end = cur + n;
     while (cur < end) {
         MEMORY_BASIC_INFORMATION mbi;
-        g_vq_calls.fetch_add(1, std::memory_order_relaxed);
-        if (VirtualQuery(cur, &mbi, sizeof(mbi)) == 0) return false;
+        if (GuestMemoryQuery::Query(cur, &mbi, &g_vq_calls) == 0) return false;
         if (mbi.State != MEM_COMMIT) return false;
         const DWORD prot = mbi.Protect & 0xFF;
         const bool writable = (prot == PAGE_READWRITE) || (prot == PAGE_WRITECOPY) ||
@@ -157,7 +156,7 @@ static size_t SafeStrlen(const char* p, size_t max_len = SIZE_MAX) {
     size_t len = 0;
     while (len < max_len) {
         MEMORY_BASIC_INFORMATION mbi;
-        if (VirtualQuery(cur, &mbi, sizeof(mbi)) == 0) break;
+        if (GuestMemoryQuery::Query(cur, &mbi, &g_vq_calls) == 0) break;
         if (mbi.State != MEM_COMMIT) break;
         if ((mbi.Protect & 0xFF) == PAGE_NOACCESS || (mbi.Protect & PAGE_GUARD)) break;
 
@@ -977,8 +976,7 @@ static const char* GuestFindCharacter(const char* s, int c, bool reverse) {
     const char* last = nullptr;
     for (;;) {
         MEMORY_BASIC_INFORMATION mbi{};
-        g_vq_calls.fetch_add(1, std::memory_order_relaxed);
-        if (!VirtualQuery(reinterpret_cast<const void*>(cursor), &mbi, sizeof(mbi)) ||
+        if (!GuestMemoryQuery::Query(reinterpret_cast<const void*>(cursor), &mbi, &g_vq_calls) ||
             mbi.State != MEM_COMMIT || (mbi.Protect & PAGE_GUARD)) return last;
         const DWORD protection = mbi.Protect & 0xff;
         if (protection != PAGE_READONLY && protection != PAGE_READWRITE &&

@@ -6,6 +6,7 @@ function Slice([string]$start,[string]$end){$a=$source.IndexOf($start);$b=$sourc
 $prefix=@"
 #define NOMINMAX
 #include <windows.h>
+#include "$root/include/guest_memory_query.h"
 #include <atomic>
 #include <thread>
 #include <mutex>

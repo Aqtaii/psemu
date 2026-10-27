@@ -682,3 +682,39 @@ Candidate D:/Tools/psemu-build/search-output includes matching loader.map.
 Next runtime disables heavy per-draw pixel/coverage/mesh-output probes while
 retaining actual framebuffer captures; instrumentation cost and search effect
 will therefore not be attributed separately without a controlled comparison.
+
+## 2026-10-27: avoid full mapped-region walks in small HLE checks
+
+Search-only candidate a08462b, PID19484, first captures18:25:58/18:26:55/
+18:27:37 are still black, with57/42s intervals. Removing heavy per-draw probes
+and direct searches has not established a visible-frame or major FPS success.
+Read-only thread samples show both hot CPU threads in NtQueryVirtualMemory
+through SafeReadable/SafeWritable/SafeReadCString. An external10-query sample
+at actual primary pool address0x2205ad02c5f reports region0xdab5e000 and mean
+VirtualQueryEx60.10ms(min46.69/max69.22); small heap region query~0.0025ms.
+Current primary mapping is D-file backed with large protection-expanded ranges.
+
+GuestMemoryQuery::Query uses K32QueryWorkingSetEx for a VALID resident page's
+current Win32Protection, returning only that one host page's extent. Invalid
+working-set metadata is never interpreted; unknown/nonresident/reserved/free
+entries fall back to VirtualQuery. No permission cache, stale permission reuse,
+page touching, guard consumption, memory mapping or pagefile setting changes.
+This follows Microsoft PSAPI_WORKING_SET_EX_BLOCK Valid/Win32Protection contract:
+https://learn.microsoft.com/en-us/windows/win32/api/psapi/ns-psapi-psapi_working_set_ex_block
+Applied to the measured SafeReadable/Writable/Strlen and native character-search
+helpers. g_vq_calls counts actual fallback VirtualQuery calls; resident queries
+are not counted there. Page-size-clipped regions remain valid for all4 callers.
+The existing concurrent-unmapping lifetime limitation remains unchanged.
+
+A real1GiB sparse D-file with whole-range NOACCESS->RW protection reproduces
+slow region walking: VirtualQuery7.419ms vs page query0.003ms in test. No timing
+assertion is used. Tests verify actual resident fast path without fallback,
+nonresident/reserved/free fallback, current RW->RO->NOACCESS->GUARD changes,
+guard retained, independent alias permissions and delete-on-close cleanup.
+Character search, secure format, mutex-cache, native atomics and semaphore
+handler regressions pass. Existing file-I/O source-extraction harness had stale
+HDR/directory/positioned-read dependencies; updated it to use actual production
+reader/globals and verified its real open/write/read/stat/canary/close test.
+Full local build and clock, native-semaphore, HTTP, secure-copy, native-backing
+self-tests pass. Candidate D:/Tools/psemu-build/query-output has matching map.
+Actual runtime timing and first recognizable Astro frame remain pending.

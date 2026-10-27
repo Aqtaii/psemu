@@ -8,6 +8,7 @@ if($a -lt 0 -or $b -le $a){throw 'Missing production character-search range'}
 $prefix=@"
 #define NOMINMAX
 #include <windows.h>
+#include "$root/include/guest_memory_query.h"
 #include <atomic>
 #include <algorithm>
 #include <string>

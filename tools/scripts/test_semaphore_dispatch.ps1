@@ -7,10 +7,11 @@ function Get-SourceRange([string]$begin, [string]$end) {
     if ($first -lt 0 -or $last -le $first) { throw "Source range not found: $begin" }
     return $source.Substring($first, $last - $first)
 }
-$memory = Get-SourceRange 'static bool SafeReadable(' 'static size_t SafeStrlen('
+$memory = Get-SourceRange 'static bool SafeReadable(' 'static int CallGuestHdrToneMapLuminance('
 $dispatch = Get-SourceRange '            if (readable_name == "sceKernelCreateSema" ||' '            // ========================================================'
 $prefix = @'
 #include <windows.h>
+#include "$root/include/guest_memory_query.h"
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
@@ -22,6 +23,7 @@ static std::atomic<uint64_t> g_vq_calls{0};
 $wrapper = @'
 static LONG Dispatch(const std::string& readable_name, CONTEXT* ctx) {
 '@
+$prefix=$prefix.Replace('$root',$root.Replace('\','/'))
 $tests = @'
     return EXCEPTION_CONTINUE_SEARCH;
 }

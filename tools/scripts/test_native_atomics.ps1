@@ -8,10 +8,11 @@ function Get-SourceRange([string]$begin, [string]$end) {
     if ($first -lt 0 -or $last -le $first) { throw "Production source range not found: $begin" }
     return $source.Substring($first, $last - $first)
 }
-$memory = Get-SourceRange 'static bool SafeReadable(' 'static size_t SafeStrlen('
+$memory = Get-SourceRange 'static bool SafeReadable(' 'static int CallGuestHdrToneMapLuminance('
 $atomics = Get-SourceRange 'static PSEMU_SYSV int32_t NativeAtomicFetchAdd4(' 'static PSEMU_SYSV int NativeStrcmp('
 $prefix = @'
 #include <windows.h>
+#include "$root/include/guest_memory_query.h"
 #include <intrin.h>
 #include <atomic>
 #include <cstdint>
@@ -22,6 +23,7 @@ $prefix = @'
 static std::atomic<uint64_t> g_vq_calls{0};
 #define PSEMU_SYSV __attribute__((sysv_abi))
 '@
+$prefix=$prefix.Replace('$root',$root.Replace('\','/'))
 $tests = @'
 #define CHECK(expr) do { if (!(expr)) { std::printf("FAIL line %d: %s\n", __LINE__, #expr); return 1; } } while (0)
 static LONG WINAPI TestVeh(EXCEPTION_POINTERS* info) {

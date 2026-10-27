@@ -3,13 +3,16 @@ $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $source = [IO.File]::ReadAllText((Join-Path $root 'src\core.cpp'))
 $first = $source.IndexOf('static bool SafeReadable(')
 $last = $source.IndexOf('static std::string FormatSysVPrintf(', $first)
-$memory = $source.Substring($first, $last - $first)
+$memoryEnd=$source.IndexOf('static int CallGuestHdrToneMapLuminance(', $first)
+$stringStart=$source.IndexOf('static size_t SafeStrlen(', $memoryEnd)
+$memory=$source.Substring($first,$memoryEnd-$first)+$source.Substring($stringStart,$last-$stringStart)
 $first = $source.IndexOf('else if (readable_name == "sceKernelOpen"')
 $last = $source.IndexOf('            } else if (readable_name == "fopen")', $first)
 if ($first -lt 0 -or $last -le $first) { throw 'Production file dispatch not found' }
 $dispatch = $source.Substring($first, $last - $first)
 $prefix = @"
 #include <windows.h>
+#include "$root/include/guest_memory_query.h"
 #include <atomic>
 #include <cstdint>
 #include <cstddef>
@@ -20,13 +23,22 @@ $prefix = @"
 #include <unordered_map>
 #include <io.h>
 #include "guest_file_stat.h"
+#include "guest_positioned_read.h"
+#include "guest_directory.h"
 std::atomic<uint64_t> g_vq_calls{0};
 static std::mutex g_vfs_mutex;
 static std::unordered_map<int, FILE*> g_kernel_files;
+static std::atomic<int> g_kernel_fd_counter{100};
+static std::unordered_map<int,GuestDirectorySnapshot> g_kernel_directories;
+static thread_local int g_guest_errno=0;
 static std::string TranslateGuestPath(const std::string& p) { return p; }
 static void EnsureParentDirs(const std::string&) {}
 #define LOG_INFO(x) ((void)0)
 "@
+$directoryStart=$source.IndexOf('static int64_t ReadGuestDirectory(')
+$directoryEnd=$source.IndexOf('extern "C" int PsemuDirectorySelfTest(', $directoryStart)
+if($directoryStart -lt 0 -or $directoryEnd -le $directoryStart){throw 'Production directory reader not found'}
+$directory=$source.Substring($directoryStart,$directoryEnd-$directoryStart)
 $wrapper = @"
 static uint64_t Invoke(const std::string& readable_name, CONTEXT& state) {
     const std::string func_name = readable_name;
@@ -82,7 +94,7 @@ $out = Join-Path $root 'build\native-atomic-tests'
 New-Item -ItemType Directory -Force $out | Out-Null
 $cpp = Join-Path $out 'kernel_file_io_test.cpp'
 $exe = Join-Path $out 'kernel_file_io_test.exe'
-[IO.File]::WriteAllText($cpp, "$prefix`n$memory`n$wrapper`n$dispatch`n$tests", [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText($cpp, "$prefix`n$memory`n$directory`n$wrapper`n$dispatch`n$tests", [Text.UTF8Encoding]::new($false))
 & clang-cl /nologo /std:c++20 /Od /EHsc /MD "/I$root\include" $cpp "/Fe:$exe" "/Fo:$out\kernel_file_io_test.obj"
 if ($LASTEXITCODE -ne 0) { throw 'Kernel file test compilation failed' }
 & $exe

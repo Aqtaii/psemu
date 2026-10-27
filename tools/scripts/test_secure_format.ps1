@@ -10,6 +10,7 @@ if($memoryEnd -le $first -or $stringStart -le $memoryEnd){throw 'Memory/formatte
 $production=$source.Substring($first,$memoryEnd-$first)+$source.Substring($stringStart,$last-$stringStart)
 $prefix = @"
 #include <windows.h>
+#include "$root/include/guest_memory_query.h"
 #include <atomic>
 #include <cstdint>
 #include <cstddef>
