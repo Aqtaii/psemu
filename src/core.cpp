@@ -3,6 +3,7 @@
 #include "guest_stub_memory.h"
 #include "guest_file_stat.h"
 #include "guest_numeric_parse.h"
+#include "guest_float_classify.h"
 #include "guest_save_transfer.h"
 #include "guest_bounded_string.h"
 #include "guest_safe_memory_copy.h"
@@ -1093,6 +1094,16 @@ extern "C" void* PsemuKytyGetFunc(const char* nid);
 // dogrudan calistirabilecegi SysV ABI fonksiyonlari.
 // ============================================================================
 
+static PSEMU_SYSV int NativeIsFiniteFloat(float value) {
+ uint32_t bits;std::memcpy(&bits,&value,sizeof(bits));return GuestFloatIsFinite(bits);
+}
+static PSEMU_SYSV int NativeIsNaNFloat(float value) {
+ uint32_t bits;std::memcpy(&bits,&value,sizeof(bits));return GuestFloatIsNaN(bits);
+}
+static PSEMU_SYSV int NativeIsInfFloat(float value) {
+ uint32_t bits;std::memcpy(&bits,&value,sizeof(bits));return GuestFloatIsInf(bits);
+}
+
 static PSEMU_SYSV double NativeSin(double x) { return sin(x); }
 static PSEMU_SYSV double NativeCos(double x) { return cos(x); }
 static PSEMU_SYSV double NativeTan(double x) { return tan(x); }
@@ -1479,6 +1490,9 @@ extern "C" void* PsemuNativePltStub(int plt_index) {
     if (n == "memset")  return reinterpret_cast<void*>(&NativeMemset);
     if (n == "memmove") return reinterpret_cast<void*>(&NativeMemmove);
     if (n == "memcmp" || n == "bcmp") return reinterpret_cast<void*>(&NativeMemcmp);
+    if (n == "__isfinitef") return reinterpret_cast<void*>(&NativeIsFiniteFloat);
+    if (n == "__isnanf") return reinterpret_cast<void*>(&NativeIsNaNFloat);
+    if (n == "__isinff") return reinterpret_cast<void*>(&NativeIsInfFloat);
     if (n == "strlen") return reinterpret_cast<void*>(&NativeStrlen);
     if (n == "strchr") return reinterpret_cast<void*>(&NativeStrchr);
     if (n == "strrchr") return reinterpret_cast<void*>(&NativeStrrchr);
@@ -5844,6 +5858,11 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 if (cp && SafeWritable(cp, sizeof(double))) *cp = c;
                 ctx->Rax = 0;
                 special_return_set = true;
+            } else if (readable_name == "__isfinitef" || readable_name == "__isnanf" || readable_name == "__isinff") {
+                const uint32_t bits=static_cast<uint32_t>(ctx->Xmm0.Low);
+                ctx->Rax=readable_name=="__isfinitef" ? GuestFloatIsFinite(bits) :
+                         readable_name=="__isnanf" ? GuestFloatIsNaN(bits) : GuestFloatIsInf(bits);
+                special_return_set=true;
             } else if (readable_name == "fp_isfinite") {
                 // int isfinite(double x): XMM0'daki degeri denetler.
                 // ONEMLI - donus mantigi (RVA 0x12dbdf'ten dogrulandi):

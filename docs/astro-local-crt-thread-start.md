@@ -786,3 +786,17 @@ mips and all host padding preserved. This device test is NOT the actual Astro
 shader and not a recognized game frame. glslang + spirv-val pass. Full local
 build succeeds at D:/Tools/psemu-build/depth-mips-output with its matching map.
 Actual Astro retry remains pending.
+
+## 2026-10-27: real binary32 classification for telemetry imports
+
+Read-only dump analysis identifies trapRVA10a224e in Telemetry.cpp's float
+NaN/INF validation (line453 in code), not proof of the separate pool-membership
+warning. CallRVA74ecd90 is PLT1472 __isfinitef; runtime logs show its default0
+return even for finite data. Existing core implemented only double fp_isfinite.
+Add true binary32 __isfinitef/__isnanf/__isinff in native SysV dispatch and real
+VEH fallback. Bit classification preserves sNaNs and MXCSR instead of performing
+FP arithmetic; signed zero and subnormals are finite, infinities/NaNs are not.
+Tests use actual production SysV functions and extracted VEH branch, known
+binary32 categories, poisoned upper XMM bits and unchanged MXCSR. Passed.
+No forced-finite result, bypassed game assertion or altered fp_isfinite(double).
+Local Jetsku reference search found no __isfinitef implementation to reuse.
