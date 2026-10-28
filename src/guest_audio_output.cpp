@@ -296,11 +296,10 @@ void GuestAudioPushPcm(uint64_t context, GuestAudioRead readable) {
                              (input_peak > 0 && state.input_nonzero == 0);
   if(input_peak > 0) ++state.input_nonzero;
   ++state.pushes;
-  if (peak > 0) {
-    ++state.nonzero;
-    state.Submit(mix);
-  } else if (state.device)
-    state.Submit(mix);
+  if (peak > 0) ++state.nonzero;
+  // Open on the first valid bed buffer, including game-produced silence.
+  // Host device failure must not remain hidden until a nonzero game sample.
+  if (active > 0 || state.device) state.Submit(mix);
   if (state.pushes <= 8 || state.pushes % 1024 == 0 || first_nonzero) {
     std::printf("[AUDIO-PCM] context=%llu pushes=%llu active=%u objects=%u "
                 "object_peak=%.8f missing=%u unsupported=%u invalid=%u "

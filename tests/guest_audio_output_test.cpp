@@ -118,20 +118,20 @@ int main() {
   Require(Call("sceAudioOut2PortSetAttributes", handle,
                reinterpret_cast<uint64_t>(&attr), 1) == 0);
   GuestAudioPushPcm(5, Read);
-  Require(opens == 0 && writes == 0);
+  Require(opens == 1 && writes == 1 && contexts.at(5)->nonzero == 0);
   samples[0] = 0.5f;
   samples[1] = 0.25f;
   samples[10] = 0.5f;
   GuestAudioPushPcm(5, Read);
-  Require(opens == 1 && writes == 1);
-  Require(pending[0]->dwBufferLength == 8);
-  const auto *output = reinterpret_cast<const int16_t *>(pending[0]->lpData);
+  Require(opens == 1 && writes == 2);
+  Require(pending[1]->dwBufferLength == 8);
+  const auto *output = reinterpret_cast<const int16_t *>(pending[1]->lpData);
   Require(output[0] > 6000 && output[0] < 6100 && output[1] > 3000 &&
           output[1] < 3050);
   Require(output[2] > 4200 && output[2] < 4350 && output[2] == output[3]);
   samples.fill(0);
   Require(output[0] > 6000); // Host submission owns its copy.
-  for (unsigned i = 0; i < 8; i++)
+  for (unsigned i = 0; i < 7; i++)
     GuestAudioPushPcm(5, Read);
   Require(writes == 8 && contexts.at(5)->drops == 1);
   const auto first = output[0];
