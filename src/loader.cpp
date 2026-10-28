@@ -1014,10 +1014,17 @@ extern "C" int PsemuHttpSelfTest();
 extern "C" int PsemuKernelSemaphoreSelfTest();
 extern "C" int PsemuClockSelfTest();
 
+#ifdef PSEMU_HAS_AVPLAYER
+extern "C" int PsemuAvPlayerSelfTest(const char* path,const char* scratch_directory);
+#endif
+
 int main(int argc, char** argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     Logger::Init();
+#ifdef PSEMU_HAS_AVPLAYER
+    if (argc==4 && std::strcmp(argv[1],"--avplayer-self-test")==0) return PsemuAvPlayerSelfTest(argv[2],argv[3]);
+#endif
     if (argc==2 && std::strcmp(argv[1],"--fiber-self-test")==0) return PsemuFiberSelfTest();
     if (argc==2 && std::strcmp(argv[1],"--event-flag-self-test")==0) return PsemuEventFlagSelfTest();
     if (argc==2 && std::strcmp(argv[1],"--clock-self-test")==0) return PsemuClockSelfTest();

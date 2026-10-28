@@ -99,7 +99,32 @@ list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/clock_self_test.cpp)
 list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/screenshot.cpp)
 list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/metrics.cpp)
 
+# Optional existing Kyty AvPlayer decoder. Never downloads during configuration.
+set(PSEMU_FFMPEG_ROOT "" CACHE PATH "Unpacked, verified FFmpeg headers and static libraries")
+if(PSEMU_FFMPEG_ROOT)
+    foreach(component avformat avcodec swscale avutil swresample)
+        if(NOT EXISTS "${PSEMU_FFMPEG_ROOT}/lib/${component}.lib")
+            message(FATAL_ERROR "FFmpeg library missing: ${component}")
+        endif()
+    endforeach()
+    if(NOT EXISTS "${PSEMU_FFMPEG_ROOT}/include/libavcodec/avcodec.h")
+        message(FATAL_ERROR "FFmpeg headers missing")
+    endif()
+    list(APPEND GPU_ALL_SRC ${GPU_SRC}/libs/avPlayer.cpp
+         ${CMAKE_CURRENT_SOURCE_DIR}/adapter/avplayer_bridge.cpp
+         ${CMAKE_CURRENT_SOURCE_DIR}/adapter/avplayer_self_test.cpp)
+endif()
+
 add_library(psemu_gpu STATIC ${GPU_ALL_SRC})
+if(PSEMU_FFMPEG_ROOT)
+    target_compile_definitions(loader PRIVATE PSEMU_HAS_AVPLAYER=1)
+    target_include_directories(psemu_gpu PRIVATE "${PSEMU_FFMPEG_ROOT}/include" "${PROJECT_SOURCE_DIR}/include")
+    foreach(component avformat avcodec swscale avutil swresample)
+        target_link_libraries(psemu_gpu PUBLIC "${PSEMU_FFMPEG_ROOT}/lib/${component}.lib")
+    endforeach()
+    target_link_libraries(psemu_gpu PUBLIC psapi strmiids uuid oleaut32 shlwapi ws2_32 ole32 user32 bcrypt)
+endif()
+
 target_include_directories(psemu_gpu PUBLIC ${GPU_INCLUDES})
 target_compile_options(psemu_gpu PRIVATE /EHsc /utf-8 /bigobj /W0)
 target_compile_definitions(psemu_gpu PRIVATE _CRT_SECURE_NO_WARNINGS NOMINMAX WIN32_LEAN_AND_MEAN)

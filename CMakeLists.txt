@@ -86,3 +86,9 @@ add_subdirectory(gpu)
 # psemu henuz GPU cagirmadigi icin loader.exe eski davranisina doner. GPU'yu
 # cagirmaya basladigimizda ilgili objeler ARTIMLI cekilecek.
 target_link_libraries(loader PRIVATE psemu_gpu)
+
+if(PSEMU_FFMPEG_ROOT)
+    add_custom_command(TARGET loader POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory "${PSEMU_FFMPEG_ROOT}/share/ffmpeg"
+                "$<TARGET_FILE_DIR:loader>/licenses/ffmpeg")
+endif()

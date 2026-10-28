@@ -15,6 +15,9 @@
 #include <algorithm>
 #include "guest_audio_queue.h"
 #include "guest_audio_output.h"
+#ifdef PSEMU_HAS_AVPLAYER
+#include "guest_avplayer.h"
+#endif
 #include <chrono>
 #include "host_allocation_size.h"
 #include "sarah_tls_sites.h"
@@ -6877,6 +6880,12 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                        GuestAudioOutputCall(readable_name,ctx->Rdi,ctx->Rsi,ctx->Rdx,
                                            &ctx->Rax,SafeReadable,SafeWritable)) {
                 special_return_set=true;
+#ifdef PSEMU_HAS_AVPLAYER
+            } else if (readable_name.rfind("sceAvPlayer",0)==0 &&
+                       GuestAvPlayerCall(readable_name,ctx->Rdi,ctx->Rsi,ctx->Rdx,ctx->Rcx,
+                                         &ctx->Rax,SafeReadable,SafeWritable)) {
+                special_return_set=true;
+#endif
             } else if (readable_name == "sceAudioOutOutput") {
                 // int sceAudioOutOutput(handle, ptr[, num])
                 // GERCEK donanimda bu cagri ses tamponu tuketilene kadar BLOKLAR
