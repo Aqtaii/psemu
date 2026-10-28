@@ -31,4 +31,8 @@ try {
  $nativeExit=$LASTEXITCODE
  $result | ForEach-Object {Write-Output $_}
  if($nativeExit -or ($result -match 'Validation Error:')){throw 'Production vertex/pixel shader pair failed'}
+ $result=& .\native_video_shader_gpu_test.exe $vertex $pixel native-vertex video-quad 2>&1
+ $nativeExit=$LASTEXITCODE
+ $result | ForEach-Object {Write-Output $_}
+ if($nativeExit -or ($result -match 'Validation Error:')){throw 'Production video pair with six-vertex quad and negative viewport failed'}
 }finally{Pop-Location}

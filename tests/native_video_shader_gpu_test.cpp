@@ -29,8 +29,10 @@ std::vector<uint32_t> code(const char *path) {
 }
 int main(int argc, char **argv) {
   try {
-    CHECK(argc == 3 || argc == 4);
-    const bool native_vertex = argc == 4;
+    CHECK(argc >= 3 && argc <= 5);
+    const bool native_vertex = argc >= 4;
+    const bool video_quad = argc == 5;
+    CHECK(!video_quad || std::strcmp(argv[4], "video-quad") == 0);
     CHECK(!native_vertex || std::strcmp(argv[3], "native-vertex") == 0);
     auto vs = code(argv[1]), ps = code(argv[2]);
     VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};
@@ -118,14 +120,24 @@ int main(int argc, char **argv) {
     float width = float(W);
     std::memcpy(constants.mapped, &width, 4);
     auto matrix = buffer(64, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
-    auto vertices = buffer(72, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
+    auto vertices = buffer(144, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
     std::array<float, 16> identity{};
     for (int i = 0; i < 4; ++i)
       identity[i * 5] = 1;
+    if (video_quad)
+      identity[10] = 0;
     std::memcpy(matrix.mapped, identity.data(), 64);
     const float tri[] = {-1, -1, 0, 1,  0, 0, 3, -1, 0,
                          1,  2,  0, -1, 3, 0, 1, 0,  2};
     std::memcpy(vertices.mapped, tri, 72);
+    if (video_quad) {
+      // Conventional six-vertex rectangle with top-left UV origin, as observed
+      // in the real video draw. This is synthetic geometry, not captured bytes.
+      const float quad[] = {-1, 1,  0, 1, 0, 0, -1, -1, 0, 1, 0, 1,
+                            1,  -1, 0, 1, 1, 1, -1, 1,  0, 1, 0, 0,
+                            1,  -1, 0, 1, 1, 1, 1,  1,  0, 1, 1, 0};
+      std::memcpy(vertices.mapped, quad, sizeof(quad));
+    }
     struct Image {
       VkImage h;
       VkDeviceMemory memory;
@@ -209,8 +221,8 @@ int main(int argc, char **argv) {
     if (native_vertex) {
       dai.pSetLayouts = &empty;
       VKOK(vkAllocateDescriptorSets(device, &dai, &vertex_set));
-      VkDescriptorBufferInfo inputs[] = {{matrix.h, 0, 64},
-                                         {vertices.h, 0, 72}};
+      VkDescriptorBufferInfo inputs[] = {
+          {matrix.h, 0, 64}, {vertices.h, 0, video_quad ? 144u : 72u}};
       VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
       w.dstSet = vertex_set;
       w.descriptorCount = 2;
@@ -315,6 +327,10 @@ int main(int argc, char **argv) {
         VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
     assembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     VkViewport vp{0, 0, float(OW), float(OH), 0, 1};
+    if (video_quad) {
+      vp.y = float(OH);
+      vp.height = -float(OH);
+    }
     VkRect2D sc{{0, 0}, {OW, OH}};
     VkPipelineViewportStateCreateInfo viewport{
         VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
@@ -364,12 +380,17 @@ int main(int argc, char **argv) {
     cai.commandBufferCount = 1;
     VkCommandBuffer cmd;
     VKOK(vkAllocateCommandBuffers(device, &cai, &cmd));
-    const std::array<std::array<uint8_t, 3>, 3> cases{
-        {{16, 128, 128}, {200, 128, 128}, {100, 90, 240}}};
+    const std::array<std::array<uint8_t, 3>, 4> cases{
+        {{16, 128, 128}, {200, 128, 128}, {100, 90, 240}, {16, 128, 128}}};
     for (size_t test = 0; test < cases.size(); ++test) {
       auto [y, u, v] = cases[test];
       auto *data = static_cast<uint8_t *>(staging.mapped);
       std::memset(data, y, W * H);
+      if (test == 3)
+        for (uint32_t py = 0; py < H; ++py)
+          for (uint32_t px = 0; px < W; ++px)
+            data[py * W + px] =
+                ((px / (W / OW) + py / (H / OH)) & 1u) ? 200 : 16;
       for (size_t i = W * H; i < W * H * 3 / 2; i += 2) {
         data[i] = u;
         data[i + 1] = v;
@@ -433,7 +454,7 @@ int main(int argc, char **argv) {
       std::array<uint32_t, 16> zeros{};
       vkCmdPushConstants(cmd, pipeline_layout, push.stageFlags, 0, 64,
                          zeros.data());
-      vkCmdDraw(cmd, 3, 1, 0, 0);
+      vkCmdDraw(cmd, video_quad ? 6 : 3, 1, 0, 0);
       vkCmdEndRenderPass(cmd);
       copy.imageExtent = {OW, OH, 1};
       vkCmdCopyImageToBuffer(cmd, target.h,
@@ -459,11 +480,18 @@ int main(int argc, char **argv) {
               .5329f * (vv - .5f),
           1.1644f * (yy - 1.f / 16.f) + 2.1124f * (uu - .5f), 1};
       float error = 0;
-      for (size_t i = 0; i < OW * OH; ++i)
+      for (size_t i = 0; i < OW * OH; ++i) {
+        auto pixel_expected = expected;
+        if (test == 3 && ((i % OW + i / OW) & 1u)) {
+          const float delta = 1.1644f * (200.f - 16.f) / 255.f;
+          for (size_t c = 0; c < 3; ++c)
+            pixel_expected[c] += delta;
+        }
         for (size_t c = 0; c < 4; ++c) {
           CHECK(std::isfinite(rgb[i * 4 + c]));
-          error = std::max(error, std::abs(rgb[i * 4 + c] - expected[c]));
+          error = std::max(error, std::abs(rgb[i * 4 + c] - pixel_expected[c]));
         }
+      }
       std::printf("[ASTRO-VIDEO-SHADER-PROBE] device=%s case=%zu YUV=%u,%u,%u "
                   "rgb=%g,%g,%g,%g expected=%g,%g,%g,%g max_error=%g "
                   "game_frame=not-tested\n",
@@ -473,8 +501,9 @@ int main(int argc, char **argv) {
       CHECK(error < .006f);
     }
     std::printf("[ASTRO-VIDEO-SHADER-PROBE] native_vertex=%u native_fragment=1 "
-                "synthetic_input=1\n",
-                native_vertex);
+                "synthetic_input=1 video_quad=%u negative_viewport=%u "
+                "patterned_case=checked\n",
+                native_vertex, video_quad, video_quad);
     VKOK(vkDeviceWaitIdle(device));
     vkDestroyCommandPool(device, cp, nullptr);
     vkDestroyPipeline(device, pipeline, nullptr);
