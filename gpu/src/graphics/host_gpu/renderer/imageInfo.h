@@ -1290,6 +1290,20 @@ CanRetireCleanRenderTargetForRenderTarget(const RenderTargetInfo& cached,bool gp
         CanRetireCleanRenderTargetForStorage(cached,gpu,buffer,tracker_gpu,same_context,coherent,backing);
 }
 
+// A linear image already disowned to buffers may be retired after the requested
+// target's current bytes have been published. Outside bytes remain buffer/backing owned.
+[[nodiscard]] inline bool CanRetireBufferOwnedLinearStorageForRenderTarget(
+    const ImageInfo& storage, bool gpu, bool buffer, bool tracker_gpu, bool cpu_dirty,
+    bool same_context, bool coherent_target, bool isolated_pages,
+    const RenderTargetInfo& target) {
+    return !gpu && buffer && !tracker_gpu && !cpu_dirty && same_context &&
+           coherent_target && isolated_pages && IsSupportedLinearStorageBacking(storage) &&
+           IsSupportedRenderTargetReconstructionFootprint(target) &&
+           target.size <= UINT64_MAX-target.address &&
+           ((target.address | target.size) & (TRACKER_PAGE_SIZE-1)) == 0 &&
+           ImageRangeOverlaps(storage.address,storage.size,target.address,target.size);
+}
+
 [[nodiscard]] inline bool
 CanRetireBufferOwnedRenderTarget(const RenderTargetInfo& cached, bool gpu_modified,
                                  bool buffer_modified, bool same_context,

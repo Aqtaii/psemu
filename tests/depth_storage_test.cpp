@@ -20,6 +20,21 @@ int main() {
   image.width=image.pitch=960;image.height=540;image.levels=image.view_levels=image.depth=1;
   image.tile=0;image.type=Prospero::GpuEnumValue(Prospero::ImageType::kColor2D);image.swizzle=0xfac;
   Require(IsSupportedLinearStorageBacking(image));
+  RenderTargetInfo target{};target.address=write;target.size=write_size;
+  target.width=960;target.height=540;target.pitch=1024;target.bytes_per_element=8;
+  target.tile_mode=27;target.levels=target.layers=1;
+  Require(CanRetireBufferOwnedLinearStorageForRenderTarget(image,false,true,false,false,true,true,true,target));
+  for(int bad=0;bad<7;bad++)Require(!CanRetireBufferOwnedLinearStorageForRenderTarget(image,
+   bad==0,bad!=1,bad==2,bad==3,bad!=4,bad!=5,bad!=6,target));
+  for(int field=0;field<6;field++){
+   auto bad=target;if(field==0)bad.address=write-0x10000000;if(field==1)bad.address++;
+   if(field==2)bad.size--;if(field==3)bad.levels=2;if(field==4)bad.pitch--;
+   if(field==5)bad.address=UINT64_MAX-65535;
+   Require(!CanRetireBufferOwnedLinearStorageForRenderTarget(image,false,true,false,false,true,true,true,bad));
+  }
+  auto invalid_linear=image;invalid_linear.format=71;
+  Require(!CanRetireBufferOwnedLinearStorageForRenderTarget(invalid_linear,false,true,false,false,true,true,true,target));
+
   Require(ClassifyBufferImageWrite(write,write_size,image.address,image.size,
    BufferImageBinding::StorageTexture,true,true,false)==BufferImageWrite::Unsupported);
   Require(ClassifyLinearStorageBufferWrite(write,write_size,image,true,false,true,false,true,false,false)==BufferImageWrite::SynchronizeStorageTexture);

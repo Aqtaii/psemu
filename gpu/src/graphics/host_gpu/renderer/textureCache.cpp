@@ -1965,11 +1965,27 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 					reconstructed_storage_retire.push_back(&cached);
 					command->RetainResourceUntilFence(entry);
 				}
+				if (overlap == RenderTargetOverlap::Unsupported &&
+					CanRetireBufferOwnedLinearStorageForRenderTarget(
+						cached.info, cached.gpu_modified, cached.buffer_modified,
+						m_memory_tracker.IsRegionGpuModified(cached.Address(), cached.Size()),
+						cached.info.IsCpuDirty() ||
+							m_memory_tracker.IsRegionCpuModified(cached.Address(), cached.Size()),
+						cached.ctx == ctx, IsCoherentGuestImageSource(target_source, info.address, info.size),
+						!HasOtherImagePageOwnerLocked(cached) &&
+							!HasMetaOverlapLocked(cached.Address(), cached.Size()),
+						info)) {
+					overlap = RenderTargetOverlap::RetireTarget;
+					buffer_owned_target_retire.push_back(&cached);
+					command->RetainResourceUntilFence(entry);
+				}
 				break;
 			case CachedImage::Kind::RenderTarget:
-				if (CanRetireCleanRenderTargetForRenderTarget(cached.target,cached.gpu_modified,
-				        cached.buffer_modified,m_memory_tracker.IsRegionGpuModified(cached.Address(),cached.Size()),
-				        cached.ctx==ctx,IsCoherentGuestImageSource(target_source,info.address,info.size),info)) {
+				if (CanRetireCleanRenderTargetForRenderTarget(
+						cached.target, cached.gpu_modified, cached.buffer_modified,
+						m_memory_tracker.IsRegionGpuModified(cached.Address(), cached.Size()),
+						cached.ctx == ctx, IsCoherentGuestImageSource(target_source, info.address, info.size),
+						info)) {
 					overlap=RenderTargetOverlap::RetireTarget;
 					command->RetainResourceUntilFence(entry);
 					static std::atomic_uint clean_retire_logs{0};
@@ -1978,18 +1994,20 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 						       " requested=0x%016" PRIx64 "+0x%016" PRIx64 " backing_current=1\n",
 						       cached.Address(),cached.Size(),info.address,info.size);
 					}
-				} else if (CanReconstructRenderTargetForRenderTarget(cached.target,cached.gpu_modified,
-				        cached.buffer_modified,m_memory_tracker.IsRegionGpuModified(cached.Address(),cached.Size()),
-				        m_memory_tracker.IsRegionCpuModified(cached.Address(),cached.Size()),cached.ctx==ctx,
-				        (m_buffer_cache.IsRegionGpuModified(cached.Address(),cached.Size()) ||
-			         m_buffer_cache.IsCachedRegionCpuModified(cached.Address(),cached.Size())),info)) {
+				} else if (CanReconstructRenderTargetForRenderTarget(
+							   cached.target, cached.gpu_modified, cached.buffer_modified,
+							   m_memory_tracker.IsRegionGpuModified(cached.Address(), cached.Size()),
+							   m_memory_tracker.IsRegionCpuModified(cached.Address(), cached.Size()),
+							   cached.ctx == ctx,
+							   (m_buffer_cache.IsRegionGpuModified(cached.Address(), cached.Size()) ||
+								m_buffer_cache.IsCachedRegionCpuModified(cached.Address(), cached.Size())),
+							   info)) {
 					overlap=RenderTargetOverlap::RetireTarget;
 					reconstructed_target_retire.push_back(&cached);
 					command->RetainResourceUntilFence(entry);
 				} else if (CanRetireBufferOwnedRenderTarget(
-				        cached.target, cached.gpu_modified, cached.buffer_modified,
-				        cached.ctx == ctx,
-				        IsCoherentGuestImageSource(target_source, info.address, info.size), info)) {
+							   cached.target, cached.gpu_modified, cached.buffer_modified, cached.ctx == ctx,
+							   IsCoherentGuestImageSource(target_source, info.address, info.size), info)) {
 					overlap = RenderTargetOverlap::RetireTarget;
 					buffer_owned_target_retire.push_back(&cached);
 					// Preserve the old Vulkan object for any recorded/in-flight references.
@@ -2033,12 +2051,14 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 				break;
 			case RenderTargetOverlap::RetireTarget:
 				supported =
-				    cached.kind == CachedImage::Kind::RenderTarget ||
-				    (cached.kind == CachedImage::Kind::StorageTexture &&
-				     std::find(reconstructed_storage_retire.begin(), reconstructed_storage_retire.end(),
-				               &cached) != reconstructed_storage_retire.end()) ||
-				    (cached.kind == CachedImage::Kind::DepthTarget && target_buffer_overlap &&
-				     IsCoherentGuestImageSource(target_source, info.address, info.size));
+					cached.kind == CachedImage::Kind::RenderTarget ||
+					(cached.kind == CachedImage::Kind::StorageTexture &&
+					 (std::find(reconstructed_storage_retire.begin(), reconstructed_storage_retire.end(),
+								&cached) != reconstructed_storage_retire.end() ||
+					  std::find(buffer_owned_target_retire.begin(), buffer_owned_target_retire.end(),
+								&cached) != buffer_owned_target_retire.end())) ||
+					(cached.kind == CachedImage::Kind::DepthTarget && target_buffer_overlap &&
+					 IsCoherentGuestImageSource(target_source, info.address, info.size));
 				if (supported && cached.kind == CachedImage::Kind::DepthTarget) {
 					buffer_owned_target_retire.push_back(&cached);
 				}
@@ -2125,6 +2145,13 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 	for (auto* cached: buffer_owned_target_retire) {
 		// The coherent buffer backing owns the current bytes. Clear the stale-image marker only
 		// after coherence validation so normal retirement can remove the obsolete Vulkan shape.
+		if (cached->kind == CachedImage::Kind::StorageTexture) {
+			static std::atomic_uint linear_retire_logs{0};
+			if (linear_retire_logs.fetch_add(1) < 8)
+				printf("[BUFFER-OWNED-LINEAR-RT] storage=0x%016" PRIx64 "+0x%016" PRIx64
+					   " target=0x%016" PRIx64 "+0x%016" PRIx64 " backing_current=1 native_retained=1\n",
+					   cached->Address(), cached->Size(), info.address, info.size);
+		}
 		cached->buffer_modified = false;
 	}
 	RetireImages(retire, native_image_source.get());
