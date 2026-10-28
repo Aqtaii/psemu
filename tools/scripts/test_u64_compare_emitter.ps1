@@ -4,7 +4,7 @@ $out=Join-Path $root 'build\native-atomic-tests'
 New-Item -ItemType Directory -Path $out -Force | Out-Null
 $source=[IO.File]::ReadAllText("$root\gpu\src\graphics\shader\recompiler\spirvEmitter\spirvEmitterAluOps.cpp")
 $begin=$source.IndexOf('void EmitCompareGtU64(')
-$end=$source.IndexOf('void EmitCompareNeU64(',$begin)
+$end=$source.IndexOf('void EmitCompareConstant(',$begin)
 if($begin -lt 0 -or $end -le $begin){throw 'Production comparison extraction failed'}
 $borrowBegin=$source.IndexOf('void EmitISubBorrowU32(')
 $borrowEnd=$source.IndexOf('void EmitScalarAddCarryU32(',$borrowBegin)
@@ -33,12 +33,17 @@ int main() {
   EmitterState state;IR::Instruction inst;inst.src[0].value=a;inst.src[1].value=b;
   EmitCompareGtU64(&state,inst);
   if(state.result!=(a>b))throw std::runtime_error("Unsigned 64-bit emission regression");
+  EmitterState equal;EmitCompareEqU64(&equal,inst);
+  if(equal.result!=(a==b))throw std::runtime_error("64-bit equality lost a dword");
+  EmitterState unequal;EmitCompareNeU64(&unequal,inst);
+  if(unequal.result!=(a!=b))throw std::runtime_error("64-bit inequality regression");
+
  };
  for(auto a:edges)for(auto b:edges)check(a,b);
  uint64_t seed=0x8a743b9125ull;
  for(uint32_t i=0;i<10000;i++) {
   seed=seed*6364136223846793005ull+1;auto a=seed;
-  seed=seed*6364136223846793005ull+1;check(a,seed);
+  seed=seed*6364136223846793005ull+1;check(a,seed);check(a,a);check(a,a^(1ull<<32));
  }
  for(uint32_t lane: {0u,31u,32u,63u}) {
   for(uint32_t a: {0u,1u,2u,0x7fffffffu,0x80000000u,0xfffffffeu,UINT32_MAX}) {
@@ -56,7 +61,7 @@ int main() {
    }
   }
  }
- std::puts("PASS: actual U64 comparison and vector borrow across lane and arithmetic boundaries");
+ std::puts("PASS: actual U64 equality/inequality/ordering and vector borrow across lane and arithmetic boundaries");
 }
 '@
 $file=Join-Path $out 'u64_compare_production.cpp'

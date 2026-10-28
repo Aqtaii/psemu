@@ -6,7 +6,7 @@
 #include <initializer_list>
 #include <stdexcept>
 #include <unordered_map>
-enum {OpUGreaterThan=1,OpIEqual,OpLogicalAnd,OpLogicalOr,OpISub,OpSelect};
+enum {OpUGreaterThan=1,OpIEqual,OpINotEqual,OpLogicalAnd,OpLogicalOr,OpISub,OpSelect};
 namespace IR {enum class Opcode {IAddCarryU32,ISubBorrowU32};struct Operand {uint64_t value=0;};struct Instruction {Operand src[3],dst,dst2;uint32_t src_count=2,pc=0;Opcode op=Opcode::IAddCarryU32;};struct BasicBlock {std::vector<Instruction> instructions;};}
 struct Builder {
  uint32_t next=10;std::unordered_map<uint32_t,uint32_t> values;
@@ -16,6 +16,7 @@ struct Builder {
   switch(opcode) {
    case OpUGreaterThan:values[id]=a>b;break;
    case OpIEqual:values[id]=a==b;break;
+   case OpINotEqual:values[id]=a!=b;break;
    case OpLogicalAnd:values[id]=a&&b;break;
    case OpLogicalOr:values[id]=a||b;break;
    case OpISub:values[id]=a-b;break;

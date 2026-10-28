@@ -1104,3 +1104,35 @@ visible pixels, padding/canaries and full-range publication. CPU-dirty tail,
 GPU-dirty tail and byte/tracker disagreement each reject before callback,
 leave all bytes unchanged, and publish nothing. PASS. Full local build completed
 in storage-clean-fragments-output with matching map; actual retry pending.
+
+## 2026-10-28: Astro compute SOPC0x12 / S_CMP_EQ_U64
+
+2cd7478 retryPID21096 starts12:02:47 and exits321 at12:11:22. Storage aliases
+advance to a new compute decoder failure atPC0x3bc, wordbf128002, SOPC0x12.
+The full1536-byte CS was already saved locally as
+_Shader[s]/original/0384_0053_new_shader_cs_failed_00000213a76cb500.bin
+(actual folder name is _Shaders). No game shader binary is committed.
+
+Pinned local Jetsku reference frontend/decode/ScalarAluOps.cpp maps0x12 to
+S_CMP_EQ_U64, and frontend/translate/Scalar.cpp emits IEqual64 into SCC.
+Add decoder/name/IR mapping, full source-pair register collection, compare-op
+classification and dispatch. Native SPIR-V compares low/high32 independently
+with IEqual and combines them with LogicalAnd, then uses the existing SCC result
+writer. No shaderInt64 feature is required and no branch/operand is forced.
+
+Production semantic fixture now checks equality/inequality/unsigned ordering
+on edge matrices,10000 random pairs, same pairs and upper-only differences;
+existing vector borrow tests remain passing. Dedicated full-source pipeline test
+checks the captured raw operand/PC, upperSGPR3/7 collection, scalar SCC lowering,
+actual resource planning and Compute SPIR-V emission for equality and inequality.
+Both modules pass Vulkan1.2 spirv-val. CI default invocation PASS. It compiles
+production sources independently; attempted temp-object reuse was removed because
+the existing clang driver does not retain those intermediate objects.
+
+Offline replay of the actual failed CS decodes207 instructions into10 CFG blocks,
+lowers all instructions and recognizes5 EqU64 instructions. Captured replay does
+not materialize its real descriptors or execute the game GPU pipeline; this is
+not an Astro frame. Full local scalar-eq-u64-output build passes with matching map.
+Real retryPID18124 started12:25:00, log prefixastro_20261028_scalar_eq_u64.
+Reference commit: f9e1958
+

@@ -136,6 +136,7 @@ enum class Opcode {
 	CompareLtU32,
 	CompareLeU32,
 	CompareGtU64,
+	CompareEqU64,
 	CompareNeU64,
 	CompareMaskEqU32,
 	CompareMaskNeU32,

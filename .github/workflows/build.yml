@@ -246,6 +246,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_native_mesh_emitter.ps1
 
+      - name: Test scalar U64 decoder and Compute SPIR-V pipeline
+        shell: pwsh
+        run: ./tools/scripts/test_scalar_u64_compare.ps1
+
       - name: Upload production Mesh compiler diagnostics
         if: always()
         uses: actions/upload-artifact@v4

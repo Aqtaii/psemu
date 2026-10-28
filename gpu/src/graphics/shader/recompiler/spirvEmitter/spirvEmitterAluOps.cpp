@@ -1569,6 +1569,20 @@ void EmitCompareGtU64(EmitterState* state, const IR::Instruction& inst) {
  EmitCompareResult(state,inst.dst,cond);
 }
 
+void EmitCompareEqU64(EmitterState* state, const IR::Instruction& inst) {
+	const auto lhs_low  = EmitSequentialValueLoad(state, inst.src[0], 0);
+	const auto lhs_high = EmitSequentialValueLoad(state, inst.src[0], 1);
+	const auto rhs_low  = EmitSequentialValueLoad(state, inst.src[1], 0);
+	const auto rhs_high = EmitSequentialValueLoad(state, inst.src[1], 1);
+	const auto eq_low   = state->builder.AllocateId();
+	const auto eq_high  = state->builder.AllocateId();
+	const auto cond     = state->builder.AllocateId();
+	state->builder.AddFunction({OpIEqual, state->bool_type, eq_low, lhs_low, rhs_low});
+	state->builder.AddFunction({OpIEqual, state->bool_type, eq_high, lhs_high, rhs_high});
+	state->builder.AddFunction({OpLogicalAnd, state->bool_type, cond, eq_low, eq_high});
+	EmitCompareResult(state, inst.dst, cond);
+}
+
 void EmitCompareNeU64(EmitterState* state, const IR::Instruction& inst) {
 	const auto lhs_low  = EmitSequentialValueLoad(state, inst.src[0], 0);
 	const auto lhs_high = EmitSequentialValueLoad(state, inst.src[0], 1);
