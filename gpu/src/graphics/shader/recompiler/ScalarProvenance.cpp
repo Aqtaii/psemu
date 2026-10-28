@@ -739,11 +739,22 @@ private:
 	void AttachScalarSources(Instruction* inst, const ScalarState& state) {
 		std::fill(std::begin(inst->scalar_sources), std::end(inst->scalar_sources),
 		          ScalarProvenance::Undefined);
+		std::fill(std::begin(inst->scalar_upper_sources), std::end(inst->scalar_upper_sources),
+		          ScalarProvenance::Undefined);
+		const bool pair_compare = inst->op == Opcode::CompareEqU64 ||
+		                          inst->op == Opcode::CompareNeU64 ||
+		                          inst->op == Opcode::CompareGtU64;
 		for (uint32_t i = 0; i < inst->src_count; i++) {
 			const auto& source = inst->src[i];
 			if (source.kind == OperandKind::Register && source.reg.file != RegisterFile::Vector &&
 			    source.reg.file != RegisterFile::Exec) {
 				inst->scalar_sources[i] = OperandValue(source, state);
+				// Comparisons write SCC, but consume both dwords at this instruction point.
+				// Keep the high-word dependency even when no other instruction reads it.
+				if (pair_compare && source.reg.file == RegisterFile::Scalar &&
+				    source.reg.index + 1u < ScalarRegisters) {
+					inst->scalar_upper_sources[i] = state.regs[source.reg.index + 1u];
+				}
 			}
 		}
 	}

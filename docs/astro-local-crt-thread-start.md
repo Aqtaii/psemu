@@ -1110,8 +1110,8 @@ in storage-clean-fragments-output with matching map; actual retry pending.
 2cd7478 retryPID21096 starts12:02:47 and exits321 at12:11:22. Storage aliases
 advance to a new compute decoder failure atPC0x3bc, wordbf128002, SOPC0x12.
 The full1536-byte CS was already saved locally as
-_Shader[s]/original/0384_0053_new_shader_cs_failed_00000213a76cb500.bin
-(actual folder name is _Shaders). No game shader binary is committed.
+_Shaders/original/0384_0053_new_shader_cs_failed_00000213a76cb500.bin
+No game shader binary is committed.
 
 Pinned local Jetsku reference frontend/decode/ScalarAluOps.cpp maps0x12 to
 S_CMP_EQ_U64, and frontend/translate/Scalar.cpp emits IEqual64 into SCC.
@@ -1135,4 +1135,30 @@ not materialize its real descriptors or execute the game GPU pipeline; this is
 not an Astro frame. Full local scalar-eq-u64-output build passes with matching map.
 Real retryPID18124 started12:25:00, log prefixastro_20261028_scalar_eq_u64.
 Reference commit: f9e1958
+## 2026-10-28: scalar pair user-data dependencies and next mip failure
 
+d5df708 retry PID18124 exits321 at12:33:54 after compiling60 shaders.
+The former SOPC0x12 failure is passed in the actual game. The next stop is
+NativeTexture mip validation: base6,last6,physical levels6. This is not a
+recognizable Astro frame. The diagnostic candidate logs address, dimensions,
+texture type/tile/resource kind/read-write flags and all eight descriptor dwords;
+PID14884 starts12:39:08 with prefixastro_20261028_mip_descriptor.
+
+Review of the new U64 comparisons found a distinct upper-SGPR binding omission:
+CollectRegisters allocated both words, but AttachScalarSources and CollectUserData
+only retained the low-word provenance. Preserve high-word provenance separately
+for EqU64/NeU64/GtU64 and collect it at binding allocation. Comparisons continue
+to write only SCC. Do not classify their result as a 64-bit destination.
+
+Regression extends the production pipeline with standalone SGPR2:3 versus6:7
+comparisons and an overwrite ofSGPR3 before the compare. Expected bindings are
+{2,3,6,7} and{2,6,7} respectively. Generate and validate the actual user-data
+SPIR-V modules as well. Local build scalar-upper-binding-output passes with
+matching map. Six generated modules pass Vulkan1.2 spirv-val; production pipeline regression and
+captured CS decode/CFG/IR replay PASS. Real-game validation pending.
+
+Mip diagnostic PID14884 reproduces the failure after60 shaders. Descriptor:
+497f8500 c4700001 010dc1df 91b66fac 00000000 00700050 00000000 00000000.
+It is a written-only RGBA16F1920x1080 2D tile27 view of mip6 while MaxMip=5.
+Keep this captured failure for subsequent image work. User now asks to investigate
+actual audio output to provide independent evidence of game progress.

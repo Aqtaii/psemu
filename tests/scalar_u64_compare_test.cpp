@@ -41,6 +41,27 @@ int main(int argc,char** argv){
  pair.blocks[0].instructions.push_back(eq);std::vector<Spirv::Emitter::RegisterBinding> regs;
  Spirv::Emitter::CollectRegisters(pair,&regs);
  for(uint32_t index:{2u,3u,6u,7u}){bool found=false;for(auto& r:regs)found|=r.reg.file==IR::RegisterFile::Scalar && r.reg.index==index;Require(found);}
+ // A standalone pair compare must seed both source dwords from user data.
+ for(uint32_t opcode:{0xbf120602u,0xbf130602u}) for(bool overwrite_high:{false,true}){
+  std::vector<uint32_t> code; if(overwrite_high) code.push_back(0xbe830381u);
+  code.insert(code.end(),{opcode,0xbf840001,0xbf800000,0xbf810000});
+  Decoder::Program decoded;Require(Decoder::DecodeProgram(code,&decoded,&error),error);
+  CFG::Graph graph;Require(CFG::BuildGraph(decoded,&graph,&error),error);Require(CFG::StructurizeForLowering(&graph,&error),error);
+  IR::Program program;Require(IR::LowerProgram(decoded,graph,ShaderType::Compute,32,&program,&error),error);
+  program.user_data_count=8;
+  Require(IR::BuildScalarProvenance(&program,&error),error);Require(IR::BuildSrtPlan(&program,&error),error);
+  Require(IR::PatchSrtReads(&program,&error),error);Require(IR::TrackResources(&program,&error),error);
+  const std::array<uint32_t,8> user_data{0,0,0,1,0,0,0,0};
+  IR::SrtRuntime runtime;runtime.user_data=user_data;IR::ResourceSnapshot resources;Require(IR::MaterializeResources(program,runtime,&resources,&error),error);
+  Require(IR::SpecializeResources(&program,resources,&error),error);
+  ShaderComputeInputInfo info{};info.threads_num[0]=32;info.threads_num[1]=info.threads_num[2]=1;info.wave_size=32;
+  IR::ShaderInfoOptions opts;opts.compute=&info;Require(IR::CollectShaderInfo(&program,opts,&error),error);
+  Require(IR::AllocateBindings(&program,{},&error),error);
+  Require(program.bindings.user_data_registers==(overwrite_high ? std::vector<uint32_t>({2,6,7}) : std::vector<uint32_t>({2,3,6,7})));
+  std::vector<uint32_t> words;Require(Spirv::EmitProgram(program,resources,nullptr,nullptr,&info,&words,&error),error);
+  const auto filename=std::string(opcode==0xbf120602u ? "scalar_eq_userdata" : "scalar_lg_userdata")+(overwrite_high ? "_overwrite.spv" : ".spv");
+  std::ofstream out(filename,std::ios::binary);out.write(reinterpret_cast<const char*>(words.data()),words.size()*4);Require(bool(out));
+ }
  for(bool equal:{true,false}){
   const std::array<uint32_t,6> code{0xbe820380,0xbe830381,equal?0xbf128002u:0xbf138002u,0xbf840001,0xbf800000,0xbf810000};
   Decoder::Program decoded;Require(Decoder::DecodeProgram(code,&decoded,&error),error);

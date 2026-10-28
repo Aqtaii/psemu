@@ -737,8 +737,14 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 	const auto last_level = descriptor.LastLevel();
 	const auto levels     = static_cast<uint32_t>(descriptor.MaxMip()) + 1u;
 	if (base_level > last_level || last_level >= levels) {
-		EXIT("unsupported texture mip view: base=%u last=%u levels=%u\n", base_level, last_level,
-		     levels);
+		EXIT("unsupported texture mip view: base=%u last=%u levels=%u addr=0x%016" PRIx64
+		     " width=%u height=%u type=%u tile=%u kind=%u read=%d written=%d "
+		     "dwords=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
+		     base_level, last_level, levels, address, width, height, descriptor.Type(),
+		     descriptor.TileMode(), static_cast<uint32_t>(resource.kind), resource.read,
+		     resource.written, descriptor.fields[0], descriptor.fields[1], descriptor.fields[2],
+		     descriptor.fields[3], descriptor.fields[4], descriptor.fields[5], descriptor.fields[6],
+		     descriptor.fields[7]);
 	}
 	const auto view_levels = last_level - base_level + 1u;
 	const auto depth       = static_cast<uint32_t>(descriptor.Depth()) + 1u;

@@ -499,6 +499,7 @@ struct Instruction {
 	Operand      src[4];
 	uint32_t     src_count         = 0;
 	uint32_t     scalar_sources[4] = {};
+	uint32_t     scalar_upper_sources[4] = {};
 	uint32_t     scalar_value      = 0;
 	MemoryInfo   memory;
 	BvhInfo      bvh;

@@ -156,6 +156,8 @@ bool CollectUserData(const Program& program, std::vector<uint32_t>& result) {
 			}
 			for (uint32_t i = 0; i < inst.src_count; i++) {
 				if (!CollectValue(program.provenance, inst.scalar_sources[i], &visited,
+				                  &registers) ||
+				    !CollectValue(program.provenance, inst.scalar_upper_sources[i], &visited,
 				                  &registers)) {
 					return false;
 				}

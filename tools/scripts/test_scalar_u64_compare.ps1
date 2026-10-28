@@ -17,7 +17,7 @@ try {
  $captureArgs=@();if($Capture){$captureArgs=@($Capture)}
  & .\scalar_u64_compare_test.exe @captureArgs
  if($LASTEXITCODE){throw 'Scalar U64 production regression failed'}
- foreach($name in @('scalar_eq_u64.spv','scalar_lg_u64.spv')){
+ foreach($name in @('scalar_eq_u64.spv','scalar_lg_u64.spv','scalar_eq_userdata.spv','scalar_lg_userdata.spv','scalar_eq_userdata_overwrite.spv','scalar_lg_userdata_overwrite.spv')){
   & "$env:VULKAN_SDK\Bin\spirv-val.exe" --target-env vulkan1.2 $name
   if($LASTEXITCODE){throw "Scalar U64 SPIR-V validation failed: $name"}
  }
