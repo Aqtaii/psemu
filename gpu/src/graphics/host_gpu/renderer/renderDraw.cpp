@@ -23,6 +23,8 @@
 #include "graphics/host_gpu/renderer/framebufferCache.h"
 #include "graphics/host_gpu/renderer/pipelineCache.h"
 #include "graphics/host_gpu/renderer/render.h"
+#include "graphics/host_gpu/renderer/renderTargetBarriers.h"
+#include "graphics/host_gpu/vma.h"
 #include "graphics/host_gpu/renderer/renderContext.h"
 #include "graphics/host_gpu/renderer/shaderResourceBarrier.h"
 #include "graphics/host_gpu/renderer/shaderSubgroup.h"
@@ -1049,6 +1051,75 @@ static std::shared_ptr<vk::QueryPool> PrepareDrawCoverageProbe(
     return pool;
 }
 
+// Opt-in copies of 1024 native target texels, sampled after this exact draw.
+// Restore the layout immediately; never publish diagnostic data to guest backing.
+static void ProbeVideoTargetPixels(CommandBuffer* command,const DrawRenderState& state) {
+ static const bool enabled=[] {const auto* flag=std::getenv("PSEMU_ASTRO_VIDEO_BINDING_PROBE");
+  return flag && std::strcmp(flag,"1")==0;}();
+ if(!enabled || !state.ps_active || !state.color_count ||
+    state.ps_input_info.stage.program->shader_hash!=0x7313c4a5u)return;
+ static std::atomic_uint count{0};const auto ordinal=count.fetch_add(1);
+ if(ordinal!=0 && ordinal!=64 && ordinal!=128 && ordinal!=256 && ordinal!=448)return;
+ const auto& color=state.color_info[0];auto* image=color.vulkan_buffer;
+ if(!image || image->layers!=1 || image->mip_levels!=1 || !image->extent.width ||
+    !image->extent.height || image->layout==vk::ImageLayout::eUndefined ||
+    image->layout==vk::ImageLayout::ePreinitialized) {
+  printf("[VIDEO-TARGET-PIXELS] draw=%u unsupported_image=1 layers=%u levels=%u layout=%u\n",
+         ordinal,image ? image->layers : 0,image ? image->mip_levels : 0,image ? uint32_t(image->layout) : 0);
+  return;
+ }
+ uint32_t element=0,color_bytes=0;bool half_float=false,packed_alpha=false;
+ switch(image->format) {
+  case vk::Format::eR16G16B16A16Sfloat:half_float=true;[[fallthrough]];
+  case vk::Format::eR16G16B16A16Unorm:element=8;color_bytes=6;break;
+  case vk::Format::eR8G8B8A8Unorm:case vk::Format::eR8G8B8A8Srgb:
+  case vk::Format::eB8G8R8A8Unorm:case vk::Format::eB8G8R8A8Srgb:element=4;color_bytes=3;break;
+  case vk::Format::eA2R10G10B10UnormPack32:case vk::Format::eA2B10G10R10UnormPack32:
+   packed_alpha=true;[[fallthrough]];
+  case vk::Format::eB10G11R11UfloatPack32:element=4;color_bytes=4;break;
+  default:printf("[VIDEO-TARGET-PIXELS] draw=%u skipped_format=%u\n",ordinal,uint32_t(image->format));return;
+ }
+ auto* ctx=g_render_ctx->GetGraphicCtx();
+ auto backing=std::shared_ptr<VulkanBuffer>(new VulkanBuffer,[ctx](VulkanBuffer* value){
+  VulkanDeleteBuffer(ctx,value);delete value;});
+ backing->usage=vk::BufferUsageFlagBits::eTransferDst;
+ backing->memory.property=vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent;
+ VulkanCreateBuffer(ctx,1024u*element,backing.get());
+ std::array<vk::BufferImageCopy,1024> regions{};
+ for(uint32_t y=0;y<32;++y)for(uint32_t x=0;x<32;++x) {
+  auto& r=regions[y*32+x];r.bufferOffset=uint64_t(y*32+x)*element;
+  r.imageSubresource={vk::ImageAspectFlagBits::eColor,0,0,1};
+  r.imageOffset={int32_t((uint64_t(x)*image->extent.width+image->extent.width/2)/32),
+                 int32_t((uint64_t(y)*image->extent.height+image->extent.height/2)/32),0};
+  r.imageExtent={1,1,1};
+ }
+ const auto old_layout=image->layout;auto vk_buffer=command->Handle();
+ GraphicsRenderColorImageBarrier(vk_buffer,image,vk::ImageLayout::eTransferSrcOptimal);
+ vk_buffer.copyImageToBuffer(image->image,vk::ImageLayout::eTransferSrcOptimal,
+                             backing->buffer,uint32_t(regions.size()),regions.data());
+ vk::BufferMemoryBarrier ready{};ready.srcAccessMask=vk::AccessFlagBits::eTransferWrite;
+ ready.dstAccessMask=vk::AccessFlagBits::eHostRead;
+ ready.srcQueueFamilyIndex=ready.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+ ready.buffer=backing->buffer;ready.offset=0;ready.size=1024u*element;
+ vk_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,vk::PipelineStageFlagBits::eHost,
+                           {},0,nullptr,1,&ready,0,nullptr);
+ GraphicsRenderColorImageBarrier(vk_buffer,image,old_layout);
+ const auto target=color.base_addr;const auto format=uint32_t(image->format);
+ command->OnFenceComplete([ctx,backing,ordinal,target,format,element,color_bytes,half_float,packed_alpha]{
+  void* mapped=nullptr;VulkanMapMemory(ctx,&backing->memory,&mapped);
+  const auto* bytes=static_cast<const uint8_t*>(mapped);uint32_t nonzero=0;
+  for(uint32_t i=0;i<1024;++i) {
+   if(packed_alpha) {uint32_t word;std::memcpy(&word,bytes+i*element,4);nonzero+=(word&0x3fffffffu)!=0;}
+   else {uint8_t bits=0;for(uint32_t b=0;b<color_bytes;++b)
+    bits|=bytes[i*element+b]&(half_float && b%2 ? 0x7fu : 0xffu);
+    nonzero+=bits!=0;}
+  }
+  VulkanUnmapMemory(ctx,&backing->memory);
+  printf("[VIDEO-TARGET-PIXELS] draw=%u target=0x%016" PRIx64 " format=%u rgb_nonzero=%u/1024 source=completed-draw-readback\n",
+         ordinal,target,format,nonzero);
+ });
+}
+
 static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::Context* ctx,
                                 HW::UserConfig* ucfg, HW::Shader* sh_ctx, const DrawCallInfo& draw,
                                 DrawRenderState* state, vk::PrimitiveTopology topology,
@@ -1164,9 +1235,11 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
                 const auto& v=vp.viewports[0];const auto sc=calc_final_scissor(vp,ctx->GetScanModeControl(),color.extent);
                 const auto& blend=ctx->GetBlendControl(color.target_slot);
                 printf("[VIDEO-DRAW] draw=%u target=0x%016" PRIx64 " extent=%ux%u color_mask=0x%x "
-                       "indices=%u instances=%u indexed=%u first_vertex=%u depth_test=%u depth_write=%u "
+                       "format=%u native_mask=0x%x indices=%u instances=%u indexed=%u first_vertex=%u depth_test=%u depth_write=%u "
                        "blend=%u src=%u dst=%u comb=%u viewport=(%.1f,%.1f %.1fx%.1f) scissor=(%d,%d)-(%d,%d)\n",
                        ordinal,color.base_addr,color.extent.width,color.extent.height,ctx->GetRenderTargetMask(),
+                       color.vulkan_buffer ? uint32_t(color.vulkan_buffer->format) : 0,
+                       color.export_mapping.ApplyMask((ctx->GetRenderTargetMask()>>(color.target_slot*4u))&0xfu),
                        draw.index_count,draw.instance_count,emit.indexed,emit.first_vertex,
                        pipeline_depth.depth_test_enable,pipeline_depth.depth_write_enable,
                        blend.enable,blend.color_srcblend,blend.color_destblend,blend.color_comb_fcn,
@@ -1213,6 +1286,7 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 		if (primitive_probe) state->vk_buffer.endQuery(*primitive_probe, 0);
 		if (coverage_probe) state->vk_buffer.endQuery(*coverage_probe, 0);
 		buffer->EndRenderPass();
+        ProbeVideoTargetPixels(buffer,*state);
 		FlushBounceCopies(state->vk_buffer, true);
 		vk::PipelineStageFlags shader_write_stages = {};
 		if (HasShaderBufferWrites(state->vs_input_info.stage)) {
