@@ -1,5 +1,6 @@
 #include "graphics/shader/recompiler/meshOutputProbe.h"
 #include "graphics/host_gpu/renderer/renderDraw.h"
+#include "graphics/host_gpu/renderer/videoGraphProbe.h"
 #include "graphics/host_gpu/renderer/singlePointIndex.h"
 
 #include "common/assert.h"
@@ -44,6 +45,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <chrono>
 #include <cstring>
 #include <cstdlib>
 #include <limits>
@@ -55,6 +57,16 @@
 extern "C" void PsemuMetricAddDraw();
 
 namespace Libs::Graphics {
+
+static std::atomic_uint g_video_graph_draws{0};
+static std::atomic_bool g_video_graph_started{false};
+bool VideoGraphProbeActive() {return g_video_graph_draws.load(std::memory_order_relaxed)!=0;}
+static uint32_t TakeVideoGraphDraw() {
+ auto remaining=g_video_graph_draws.load(std::memory_order_relaxed);
+ while(remaining && !g_video_graph_draws.compare_exchange_weak(remaining,remaining-1,std::memory_order_relaxed)){}
+ return remaining;
+}
+
 
 int32_t ResolveVertexOffset(uint32_t index_offset, const ShaderVertexInputInfo& vs_input_info) {
 	if (index_offset != 0 || !vs_input_info.fetch_embedded) {
@@ -1051,6 +1063,32 @@ static std::shared_ptr<vk::QueryPool> PrepareDrawCoverageProbe(
     return pool;
 }
 
+// Save only a completed native RGBA8 color attachment. No decoder pixels or
+// guest backing are used, and this capture does not replace the presented frame.
+static void SaveNativeVideoTarget(const uint8_t* rgba,uint32_t width,uint32_t height,bool bgra) {
+ const uint32_t row_bytes=(width*3u+3u)&~3u;const uint32_t pixel_bytes=row_bytes*height;
+ std::array<uint8_t,54> header{};header[0]='B';header[1]='M';
+ auto u32=[&](size_t offset,uint32_t value){std::memcpy(header.data()+offset,&value,4);};
+ auto u16=[&](size_t offset,uint16_t value){std::memcpy(header.data()+offset,&value,2);};
+ u32(2,54u+pixel_bytes);u32(10,54);u32(14,40);u32(18,width);u32(22,height);u16(26,1);u16(28,24);u32(34,pixel_bytes);
+ const auto stamp=std::chrono::system_clock::now().time_since_epoch().count();
+ const auto path=std::filesystem::path("tools/dumps")/("native_video_target_"+std::to_string(stamp)+".bmp");
+ Common::File::CreateDirectories(path.parent_path());Common::File file;
+ if(!file.Create(path)) {printf("[VIDEO-NATIVE-CAPTURE] create_failed=1\n");return;}
+ uint32_t written=0;file.Write(header.data(),uint32_t(header.size()),&written);bool complete=written==header.size();
+ std::vector<uint8_t> row(row_bytes);
+ for(uint32_t y=height;y>0 && complete;--y) {
+  for(uint32_t x=0;x<width;++x) {
+   const auto* pixel=rgba+(uint64_t(y-1)*width+x)*4;
+   row[x*3]=pixel[bgra ? 0 : 2];row[x*3+1]=pixel[1];row[x*3+2]=pixel[bgra ? 2 : 0];
+  }
+  file.Write(row.data(),row_bytes,&written);complete=written==row_bytes;
+ }
+ file.Close();const auto name=Common::PathToString(path);
+ printf("[VIDEO-NATIVE-CAPTURE] complete=%u extent=%ux%u file=%s source=completed-video-draw diagnostic_target=1\n",
+        complete,width,height,name.c_str());
+}
+
 // Opt-in copies of 1024 native target texels, sampled after this exact draw.
 // Restore the layout immediately; never publish diagnostic data to guest backing.
 static void ProbeVideoTargetPixels(CommandBuffer* command,const DrawRenderState& state) {
@@ -1084,14 +1122,27 @@ static void ProbeVideoTargetPixels(CommandBuffer* command,const DrawRenderState&
   VulkanDeleteBuffer(ctx,value);delete value;});
  backing->usage=vk::BufferUsageFlagBits::eTransferDst;
  backing->memory.property=vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent;
- VulkanCreateBuffer(ctx,1024u*element,backing.get());
- std::array<vk::BufferImageCopy,1024> regions{};
+ const auto width=image->extent.width,height=image->extent.height;
+ const bool bgra=image->format==vk::Format::eB8G8R8A8Unorm || image->format==vk::Format::eB8G8R8A8Srgb;
+ const bool capture=ordinal==64 && element==4 && color_bytes==3 && width==3840 && height==2160;
+ const uint64_t sample_bytes=1024u*element;
+ const auto backing_bytes=sample_bytes+(capture ? uint64_t(width)*height*4 : 0);
+ VulkanCreateBuffer(ctx,backing_bytes,backing.get());
+ std::vector<vk::BufferImageCopy> regions(capture ? 1025 : 1024);
  for(uint32_t y=0;y<32;++y)for(uint32_t x=0;x<32;++x) {
   auto& r=regions[y*32+x];r.bufferOffset=uint64_t(y*32+x)*element;
   r.imageSubresource={vk::ImageAspectFlagBits::eColor,0,0,1};
   r.imageOffset={int32_t((uint64_t(x)*image->extent.width+image->extent.width/2)/32),
                  int32_t((uint64_t(y)*image->extent.height+image->extent.height/2)/32),0};
   r.imageExtent={1,1,1};
+ }
+ if(capture) {
+  auto& full=regions[1024];full.bufferOffset=sample_bytes;
+  full.imageSubresource={vk::ImageAspectFlagBits::eColor,0,0,1};full.imageExtent={width,height,1};
+ }
+ if(ordinal==64 && !g_video_graph_started.exchange(true,std::memory_order_relaxed)) {
+  g_video_graph_draws.store(64,std::memory_order_relaxed);
+  printf("[VIDEO-GRAPH-BEGIN] target=0x%016" PRIx64 " following_graphics_draws=64\n",color.base_addr);
  }
  const auto old_layout=image->layout;auto vk_buffer=command->Handle();
  GraphicsRenderColorImageBarrier(vk_buffer,image,vk::ImageLayout::eTransferSrcOptimal);
@@ -1100,12 +1151,12 @@ static void ProbeVideoTargetPixels(CommandBuffer* command,const DrawRenderState&
  vk::BufferMemoryBarrier ready{};ready.srcAccessMask=vk::AccessFlagBits::eTransferWrite;
  ready.dstAccessMask=vk::AccessFlagBits::eHostRead;
  ready.srcQueueFamilyIndex=ready.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
- ready.buffer=backing->buffer;ready.offset=0;ready.size=1024u*element;
+ ready.buffer=backing->buffer;ready.offset=0;ready.size=backing_bytes;
  vk_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,vk::PipelineStageFlagBits::eHost,
                            {},0,nullptr,1,&ready,0,nullptr);
  GraphicsRenderColorImageBarrier(vk_buffer,image,old_layout);
  const auto target=color.base_addr;const auto format=uint32_t(image->format);
- command->OnFenceComplete([ctx,backing,ordinal,target,format,element,color_bytes,half_float,packed_alpha]{
+ command->OnFenceComplete([ctx,backing,ordinal,target,format,element,color_bytes,half_float,packed_alpha,capture,sample_bytes,width,height,bgra]{
   void* mapped=nullptr;VulkanMapMemory(ctx,&backing->memory,&mapped);
   const auto* bytes=static_cast<const uint8_t*>(mapped);uint32_t nonzero=0,bright=0,nonfinite=0;
   float peak=0;
@@ -1135,6 +1186,7 @@ static void ProbeVideoTargetPixels(CommandBuffer* command,const DrawRenderState&
    }
    peak=std::max(peak,pixel_peak);bright+=pixel_peak>.02f;
   }
+  if(capture)SaveNativeVideoTarget(bytes+sample_bytes,width,height,bgra);
   VulkanUnmapMemory(ctx,&backing->memory);
   printf("[VIDEO-TARGET-PIXELS] draw=%u target=0x%016" PRIx64 " format=%u rgb_nonzero=%u/1024 bright_above_002=%u/1024 positive_peak=%.9g nonfinite=%u source=completed-draw-readback\n",
          ordinal,target,format,nonzero,bright,peak,nonfinite);
@@ -1152,6 +1204,18 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 	EXIT_IF(sh_ctx == nullptr);
 	EXIT_IF(draw.name == nullptr);
 	EXIT_IF(state == nullptr);
+ if(const auto remaining=TakeVideoGraphDraw()) {
+  printf("[VIDEO-GRAPH-DRAW] remaining=%u vs=0x%016" PRIx64 " ps=0x%016" PRIx64 " indices=%u instances=%u colors=%u\n",
+         remaining,state->vs_input_info.stage.program->shader_hash,
+         state->ps_active ? state->ps_input_info.stage.program->shader_hash : 0,
+         draw.index_count,draw.instance_count,state->color_count);
+  for(uint32_t i=0;i<state->color_count;++i) {
+   const auto& target=state->color_info[i];
+   printf("[VIDEO-GRAPH-TARGET] slot=%u address=0x%016" PRIx64 " image=%p format=%u extent=%ux%u\n",
+          i,target.base_addr,static_cast<void*>(target.vulkan_buffer),uint32_t(target.format),
+          target.extent.width,target.extent.height);
+  }
+ }
 
 	// Diagnostic control only: preserve real shaders/resources, but isolate fragment-test
 	// rejection. Never treat output from this altered state as a correct game frame.

@@ -3,6 +3,7 @@
 #include "graphics/host_gpu/renderer/bufferCache.h"
 #include "graphics/host_gpu/renderer/textureCache.h"
 #include "graphics/host_gpu/renderer/descriptors.h"
+#include "graphics/host_gpu/renderer/videoGraphProbe.h"
 
 #include "common/assert.h"
 #include "common/common.h"
@@ -1284,6 +1285,28 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 			return;
 		}
 	}
+    if(video_probe && VideoGraphProbeActive()) {
+        static std::atomic_uint edges{0};
+        for(size_t i=0;i<snapshot.images.size() && i<8;++i) {
+            if(edges.fetch_add(1)>=2048)break;
+            ShaderTextureResource sharp;CopyNativeDescriptor(snapshot.images[i],sharp.fields);
+            printf("[VIDEO-GRAPH-IMAGE] shader=0x%016" PRIx64 " stage=%u slot=%zu address=0x%016" PRIx64
+                   " image=%p format=%u extent=%ux%u read=%u write=%u\n",
+                   program.shader_hash,uint32_t(program.stage),i,sharp.Base40(),
+                   static_cast<void*>(descriptors.images[i].image),uint32_t(sharp.Format()),
+                   uint32_t(sharp.Width5())+1,uint32_t(sharp.Height5())+1,
+                   program.info.images[i].read,program.info.images[i].written);
+        }
+        for(size_t i=0;i<snapshot.buffers.size() && i<8;++i) {
+            if(edges.fetch_add(1)>=2048)break;
+            ShaderBufferResource sharp;CopyNativeDescriptor(snapshot.buffers[i],sharp.fields);
+            printf("[VIDEO-GRAPH-BUFFER] shader=0x%016" PRIx64 " stage=%u slot=%zu address=0x%016" PRIx64
+                   " native_offset=0x%016" PRIx64 " range=0x%016" PRIx64 " read=%u write=%u\n",
+                   program.shader_hash,uint32_t(program.stage),i,sharp.Base48(),
+                   uint64_t(descriptors.buffers[i].offset),uint64_t(descriptors.buffers[i].range),
+                   program.info.buffers[i].read,program.info.buffers[i].written);
+        }
+    }
 	descriptors.addresses.reserve(program.info.addresses.size());
 	for (uint32_t i = 0; i < program.info.addresses.size(); i++) {
 		descriptors.addresses.push_back(NativeAddressBuffer(
