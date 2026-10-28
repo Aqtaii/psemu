@@ -1202,3 +1202,16 @@ PID23608 starts12:57:32, prefixastro_20261028_audio_acm. Main mix stayszero over
 transient. No valid audible Astro output has been obtained. This running candidate
 precedes raw input_peak diagnostics; do not interpret a zero downmix as proof all
 source channels arezero. Final raw-metric candidate is built but not run yet.
+
+Audio ACM candidate PID23608 exits321 at13:07:16 with the same Vulkan mip6/max5
+error after60 shaders. Last periodic audio record:28672pushes,3 active bed ports,
+19 object ports,zero mixed peak andzero nonzero submissions,zero invalid pointers.
+Thus the audio thread is running; no audible game output was obtained before the
+independent graphics failure. This does not prove every raw bed channel iszero.
+Final candidate PID21860 starts13:08:56, prefixastro_20261028_audio_final, and now
+logs raw input_peak/input_nonzero in addition to the actual stereo mixture.
+
+First eight final-candidate pushes confirm raw input_peak=0 and cumulative
+input_nonzero=0 for active bed PCM. Initial object transient is measured separately
+and is never routed to speakers. Actual waveOut device opening remains untested
+because no nonzero bed submission has been observed; mock backend regression PASS.
