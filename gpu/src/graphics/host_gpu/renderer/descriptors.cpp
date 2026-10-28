@@ -1220,6 +1220,37 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
             printf("[GPU-SOURCE-READ-PREPARE] shader=0x%016" PRIx64 " ranges=%zu force_resident=1\n",
                    program.shader_hash,snapshot.guest_reads.size());
     }
+    // Read-only, opt-in evidence for the captured Astro opening-video pair.
+    // These hashes select diagnostics only; resource binding and drawing stay unchanged.
+    static const bool video_probe=[] {
+        const auto* flag=std::getenv("PSEMU_ASTRO_VIDEO_BINDING_PROBE");
+        return flag && std::strcmp(flag,"1")==0;
+    }();
+    if(video_probe && (program.shader_hash==0x7313c4a5u || program.shader_hash==0xefd4cb1cu)) {
+        static std::atomic_uint vertex_count{0},pixel_count{0};
+        const auto ordinal=(program.shader_hash==0xefd4cb1cu ? vertex_count : pixel_count).fetch_add(1);
+        if(ordinal<2 || (ordinal<=640 && ordinal%64==0)) {
+            printf("[VIDEO-BINDING] shader=0x%016" PRIx64 " stage=%u draw=%u buffers=%zu images=%zu samplers=%zu\n",
+                   program.shader_hash,static_cast<uint32_t>(program.stage),ordinal,
+                   snapshot.buffers.size(),snapshot.images.size(),snapshot.samplers.size());
+            for(size_t i=0;i<snapshot.buffers.size() && i<8;++i) {
+                const auto& v=snapshot.buffers[i];
+                printf("[VIDEO-BUFFER] shader=0x%016" PRIx64 " slot=%zu raw=%08x,%08x,%08x,%08x\n",
+                       program.shader_hash,i,v.dwords[0],v.dwords[1],v.dwords[2],v.dwords[3]);
+            }
+            for(size_t i=0;i<snapshot.images.size() && i<8;++i) {
+                const auto& v=snapshot.images[i];
+                printf("[VIDEO-IMAGE] shader=0x%016" PRIx64 " slot=%zu raw=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
+                       program.shader_hash,i,v.dwords[0],v.dwords[1],v.dwords[2],v.dwords[3],
+                       v.dwords[4],v.dwords[5],v.dwords[6],v.dwords[7]);
+            }
+            for(size_t i=0;i<snapshot.samplers.size() && i<8;++i) {
+                const auto& v=snapshot.samplers[i];
+                printf("[VIDEO-SAMPLER] shader=0x%016" PRIx64 " slot=%zu raw=%08x,%08x,%08x,%08x\n",
+                       program.shader_hash,i,v.dwords[0],v.dwords[1],v.dwords[2],v.dwords[3]);
+            }
+        }
+    }
 	DescriptorCache::NativeDescriptors descriptors;
     std::vector<GuestAddressRange> fault_address_ranges;
 	descriptors.buffers.reserve(program.info.buffers.size());

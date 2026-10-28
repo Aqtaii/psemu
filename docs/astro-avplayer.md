@@ -25,3 +25,17 @@ Astro PID 18296 executed the real Init, PostInit, AddSource, StreamCount (2), Ge
 
 CI now explicitly installs the pinned dependency, enables the decoder through `PSEMU_FFMPEG_ROOT`, requires its license/source notices in the package, and runs the production ABI/PCM test with a generated WAV. `test_avplayer.ps1` without MediaPath generates this private, temporary fixture in its explicit ScratchDirectory and removes it afterward. No game files are needed or uploaded. With MediaPath, the same test checks real video decoding too. Both paths passed locally; workflow YAML and its new PowerShell steps parsed successfully.
 The subsequent `audio-linear-retire-output` run produced real nonzero AudioOut2 output and the user confirmed hearing Sony startup audio. Native decoder frames continued after Resume. This confirms audible game sound; native visible Vulkan game output is still unconfirmed. The former linear-target crash was passed; a later R32 color-storage/containing-target transition is the next runtime validation point. `PSEMU_AVPLAYER_FRAME_PROBE=1` enables bounded, read-only source luma diagnostics to separate decoded input from presentation.
+
+### Opening-video shader replay (2026-10-28)
+
+The captured production vertex `efd4cb1c` and pixel `7313c4a5` SPIR-V modules now run unchanged in an independent Vulkan graphics pipeline with synthetic 64x48 NV12 packed into an R8 image. The test checks every pixel in an 8x8 float framebuffer against CPU YUV-to-RGB expectations for black, neutral bright and colored inputs. Both a synthetic full-screen vertex shader plus the real pixel shader and the complete real vertex/pixel pair passed on Arc B580. Maximum component errors were 0.000003, 0.000384 and 0.000922 (limit 0.006, including the shader's half packing). Repeated with the Khronos validation layer: no validation errors or warnings after matching the production writable-buffer feature requirements in the test device.
+
+Run from the portable build environment with explicit caller-owned captures:
+
+```powershell
+.\tools\scripts\test_native_video_shader_gpu.ps1 -VertexSpirv <production-video-vs.spv> -PixelSpirv <production-video-ps.spv>
+```
+
+The test logs input SHA-256 hashes and does not include proprietary shader bytes, game images or media. It exercises captured compiled modules, not recompilation of their source. It cannot prove that the running guest supplies the same valid resources, matrix, draw state or presentation target. It is not an Astro game-frame result and is intentionally outside asset-free CI.
+
+`PSEMU_ASTRO_VIDEO_BINDING_PROBE=1` selects bounded runtime diagnostics for that captured shader pair: raw native snapshot buffer/image/sampler descriptors, actual upload-source luma samples, video draw target/mask/blend/depth/viewport/scissor and completed-fence occlusion results with the pixel-shader hash. The upload probe reads only bytes already being uploaded and does not read guest pointers, change ownership, replace pixels or add readbacks. Coverage queries add measurement GPU work only while explicitly enabled. Default rendering is unchanged.

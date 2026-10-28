@@ -995,12 +995,19 @@ static std::shared_ptr<vk::QueryPool> PrepareDrawCoverageProbe(
     CommandBuffer* command, const DrawRenderState& state, const DrawCallInfo& draw,
     uint64_t submit_id, bool primitives = false) {
     const char* flag = std::getenv("PSEMU_ASTRO_COVERAGE_PROBE");
-    if (!flag || std::strcmp(flag, "1") != 0) return {};
+    static const bool video_enabled=[] {
+        const auto* value=std::getenv("PSEMU_ASTRO_VIDEO_BINDING_PROBE");
+        return value && std::strcmp(value,"1")==0;
+    }();
+    const auto ps_hash=state.ps_active && state.ps_input_info.stage.program ?
+        state.ps_input_info.stage.program->shader_hash : 0;
+    const bool video=video_enabled && ps_hash==0x7313c4a5u;
+    if ((!flag || std::strcmp(flag, "1") != 0) && !video) return {};
     if (primitives && (!state.merged_mesh ||
         !g_render_ctx->GetGraphicCtx()->mesh_queries_enabled)) return {};
-    static std::atomic_uint probe_count{0}, primitive_probe_count{0};
-    const auto probe_id = (primitives ? primitive_probe_count : probe_count).fetch_add(1);
-    if (probe_id >= 48) return {};
+    static std::atomic_uint probe_count{0}, primitive_probe_count{0},video_count{0};
+    const auto probe_id = (video ? video_count : primitives ? primitive_probe_count : probe_count).fetch_add(1);
+    if(video ? (probe_id>=2 && (probe_id>640 || probe_id%64!=0)) : probe_id>=48) return {};
     auto device = g_render_ctx->GetGraphicCtx()->device;
     auto pool = std::shared_ptr<vk::QueryPool>(new vk::QueryPool{},
         [device](vk::QueryPool* p) {
@@ -1024,20 +1031,20 @@ static std::shared_ptr<vk::QueryPool> PrepareDrawCoverageProbe(
     const auto colors = state.color_count;
     const auto extent = colors ? state.color_info[0].extent : vk::Extent2D{};
     command->OnFenceComplete([device, pool, probe_id, submit_id, mesh, words,
-                              indices, instances, colors, extent, primitives] {
+                              indices, instances, colors, extent, primitives, ps_hash] {
         uint64_t result[2]{};
         const auto status = device.getQueryPoolResults(*pool, 0, 1, sizeof(result),
             result, sizeof(result), vk::QueryResultFlagBits::e64 |
                                     vk::QueryResultFlagBits::eWithAvailability);
         printf("[%s] id=%u submit=%llu mesh=%u vs_words=%zu "
                "indices=%u instances=%u colors=%u extent=%ux%u %s=%llu "
-               "available=%llu result=%d source=completed-fence\n",
+               "available=%llu result=%d ps_shader=0x%016" PRIx64 " source=completed-fence\n",
                primitives ? "GPU-MESH-PRIMITIVES" : "GPU-DRAW-COVERAGE",
                probe_id, static_cast<unsigned long long>(submit_id), unsigned(mesh),
                words, indices, instances, colors, extent.width, extent.height,
                primitives ? "primitives" : "samples",
                static_cast<unsigned long long>(result[0]),
-               static_cast<unsigned long long>(result[1]), int(status));
+               static_cast<unsigned long long>(result[1]), int(status),ps_hash);
     });
     return pool;
 }
@@ -1145,6 +1152,28 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 		}
 
 		FlushBounceCopies(state->vk_buffer, false);
+        static const bool video_draw_enabled=[] {
+            const auto* value=std::getenv("PSEMU_ASTRO_VIDEO_BINDING_PROBE");
+            return value && std::strcmp(value,"1")==0;
+        }();
+        if(video_draw_enabled && state->ps_active && state->color_count &&
+           state->ps_input_info.stage.program->shader_hash==0x7313c4a5u) {
+            static std::atomic_uint count{0};const auto ordinal=count.fetch_add(1);
+            if(ordinal<2 || (ordinal<=640 && ordinal%64==0)) {
+                const auto& color=state->color_info[0];const auto& vp=ctx->GetScreenViewport();
+                const auto& v=vp.viewports[0];const auto sc=calc_final_scissor(vp,ctx->GetScanModeControl(),color.extent);
+                const auto& blend=ctx->GetBlendControl(color.target_slot);
+                printf("[VIDEO-DRAW] draw=%u target=0x%016" PRIx64 " extent=%ux%u color_mask=0x%x "
+                       "indices=%u instances=%u indexed=%u first_vertex=%u depth_test=%u depth_write=%u "
+                       "blend=%u src=%u dst=%u comb=%u viewport=(%.1f,%.1f %.1fx%.1f) scissor=(%d,%d)-(%d,%d)\n",
+                       ordinal,color.base_addr,color.extent.width,color.extent.height,ctx->GetRenderTargetMask(),
+                       draw.index_count,draw.instance_count,emit.indexed,emit.first_vertex,
+                       pipeline_depth.depth_test_enable,pipeline_depth.depth_write_enable,
+                       blend.enable,blend.color_srcblend,blend.color_destblend,blend.color_comb_fcn,
+                       v.xoffset-v.xscale,v.yoffset-v.yscale,v.xscale*2.f,v.yscale*2.f,
+                       sc.left,sc.top,sc.right,sc.bottom);
+            }
+        }
 		auto coverage_probe = PrepareDrawCoverageProbe(buffer, *state, draw, submit_id);
 		auto primitive_probe = PrepareDrawCoverageProbe(buffer, *state, draw, submit_id, true);
 

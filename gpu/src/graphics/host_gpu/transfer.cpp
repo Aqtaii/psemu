@@ -899,12 +899,33 @@ void ClearColorImage(CommandBuffer* buffer, VulkanImage* image, const vk::ClearC
 	               vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eTransferSrcOptimal);
 }
 
+// Observe only the bytes already supplied to the real upload, without guest reads,
+// extra GPU work, or changes to ownership. A nonblack source is not a game frame.
+static void LogVideoUploadSource(const VulkanImage* image,const void* data,
+                                 uint64_t size,uint32_t pitch) {
+ static const bool enabled=[] {const auto* flag=std::getenv("PSEMU_ASTRO_VIDEO_BINDING_PROBE");
+  return flag && std::strcmp(flag,"1")==0;}();
+ if(!enabled || !image || !data || image->format!=vk::Format::eR8Unorm ||
+    image->extent.width!=3840 || image->extent.height!=3240 || pitch<3840 ||
+    uint64_t(pitch)*2159+3840>size)return;
+ static std::atomic_uint count{0};const auto ordinal=count.fetch_add(1);
+ if(ordinal>=2 && (ordinal>640 || ordinal%64!=0))return;
+ const auto* bytes=static_cast<const uint8_t*>(data);uint32_t low=255,high=0,above32=0;
+ for(uint32_t y=0;y<32;++y)for(uint32_t x=0;x<32;++x) {
+  const auto sample=bytes[uint64_t(y*2160/32)*pitch+x*3840/32];
+  low=std::min(low,uint32_t(sample));high=std::max(high,uint32_t(sample));above32+=sample>32;
+ }
+ printf("[VIDEO-UPLOAD-SOURCE] upload=%u image=%p pitch=%u min=%u max=%u above32=%u/1024 source_only=1\n",
+        ordinal,static_cast<const void*>(image),pitch,low,high,above32);
+}
+
 void UploadImage(GraphicContext* ctx, VulkanImage* dst_image, const void* src_data, uint64_t size,
                  uint32_t src_pitch, vk::ImageLayout dst_layout) {
 	KYTY_PROFILER_FUNCTION();
 
 	EXIT_IF(size == 0);
 
+	LogVideoUploadSource(dst_image,src_data,size,src_pitch);
 	GetStagingBuffer(StagingBufferType::Texture)
 	    ->UploadToImage(ctx, dst_image, src_data, size, src_pitch, vk::ImageAspectFlagBits::eColor,
 	                    vk::ImageLayout::eUndefined, dst_layout);
@@ -994,6 +1015,9 @@ void UploadImage(GraphicContext* ctx, VulkanImage* image, const void* src_data, 
                  std::span<const BufferImageCopy> regions, vk::ImageLayout dst_layout) {
 	EXIT_IF(size == 0 || regions.empty());
 
+    if(src_data && regions.size()==1 && regions[0].offset<=size)
+        LogVideoUploadSource(image,static_cast<const uint8_t*>(src_data)+regions[0].offset,
+                             size-regions[0].offset,regions[0].pitch);
 	GetStagingBuffer(StagingBufferType::Texture)
 	    ->UploadToImage(ctx, image, src_data, size, regions, dst_layout);
 }
