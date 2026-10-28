@@ -290,6 +290,46 @@ int main() {
   Require(cache.m_memory_tracker.published[0]==std::pair<uint64_t,uint64_t>{old.address,old.size});
  }
 
+ // Full RGBA16F storage readback must cover clean cached fragments outside
+ // the small requested depth view, and preflight every conflicting owner first.
+ {
+  ImageInfo old{};old.address=0x233de8f0000ull;old.size=0x1a20000;old.width=old.pitch=2432;old.height=1368;
+  old.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float);
+  old.type=Prospero::GpuEnumValue(Prospero::ImageType::kColor2D);old.depth=old.levels=old.view_levels=1;
+  old.tile=Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget);
+  auto small=old;small.address+=0x240000;small.size=0xc0000;small.width=480;small.height=270;small.pitch=512;
+  small.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float);small.tile=Prospero::GpuEnumValue(Prospero::TileMode::kDepth);
+  Require(IsSupportedColorStorageBacking(old));
+  const auto tail=old.address+0x1000000;
+  std::vector<uint64_t> linear(old.size/8),expected(linear.size()+2,0xa5a5a5a5a5a5a5a5ull);
+  for(size_t i=0;i<linear.size();i++)linear[i]=0x3c00380034003000ull+i;
+  size_t outside_small=0;
+  for(uint32_t y=0;y<old.height;y++)for(uint32_t x=0;x<old.width;x++){
+   const auto physical=((y/64)*19+x/128)*8192+Gen5RenderTargetOffsetInBlock<uint64_t>(x%128,y)/8;
+   expected[1+physical]=linear[y*old.pitch+x];
+   outside_small+=(physical*8<0x240000 || physical*8>=0x300000);
+  }
+  Require(outside_small>0);
+  for(int conflict=0;conflict<4;conflict++){
+   BufferCache cache;
+   cache.m_buffers.emplace(tail,std::make_unique<BufferCache::CachedBuffer>(BufferCache::CachedBuffer{0xa20000}));
+   if(conflict==1)cache.m_memory_tracker.cpu.emplace_back(tail,0x1000);
+   if(conflict==2)cache.m_memory_tracker.gpu.emplace_back(tail,0x1000);
+   if(conflict==3)cache.m_gpu_modified_ranges.dirty.emplace_back(tail,0x1000);
+   const bool competing=cache.m_memory_tracker.IsRegionGpuModified(old.address,old.size) || cache.IsCachedRegionCpuModified(old.address,old.size);
+   Require(CanReconstructStorageForStorage(old,true,false,true,false,true,competing,small)==(conflict!=1 && conflict!=2));
+   std::vector<uint64_t> guest(expected.size(),0xa5a5a5a5a5a5a5a5ull);const auto before=guest;
+   bool called=false,rejected=false;
+   try {cache.ReconstructImageBacking(old.address,old.size,[&]{called=true;
+    TileConvertLinearToTiledRenderTarget64PreservePadding(guest.data()+1,linear.data(),old.width,old.height,old.pitch,old.size);
+   });}catch(const std::runtime_error&){rejected=true;}
+   if(conflict==0){
+    Require(called && !rejected && guest==expected && cache.m_memory_tracker.published.size()==1);
+    Require(cache.m_memory_tracker.published[0]==std::pair<uint64_t,uint64_t>{old.address,old.size});
+   }else Require(rejected && !called && guest==before && cache.m_memory_tracker.published.empty());
+  }
+ }
+
  // Captured straddling RGBA8 target -> RGBA16F storage: publish the full old
  // target, including 0x2c0000 bytes beyond the new allocation's upper bound.
  {

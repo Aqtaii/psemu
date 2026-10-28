@@ -1077,3 +1077,30 @@ packed-color retile, preserved canaries/padding match prior backing and every
 R32 depth pixel contains the exact packed bits. PASS. Existing CPU regression
 suite passes. Local storage-layout-roundtrip-output build pending; recognizable
 Astro image still pending.
+
+## 2026-10-28: full storage publication across clean cached buffer fragments
+
+Resumed3d3533b runtimePID20016 started11:42:49 and exited321 at11:53:40.
+Next alias: requestedR32 depth480x270,pitch512,size0xc0000 atold+0x240000,
+oldRGBA16F2432x1368,pitch2432,size0x1a20000. Old GPU/tracker current, CPU clean,
+no yielded owner. Old fatal printed buffer overlap for the SMALL request only;
+storage admission used HasPageOverlap over the FULL old allocation. Therefore
+clean resident fragments outside the request could reject a legal publication.
+Old-buffer dirtiness/type were omitted, so diagnostics now expose them explicitly.
+
+Storage reconstruction now follows the existing RT rule: reject buffer GPU-dirty
+or cached CPU-dirty owners across the full old range, rather than mere residency.
+Explicit full storage readbacks use the preserve-backing mode: supported depth/
+color layouts may traverse clean buffer fragments, ReconstructImageBacking
+preflights all competing owners BEFORE download/retile/backing replacement, and
+marks the full range CPU-dirty for later fragment upload. Fault-driven storage
+readback restrictions and pending-fault-page handling remain unchanged. Cached
+image CPU-dirty state is checked too. Storage aliases drain pending commands via
+the existing pre-lock recording-generation retry path, as RT aliases already do.
+
+New production CPU test covers captured largeRGBA16F -> smallR32 shape with a
+cached tail outside the request. Full retile matches independently expected
+visible pixels, padding/canaries and full-range publication. CPU-dirty tail,
+GPU-dirty tail and byte/tracker disagreement each reject before callback,
+leave all bytes unchanged, and publish nothing. PASS. Full local build completed
+in storage-clean-fragments-output with matching map; actual retry pending.

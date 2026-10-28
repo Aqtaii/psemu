@@ -484,7 +484,7 @@ struct TextureCache::ReadbackWorker {
 		return {info.address, info.size};
 	}
 
-	[[nodiscard]] ReadbackRange DownloadColorImage(CachedImage& cached, bool preserve_target_padding = false) {
+	[[nodiscard]] ReadbackRange DownloadColorImage(CachedImage& cached, bool preserve_backing_padding = false) {
 		const bool storage = cached.kind == CachedImage::Kind::StorageTexture;
 		const bool target  = cached.kind == CachedImage::Kind::RenderTarget;
 		const auto info =
@@ -524,7 +524,10 @@ struct TextureCache::ReadbackWorker {
 		const auto slice_size     = info.size / layers;
 		const bool meta_overlap   = cache.HasMetaOverlapLocked(info.address, info.size);
 		const bool buffer_overlap = cache.m_buffer_cache.HasPageOverlap(info.address, info.size);
-		if (meta_overlap || (buffer_overlap && (!target || (!preserve_target_padding && access != PageFaultAccess::Read)))) {
+        const bool full_storage_publication = storage && preserve_backing_padding &&
+                                              (depth_storage || color_storage);
+		if (meta_overlap || (buffer_overlap && ((!target && !full_storage_publication) ||
+            (!preserve_backing_padding && access != PageFaultAccess::Read)))) {
 			EXIT("TextureCache: color-image readback storage is unsupported, addr=0x%016" PRIx64
 			     " size=0x%016" PRIx64 " meta=%d buffer=%d kind=%u\n",
 			     info.address, info.size, meta_overlap, buffer_overlap,
@@ -583,7 +586,7 @@ struct TextureCache::ReadbackWorker {
                  if(!LibKernel::Memory::TryReadBacking(info.address,guest.data(),info.size))
                   EXIT("TextureCache: cannot preserve depth mip readback backing\n");
                  TileDepthStorageMipsPreservePadding(guest.data(),download.data(),cached.info);
-                } else if (preserve_target_padding || color_storage) {
+                } else if (preserve_backing_padding || color_storage) {
 					if (!IsTiledRenderTarget(layout) || (layout.bytes_per_element != 2 && layout.bytes_per_element != 4 && layout.bytes_per_element != 8) ||
 					    !Libs::LibKernel::Memory::TryReadBacking(info.address, guest.data(), info.size)) {
 						EXIT("TextureCache: cannot preserve target reconstruction padding\n");
@@ -614,8 +617,8 @@ struct TextureCache::ReadbackWorker {
 			// Run holds the texture lock and pauses submissions. Keep buffer ownership stable
 			// through download, retile, backing replacement and cached-fragment publication.
 			cache.m_buffer_cache.ReconstructImageBacking(
-			    info.address, info.size, reconstruct, preserve_target_padding ? 0 : vaddr & ~(TRACKER_PAGE_SIZE - 1));
-			buffer_publication_pending = !preserve_target_padding;
+			    info.address, info.size, reconstruct, preserve_backing_padding ? 0 : vaddr & ~(TRACKER_PAGE_SIZE - 1));
+			buffer_publication_pending = !preserve_backing_padding;
 			static std::atomic_uint readback_logs {0};
 			if (readback_logs.fetch_add(1, std::memory_order_relaxed) < 8) {
 				printf("[RT-BUFFER-READBACK] image=0x%016" PRIx64 "+0x%016" PRIx64
@@ -1119,8 +1122,9 @@ void TextureCache::ResolveStorageImageOverlaps(CommandBuffer* command, GraphicCo
 			case StorageImageOverlap::Unsupported:
                 if(cached->kind==CachedImage::Kind::StorageTexture &&
                    CanReconstructStorageForStorage(cached->info,cached->gpu_modified,cached->buffer_modified,
-                    tracker_gpu,m_memory_tracker.IsRegionCpuModified(cached->Address(),cached->Size()),
-                    cached->ctx==ctx,m_buffer_cache.HasPageOverlap(cached->Address(),cached->Size()),requested)) {
+                    tracker_gpu,cached->info.IsCpuDirty() || m_memory_tracker.IsRegionCpuModified(cached->Address(),cached->Size()),
+                    cached->ctx==ctx,(m_buffer_cache.IsRegionGpuModified(cached->Address(),cached->Size()) ||
+                     m_buffer_cache.IsCachedRegionCpuModified(cached->Address(),cached->Size())),requested)) {
                  retire.push_back(cached);
                  static std::atomic_uint storage_alias_logs{0};
                  if(storage_alias_logs.fetch_add(1)<8)printf("[STORAGE-STORAGE-RETIRE] old=0x%016" PRIx64
@@ -1160,7 +1164,7 @@ void TextureCache::ResolveStorageImageOverlaps(CommandBuffer* command, GraphicCo
 				     " kind=%u same_context=%d gpu=%d/%d buffer=%d"
 				     " requested=%ux%u pitch=%u tile=%u fmt=%u depth=%u levels=%u"
 				     " target=%ux%u pitch=%u tile=%u bpe=%u layers=%u levels=%u"
-				     " cpu=%d buffers=%d existing_info={fmt=%u width=%u height=%u pitch=%u tile=%u levels=%u base=%u view=%u swizzle=0x%03x}\n",
+				     " cpu=%d buffers=%d existing_info={fmt=%u width=%u height=%u pitch=%u tile=%u levels=%u base=%u view=%u swizzle=0x%03x} existing_buffers={pages=%d gpu=%d cpu=%d} existing_shape={depth=%u type=%u array=%u}\n",
 				     requested.address, requested.size, cached->Address(), cached->Size(),
 				     static_cast<uint32_t>(cached->kind), cached->ctx == ctx, cached->gpu_modified,
 				     tracker_gpu, cached->buffer_modified,
@@ -1171,7 +1175,11 @@ void TextureCache::ResolveStorageImageOverlaps(CommandBuffer* command, GraphicCo
 				     m_memory_tracker.IsRegionCpuModified(cached->Address(),cached->Size()),
 				     m_buffer_cache.HasPageOverlap(requested.address,requested.size),
                      cached->info.format,cached->info.width,cached->info.height,cached->info.pitch,cached->info.tile,
-                     cached->info.levels,cached->info.base_level,cached->info.view_levels,cached->info.swizzle);
+                     cached->info.levels,cached->info.base_level,cached->info.view_levels,cached->info.swizzle,
+                     m_buffer_cache.HasPageOverlap(cached->Address(),cached->Size()),
+                     m_buffer_cache.IsRegionGpuModified(cached->Address(),cached->Size()),
+                     m_buffer_cache.IsCachedRegionCpuModified(cached->Address(),cached->Size()),
+                     cached->info.depth,cached->info.type,cached->info.base_array);
 		}
 	}
 	RequireRetirementIsolation(retire, "storage neighbor", requested.address, requested.size);
@@ -1199,7 +1207,7 @@ void TextureCache::ResolveStorageImageOverlaps(CommandBuffer* command, GraphicCo
 		if (!cached->gpu_modified) {
 			continue;
 		}
-		const auto transfer = m_readback->DownloadColorImage(*cached, cached->kind == CachedImage::Kind::RenderTarget);
+		const auto transfer = m_readback->DownloadColorImage(*cached, true);
 		m_memory_tracker.ForEachDownloadRange<true>(transfer.address, transfer.size,
 		                                            [](uint64_t, uint64_t) noexcept {});
 		cached->gpu_modified = false;
@@ -1292,7 +1300,8 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
          if(CanReconstructStorageForSampled(cached->info,cached->gpu_modified,cached->buffer_modified,
            m_memory_tracker.IsRegionGpuModified(cached->Address(),cached->Size()),
            cached->info.IsCpuDirty() || m_memory_tracker.IsRegionCpuModified(cached->Address(),cached->Size()),
-           cached->ctx==ctx,m_buffer_cache.HasPageOverlap(cached->Address(),cached->Size()),info)) {
+           cached->ctx==ctx,(m_buffer_cache.IsRegionGpuModified(cached->Address(),cached->Size()) ||
+            m_buffer_cache.IsCachedRegionCpuModified(cached->Address(),cached->Size())),info)) {
           reconstruct_storage=true;break;
          }
         }
@@ -1552,6 +1561,12 @@ StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   com
 		std::lock_guard transaction(m_resource_mutex);
 		FaultSafeTextureLock lock(this,m_lock);
 		for (auto* cached:FindImagesInRegionLocked(info.address,info.size,true)) {
+            if(cached->kind==CachedImage::Kind::StorageTexture && !EqualStorageBacking(info,cached->info) &&
+               CanReconstructStorageForStorage(cached->info,cached->gpu_modified,cached->buffer_modified,
+                m_memory_tracker.IsRegionGpuModified(cached->Address(),cached->Size()),
+                cached->info.IsCpuDirty() || m_memory_tracker.IsRegionCpuModified(cached->Address(),cached->Size()),
+                cached->ctx==ctx,(m_buffer_cache.IsRegionGpuModified(cached->Address(),cached->Size()) ||
+                 m_buffer_cache.IsCachedRegionCpuModified(cached->Address(),cached->Size())),info))needs_target_drain=true;
 			if (cached->kind==CachedImage::Kind::RenderTarget &&
 			    CanReconstructRenderTargetForStorage(cached->target,cached->gpu_modified,
 			        cached->buffer_modified,m_memory_tracker.IsRegionGpuModified(cached->Address(),cached->Size()),
