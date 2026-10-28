@@ -10,6 +10,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 
 namespace Libs::Graphics {
 
@@ -849,6 +850,48 @@ ClassifyBufferImageWrite(uint64_t buffer_address, uint64_t buffer_size, uint64_t
 		case BufferImageBinding::Unsupported: return BufferImageWrite::Unsupported;
 	}
 	return BufferImageWrite::Unsupported;
+}
+
+[[nodiscard]] inline bool IsSupportedLinearStorageBacking(const ImageInfo& info) {
+	if (info.address == 0 || (info.address & 255u) != 0 || info.size == 0 ||
+	    info.size > UINT32_MAX || info.size > UINT64_MAX - info.address ||
+	    info.width == 0 || info.width > 16384 || info.height == 0 || info.height > 16384)
+		return false;
+	return info.format == Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16UNorm) &&
+	       info.tile == Prospero::GpuEnumValue(Prospero::TileMode::kLinear) &&
+	       info.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) &&
+	       info.depth == 1 && info.levels == 1 && info.base_level == 0 &&
+	       info.view_levels == 1 && info.base_array == 0 && info.swizzle == 0xfacu &&
+	       info.pitch == ((info.width + 31u) & ~31u) &&
+	       info.size == static_cast<uint64_t>(info.pitch) * info.height * 8u;
+}
+
+[[nodiscard]] inline BufferImageWrite ClassifyLinearStorageBufferWrite(
+    uint64_t write_address, uint64_t write_size, const ImageInfo& info,
+    bool gpu, bool buffer, bool tracker_gpu, bool cpu, bool formatted,
+    bool page_conflict, bool buffer_conflict) {
+	if (!IsSupportedLinearStorageBacking(info) || write_address == 0 || write_size == 0 ||
+	    write_size > UINT64_MAX - write_address ||
+	    ((write_address | write_size) & (TRACKER_PAGE_SIZE - 1u)) != 0 ||
+	    !ImageRangeOverlaps(write_address, write_size, info.address, info.size) ||
+	    !formatted || page_conflict || cpu) return BufferImageWrite::Unsupported;
+	if (gpu && !buffer && tracker_gpu && !buffer_conflict)
+		return BufferImageWrite::SynchronizeStorageTexture;
+	if (!gpu && buffer && !tracker_gpu)
+		return BufferImageWrite::InvalidateStorageTexture;
+	return BufferImageWrite::Unsupported;
+}
+
+[[nodiscard]] inline bool CopyLinearStorageRowsPreservePadding(
+    void* destination, const void* readback, const ImageInfo& info) {
+	if (destination == nullptr || readback == nullptr || !IsSupportedLinearStorageBacking(info))
+		return false;
+	const auto stride = static_cast<size_t>(info.pitch) * 8u;
+	const auto visible = static_cast<size_t>(info.width) * 8u;
+	for (uint32_t y = 0; y < info.height; ++y)
+		std::memcpy(static_cast<uint8_t*>(destination) + y * stride,
+		            static_cast<const uint8_t*>(readback) + y * stride, visible);
+	return true;
 }
 
 [[nodiscard]] inline StorageBufferRebind

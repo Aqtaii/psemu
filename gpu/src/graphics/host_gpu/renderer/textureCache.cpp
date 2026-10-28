@@ -3008,8 +3008,58 @@ void TextureCache::PrepareHostWrite(uint64_t vaddr, uint64_t size) {
 	MarkSampledAliasesCpuDirtyLocked(vaddr, size);
 }
 
+bool TextureCache::HasOtherImagePageOwnerLocked(const CachedImage& selected) {
+	for (auto* candidate: FindImagesInRegionLocked(selected.Address(), selected.Size(), true))
+		if (candidate != &selected) return true;
+	return false;
+}
+
+void TextureCache::SynchronizeLinearStorageImageToBufferLocked(
+    CachedImage& cached, uint64_t write_address, uint64_t write_size) {
+	const auto& info = cached.info;
+	const auto page_begin = info.address & ~(TRACKER_PAGE_SIZE - 1u);
+	const auto page_end = (info.address + info.size + TRACKER_PAGE_SIZE - 1u) & ~(TRACKER_PAGE_SIZE - 1u);
+	const bool page_conflict = HasOtherImagePageOwnerLocked(cached) || HasMetaOverlapLocked(info.address, info.size);
+	const bool buffer_conflict = m_buffer_cache.IsRegionGpuModified(page_begin, page_end - page_begin) ||
+	                             m_buffer_cache.IsCachedRegionCpuModified(page_begin, page_end - page_begin);
+	if (cached.kind != CachedImage::Kind::StorageTexture || cached.ctx == nullptr || cached.image == nullptr ||
+	    ClassifyLinearStorageBufferWrite(write_address, write_size, info, cached.gpu_modified,
+	        cached.buffer_modified, m_memory_tracker.IsRegionGpuModified(info.address, info.size),
+	        info.IsCpuDirty() || m_memory_tracker.IsRegionCpuModified(info.address, info.size),
+	        true, page_conflict, buffer_conflict) != BufferImageWrite::SynchronizeStorageTexture ||
+	    cached.image->format != VulkanFormat(info.format) || cached.image->extent.width != info.width ||
+	    cached.image->extent.height != info.height || cached.image->layers != 1 || cached.image->mip_levels != 1)
+		EXIT("TextureCache: unsupported linear storage readback ownership\n");
+	Transfer::WaitForGraphicsIdle(cached.ctx);
+	m_buffer_cache.ReconstructImageBacking(info.address, info.size, [&] {
+		m_buffer_transition_guest.resize(info.size);
+		if (!LibKernel::Memory::TryReadBacking(info.address, m_buffer_transition_guest.data(), info.size))
+			EXIT("TextureCache: cannot preserve linear storage padding\n");
+		m_buffer_transition_linear.resize(info.size);
+		const auto regions = Transfer::MakeLayeredImageBufferCopies(
+		    1, info.size, info.pitch, info.width, info.height);
+		Transfer::DownloadImage(cached.ctx, m_buffer_transition_linear.data(), info.size,
+		                        regions, cached.image, cached.image->layout);
+		EXIT_IF(!CopyLinearStorageRowsPreservePadding(m_buffer_transition_guest.data(),
+		                                             m_buffer_transition_linear.data(), info));
+		LibKernel::Memory::WriteBacking(info.address, m_buffer_transition_guest.data(), info.size);
+	});
+	m_memory_tracker.ForEachDownloadRange<true>(info.address, info.size, [](uint64_t, uint64_t) noexcept {});
+	cached.gpu_modified = false;
+	cached.buffer_modified = true;
+	static std::atomic_uint logs{0};
+	if (logs.fetch_add(1) < 8)
+		printf("[LINEAR-STORAGE-BUFFER-SYNC] image=0x%016" PRIx64 "+0x%016" PRIx64
+		       " write=0x%016" PRIx64 "+0x%016" PRIx64 " full_backing=1 padding_preserved=1 edge_isolated=1\n",
+		       info.address, info.size, write_address, write_size);
+}
+
 void TextureCache::SynchronizeColorImageToBufferLocked(CachedImage& cached, uint64_t write_address,
                                                        uint64_t write_size, bool preserve_storage_padding) {
+	if (cached.kind == CachedImage::Kind::StorageTexture && IsSupportedLinearStorageBacking(cached.info)) {
+		SynchronizeLinearStorageImageToBufferLocked(cached, write_address, write_size);
+		return;
+	}
 	const bool       render_target = cached.kind == CachedImage::Kind::RenderTarget;
 	const bool       video_out     = cached.kind == CachedImage::Kind::VideoOut;
 	const bool       storage       = cached.kind == CachedImage::Kind::StorageTexture;
@@ -3368,17 +3418,31 @@ bool TextureCache::InvalidateMemoryFromGPU(uint64_t vaddr, uint64_t size,
 		    vaddr == cached.Address(1) && size == cached.Size(1)) {
 			plane = 1;
 		}
-		const auto next = ClassifyBufferImageWrite(vaddr, size, cached.Address(plane), cached.Size(plane),
+		auto next = ClassifyBufferImageWrite(vaddr, size, cached.Address(plane), cached.Size(plane),
 		                                           cached.BufferBinding(), cached.gpu_modified,
 		                                           formatted_buffer_write, cached.buffer_modified);
+		bool linear_page_conflict = false, linear_buffer_conflict = false;
+		if (cached.kind == CachedImage::Kind::StorageTexture && IsSupportedLinearStorageBacking(cached.info)) {
+			const auto page_begin = cached.info.address & ~(TRACKER_PAGE_SIZE - 1u);
+			const auto page_end = (cached.info.address + cached.info.size + TRACKER_PAGE_SIZE - 1u) & ~(TRACKER_PAGE_SIZE - 1u);
+			linear_page_conflict = HasOtherImagePageOwnerLocked(cached) || HasMetaOverlapLocked(cached.info.address, cached.info.size);
+			linear_buffer_conflict = m_buffer_cache.IsRegionGpuModified(page_begin, page_end - page_begin) ||
+			                         m_buffer_cache.IsCachedRegionCpuModified(page_begin, page_end - page_begin);
+			next = ClassifyLinearStorageBufferWrite(vaddr, size, cached.info, cached.gpu_modified,
+			    cached.buffer_modified, m_memory_tracker.IsRegionGpuModified(cached.info.address, cached.info.size),
+			    cached.info.IsCpuDirty() || m_memory_tracker.IsRegionCpuModified(cached.info.address, cached.info.size),
+			    formatted_buffer_write, linear_page_conflict, linear_buffer_conflict);
+		}
 		if (match != m_images.end() || next == BufferImageWrite::None ||
 		    next == BufferImageWrite::Unsupported) {
 			EXIT("TextureCache: unsupported GPU invalidation alias, addr=0x%016" PRIx64
 			     " size=0x%016" PRIx64 " cached_kind=%u cached=0x%016" PRIx64 "+0x%016" PRIx64
-			     " gpu_modified=%d buffer_modified=%d formatted=%d ambiguous=%d\n",
+			     " gpu_modified=%d buffer_modified=%d formatted=%d ambiguous=%d"
+			     " shape={fmt=%u tile=%u extent=%ux%u pitch=%u levels=%u} linear_page_conflict=%d linear_buffer_conflict=%d\n",
 			     vaddr, size, static_cast<uint32_t>(cached.kind), cached.Address(), cached.Size(),
 			     cached.gpu_modified, cached.buffer_modified, formatted_buffer_write,
-			     match != m_images.end());
+			     match != m_images.end(), cached.info.format, cached.info.tile, cached.info.width,
+			     cached.info.height, cached.info.pitch, cached.info.levels, linear_page_conflict, linear_buffer_conflict);
 		}
 		match  = it;
 		action = next;

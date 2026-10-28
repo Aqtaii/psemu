@@ -1,6 +1,65 @@
 #include <source_location>
 static void Require(bool ok,std::source_location where=std::source_location::current()) {if(!ok) {std::fprintf(stderr,"Regression failed at %s:%u\n",where.file_name(),where.line());throw std::runtime_error("regression failed");}}
 int main() {
+ // Captured sub-page-ended RGBA16 UNorm storage straddles the formatted buffer write.
+ {
+  ImageInfo image{};const uint64_t write=0x2246a640000ull,write_size=0x480000;
+  image.address=write+0x300000;image.size=0x3f4800;image.format=65;
+  image.width=image.pitch=960;image.height=540;image.levels=image.view_levels=image.depth=1;
+  image.tile=0;image.type=Prospero::GpuEnumValue(Prospero::ImageType::kColor2D);image.swizzle=0xfac;
+  Require(IsSupportedLinearStorageBacking(image));
+  Require(ClassifyBufferImageWrite(write,write_size,image.address,image.size,
+   BufferImageBinding::StorageTexture,true,true,false)==BufferImageWrite::Unsupported);
+  Require(ClassifyLinearStorageBufferWrite(write,write_size,image,true,false,true,false,true,false,false)==BufferImageWrite::SynchronizeStorageTexture);
+  Require(ClassifyLinearStorageBufferWrite(image.address+0x300000,write_size,image,true,false,true,false,true,false,false)==BufferImageWrite::SynchronizeStorageTexture);
+  Require(ClassifyLinearStorageBufferWrite(write,write_size,image,false,true,false,false,true,false,true)==BufferImageWrite::InvalidateStorageTexture);
+  for(int bad=0;bad<8;bad++)Require(ClassifyLinearStorageBufferWrite(write,write_size,image,
+   bad!=0 && bad!=7,bad==1 || bad==7,bad!=2,bad==3,bad!=4,bad==5,bad==6)==BufferImageWrite::Unsupported);
+  for(auto [address,bytes]:std::array<std::pair<uint64_t,uint64_t>,5>{{{write,0},{write+1,write_size},
+   {write,write_size+1},{write-0x1000,0x1000},{UINT64_MAX-4095,8192}}})
+   Require(ClassifyLinearStorageBufferWrite(address,bytes,image,true,false,true,false,true,false,false)==BufferImageWrite::Unsupported);
+  for(int field=0;field<12;field++){
+   auto bad=image;if(field==0)bad.format=71;if(field==1)bad.tile=27;if(field==2)bad.levels=2;
+   if(field==3)bad.base_level=1;if(field==4)bad.view_levels=0;if(field==5)bad.base_array=1;
+   if(field==6)bad.depth=2;if(field==7)bad.pitch--;if(field==8)bad.size--;
+   if(field==9)bad.swizzle=0x324;if(field==10)bad.type=Prospero::GpuEnumValue(Prospero::ImageType::kColor3D);
+   if(field==11)bad.address=UINT64_MAX-255;
+   Require(!IsSupportedLinearStorageBacking(bad));
+  }
+  std::vector<uint8_t> gpu(image.size),guest(image.size+32,0x5a);
+  for(size_t i=0;i<gpu.size();i++)gpu[i]=uint8_t(i*17+13);
+  Require(CopyLinearStorageRowsPreservePadding(guest.data()+16,gpu.data(),image));
+  Require(std::memcmp(guest.data()+16,gpu.data(),gpu.size())==0);
+  for(size_t i=0;i<16;i++)Require(guest[i]==0x5a && guest[guest.size()-1-i]==0x5a);
+  image.width=959;std::fill(guest.begin(),guest.end(),0x5a);
+  Require(IsSupportedLinearStorageBacking(image) && CopyLinearStorageRowsPreservePadding(guest.data()+16,gpu.data(),image));
+  for(size_t y=0;y<image.height;y++){
+   const size_t row=y*960*8;Require(std::memcmp(guest.data()+16+row,gpu.data()+row,959*8)==0);
+   for(size_t x=959*8;x<960*8;x++)Require(guest[16+row+x]==0x5a);
+  }
+  const auto saved=guest;auto bad=image;bad.format=71;
+  Require(!CopyLinearStorageRowsPreservePadding(guest.data()+16,gpu.data(),bad) && guest==saved);
+  Require(!CopyLinearStorageRowsPreservePadding(nullptr,gpu.data(),image));
+  Require(!CopyLinearStorageRowsPreservePadding(guest.data()+16,nullptr,image));
+  // The actual buffer publication API preflights ownership before any copy and publishes the full image.
+  Libs::LibKernel::Memory::fixture_base=image.address-16;
+  Libs::LibKernel::Memory::fixture_backing.assign(image.size+32,0x5a);
+  BufferCache publication;bool copied=false;
+  publication.ReconstructImageBacking(image.address,image.size,[&]{copied=true;
+   Require(CopyLinearStorageRowsPreservePadding(Libs::LibKernel::Memory::fixture_backing.data()+16,gpu.data(),image));});
+  Require(copied && publication.m_memory_tracker.published==std::vector<std::pair<uint64_t,uint64_t>>({{image.address,image.size}}));
+  for(size_t i=0;i<16;i++)Require(Libs::LibKernel::Memory::fixture_backing[i]==0x5a && Libs::LibKernel::Memory::fixture_backing[image.size+16+i]==0x5a);
+  const auto preserved=Libs::LibKernel::Memory::fixture_backing;
+  for(int conflict=0;conflict<3;conflict++){
+   BufferCache rejected;if(conflict==0)rejected.m_memory_tracker.gpu.emplace_back(image.address+0x300000,4096);
+   if(conflict==1)rejected.m_gpu_modified_ranges.dirty.emplace_back(image.address+0x300000,4096);
+   if(conflict==2){auto fragment=std::make_unique<BufferCache::CachedBuffer>();fragment->size=image.size;
+    rejected.m_buffers.emplace(image.address,std::move(fragment));rejected.m_memory_tracker.cpu.emplace_back(image.address+0x300000,4096);}
+   bool called=false,failed=false;try{rejected.ReconstructImageBacking(image.address,image.size,[&]{called=true;});}catch(const std::runtime_error&){failed=true;}
+   Require(failed && !called && rejected.m_memory_tracker.published.empty() && preserved==Libs::LibKernel::Memory::fixture_backing);
+  }
+ }
+
  {
   ImageInfo visible{};visible.levels=6;visible.base_level=0;visible.view_levels=6;
   Require(IsValidStorageSampledMipRange(11,visible) && IsValidStorageSampledMipRange(6,visible));

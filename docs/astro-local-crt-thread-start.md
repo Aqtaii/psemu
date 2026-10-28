@@ -1319,3 +1319,45 @@ with existing depth/storage ownership tests. Earlier actual ArcB58011-backing /
 6-view GPU fixture already proves that exact native view shape and bit readback.
 Full local audio-sampled-bounds-output build PASS with matching map. New real
 PID20656 starts17:53:58, prefixastro_20261028_audio_sampled_bounds.
+
+## 2026-10-28: partial formatted-buffer alias of linear RGBA16 UNorm storage
+
+Sampled-bounds PID20656 passes the prior view/canonical mip stops and compiles60
+shaders. Next fatal: GPU invalidation of write0x2246a640000+0x480000 overlaps storage
+0x2246a940000+0x3f4800, GPU current,buffer markerfalse,formattedtrue. Captured TEX#56
+confirms960x540,fmt65(k16_16_16_16UNorm),tile0,identityRGBA. Its0x3f4800 bytes end
+halfway through a4KiB page. The old generic classifier rejects non-page-sized
+storage and crossing writes. Do not broaden that generic classifier.
+
+Add a narrow admission/readback path for validated single-level2D linearRGBA16
+UNorm with exact256-byte row pitch/allocation size, identityRGBA and no array or
+volume. Allow crossing formatted page-aligned writes only after proving current
+image/tracker GPU ownership, no CPU/competing-buffer owner, no other image page
+owner and no metadata. Buffer-owned stale images may be invalidated without
+reading their old native image; contradictory ownership is rejected.
+
+The dedicated readback waits for prior GPU work, uses BufferCache's existing
+ReconstructImageBacking preflight callback, snapshots the full guest allocation,
+downloads the native image and copies only visible rows onto that snapshot. This
+preserves row padding and bytes outside the impending write; writes only the
+actual image byte range, then publishes the full image range. Edge-page isolation
+is mandatory before clearing its tracker pages. No outside-image bytes are erased.
+
+Production helper regression covers the exact0x300000-offset crossing write,
+opposite edge crossing, buffer-owned reuse, unformatted/unaligned/nonoverlap/
+overflow ranges, mismatched owner/tracker/CPU/page/other-buffer state,12 unsupported
+layout changes, all captured pixel bytes,959-of960 row padding and guard bytes.
+Actual ReconstructImageBacking callback tests verify full-range publication and
+GPU tracker/range/CPU-fragment conflicts rejecting before callback or mutation.
+Existing depth/storage ownership tests remain PASS. Full local build PASS.
+
+Actual ArcB580 fixture adds960x540RGBA16UNorm storage:518400pixels, four exact
+16-bit UNorm channel values, sampled view and padding checks PASS; previous R32,
+packedRGB and RGBA16F7/11-level cases remain PASS. Standalone native API evidence,
+not an Astro frame or audible recording. PID24396 starts18:16:23 in
+ audio-linear-storage-output, prefixastro_20261028_audio_linear_storage.
+
+AvPlayer audit additionally confirms the local FFmpeg-backed implementation is
+excluded from GPU_LIBS_SRC. Current core returns0 for Init and game takes Stop/
+Close without source/data calls. Treat video/audio decoder integration as separate
+unfinished work; do not count externally playing a movie as emulator progress.

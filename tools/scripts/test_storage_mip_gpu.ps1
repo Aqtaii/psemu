@@ -33,4 +33,6 @@ try {
  if($LASTEXITCODE){throw 'RGBA16 mip6 Vulkan test failed'}
  & .\storage_mip_gpu_test.exe storage_rgba16_mip_gpu.spv 6 rgba16-tail
  if($LASTEXITCODE){throw 'RGBA16 full backing/narrow view Vulkan test failed'}
+ & .\storage_mip_gpu_test.exe storage_rgba16_mip_gpu.spv 0 unorm-linear
+ if($LASTEXITCODE){throw 'RGBA16 UNorm linear storage Vulkan test failed'}
 } finally {Pop-Location}

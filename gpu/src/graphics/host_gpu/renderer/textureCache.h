@@ -161,6 +161,8 @@ private:
 	                                uint64_t address, uint64_t size) const;
 	void RetireImages(const std::vector<CachedImage*>& retire,
 	                  const CachedImage*               native_image_source = nullptr);
+	[[nodiscard]] bool HasOtherImagePageOwnerLocked(const CachedImage& selected);
+	void SynchronizeLinearStorageImageToBufferLocked(CachedImage& cached, uint64_t address, uint64_t size);
 	void SynchronizeColorImageToBufferLocked(CachedImage& cached, uint64_t write_address,
 	                                         uint64_t write_size, bool preserve_storage_padding = false);
 	void ReconstructDepthStencilForBufferLocked(CachedImage& cached, uint64_t address, uint64_t size);
