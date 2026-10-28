@@ -31,4 +31,6 @@ try {
  if($LASTEXITCODE){throw 'Packed float storage Vulkan test failed'}
  & .\storage_mip_gpu_test.exe storage_rgba16_mip_gpu.spv 6 rgba16
  if($LASTEXITCODE){throw 'RGBA16 mip6 Vulkan test failed'}
+ & .\storage_mip_gpu_test.exe storage_rgba16_mip_gpu.spv 6 rgba16-tail
+ if($LASTEXITCODE){throw 'RGBA16 full backing/narrow view Vulkan test failed'}
 } finally {Pop-Location}

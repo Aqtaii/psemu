@@ -845,6 +845,21 @@ bool Equal(const ImageInfo& left, const ImageInfo& right) {
 	       left.base_array == right.base_array;
 }
 
+ImageInfo CanonicalTextureMipBacking(const ImageInfo& requested) {
+	auto result = requested;
+	if (requested.type == Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) &&
+	    requested.depth == 1 && requested.base_array == 0 &&
+	    requested.tile == Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) &&
+	    requested.levels > 1 && requested.base_level < requested.levels &&
+	    requested.view_levels != 0 && requested.view_levels <= requested.levels - requested.base_level) {
+		result.levels = TileGetEquivalentRenderTargetMipLevels(
+		    requested.format, requested.width, requested.height, requested.pitch,
+		    requested.levels, requested.size);
+	}
+	// Only physical capacity changes. BASE_LEVEL and visible level count remain the guest view.
+	return result;
+}
+
 bool EqualStorageBacking(const ImageInfo& left, const ImageInfo& right) {
 	return left.address == right.address && left.size == right.size &&
 	       left.format == right.format && left.width == right.width &&
@@ -1275,7 +1290,8 @@ TextureCache::~TextureCache() {
 }
 
 VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* ctx,
-                                       const ImageInfo& info, bool metadata_read) {
+                                       const ImageInfo& requested_info, bool metadata_read) {
+	const auto info = CanonicalTextureMipBacking(requested_info);
 	if (info.address == 0 || info.size == 0 || info.address >= TRACKER_ADDRESS_SIZE ||
 	    info.size > TRACKER_ADDRESS_SIZE - info.address || info.width == 0 || info.height == 0 ||
 	    info.depth == 0 || info.levels == 0 || info.levels >= 16 || info.view_levels == 0 ||
@@ -1501,8 +1517,9 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
 
 StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   command,
                                                             GraphicContext*  ctx,
-                                                            const ImageInfo& info,
+                                                            const ImageInfo& requested_info,
                                                             const DccBinding* dcc) {
+	const auto info = CanonicalTextureMipBacking(requested_info);
 	const bool dcc_rgba16 = info.format == Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float) && info.swizzle == 0xfacu;
 	const bool dcc_rgb11 = info.format == Prospero::GpuEnumValue(Prospero::BufferFormat::k11_11_10Float) && info.swizzle == 0x3acu;
 	if (dcc != nullptr &&

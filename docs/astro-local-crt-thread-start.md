@@ -1253,3 +1253,47 @@ standalone fixture, explicitly not an Astro frame or evidence of audible audio.
 Full audio-mip-view-output build PASS with matching map. PID21952 starts13:21:35,
 log prefixastro_20261028_audio_mip_view; real progress beyond the former abort
 remains to be validated. Root Sarah executable and user launch scripts untouched.
+
+## 2026-10-28: validate Windows output and canonicalize the existing RGBA16F tail
+
+The first-bed candidate opens waveOut for the first valid game PCM bed buffer,
+including real zero PCM. It no longer hides device initialization until a nonzero
+sample. Mock regression verifies initial silence is submitted without incrementing
+nonzero, then owned nonzero buffers, bounded queue reuse/drop and teardown. PASS.
+Actual PID23072 audio-device-output logs waveOutOpen=0 at48kHz stereo and0 host
+drops. Game input remainszero in the observed samples; this is not audible audio.
+
+Mip-view candidate PID21952 passed NativeTexture's former mip6/max5 validation
+but then failed the next genuine ownership check: same address and0x1640000 bytes,
+RGBA16F1920x1080 pitch1920 tile27, old storage6 levels,GPU/tracker current, CPU and
+buffer owners absent; requested storage7 levels. No earlier mip data may be lost.
+
+Instead of discarding that image or uploading stale old mip bytes, canonicalize
+this exact kind of physical allocation when first created. Production tile API
+TileGetEquivalentRenderTargetMipLevels permits only2D RGBA16F render-target tiles,
+checks the actual allocation byte size and natural mip bound, and requires every
+existing mip's full source/linear offsets, sizes, tail coordinates and padded
+extent to remain identical. Both sampled/storage cache entrances use the resulting
+physical capacity. Guest BASE_LEVEL and visible view_levels remain unchanged.
+The captured6- and7-level descriptors converge to11 physical levels in the same
+0x1640000 bytes. Initial coherent upload includes the tail before GPU ownership;
+no in-flight GPU image is overwritten, and tracker ownership rules are unchanged.
+The pinned Jetsku SameBacking likewise separates backing capacity from view bounds;
+our canonicalization uses the local production tile layout as its admission proof.
+
+Production CPU fixture checks capacities6/7/11 ->11, single-mip/other format/wrong
+pitch/wrong size/naturally invalid inputs unchanged, exact ImageInfo preservation
+apart from levels, storage mip6 view1, sampled view7, and scope exclusions for
+arrays/volume/base-array/invalid views/tile/size. PASS. Existing depth/storage and
+AudioOut2 regressions PASS. Full local audio-mip-tail-output build PASS.
+
+ArcB580 Vulkan fixture covers both7-level backing/view7 and11-level backing/view6,
+with storage view at mip6. All480 written texels match four half-float channels,
+other6 or10 mips and linear-copy padding stay unchanged, sampled query reports
+only the visible view count. Existing R32 mip0/1/7 and packedRGB cases PASS. These
+are standalone GPU tests, not a native Astro frame or an audible game recording.
+
+PID19132 starts17:39:43 in audio-mip-tail-output, prefixastro_20261028_audio_mip_tail.
+Actual passage of the former cache alias stop is pending. Tools, logs, builds and
+all new artifacts stay onD. Prior canonicalization write had been rejected by the
+automatic approval review's usage quota and did not execute; it is now applied.

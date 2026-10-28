@@ -2419,6 +2419,34 @@ bool TileGetRenderTargetMipLayout(uint32_t width, uint32_t height, uint32_t pitc
 	return total_size->size != 0 && total_size->align == 65536;
 }
 
+uint32_t TileGetEquivalentRenderTargetMipLevels(uint32_t format, uint32_t width,
+                                                uint32_t height, uint32_t pitch,
+                                                uint32_t levels, uint64_t backing_size) {
+	if (format != Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float) ||
+	    width == 0 || width > 16384 || height == 0 || height > 16384 || levels <= 1 ||
+	    levels > 16 || backing_size == 0 || backing_size > UINT32_MAX) return levels;
+	std::array<TileSizeOffset, 16> original {};
+	std::array<TilePaddedSize, 16> original_padded {};
+	TileSizeAlign original_size {};
+	if (!TileGetRenderTargetMipLayout(width, height, pitch, 8, levels, &original_size,
+	                                  original.data(), original_padded.data()) ||
+	    original_size.size != backing_size) return levels;
+	uint32_t result = levels;
+	for (uint32_t candidate = levels + 1; candidate <= 16; ++candidate) {
+		std::array<TileSizeOffset, 16> expanded {};
+		std::array<TilePaddedSize, 16> expanded_padded {};
+		TileSizeAlign expanded_size {};
+		if (!TileGetRenderTargetMipLayout(width, height, pitch, 8, candidate, &expanded_size,
+		                                  expanded.data(), expanded_padded.data()) ||
+		    expanded_size.size != original_size.size || expanded_size.align != original_size.align ||
+		    std::memcmp(original.data(), expanded.data(), levels * sizeof(TileSizeOffset)) != 0 ||
+		    std::memcmp(original_padded.data(), expanded_padded.data(), levels * sizeof(TilePaddedSize)) != 0)
+			break;
+		result = candidate;
+	}
+	return result;
+}
+
 void TileGetTextureSize(uint32_t format, uint32_t width, uint32_t height, uint32_t pitch,
                         uint32_t levels, uint32_t tile, TileSizeAlign* total_size,
                         TileSizeOffset* level_sizes, TilePaddedSize* padded_size) {

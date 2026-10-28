@@ -106,6 +106,11 @@ bool     TileGetRenderTargetMipLayout(uint32_t width, uint32_t height, uint32_t 
 void     TileGetTextureSize(uint32_t format, uint32_t width, uint32_t height, uint32_t pitch,
                             uint32_t levels, uint32_t tile, TileSizeAlign* total_size,
                             TileSizeOffset* level_sizes, TilePaddedSize* padded_size);
+// Largest RGBA16F mip chain with identical physical bytes and unchanged existing mip layout.
+uint32_t TileGetEquivalentRenderTargetMipLevels(uint32_t format, uint32_t width,
+                                                uint32_t height, uint32_t pitch,
+                                                uint32_t levels, uint64_t backing_size);
+
 void TileGetTextureTotalSize(uint32_t format, uint32_t width, uint32_t height, uint32_t depth,
                              uint32_t pitch, uint32_t levels, uint32_t tile, bool volume_texture,
                              TileSizeAlign* total_size);

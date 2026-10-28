@@ -6,6 +6,8 @@ function Slice([string]$source,[string]$start,[string]$end){$a=$source.IndexOf($
 $tile=[IO.File]::ReadAllText("$root\gpu\src\graphics\guest_gpu\tile.cpp")
 $header=@"
 #include "graphics/guest_gpu/gpu_format.h"
+#include "graphics/guest_gpu/gpu_defs.h"
+#include <cstring>
 #include "graphics/guest_gpu/tile.h"
 #include "graphics/shader/shaderBindings.h"
 #include <algorithm>
@@ -17,7 +19,15 @@ using namespace Libs::Graphics;
 "@
 $header+="`n"+(Slice $tile 'static uint32_t IntLog2(' 'static uint32_t CalcLinearBlockWidth(')
 $header+=Slice $tile 'static bool Gen5Thin64KBBlockSizeFromElementBytes(' 'static uint32_t Gen5Standard4KBOffsetInBlock('
-$header+='void ProductionTile27Layout(uint32_t format,uint32_t width,uint32_t height,uint32_t pitch,uint32_t levels,uint32_t tile,TileSizeAlign* total_size,TileSizeOffset* level_sizes,TilePaddedSize* padded_size) {'
+$header+='namespace Libs::Graphics {'
+$header+=Slice $tile 'uint32_t TileGetRenderTargetPitch(' 'bool TileGetRenderTargetSize('
+$header+=Slice $tile 'bool TileGetRenderTargetMipLayout(' 'void TileGetTextureSize('
+$header+='}'
+$info=[IO.File]::ReadAllText("$root\gpu\src\graphics\host_gpu\renderer\imageInfo.h")
+$cache=[IO.File]::ReadAllText("$root\gpu\src\graphics\host_gpu\renderer\textureCache.cpp")
+$header+=Slice $info 'struct ImageInfo {' 'struct RenderTargetInfo {'
+$header+=Slice $cache 'ImageInfo CanonicalTextureMipBacking(' 'bool EqualStorageBacking('
+$header+='void Libs::Graphics::TileGetTextureSize(uint32_t format,uint32_t width,uint32_t height,uint32_t pitch,uint32_t levels,uint32_t tile,TileSizeAlign* total_size,TileSizeOffset* level_sizes,TilePaddedSize* padded_size) {'
 $a=$tile.IndexOf('bytes_per_element != 0 && tile == 27 && levels > 1)');if($a -lt 0){throw 'Tile27 branch missing'}
 $a=$tile.LastIndexOf('if (const uint32_t bytes_per_element',$a);$b=$tile.IndexOf('if (auto bytes_per_block =',$a)
 if($a -lt 0 -or $b -le $a){throw 'Tile27 range missing'}
