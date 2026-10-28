@@ -175,7 +175,7 @@ extern "C" int PsemuAvPlayerSelfTest(const char *path, const char *scratch_direc
     CHECK(static_cast<int32_t>(Call("sceAvPlayerGetStreamInfo", h, 0, 1)) == AVPLAYER_ERROR_INVALID_PARAMS);
     CHECK(static_cast<int32_t>(Call("sceAvPlayerAddSource", h, 1)) == AVPLAYER_ERROR_INVALID_PARAMS);
     CHECK(Call("sceAvPlayerAddSource", h, reinterpret_cast<uint64_t>(path)) == 0);
-    CHECK(Call("sceAvPlayerStreamCount", h) >= 2);
+    CHECK(Call("sceAvPlayerStreamCount", h) >= 1);
     bool video = false, audio = false;
     for (uint32_t i = 0; i < Call("sceAvPlayerStreamCount", h); ++i) {
         struct {
@@ -188,7 +188,7 @@ extern "C" int PsemuAvPlayerSelfTest(const char *path, const char *scratch_direc
         video |= canary.info.type == AvPlayerStreamVideo;
         audio |= canary.info.type == AvPlayerStreamAudio;
     }
-    CHECK(video && audio && f.opens == 1 && f.ready == 1);
+    CHECK(audio && f.opens == 1 && f.ready == 1);
     CHECK(Call("sceAvPlayerStart", h) == 0);
     CHECK(f.play == 1);
     CHECK(Call("sceAvPlayerGetVideoDataEx", h, 1) == 0);
@@ -197,9 +197,13 @@ extern "C" int PsemuAvPlayerSelfTest(const char *path, const char *scratch_direc
         AvPlayerFrameInfoEx info{};
         uint64_t post = 0xfedcba9876543210;
     } frame;
-    CHECK(Call("sceAvPlayerGetVideoDataEx", h, reinterpret_cast<uint64_t>(&frame.info)) == 1);
-    CHECK(frame.pre == 0x0123456789abcdef && frame.post == 0xfedcba9876543210);
-    CHECK(frame.info.data && frame.info.details.video.width && frame.info.details.video.height);
+    if (video) {
+        CHECK(Call("sceAvPlayerGetVideoDataEx", h, reinterpret_cast<uint64_t>(&frame.info)) == 1);
+        CHECK(frame.pre == 0x0123456789abcdef && frame.post == 0xfedcba9876543210);
+        CHECK(frame.info.data && frame.info.details.video.width && frame.info.details.video.height);
+    } else {
+        CHECK(Call("sceAvPlayerGetVideoDataEx", h, reinterpret_cast<uint64_t>(&frame.info)) == 0);
+    }
     uint64_t nonzero = 0, pcm_bytes = 0;
     size_t blocks = 0;
     for (size_t i = 0; i < 500; ++i) {

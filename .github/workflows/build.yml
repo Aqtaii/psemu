@@ -284,6 +284,13 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+      - name: Prepare pinned native AvPlayer decoder libraries
+        shell: pwsh
+        run: |
+          $taskTools=Join-Path $env:RUNNER_TEMP 'psemu-tools'
+          ./tools/scripts/setup_ffmpeg.ps1 -ToolsDirectory $taskTools
+          "PSEMU_FFMPEG_ROOT=$(Join-Path $taskTools 'ffmpeg-9ac4cfd195f1')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Build complete emulator
         shell: cmd
         run: call cmbuild.bat
@@ -297,6 +304,7 @@ jobs:
           Copy-Item -LiteralPath tools\scripts\run_performance.bat -Destination dist\tools\scripts
           Copy-Item -LiteralPath gpu\3rdparty\winpthread\COPYING -Destination dist\WINPTHREAD-LICENSE.txt
           Copy-Item -LiteralPath LICENSES -Destination dist -Recurse
+          if (!(Test-Path -LiteralPath dist\LICENSES\ffmpeg\SOURCE.txt)) { throw 'FFmpeg license/source notices missing' }
           $redist = Join-Path $env:VCToolsRedistDir 'x64'
           $crt = Get-ChildItem -LiteralPath $redist -Directory -Filter 'Microsoft.VC*.CRT' | Select-Object -First 1
           if (!$crt) { throw 'Visual C++ runtime directory not found' }
@@ -311,6 +319,12 @@ jobs:
           '@ | Set-Content -LiteralPath dist\README.txt -Encoding utf8
           $manifest = Get-ChildItem -LiteralPath dist -File -Recurse | Get-FileHash -Algorithm SHA256
           $manifest | ForEach-Object { "$($_.Hash)  $([IO.Path]::GetRelativePath((Resolve-Path dist).Path, $_.Path))" } | Set-Content dist\SHA256SUMS.txt
+
+      - name: Test native AvPlayer guest ABI and PCM without game assets
+        shell: pwsh
+        run: |
+          $taskScratch=Join-Path $env:RUNNER_TEMP 'psemu-avplayer-test'
+          ./tools/scripts/test_avplayer.ps1 -LoaderPath (Resolve-Path dist/loader.exe).Path -ScratchDirectory $taskScratch
 
       - name: Test native Fiber stack switching without a game
         shell: pwsh

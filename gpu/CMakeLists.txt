@@ -100,7 +100,7 @@ list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/screenshot.cpp)
 list(APPEND GPU_ALL_SRC ${CMAKE_CURRENT_SOURCE_DIR}/adapter/metrics.cpp)
 
 # Optional existing Kyty AvPlayer decoder. Never downloads during configuration.
-set(PSEMU_FFMPEG_ROOT "" CACHE PATH "Unpacked, verified FFmpeg headers and static libraries")
+set(PSEMU_FFMPEG_ROOT "$ENV{PSEMU_FFMPEG_ROOT}" CACHE PATH "Unpacked, verified FFmpeg headers and static libraries")
 if(PSEMU_FFMPEG_ROOT)
     foreach(component avformat avcodec swscale avutil swresample)
         if(NOT EXISTS "${PSEMU_FFMPEG_ROOT}/lib/${component}.lib")
