@@ -8010,14 +8010,14 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         }
 
         ss_init() << " | " << (access_type == 0 ? "READ" : (access_type == 1 ? "WRITE" : "EXEC"))
-           << " violation @ 0x" << access_addr;
+           << " violation @ 0x" << std::hex << access_addr;
 
         // Faulting komutun kendi baytlarini goster - tahmin yerine gercek veriyle
         // ilerleyebilmek icin. RIP oyun modulu icindeyse (yani gercekten calisan
         // bir komuttan kaynaklaniyorsa, sentinel/unmapped bir hedef degilse) anlamli.
         if (IsInModuleRange(ctx->Rip) && SafeReadable(reinterpret_cast<void*>(ctx->Rip), 16)) {
             const uint8_t* rip_bytes = reinterpret_cast<const uint8_t*>(ctx->Rip);
-            ss_init() << "\n[-] Faulting komut baytlari @ RIP (RVA: 0x" << (ctx->Rip - g_base_addr) << "): ";
+            ss_init() << "\n[-] Faulting komut baytlari @ RIP (RVA: 0x" << std::hex << (ctx->Rip - g_base_addr) << "): ";
             for (int bi = 0; bi < 16; bi++) {
                 char buf[4];
                 snprintf(buf, sizeof(buf), "%02X ", rip_bytes[bi]);
