@@ -375,8 +375,7 @@ vk::ImageView TextureCache::GetStorageTextureSampledView(GraphicContext*        
                                  info.height, image != nullptr ? image->extent.height : 0);
 	if (ctx == nullptr || image == nullptr || image->image == nullptr ||
 	    shape == StorageSampledViewShape::Unsupported || info.base_array != 0 ||
-	    info.levels != image->mip_levels || info.base_level >= info.levels ||
-	    info.view_levels == 0 || info.base_level + info.view_levels > info.levels) {
+	    !IsValidStorageSampledMipRange(image->mip_levels, info)) {
 		EXIT("TextureCache: invalid sampled view of storage texture, image=%p type=%u depth=%u"
 		     " base=%u levels=%u view_levels=%u image_levels=%u base_array=%u\n",
 		     static_cast<const void*>(image), info.type, info.depth, info.base_level, info.levels,

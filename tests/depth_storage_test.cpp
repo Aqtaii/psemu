@@ -1,6 +1,19 @@
 #include <source_location>
 static void Require(bool ok,std::source_location where=std::source_location::current()) {if(!ok) {std::fprintf(stderr,"Regression failed at %s:%u\n",where.file_name(),where.line());throw std::runtime_error("regression failed");}}
 int main() {
+ {
+  ImageInfo visible{};visible.levels=6;visible.base_level=0;visible.view_levels=6;
+  Require(IsValidStorageSampledMipRange(11,visible) && IsValidStorageSampledMipRange(6,visible));
+  visible.levels=7;visible.base_level=6;visible.view_levels=1;Require(IsValidStorageSampledMipRange(11,visible));
+  for(uint32_t backing:{0u,5u,6u,17u})Require(!IsValidStorageSampledMipRange(backing,visible));
+  for(int field=0;field<7;field++){
+   auto bad=visible;if(field==0)bad.levels=0;if(field==1)bad.levels=12;
+   if(field==2)bad.base_level=7;if(field==3)bad.view_levels=0;if(field==4)bad.view_levels=2;
+   if(field==5)bad.base_level=UINT32_MAX;if(field==6)bad.view_levels=UINT32_MAX;
+   Require(!IsValidStorageSampledMipRange(11,bad));
+  }
+ }
+
  // Captured Astro storage mip6 with MAX_MIP5 must retain physical mip0..6.
  {
   ShaderTextureResource d{{0xc57ea100,0xc4700002,0x010dc1df,0x91b66fac,0,0x00700050,0,0}};

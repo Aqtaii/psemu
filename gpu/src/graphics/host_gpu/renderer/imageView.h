@@ -51,6 +51,13 @@ namespace Libs::Graphics {
 	        height != 0 && depth == 1);
 }
 
+[[nodiscard]] inline bool IsValidStorageSampledMipRange(uint32_t image_levels,
+                                                        const ImageInfo& info) noexcept {
+	return image_levels != 0 && image_levels <= 16 && info.levels != 0 &&
+	       info.levels <= image_levels && info.base_level < info.levels &&
+	       info.view_levels != 0 && info.view_levels <= info.levels - info.base_level;
+}
+
 [[noreturn]] inline void UnsupportedColorView(const char* usage, vk::Format image_format,
                                               vk::Format view_format, uint32_t swizzle) noexcept {
 	EXIT("unsupported %s color image view: image_format=%d view_format=%d swizzle=0x%03x\n", usage,

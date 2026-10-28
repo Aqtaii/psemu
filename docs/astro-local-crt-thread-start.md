@@ -1297,3 +1297,25 @@ PID19132 starts17:39:43 in audio-mip-tail-output, prefixastro_20261028_audio_mip
 Actual passage of the former cache alias stop is pending. Tools, logs, builds and
 all new artifacts stay onD. Prior canonicalization write had been rejected by the
 automatic approval review's usage quota and did not execute; it is now applied.
+
+## 2026-10-28: preserve narrow sampled views of canonical storage backing
+
+PID19132 exits321 at17:49:35. The cache creates11 levels, then the binding path
+rejects a legitimate sampled view (base0, requested6 levels, view6) because
+GetStorageTextureSampledView still required image_levels==info.levels. This check
+should have been included in the canonical-backing change; capacity and visible
+range are separate. No evidence of audible sound or a visible Astro frame.
+
+IsValidStorageSampledMipRange now requires nonzero bounded physical/requested
+counts, requested<=physical, base<requested and nonempty view<=requested-base.
+Use subtraction for overflow safety. GetStorageTextureSampledView retains the
+exact requested base/count/swizzle and all type/format/layer validation. It never
+substitutes the11-level capacity into the visible6-level view.
+
+Production regression covers6-view/11-backing, exact6, base6/count1 in requested7,
+zero/too-small/too-large backing, zero requested count, requested count exceeding
+backing, base at/past range, empty/overlong and UINT32_MAX base/count. PASS along
+with existing depth/storage ownership tests. Earlier actual ArcB58011-backing /
+6-view GPU fixture already proves that exact native view shape and bit readback.
+Full local audio-sampled-bounds-output build PASS with matching map. New real
+PID20656 starts17:53:58, prefixastro_20261028_audio_sampled_bounds.
