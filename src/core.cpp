@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <algorithm>
 #include "guest_audio_queue.h"
+#include "guest_audio_output.h"
 #include <chrono>
 #include "host_allocation_size.h"
 #include "sarah_tls_sites.h"
@@ -6825,6 +6826,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                         std::lock_guard<std::mutex> lock(g_audio_queue_mutex);
                         const auto handle=g_next_audio_context++;
                         g_audio_queues.emplace(handle,GuestAudioQueue(param->queue_depth,param->num_grains));
+                        GuestAudioRegisterContext(handle,param->num_grains);
                         *output=handle;
                     }
                     result=0;
@@ -6859,7 +6861,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                                     LOG_INFO("[AUDIO-QUEUE] context="+std::to_string(ctx->Rdi)+" queued="+
                                         std::to_string(queue.queued)+" available="+std::to_string(queue.Available()));
                                 result=0;
-                            } else if (destroying) {g_audio_queues.erase(found);result=0;}
+                            } else if (destroying) {g_audio_queues.erase(found);GuestAudioDestroyContext(ctx->Rdi);result=0;}
                             else if (!pushing || queue.Push(now)) result=0;
                             else if (!ctx->Rsi) result=-2144960504; // Kyty AUDIO_OUT2_ERROR_NOT_READY
                             else sleep_micros=queue.grain_micros;
@@ -6868,7 +6870,12 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                         Sleep(static_cast<DWORD>((std::min)(sleep_micros/1000+1,uint64_t(1000))));
                     }
                 }
+                if (pushing && result==0) GuestAudioPushPcm(ctx->Rdi,SafeReadable);
                 ctx->Rax=static_cast<uint64_t>(static_cast<int64_t>(result));
+                special_return_set=true;
+            } else if ((readable_name.rfind("sceAudioOut2",0)==0 || readable_name=="sceAcmContextCreate") &&
+                       GuestAudioOutputCall(readable_name,ctx->Rdi,ctx->Rsi,ctx->Rdx,
+                                           &ctx->Rax,SafeReadable,SafeWritable)) {
                 special_return_set=true;
             } else if (readable_name == "sceAudioOutOutput") {
                 // int sceAudioOutOutput(handle, ptr[, num])

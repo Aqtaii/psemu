@@ -65,6 +65,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_guest_audio_queue.ps1
 
+      - name: Test AudioOut2 PCM conversion and host buffer ownership
+        shell: pwsh
+        run: ./tools/scripts/test_guest_audio_output.ps1
+
       - name: Test secure guest binary copies
         shell: pwsh
         run: ./tools/scripts/test_guest_safe_memory_copy.ps1

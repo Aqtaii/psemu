@@ -1162,3 +1162,43 @@ Mip diagnostic PID14884 reproduces the failure after60 shaders. Descriptor:
 It is a written-only RGBA16F1920x1080 2D tile27 view of mip6 while MaxMip=5.
 Keep this captured failure for subsequent image work. User now asks to investigate
 actual audio output to provide independent evidence of game progress.
+
+## 2026-10-28: actual AudioOut2 PCM output path
+
+User requests an audio investigation as independent evidence of Astro progress.
+Existing core only paced AudioOut2 queues. GPU libs/libAudio2.cpp and audio.cpp
+contain PCM support but are excluded from GPU_LIBS_SRC and depend on SDL.
+Add a loader-native Windows waveOut path without changing graphics checks.
+
+GuestAudioOutputCall now creates distinct64-bit users/ports, returns actual port
+channel counts, stereo speaker info, and retains PCM attribute0 pointers per port.
+ContextPush copies validated guest PCM at successful queue admission. Support
+48kHz interleaved float/s16 mono/stereo/8-channel beds with normalized stereo
+mixing, finite-value handling and bounded eight-buffer asynchronous host queues.
+Keep host buffers until WHDR_DONE and reset/unprepare/close on context destruction.
+Do not play object/haptic ports as speaker beds; measure object PCM separately.
+No new DLL/runtime dependency; winmm was already linked.
+
+Astro actually creates main/BGM float8ch format0x800 ports at48kHz,512frames,
+plus19 mono object ports(type0x100,format0x100). Correct sceAcmContextCreate
+separately to publish its32-bit context ID; pinned Jetsku acm.h/cpp confirms ABI.
+The reference ACM batch functions themselves are placeholders that advance command
+positions and return success; they do not supply a complete DSP implementation.
+No ACM batch processing or spatial renderer is claimed here.
+
+Production source regression uses mocked waveOut calls, so it plays no synthetic
+hardware audio. Covers ABI sizes, invalid pointers and guards,32-bit ACM output,
+user/port handles,7.1/mono/s16 mixing,NaN/Inf handling, guest-buffer copy ownership,
+full host queue/drop/reuse and reset/close, and object isolation. PASS. Separate
+LFE-only fixture proves nonzero source PCM can produce a zero stereo mix; raw peak
+and cumulative input_nonzero diagnostics distinguish this from actual silence.
+CI now runs test_guest_audio_output.ps1; existing queue regression remains PASS.
+Full local build audio-final-output PASS, with matching map, all files onD.
+
+Real PID11232 first discovers8ch output (stopped to add that format). PID22580
+then observes thousands of zero stereo submissions (stopped for ACM/object probe).
+PID23608 starts12:57:32, prefixastro_20261028_audio_acm. Main mix stayszero over
+13312pushes while19 object ports becomezero after a short initial out-of-range
+transient. No valid audible Astro output has been obtained. This running candidate
+precedes raw input_peak diagnostics; do not interpret a zero downmix as proof all
+source channels arezero. Final raw-metric candidate is built but not run yet.

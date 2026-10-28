@@ -36,7 +36,7 @@ endif()
 set(PSEMU_SOURCES
     src/agc.cpp src/core.cpp src/game_profile.cpp src/linker.cpp
     src/loader.cpp src/logger.cpp src/scanner.cpp src/syscalls.cpp src/video.cpp
-    src/native_atomic_guard.cpp
+    src/native_atomic_guard.cpp src/guest_audio_output.cpp
 )
 
 add_executable(loader ${PSEMU_SOURCES})
