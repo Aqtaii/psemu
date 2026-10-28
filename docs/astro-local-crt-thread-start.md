@@ -1361,3 +1361,10 @@ AvPlayer audit additionally confirms the local FFmpeg-backed implementation is
 excluded from GPU_LIBS_SRC. Current core returns0 for Init and game takes Stop/
 Close without source/data calls. Treat video/audio decoder integration as separate
 unfinished work; do not count externally playing a movie as emulator progress.
+
+
+### 2026-10-28: disjoint image owners in a formatted buffer write
+
+The linear-storage run reached a write spanning the end of a native render target and the beginning of the adjacent linear UNorm storage image. Captured RT `0x16eeb170000+0xff0000`, storage `0x16eec160000+0x3f4800`, write `0x16eebe60000+0x480000`. The owners abut on a tracker-page boundary; the previous single-match restriction rejected the second owner.
+
+GPU invalidation now collects and retains all classified owners before applying the existing per-image transitions. All owner ranges must be nonzero, nonoverflowing, and pairwise disjoint at tracker-page granularity. Shared-page aliases still fail; each transition retains its existing buffer/image/coherence checks. Selection validation is not a transactional rollback guarantee. Captured pair, reverse order, overlap, shared edge page, zero and overflow tests passed, as did the full Windows build. Runtime candidate `audio-disjoint-owners-output` is being checked with actual Astro. No audible Astro PCM or recognizable native game frame is confirmed.

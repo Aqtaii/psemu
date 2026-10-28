@@ -1,6 +1,18 @@
 #include <source_location>
 static void Require(bool ok,std::source_location where=std::source_location::current()) {if(!ok) {std::fprintf(stderr,"Regression failed at %s:%u\n",where.file_name(),where.line());throw std::runtime_error("regression failed");}}
 int main() {
+ {
+  const uint64_t rt=0x16eeb170000ull,rt_size=0xff0000,linear=rt+rt_size,linear_size=0x3f4800;
+  Require(CanCombineImageWriteOwners(rt,rt_size,linear,linear_size));
+  Require(CanCombineImageWriteOwners(linear,linear_size,rt,rt_size));
+  Require(!CanCombineImageWriteOwners(rt,rt_size+1,linear,linear_size));
+  Require(!CanCombineImageWriteOwners(0x100000,128,0x100080,128)); // Disjoint bytes still share a tracker page.
+  Require(CanCombineImageWriteOwners(0x100000,4096,0x101000,128));
+  Require(!CanCombineImageWriteOwners(0,4096,linear,linear_size));
+  Require(!CanCombineImageWriteOwners(rt,0,linear,linear_size));
+  Require(!CanCombineImageWriteOwners(UINT64_MAX-4095,8192,linear,linear_size));
+ }
+
  // Captured sub-page-ended RGBA16 UNorm storage straddles the formatted buffer write.
  {
   ImageInfo image{};const uint64_t write=0x2246a640000ull,write_size=0x480000;

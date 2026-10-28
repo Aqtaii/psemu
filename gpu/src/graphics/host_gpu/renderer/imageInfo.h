@@ -894,6 +894,13 @@ ClassifyBufferImageWrite(uint64_t buffer_address, uint64_t buffer_size, uint64_t
 	return true;
 }
 
+[[nodiscard]] inline bool CanCombineImageWriteOwners(uint64_t left, uint64_t left_size,
+                                                     uint64_t right, uint64_t right_size) {
+	return left != 0 && right != 0 && left_size != 0 && right_size != 0 &&
+	       left_size <= UINT64_MAX - left && right_size <= UINT64_MAX - right &&
+	       !ImagePageRangesOverlap(left, left_size, right, right_size);
+}
+
 [[nodiscard]] inline StorageBufferRebind
 ClassifyStorageBufferRebind(bool buffer_overlap, bool cached_gpu_modified,
                             bool cached_buffer_modified, bool tracker_gpu_modified,
