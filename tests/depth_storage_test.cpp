@@ -759,6 +759,37 @@ int main() {
   d.fields[3]=0x91811324;resource.read=true;
   Require(!IsSupportedStorageTextureDescriptor(resource,d));
  }
+ // After actual Sony audio: native R32 color storage inside a larger transient target.
+ {
+  ImageInfo old{};old.address=0x2d56e1e0000ull;old.size=0xc0000;old.width=480;old.height=270;
+  old.pitch=512;old.format=36;old.tile=27;old.type=9;old.depth=old.levels=old.view_levels=1;
+  RenderTargetInfo target{};target.address=0x2d56e030000ull;target.size=0x870000;
+  target.width=1920;target.height=1080;target.pitch=1920;target.bytes_per_element=4;
+  target.tile_mode=27;target.levels=target.layers=1;
+  Require(IsSupportedColorStorageBacking(old));
+  Require(CanReconstructColorStorageForRenderTarget(old,true,false,true,false,true,true,false,target));
+  for(int bad=0;bad<7;bad++)Require(!CanReconstructColorStorageForRenderTarget(old,
+   bad!=0,bad==1,bad!=2,bad==3,bad!=4,bad!=5,bad==6,target));
+  for(int field=0;field<9;field++){
+   auto bad=old;if(field==0)bad.format=39;if(field==1)bad.tile=24;if(field==2)bad.pitch--;
+   if(field==3)bad.size-=65536;if(field==4)bad.levels=2;if(field==5)bad.base_level=1;
+   if(field==6)bad.base_array=1;if(field==7)bad.address=target.address+target.size-0x10000;
+   if(field==8)bad.address=UINT64_MAX-0xffff;
+   Require(!CanReconstructColorStorageForRenderTarget(bad,true,false,true,false,true,true,false,target));
+  }
+  auto outside=target;outside.address+=old.size+0x200000;
+  Require(!CanReconstructColorStorageForRenderTarget(old,true,false,true,false,true,true,false,outside));
+  std::vector<uint32_t> linear(old.size/4),expected(linear.size(),0x5a79b321),actual(linear.size()+2,0x5a79b321);
+  for(size_t i=0;i<linear.size();i++)linear[i]=0x3f000000u+uint32_t(i*17);
+  for(uint32_t y=0;y<old.height;y++)for(uint32_t x=0;x<old.width;x++){
+   const auto physical=((y/128)*4+x/128)*16384+Gen5RenderTargetOffsetInBlock<uint32_t>(x%128,y%128)/4;
+   expected[physical]=linear[y*old.pitch+x];
+  }
+  TileConvertLinearToTiledRenderTarget32PreservePadding(actual.data()+1,linear.data(),old.width,old.height,old.pitch,old.size);
+  Require(actual.front()==0x5a79b321 && actual.back()==0x5a79b321);
+  Require(std::memcmp(actual.data()+1,expected.data(),old.size)==0);
+ }
+
  // Captured same allocation changes from R32 depth tiling to R11G11B10 color tiling.
  {
   ImageInfo old{};old.address=0x1795a550000ull;old.size=0x280000;old.width=960;old.height=540;

@@ -1194,14 +1194,28 @@ CanReconstructStorageForRenderTarget(const ImageInfo& storage, bool gpu_modified
 [[nodiscard]] inline bool IsSupportedColorStorageBacking(const ImageInfo& storage) {
  RenderTargetInfo backing{};backing.address=storage.address;backing.size=storage.size;
  backing.width=storage.width;backing.height=storage.height;backing.pitch=storage.pitch;
- backing.bytes_per_element=storage.format==Prospero::GpuEnumValue(Prospero::BufferFormat::k11_11_10Float)?4:8;
+ backing.bytes_per_element=storage.format==Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float)?8:4;
  backing.tile_mode=storage.tile;backing.levels=storage.levels;
  return (storage.format==Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float) ||
-         storage.format==Prospero::GpuEnumValue(Prospero::BufferFormat::k11_11_10Float)) &&
+         storage.format==Prospero::GpuEnumValue(Prospero::BufferFormat::k11_11_10Float) ||
+         storage.format==Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float)) &&
         storage.tile==Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) &&
         storage.type==Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) && storage.depth==1 &&
         storage.base_level==0 && storage.levels==1 && storage.view_levels==1 && storage.base_array==0 &&
         IsSupportedRenderTargetReconstructionFootprint(backing);
+}
+
+// Complete native color storage publication before a containing transient target takes ownership.
+[[nodiscard]] inline bool CanReconstructColorStorageForRenderTarget(
+    const ImageInfo& storage, bool gpu, bool buffer, bool tracker_gpu, bool cpu_dirty,
+    bool same_context, bool coherent_target, bool target_buffers, const RenderTargetInfo& target) {
+    return gpu && !buffer && tracker_gpu && !cpu_dirty && same_context && coherent_target && !target_buffers &&
+           IsSupportedColorStorageBacking(storage) && IsSupportedRenderTargetReconstructionFootprint(target) &&
+           storage.address % TRACKER_PAGE_SIZE==0 && storage.size % TRACKER_PAGE_SIZE==0 &&
+           target.address % TRACKER_PAGE_SIZE==0 && target.size % TRACKER_PAGE_SIZE==0 &&
+           storage.size<=UINT64_MAX-storage.address && target.size<=UINT64_MAX-target.address &&
+           storage.address>=target.address && storage.address-target.address<=target.size &&
+           storage.size<=target.size-(storage.address-target.address);
 }
 
 // Distinct transient storage owners must publish their complete GPU backing before reuse.

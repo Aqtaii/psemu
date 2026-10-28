@@ -1,6 +1,8 @@
 #include "guest_avplayer.h"
 #include "libs/avPlayerTypes.h"
 #include <atomic>
+#include <cstdlib>
+#include <algorithm>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -92,6 +94,37 @@ bool Prepare(T &init, Player &p, GuestAvRead read, GuestAvWrite write, std::stri
     init.memory_replacement = {&p, Allocate, Deallocate, AllocateTexture, DeallocateTexture};
     return true;
 }
+// Read-only, opt-in source measurement. It does not alter or present the frame.
+void ProbeVideoFrame(const AvPlayerFrameInfoEx &frame, GuestAvRead read) {
+    static const bool enabled = [] {
+        const char *value = std::getenv("PSEMU_AVPLAYER_FRAME_PROBE");
+        return value && value[0] != '0';
+    }();
+    static std::atomic_uint sequence{0};
+    if (!enabled)
+        return;
+    const auto n = sequence.fetch_add(1);
+    if (n % 64 != 0 || n >= 1024)
+        return;
+    const auto &v = frame.details.video;
+    if (!frame.data || !v.width || !v.height || !v.pitch || v.width > v.pitch || v.pitch > 16384 ||
+        v.height > 8192 || !read(frame.data, size_t(v.pitch) * v.height))
+        return;
+    const auto *luma = static_cast<const uint8_t *>(frame.data);
+    unsigned lo = 255, hi = 0, bright = 0;
+    for (uint32_t y = 0; y < 32; ++y)
+        for (uint32_t x = 0; x < 32; ++x) {
+            const auto row = (2ull * y + 1) * v.height / 64, col = (2ull * x + 1) * v.width / 64;
+            const auto value = luma[row * v.pitch + col];
+            lo = std::min(lo, unsigned(value));
+            hi = std::max(hi, unsigned(value));
+            bright += value > 32;
+        }
+    printf("[AVPLAYER-SOURCE-LUMA] frame=%u data=%p pts=%llu extent=%ux%u pitch=%u min=%u max=%u "
+           "above32=%u/1024 source_only=1\n",
+           n, frame.data, frame.time_stamp, v.width, v.height, v.pitch, lo, hi, bright);
+}
+
 uint64_t Register(const std::shared_ptr<Player> &p) {
     if (!p->native)
         return 0;
@@ -229,6 +262,7 @@ bool GuestAvPlayerCall(std::string_view name, uint64_t a0, uint64_t a1, uint64_t
                     AvPlayerFrameInfoEx v{};
                     rc = AvPlayerGetVideoDataEx(h, &v);
                     if (rc) {
+                        ProbeVideoFrame(v, read);
                         Store(a1, v);
                         if (frame_logs.fetch_add(1) < 8)
                             printf("[AVPLAYER-VIDEO] native_decode=1 size=%ux%u pts=%llu\n",

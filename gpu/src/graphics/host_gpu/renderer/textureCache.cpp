@@ -1869,14 +1869,20 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 				break;
 			}
 			if (cached.kind == CachedImage::Kind::StorageTexture &&
-			    ClassifyStorageRenderTargetOverlap(
-			        cached.info, cached.image->format, cached.gpu_modified, cached.buffer_modified,
-			        cached.info.IsCpuDirty(), cached.ctx == ctx, info) == RenderTargetOverlap::Unsupported &&
-			    CanReconstructStorageForRenderTarget(
-			        cached.info, cached.gpu_modified, cached.buffer_modified,
-			        cached.info.IsCpuDirty() ||
-			            m_memory_tracker.IsRegionCpuModified(cached.info.address, cached.info.size),
-			        cached.ctx == ctx, true, buffers, info)) {
+				ClassifyStorageRenderTargetOverlap(
+					cached.info, cached.image->format, cached.gpu_modified, cached.buffer_modified,
+					cached.info.IsCpuDirty(), cached.ctx == ctx, info) == RenderTargetOverlap::Unsupported &&
+				(CanReconstructStorageForRenderTarget(
+					 cached.info, cached.gpu_modified, cached.buffer_modified,
+					 cached.info.IsCpuDirty() ||
+						 m_memory_tracker.IsRegionCpuModified(cached.info.address, cached.info.size),
+					 cached.ctx == ctx, true, buffers, info) ||
+				 CanReconstructColorStorageForRenderTarget(
+					 cached.info, cached.gpu_modified, cached.buffer_modified,
+					 m_memory_tracker.IsRegionGpuModified(cached.Address(), cached.Size()),
+					 cached.info.IsCpuDirty() ||
+						 m_memory_tracker.IsRegionCpuModified(cached.Address(), cached.Size()),
+					 cached.ctx == ctx, true, buffers, info))) {
 				needs_storage_drain = true;
 				break;
 			}
@@ -1949,18 +1955,26 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 				break;
 			case CachedImage::Kind::StorageTexture:
 				overlap = ClassifyStorageRenderTargetOverlap(
-				    cached.info, cached.image->format, cached.gpu_modified, cached.buffer_modified,
-				    cached.info.IsCpuDirty() ||
-				        m_memory_tracker.IsRegionCpuModified(cached.info.address, cached.info.size),
-				    cached.ctx == ctx, info);
+					cached.info, cached.image->format, cached.gpu_modified, cached.buffer_modified,
+					cached.info.IsCpuDirty() ||
+						m_memory_tracker.IsRegionCpuModified(cached.info.address, cached.info.size),
+					cached.ctx == ctx, info);
 				if (overlap == RenderTargetOverlap::Unsupported &&
-				    CanReconstructStorageForRenderTarget(
-				        cached.info, cached.gpu_modified, cached.buffer_modified,
-				        cached.info.IsCpuDirty() ||
-				            m_memory_tracker.IsRegionCpuModified(cached.info.address, cached.info.size),
-				        cached.ctx == ctx,
-				        IsCoherentGuestImageSource(target_source, info.address, info.size),
-				        target_buffer_overlap, info)) {
+					(CanReconstructStorageForRenderTarget(
+						 cached.info, cached.gpu_modified, cached.buffer_modified,
+						 cached.info.IsCpuDirty() ||
+							 m_memory_tracker.IsRegionCpuModified(cached.info.address, cached.info.size),
+						 cached.ctx == ctx,
+						 IsCoherentGuestImageSource(target_source, info.address, info.size),
+						 target_buffer_overlap, info) ||
+					 CanReconstructColorStorageForRenderTarget(
+						 cached.info, cached.gpu_modified, cached.buffer_modified,
+						 m_memory_tracker.IsRegionGpuModified(cached.Address(), cached.Size()),
+						 cached.info.IsCpuDirty() ||
+							 m_memory_tracker.IsRegionCpuModified(cached.Address(), cached.Size()),
+						 cached.ctx == ctx,
+						 IsCoherentGuestImageSource(target_source, info.address, info.size),
+						 target_buffer_overlap, info))) {
 					overlap = RenderTargetOverlap::RetireTarget;
 					reconstructed_storage_retire.push_back(&cached);
 					command->RetainResourceUntilFence(entry);
@@ -2123,13 +2137,20 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 		if (!needs_storage_drain) {
 			EXIT("TextureCache: storage reconstruction has no ordered producer drain\n");
 		}
-		SynchronizeColorImageToBufferLocked(*storage, storage->info.address, storage->info.size, true);
+		if (IsSupportedColorStorageBacking(storage->info)) {
+			const auto transfer = m_readback->DownloadColorImage(*storage, true);
+			m_memory_tracker.ForEachDownloadRange<true>(transfer.address, transfer.size,
+														[](uint64_t, uint64_t) noexcept {});
+			storage->gpu_modified = false;
+		} else {
+			SynchronizeColorImageToBufferLocked(*storage, storage->info.address, storage->info.size, true);
+		}
 		storage->buffer_modified = false;
-		static std::atomic_uint reconstruction_logs {0};
+		static std::atomic_uint reconstruction_logs{0};
 		if (reconstruction_logs.fetch_add(1, std::memory_order_relaxed) < 8) {
-			printf("[STORAGE-RT-RECONSTRUCT] storage=0x%016" PRIx64 "+0x%016" PRIx64
-			       " target=0x%016" PRIx64 "+0x%016" PRIx64 " full_backing=1\n",
-			       storage->info.address, storage->info.size, info.address, info.size);
+			printf("[STORAGE-RT-RECONSTRUCT] storage=0x%016" PRIx64 "+0x%016" PRIx64 " target=0x%016" PRIx64
+				   "+0x%016" PRIx64 " full_backing=1\n",
+				   storage->info.address, storage->info.size, info.address, info.size);
 		}
 	}
 
