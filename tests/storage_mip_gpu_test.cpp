@@ -14,7 +14,7 @@
 #define VKOK(x) CHECK((x)==VK_SUCCESS)
 // PRODUCTION_INVERSE
 int main(int argc,char** argv) {try {
- CHECK(argc>=2 && argc<=4);const bool packed=argc==4 && std::strcmp(argv[3],"packed")==0;const uint32_t target=argc>=3?uint32_t(std::strtoul(argv[2],nullptr,10)):0;CHECK(target<8);
+ CHECK(argc>=2 && argc<=4);const bool packed=argc==4 && std::strcmp(argv[3],"packed")==0;const bool rgba16=argc==4 && std::strcmp(argv[3],"rgba16")==0;const uint32_t target=argc>=3?uint32_t(std::strtoul(argv[2],nullptr,10)):0;CHECK(target<8);
  std::ifstream input(argv[1],std::ios::binary|std::ios::ate);CHECK(input);
  size_t shader_bytes=size_t(input.tellg());CHECK(shader_bytes && shader_bytes%4==0);
  std::vector<uint32_t> code(shader_bytes/4);input.seekg(0);input.read(reinterpret_cast<char*>(code.data()),shader_bytes);CHECK(input);
@@ -30,29 +30,30 @@ int main(int argc,char** argv) {try {
  float priority=1;VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};qci.queueFamilyIndex=family;qci.queueCount=1;qci.pQueuePriorities=&priority;
  VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};dci.queueCreateInfoCount=1;dci.pQueueCreateInfos=&qci;
  VkPhysicalDeviceFeatures enabled{};
- if(packed){VkPhysicalDeviceFeatures supported{};vkGetPhysicalDeviceFeatures(physical,&supported);CHECK(supported.shaderStorageImageWriteWithoutFormat);enabled.shaderStorageImageWriteWithoutFormat=VK_TRUE;dci.pEnabledFeatures=&enabled;}
+ if(packed || rgba16){VkPhysicalDeviceFeatures supported{};vkGetPhysicalDeviceFeatures(physical,&supported);CHECK(supported.shaderStorageImageWriteWithoutFormat);enabled.shaderStorageImageWriteWithoutFormat=VK_TRUE;dci.pEnabledFeatures=&enabled;}
  VkDevice device;VKOK(vkCreateDevice(physical,&dci,nullptr,&device));VkQueue queue;vkGetDeviceQueue(device,family,0,&queue);
  VkPhysicalDeviceMemoryProperties memory_properties{};vkGetPhysicalDeviceMemoryProperties(physical,&memory_properties);
  auto allocate=[&](VkMemoryRequirements requirements,VkMemoryPropertyFlags flags){uint32_t type=0;while(type<memory_properties.memoryTypeCount && (!(requirements.memoryTypeBits&(1u<<type)) || (memory_properties.memoryTypes[type].propertyFlags&flags)!=flags))++type;CHECK(type<memory_properties.memoryTypeCount);VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};ai.allocationSize=requirements.size;ai.memoryTypeIndex=type;VkDeviceMemory result;VKOK(vkAllocateMemory(device,&ai,nullptr,&result));return result;};
- const uint32_t width=packed?1920:480,height=packed?1080:270,levels=packed?1:8;const VkDeviceSize bytes=packed?0x870000:0x160000;CHECK(target<levels);
- const VkFormat format=packed?VK_FORMAT_B10G11R11_UFLOAT_PACK32:VK_FORMAT_R32_SFLOAT;
+ const uint32_t width=(packed||rgba16)?1920:480,height=(packed||rgba16)?1080:270,levels=packed?1:(rgba16?7:8),words_per_pixel=rgba16?2:1;VkDeviceSize bytes=packed?0x870000:0x160000;CHECK(target<levels);
+ const VkFormat format=packed?VK_FORMAT_B10G11R11_UFLOAT_PACK32:(rgba16?VK_FORMAT_R16G16B16A16_SFLOAT:VK_FORMAT_R32_SFLOAT);
  VkFormatProperties format_properties{};vkGetPhysicalDeviceFormatProperties(physical,format,&format_properties);CHECK(format_properties.optimalTilingFeatures&VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT);
- constexpr std::array<VkDeviceSize,8> offsets{0,0xc0000,0x100000,0x110000,0x120000,0x130000,0x140000,0x150000};
+ std::array<VkDeviceSize,8> offsets{0,0xc0000,0x100000,0x110000,0x120000,0x130000,0x140000,0x150000};
  std::array<uint32_t,8> pitches{512,256,128,128,128,128,128,128};
  if(packed)pitches[0]=1920;
+ if(rgba16){bytes=0;for(uint32_t l=0;l<levels;l++){offsets[l]=bytes;pitches[l]=std::max(width>>l,1u);bytes=(bytes+VkDeviceSize(pitches[l])*std::max(height>>l,1u)*8+255)&~VkDeviceSize(255);}}
  VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};bci.size=bytes;bci.usage=VK_BUFFER_USAGE_TRANSFER_SRC_BIT|VK_BUFFER_USAGE_TRANSFER_DST_BIT;
  VkBuffer buffer;VKOK(vkCreateBuffer(device,&bci,nullptr,&buffer));VkMemoryRequirements requirements{};vkGetBufferMemoryRequirements(device,buffer,&requirements);
  VkDeviceMemory buffer_memory=allocate(requirements,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);VKOK(vkBindBufferMemory(device,buffer,buffer_memory,0));
  void* mapped=nullptr;VKOK(vkMapMemory(device,buffer_memory,0,bytes,0,&mapped));auto* pixels=static_cast<uint32_t*>(mapped);
  std::fill(pixels,pixels+bytes/4,0xdeadbeef);std::array<VkBufferImageCopy,8> copies{};
- for(uint32_t l=0;l<levels;++l){auto& c=copies[l];c.bufferOffset=offsets[l];c.bufferRowLength=pitches[l];c.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,l,0,1};c.imageExtent={std::max(width>>l,1u),std::max(height>>l,1u),1};for(uint32_t y=0;y<c.imageExtent.height;++y)for(uint32_t x=0;x<c.imageExtent.width;++x){float value=0.125f+float(l)/16.f+float(x+y)/4096.f;std::memcpy(pixels+offsets[l]/4+y*pitches[l]+x,&value,4);}}
+ for(uint32_t l=0;l<levels;++l){auto& c=copies[l];c.bufferOffset=offsets[l];c.bufferRowLength=pitches[l];c.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,l,0,1};c.imageExtent={std::max(width>>l,1u),std::max(height>>l,1u),1};for(uint32_t y=0;y<c.imageExtent.height;++y)for(uint32_t x=0;x<c.imageExtent.width;++x){float value=0.125f+float(l)/16.f+float(x+y)/4096.f;const auto index=offsets[l]/4+(y*pitches[l]+x)*words_per_pixel;if(rgba16){pixels[index]=pixels[index+1]=0x30003000u;}else std::memcpy(pixels+index,&value,4);}}
  std::vector<uint32_t> expected(pixels,pixels+bytes/4);
  VkImageCreateInfo imci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};imci.imageType=VK_IMAGE_TYPE_2D;imci.format=format;imci.extent={width,height,1};imci.mipLevels=levels;imci.arrayLayers=1;imci.samples=VK_SAMPLE_COUNT_1_BIT;imci.tiling=VK_IMAGE_TILING_OPTIMAL;imci.usage=VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_STORAGE_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT;
  VkImage image;VKOK(vkCreateImage(device,&imci,nullptr,&image));vkGetImageMemoryRequirements(device,image,&requirements);VkDeviceMemory image_memory=allocate(requirements,VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);VKOK(vkBindImageMemory(device,image,image_memory,0));
  VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};vci.image=image;vci.viewType=VK_IMAGE_VIEW_TYPE_2D;vci.format=format;vci.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,target,1,0,1};
  VkImageView view;VKOK(vkCreateImageView(device,&vci,nullptr,&view));
  VkImageViewUsageCreateInfo sampled_usage{VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO};sampled_usage.usage=VK_IMAGE_USAGE_SAMPLED_BIT;
- VkImageViewCreateInfo sci=vci;sci.pNext=&sampled_usage;sci.subresourceRange.baseMipLevel=0;sci.subresourceRange.levelCount=levels;sci.components=packed?VkComponentMapping{VK_COMPONENT_SWIZZLE_R,VK_COMPONENT_SWIZZLE_G,VK_COMPONENT_SWIZZLE_B,VK_COMPONENT_SWIZZLE_ONE}:VkComponentMapping{VK_COMPONENT_SWIZZLE_R,VK_COMPONENT_SWIZZLE_R,VK_COMPONENT_SWIZZLE_R,VK_COMPONENT_SWIZZLE_ONE};
+ VkImageViewCreateInfo sci=vci;sci.pNext=&sampled_usage;sci.subresourceRange.baseMipLevel=0;sci.subresourceRange.levelCount=levels;sci.components=rgba16?VkComponentMapping{VK_COMPONENT_SWIZZLE_IDENTITY,VK_COMPONENT_SWIZZLE_IDENTITY,VK_COMPONENT_SWIZZLE_IDENTITY,VK_COMPONENT_SWIZZLE_IDENTITY}:packed?VkComponentMapping{VK_COMPONENT_SWIZZLE_R,VK_COMPONENT_SWIZZLE_G,VK_COMPONENT_SWIZZLE_B,VK_COMPONENT_SWIZZLE_ONE}:VkComponentMapping{VK_COMPONENT_SWIZZLE_R,VK_COMPONENT_SWIZZLE_R,VK_COMPONENT_SWIZZLE_R,VK_COMPONENT_SWIZZLE_ONE};
  VkImageView sampled_view;VKOK(vkCreateImageView(device,&sci,nullptr,&sampled_view));
  VkSamplerCreateInfo sampler_info{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};sampler_info.magFilter=VK_FILTER_NEAREST;sampler_info.minFilter=VK_FILTER_NEAREST;sampler_info.mipmapMode=VK_SAMPLER_MIPMAP_MODE_NEAREST;sampler_info.addressModeU=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;sampler_info.addressModeV=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;sampler_info.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;sampler_info.maxLod=7;
  VkSampler sampler;VKOK(vkCreateSampler(device,&sampler_info,nullptr,&sampler));
@@ -73,8 +74,8 @@ int main(int argc,char** argv) {try {
   const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};vkCmdClearColorImage(command,image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,&clear,1,&range);}
 
  barrier(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_WRITE_BIT|VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
- int source=int(InverseStorageSwizzleComponent(packed?0x3ac:0x324,0));CHECK(source==0);
- if(packed){CHECK(InverseStorageSwizzleComponent(0x3ac,1)==1 && InverseStorageSwizzleComponent(0x3ac,2)==2 && InverseStorageSwizzleComponent(0x3ac,3)==UINT32_MAX);}else CHECK(InverseStorageSwizzleComponent(0x324,1)==UINT32_MAX);
+ int source=int(InverseStorageSwizzleComponent(rgba16?0xfac:(packed?0x3ac:0x324),0));CHECK(source==0);
+ if(packed){CHECK(InverseStorageSwizzleComponent(0x3ac,1)==1 && InverseStorageSwizzleComponent(0x3ac,2)==2 && InverseStorageSwizzleComponent(0x3ac,3)==UINT32_MAX);}else if(rgba16){for(uint32_t c=0;c<4;c++)CHECK(InverseStorageSwizzleComponent(0xfac,c)==c);}else CHECK(InverseStorageSwizzleComponent(0x324,1)==UINT32_MAX);
  vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline);vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline_layout,0,1,&set,0,nullptr);const int push[]={source,int(target)};vkCmdPushConstants(command,pipeline_layout,VK_SHADER_STAGE_COMPUTE_BIT,0,8,push);vkCmdDispatch(command,(std::max(width>>target,1u)+7)/8,(std::max(height>>target,1u)+7)/8,1);
  if(packed){
   barrier(VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_GENERAL,VK_ACCESS_SHADER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
@@ -85,9 +86,10 @@ int main(int argc,char** argv) {try {
  VkMemoryBarrier host{VK_STRUCTURE_TYPE_MEMORY_BARRIER};host.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;host.dstAccessMask=VK_ACCESS_HOST_READ_BIT;vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&host,0,nullptr,0,nullptr);VKOK(vkEndCommandBuffer(command));
  VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};submit.commandBufferCount=1;submit.pCommandBuffers=&command;VKOK(vkQueueSubmit(queue,1,&submit,VK_NULL_HANDLE));VKOK(vkQueueWaitIdle(queue));
  std::vector<bool> visible(bytes/4,false);size_t changed=0;
- for(uint32_t l=0;l<levels;++l)for(uint32_t y=0;y<copies[l].imageExtent.height;++y)for(uint32_t x=0;x<copies[l].imageExtent.width;++x){size_t index=offsets[l]/4+y*pitches[l]+x;visible[index]=true;CHECK(pixels[index]==(l==target?(packed?((15u<<5u)<<22u)|((14u<<6u)<<11u)|(13u<<6u):0x3e800000u):expected[index]));changed+=l==target;}
+ for(uint32_t l=0;l<levels;++l)for(uint32_t y=0;y<copies[l].imageExtent.height;++y)for(uint32_t x=0;x<copies[l].imageExtent.width;++x){size_t index=offsets[l]/4+(y*pitches[l]+x)*words_per_pixel;for(uint32_t c=0;c<words_per_pixel;c++){visible[index+c]=true;const uint32_t written=rgba16?(c==0?0x38003400u:0x3c003c00u):(packed?((15u<<5u)<<22u)|((14u<<6u)<<11u)|(13u<<6u):0x3e800000u);CHECK(pixels[index+c]==(l==target?written:expected[index+c]));}changed+=l==target;}
  for(size_t i=0;i<visible.size();++i)if(!visible[i])CHECK(pixels[i]==expected[i]);
  if(packed)std::printf("[STORAGE-PACKED-GPU] device=%s R11G11B10 RGB1 identity_storage formatless_write=1 native_clear=checked sampled_RGB1=checked written_pixels=%zu packed_bits=checked padding_preserved=1 Astro=not-executed\n",properties.deviceName,changed);
+ else if(rgba16)std::printf("[STORAGE-RGBA16-MIP-GPU] device=%s target_mip=%u written_pixels=%zu unchanged_mips=6 sampled_levels=7 identity_RGBA=checked half_bits=checked padding_preserved=1 Astro=not-executed\n",properties.deviceName,target,changed);
  else std::printf("[STORAGE-MIP-GPU] device=%s R32Float RRR1 source=%d target_mip=%u written_pixels=%zu unchanged_mips=7 sampled_mips=8 sampled_RRR1=checked padding_preserved=1 Astro=not-executed\n",properties.deviceName,source,target,changed);
  vkDestroyCommandPool(device,command_pool,nullptr);vkDestroyPipeline(device,pipeline,nullptr);vkDestroyShaderModule(device,shader,nullptr);vkDestroyPipelineLayout(device,pipeline_layout,nullptr);vkDestroyDescriptorPool(device,pool,nullptr);vkDestroyDescriptorSetLayout(device,set_layout,nullptr);vkDestroySampler(device,sampler,nullptr);vkDestroyImageView(device,sampled_view,nullptr);vkDestroyImageView(device,view,nullptr);vkDestroyImage(device,image,nullptr);vkFreeMemory(device,image_memory,nullptr);vkUnmapMemory(device,buffer_memory);vkDestroyBuffer(device,buffer,nullptr);vkFreeMemory(device,buffer_memory,nullptr);vkDestroyDevice(device,nullptr);vkDestroyInstance(instance,nullptr);
  return 0;

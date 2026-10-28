@@ -1,6 +1,31 @@
 #include <source_location>
 static void Require(bool ok,std::source_location where=std::source_location::current()) {if(!ok) {std::fprintf(stderr,"Regression failed at %s:%u\n",where.file_name(),where.line());throw std::runtime_error("regression failed");}}
 int main() {
+ // Captured Astro storage mip6 with MAX_MIP5 must retain physical mip0..6.
+ {
+  ShaderTextureResource d{{0xc57ea100,0xc4700002,0x010dc1df,0x91b66fac,0,0x00700050,0,0}};
+  ShaderRecompiler::IR::ImageResource resource{ShaderRecompiler::IR::ResourceKind::StorageImage,
+   ShaderRecompiler::Decoder::ImageDimension::Dim2D,false,true};
+  Require(d.Width5()+1==1920 && d.Height5()+1==1080 && d.Format()==71);
+  Require(d.BaseLevel()==6 && d.LastLevel()==6 && d.MaxMip()==5 && d.NonMsaaMipLevels()==7);
+  Require(IsValidTextureMipView(d) && IsSupportedStorageTextureDescriptor(resource,d) && IsSupportedStorageTextureEncoding(d));
+  for(uint32_t mip=0;mip<=10;mip++){
+   auto view=d;view.fields[3]=(view.fields[3]&~0xff000u)|(mip<<12)|(mip<<16);
+   Require(IsValidTextureMipView(view) && view.NonMsaaMipLevels()==std::max(mip+1u,6u));
+  }
+  for(uint32_t mip=11;mip<16;mip++){
+   auto bad=d;bad.fields[3]=(bad.fields[3]&~0xff000u)|(mip<<12)|(mip<<16);
+   Require(!IsValidTextureMipView(bad) && !IsSupportedStorageTextureDescriptor(resource,bad));
+  }
+  auto bad=d;bad.fields[3]=0x91b56fac;Require(!IsValidTextureMipView(bad));
+  auto volume=d;volume.fields[1]=(volume.fields[1]&0x3fffffffu)|(3u<<30);
+  volume.fields[2]=15u|(63u<<14);volume.fields[4]=255u;volume.fields[5]=0;
+  volume.fields[3]=0x01888facu|(Prospero::GpuEnumValue(Prospero::ImageType::kColor3D)<<28);
+  Require(volume.Width5()+1==64 && volume.Height5()+1==64 && IsValidTextureMipView(volume));
+  volume.fields[3]=(volume.fields[3]&0x0fffffffu)|(Prospero::GpuEnumValue(Prospero::ImageType::kColor2DArray)<<28);
+  Require(!IsValidTextureMipView(volume));
+ }
+
  {
   ShaderTextureResource d{};
   const uint32_t fields[]={0x5b632f00,0xc2400002,0x010dc1df,0x91b003ac,0,0x00700000,0x207b0000,0x025b96c3};
@@ -628,7 +653,8 @@ int main() {
    d.fields[3]=0x91800324|(mip<<12)|(mip<<16);
    Require(IsSupportedStorageTextureDescriptor(resource,d) && IsSupportedStorageTextureEncoding(d));
   }
-  for(uint32_t flags:std::array<uint32_t,3>{0x91801324,0x91810324,0x91888324}) {
+  d.fields[3]=0x91888324;Require(d.NonMsaaMipLevels()==9 && IsSupportedStorageTextureDescriptor(resource,d));
+  for(uint32_t flags:std::array<uint32_t,3>{0x91801324,0x91810324,0x91899324}) {
    d.fields[3]=flags;Require(!IsSupportedStorageTextureDescriptor(resource,d));
   }
   d.fields[3]=0x91811324;resource.read=true;

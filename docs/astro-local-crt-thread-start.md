@@ -1215,3 +1215,41 @@ First eight final-candidate pushes confirm raw input_peak=0 and cumulative
 input_nonzero=0 for active bed PCM. Initial object transient is measured separately
 and is never routed to speakers. Actual waveOut device opening remains untested
 because no nonzero bed submission has been observed; mock backend regression PASS.
+
+## 2026-10-28: raw PCM remains zero; unblock the actual graphics stop
+
+Raw-metric PID21860 exits321 at13:17:22 at the same RGBA16F mip6/max5 descriptor
+failure. Last periodic record26624pushes:3 bed ports,19 object ports, input_peak0,
+input_nonzero0,mixed peak0,nonzero0,invalid pointers0. No audible Astro PCM found.
+Read-only import-map probe confirms ACM Create1, BatchStartBuffers0, BatchWait0;
+these are actual call counters, not merely a log-filter observation. Imported map
+has1708 entries. Do not infer that the software mixer is stopped from zero ACM
+batches: e03cf0 is called by the output loop, pending_ticks is1; in the next run
+12 render-list nodes have their enabled byte+0x120 set. No guest state was changed.
+Node fields+0xb8/+0x110 are opaque class/routing tags, not confirmed channel counts.
+Likewise engine+0x740 is not a verified ACM context field; discard that probe label.
+
+To reach later sound events, fix the independent graphics abort rather than bypass
+rendering or force nonzero sound. ShaderTextureResource::NonMsaaMipLevels includes
+both MAX_MIP and LAST_LEVEL, as pinned Jetsku BuildTextureDescription does for its
+physical/view level bounds. NativeTexture and storage validation share natural
+mip-range checks. Captured1920x1080 RGBA16F view6 with MaxMip5 needs7 host levels.
+Keep BaseLevel6; do not rebase to0 or clamp to5. Reject inverted ranges and mip
+counts exceeding the resource dimensions (3D depth contributes; array layers do not).
+
+Production descriptor regression PASS, including mip0..10 and invalid11..15.
+R32 natural mip8 now valid even with MaxMip7; replace old invalid8 fixture with9.
+New production tile27 extraction plus actual gpu_format.cpp shows levels6 and7
+share backing0x1640000, all original0..5 offsets/padded layouts stay unchanged,
+new mip6 is bounded within the same64KiB tail and disjoint from mip5. PASS.
+CI now includes test_texture_mip_view.ps1. Existing depth/cache/ownership tests PASS.
+
+Native Vulkan fixture extended with RGBA16F1920x1080,7 mip levels, view at mip6.
+ArcB580 formatless imageStore writes480 pixels and reads all four half-float
+channels back bit-exactly; sampled image reports7 levels, other6 mips and padding
+stay unchanged. Existing R32 mip0/1/7 and packedRGB GPU cases also PASS. This is a
+standalone fixture, explicitly not an Astro frame or evidence of audible audio.
+
+Full audio-mip-view-output build PASS with matching map. PID21952 starts13:21:35,
+log prefixastro_20261028_audio_mip_view; real progress beyond the former abort
+remains to be validated. Root Sarah executable and user launch scripts untouched.

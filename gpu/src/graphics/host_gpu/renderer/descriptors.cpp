@@ -535,6 +535,17 @@ static void ValidateDepthTargetBinding(const ShaderRecompiler::IR::ImageResource
 	     descriptor.fields[4], descriptor.fields[5], descriptor.fields[6], descriptor.fields[7]);
 }
 
+static bool IsValidTextureMipView(const ShaderTextureResource& descriptor) {
+	if (descriptor.BaseLevel() > descriptor.LastLevel()) return false;
+	uint32_t dimension = std::max(static_cast<uint32_t>(descriptor.Width5()) + 1u,
+	                              static_cast<uint32_t>(descriptor.Height5()) + 1u);
+	if (descriptor.Type() == Prospero::GpuEnumValue(Prospero::ImageType::kColor3D))
+		dimension = std::max(dimension, static_cast<uint32_t>(descriptor.Depth()) + 1u);
+	uint32_t max_levels = 1;
+	while (dimension > 1) { dimension >>= 1u; ++max_levels; }
+	return descriptor.NonMsaaMipLevels() <= max_levels;
+}
+
 static bool IsSupportedStorageTextureDescriptor(const ShaderRecompiler::IR::ImageResource& resource,
                                                 const ShaderTextureResource& descriptor) {
 	const auto tile   = descriptor.TileMode();
@@ -568,7 +579,7 @@ static bool IsSupportedStorageTextureDescriptor(const ShaderRecompiler::IR::Imag
 	const bool supported_mip_view = descriptor.BaseLevel() == 0 || is_2d;
 	return (is_1d || is_2d || is_2d_array || is_3d) && supported_tile && supported_mip_view &&
 	       descriptor.BaseLevel() == descriptor.LastLevel() &&
-	       descriptor.LastLevel() <= descriptor.MaxMip() && descriptor.MinLod() == 0 &&
+	       IsValidTextureMipView(descriptor) && descriptor.MinLod() == 0 &&
 	       descriptor.BaseArray5() == 0 && supported_swizzle && descriptor.BCSwizzle() == 0 &&
 	       !descriptor.MsaaDepth();
 }
@@ -735,8 +746,8 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 	const auto height     = static_cast<uint32_t>(descriptor.Height5()) + 1u;
 	const auto base_level = descriptor.BaseLevel();
 	const auto last_level = descriptor.LastLevel();
-	const auto levels     = static_cast<uint32_t>(descriptor.MaxMip()) + 1u;
-	if (base_level > last_level || last_level >= levels) {
+	const auto levels     = descriptor.NonMsaaMipLevels();
+	if (!IsValidTextureMipView(descriptor)) {
 		EXIT("unsupported texture mip view: base=%u last=%u levels=%u addr=0x%016" PRIx64
 		     " width=%u height=%u type=%u tile=%u kind=%u read=%d written=%d "
 		     "dwords=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",

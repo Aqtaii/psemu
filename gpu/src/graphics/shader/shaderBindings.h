@@ -96,6 +96,11 @@ struct ShaderTextureResource {
 	[[nodiscard]] uint16_t BaseArray5() const { return (fields[4] >> 16u) & 0x1FFFu; }
 	[[nodiscard]] uint8_t  ArrayPitch() const { return (fields[5] >> 0u) & 0xFu; }
 	[[nodiscard]] uint8_t  MaxMip() const { return (fields[5] >> 4u) & 0xFu; }
+	// Non-MSAA views may explicitly address a mip beyond the descriptor's encoded MAX_MIP.
+	// Retain the entire backing required by either field; never rebase the view.
+	[[nodiscard]] uint32_t NonMsaaMipLevels() const {
+		return static_cast<uint32_t>(MaxMip() > LastLevel() ? MaxMip() : LastLevel()) + 1u;
+	}
 	[[nodiscard]] uint16_t MinLodWarn5() const { return (fields[5] >> 8u) & 0xFFFu; }
 	[[nodiscard]] uint8_t  PerfMod5() const { return (fields[5] >> 20u) & 0x7u; }
 	[[nodiscard]] bool     CornerSample() const { return ((fields[5] >> 23u) & 0x1u) == 1; }

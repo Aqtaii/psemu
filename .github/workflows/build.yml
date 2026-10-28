@@ -135,6 +135,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_depth_storage.ps1
 
+      - name: Test captured texture mip view backing and tail layout
+        shell: pwsh
+        run: ./tools/scripts/test_texture_mip_view.ps1
+
       - name: Test VideoOut buffer ownership refresh
         shell: pwsh
         run: ./tools/scripts/test_video_out_refresh.ps1
