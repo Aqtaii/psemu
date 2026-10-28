@@ -94,6 +94,11 @@ bool ValidateResourceSnapshot(const Program& program, const ResourceSnapshot& sn
 		}
 		return false;
 	}
+    if(!ValidateGuestReadFootprint(snapshot.guest_reads) ||
+       (!program.uses_guest_address_table && !snapshot.guest_reads.empty())) {
+        if(error)*error="invalid guest source read footprint in resource snapshot";
+        return false;
+    }
 	if (snapshot.buffers.size() != program.info.buffers.size() ||
 	    snapshot.images.size() != program.info.images.size() ||
 	    snapshot.samplers.size() != program.info.samplers.size() ||
@@ -261,11 +266,30 @@ bool MaterializeResources(const Program& program, const SrtRuntime& runtime,
 
 	std::vector<DescriptorValue> values;
 	std::vector<uint32_t>        flattened_srt;
-	if (!EvaluateRuntimeSources(program, requests, runtime, &values, &flattened_srt, error)) {
+    struct ReadTrace {
+        const SrtRuntime* source;
+        std::vector<uint64_t> addresses;
+    } trace{&runtime,{}};
+    auto evaluated_runtime=runtime;
+    if(program.uses_guest_address_table && runtime.read_memory) {
+        evaluated_runtime.userdata=&trace;
+        evaluated_runtime.read_memory=[](void* userdata,uint64_t address,uint32_t* value) {
+            auto& trace=*static_cast<ReadTrace*>(userdata);
+            if(trace.addresses.size()>=MaxGuestReadDwords ||
+               !trace.source->read_memory(trace.source->userdata,address,value))return false;
+            trace.addresses.push_back(address);
+            return true;
+        };
+    }
+	if (!EvaluateRuntimeSources(program, requests, evaluated_runtime, &values, &flattened_srt, error)) {
 		return false;
 	}
 
 	ResourceSnapshot next;
+    if(!BuildGuestReadFootprint(trace.addresses,&next.guest_reads)) {
+        if(error)*error="invalid or excessive guest source read footprint";
+        return false;
+    }
 	auto             cursor = values.begin();
 	next.buffers.assign(cursor, cursor + program.info.buffers.size());
 	cursor += program.info.buffers.size();

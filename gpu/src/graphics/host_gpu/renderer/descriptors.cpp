@@ -1077,7 +1077,9 @@ static BufferView NativeUpload(CommandBuffer* command_buffer, std::span<const ui
 	return result;
 }
 
-static BufferView NativeGuestAddressFault(CommandBuffer* command, bool mesh_probe) {
+static BufferView NativeGuestAddressFault(CommandBuffer* command, bool mesh_probe,
+ uint64_t shader_hash, uint32_t stage, uint64_t gs_root,
+ std::vector<GuestAddressRange> address_ranges, size_t source_range_count) {
  auto* ctx = g_render_ctx->GetGraphicCtx();
  auto backing = std::shared_ptr<VulkanBuffer>(new VulkanBuffer, [ctx](VulkanBuffer* b) {
   VulkanDeleteBuffer(ctx,b); delete b;
@@ -1091,7 +1093,7 @@ static BufferView NativeGuestAddressFault(CommandBuffer* command, bool mesh_prob
  VulkanMapMemory(ctx,&backing->memory,&mapped);
  std::memset(mapped,0,bytes);
  VulkanUnmapMemory(ctx,&backing->memory);
- command->OnFenceComplete([ctx,backing,mesh_probe] {
+ command->OnFenceComplete([ctx,backing,mesh_probe,shader_hash,stage,gs_root,source_range_count,address_ranges=std::move(address_ranges)] {
   void* data = nullptr;
   VulkanMapMemory(ctx,&backing->memory,&data);
   GuestAddressFaultRecord fault;
@@ -1133,6 +1135,20 @@ static BufferView NativeGuestAddressFault(CommandBuffer* command, bool mesh_prob
   // Partial dispatch outputs cannot be published as correct guest results.
   // Page population/replay must be connected before allowing continuation.
   if(fault.status) {
+   uint64_t device=0,mapped=0;
+   const bool cpu_resolves=ResolveGuestAddress(address_ranges,fault.Address(),4,&device);
+   const bool host_mapped=HostMemoryQueryRange(fault.Address(),4,HostMemoryAccess::Mapped,&mapped) && mapped==4;
+   printf("[GPU-ADDRESS-FAULT] shader=0x%016" PRIx64 " stage=%u gs_root=0x%016" PRIx64
+          " address=0x%016" PRIx64 " ranges=%zu source_ranges=%zu cpu_resolves=%d host_mapped=%d\n",
+          shader_hash,stage,gs_root,fault.Address(),address_ranges.size(),source_range_count,cpu_resolves,host_mapped);
+   const auto next=std::upper_bound(address_ranges.begin(),address_ranges.end(),fault.Address(),
+       [](uint64_t address,const GuestAddressRange& range){return address<range.guest_base;});
+   if(next!=address_ranges.begin()) {
+    const auto& r=*std::prev(next);
+    printf("[GPU-ADDRESS-NEIGHBOR] before=0x%016" PRIx64 "+0x%016" PRIx64 "\n",r.guest_base,r.size);
+   }
+   if(next!=address_ranges.end())
+    printf("[GPU-ADDRESS-NEIGHBOR] after=0x%016" PRIx64 "+0x%016" PRIx64 "\n",next->guest_base,next->size);
    EXIT("GPU guest-address read failed: status=%u address=0x%016" PRIx64
         " preparable=%d\n",fault.status,fault.Address(),
         static_cast<int>(CanPrepareGuestAddressFault(fault)));
@@ -1185,7 +1201,27 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 		}
 		return true;
 	};
+    // Establish source residency before collecting any native descriptor views;
+    // a new cache owner may merge/reallocate earlier resident buffer allocations.
+    if(ShaderRecompiler::IR::FindBinding(program.bindings,
+           ShaderRecompiler::IR::DescriptorBindingKind::GuestAddressTable)) {
+        auto* cache=g_render_ctx->GetBufferCache();
+        // CPU SRT evaluation is not residency. Prepare those exact successful reads
+        // before capturing the GPU table, using the ordinary coherence/ownership path.
+        for(const auto& read:snapshot.guest_reads) {
+            const auto resident=cache->ObtainBuffer(buffer,g_render_ctx->GetGraphicCtx(),
+                                                   read.address,read.size,false,true,false,true);
+            if(recording_changed())return;
+            if(!resident.first || !resident.first->device_address)
+                EXIT("guest source read could not establish resident backing\n");
+        }
+        static std::atomic_uint source_logs{0};
+        if(!snapshot.guest_reads.empty() && source_logs.fetch_add(1)<8)
+            printf("[GPU-SOURCE-READ-PREPARE] shader=0x%016" PRIx64 " ranges=%zu force_resident=1\n",
+                   program.shader_hash,snapshot.guest_reads.size());
+    }
 	DescriptorCache::NativeDescriptors descriptors;
+    std::vector<GuestAddressRange> fault_address_ranges;
 	descriptors.buffers.reserve(program.info.buffers.size());
 	for (uint32_t i = 0; i < program.info.buffers.size(); i++) {
 		ShaderBufferResource descriptor;
@@ -1242,10 +1278,14 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 		// OpArrayLength must reflect serialized bytes, never stream-buffer padding.
 		descriptors.guest_address_table.range = words.size() * sizeof(uint32_t);
 		for (const auto& backing: addresses.backing) buffer->RetainResourceUntilFence(backing);
+        fault_address_ranges=std::move(addresses.ranges);
 	}
 	if (ShaderRecompiler::IR::FindBinding(program.bindings,
             ShaderRecompiler::IR::DescriptorBindingKind::GuestAddressFault)) {
-		descriptors.guest_address_fault = NativeGuestAddressFault(buffer, program.bindings.mesh_output_probe);
+		descriptors.guest_address_fault = NativeGuestAddressFault(buffer, program.bindings.mesh_output_probe,
+            program.shader_hash,static_cast<uint32_t>(program.stage),
+            point ? uint64_t(point->gs_user_data_low) | (uint64_t(point->gs_user_data_high)<<32) : 0,
+            std::move(fault_address_ranges),snapshot.guest_reads.size());
 	}
 	if (ShaderRecompiler::IR::FindBinding(
 	        program.bindings, ShaderRecompiler::IR::DescriptorBindingKind::FlattenedSrt) !=

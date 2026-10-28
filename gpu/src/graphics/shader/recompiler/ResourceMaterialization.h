@@ -2,6 +2,7 @@
 #define EMULATOR_INCLUDE_EMULATOR_GRAPHICS_SHADER_RECOMPILER_RESOURCEMATERIALIZATION_H_
 
 #include "graphics/shader/recompiler/SrtWalker.h"
+#include "graphics/shader/recompiler/guestReadFootprint.h"
 
 namespace Libs::Graphics::ShaderRecompiler::IR {
 
@@ -21,6 +22,7 @@ struct ResourceSnapshot {
 	std::vector<Address>         addresses;
 	std::vector<uint32_t>        flattened_srt;
 	std::vector<uint32_t>        user_data;
+    std::vector<GuestReadRange> guest_reads;
 };
 
 struct MeshPointGroupPayload {

@@ -1,3 +1,4 @@
+#include "graphics/shader/recompiler/guestReadFootprint.h"
 #include "graphics/shader/recompiler/meshOutputProbe.h"
 #include "graphics/host_gpu/renderer/guestAddressTable.h"
 #include "graphics/host_gpu/renderer/fenceCompletionActions.h"
@@ -8,6 +9,32 @@
 using namespace Libs::Graphics;
 #define CHECK(x) do {if(!(x)){std::printf("FAIL %d: %s\n",__LINE__,#x);return 1;}}while(0)
 int main() {
+ {
+  using namespace ShaderRecompiler::IR;
+  const uint64_t captured=0x15fb3b8f2e0ull;
+  std::vector<GuestReadRange> reads{{0x1000,4}};
+  const std::array input{captured+8,captured,captured+4,captured,captured+16};
+  CHECK(BuildGuestReadFootprint(input,&reads));
+  CHECK((reads==std::vector<GuestReadRange>{{captured,12},{captured+16,4}}));
+  const auto saved=reads;
+  CHECK(ValidateGuestReadFootprint(reads));
+  for(const auto invalid:std::array<GuestReadRange,6>{{{0,4},{captured,0},{captured+1,4},
+       {GuestAddressLimit-4,8},{captured,MaxGuestReadDwords*4+4},{captured,5}}}) {
+   const std::array range{invalid};CHECK(!ValidateGuestReadFootprint(range));
+  }
+  const std::array overlap{GuestReadRange{captured,8},GuestReadRange{captured+4,4}};
+  CHECK(!ValidateGuestReadFootprint(overlap));
+  const std::array last{GuestReadRange{GuestAddressLimit-4,4}};
+  CHECK(ValidateGuestReadFootprint(last));
+  for(const auto bad:std::array<uint64_t,5>{0,captured+1,GuestAddressLimit,UINT64_MAX,GuestAddressLimit-2}) {
+   const std::array invalid{captured,bad};CHECK(!BuildGuestReadFootprint(invalid,&reads) && reads==saved);
+  }
+  std::vector<uint64_t> excessive(MaxGuestReadDwords+1,captured);
+  CHECK(!BuildGuestReadFootprint(excessive,&reads) && reads==saved);
+  CHECK(!BuildGuestReadFootprint(input,nullptr));
+  CHECK(BuildGuestReadFootprint({},&reads) && reads.empty());
+ }
+
  using ShaderRecompiler::MeshOutputProbe;
  MeshOutputProbe probe;
  std::array<float,4> position{9,9,9,9};

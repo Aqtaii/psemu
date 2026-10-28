@@ -123,7 +123,14 @@ int main(int argc,char** argv) {
   buffer.memory.kind=R::ResourceKind::Buffer;buffer.memory.resource=2;buffer.memory.idxen=true;
   buffer.memory.data_bits=32;buffer.memory.data_dwords=1;buffer.memory.component_count=1;
   mesh.blocks[0].instructions.push_back(buffer);
+  // An independent GPU scalar read keeps checked address translation enabled.
+  // The CPU source evaluator must not read this unused/conditionally reached word.
+  auto independent=mesh.blocks[0].instructions.front();independent.pc=0x110;
+  independent.dst.reg.index=60;independent.memory.offset=0x40;
+  independent.memory.component_count=1;independent.memory.component_index=0;
+  mesh.blocks[0].instructions.push_back(independent);
   std::string error;Require(R::BuildMergedMeshResourcePlan(&mesh,16,&error));
+  Require(mesh.uses_guest_address_table);
   Require(mesh.info.buffers.size()==1 && mesh.info.addresses.empty());
   std::array<uint32_t,16> es_words{};es_words[0]=0x87654321;
   R::SrtRuntime runtime;runtime.user_data=es_words;runtime.mesh_gs_user_data_address=0x123450000ull;
@@ -136,11 +143,25 @@ int main(int argc,char** argv) {
   R::ResourceSnapshot snapshot;Require(R::MaterializeResources(mesh,runtime,&snapshot,&error));
   Require(snapshot.buffers.size()==1 && snapshot.buffers[0].dwords[0]==0x40000000u);
   Require(snapshot.user_data==std::vector<uint32_t>(es_words.begin(),es_words.end()));
+  Require(snapshot.guest_reads==std::vector<R::GuestReadRange>{{0x123450000ull,16}});
   runtime.mesh_gs_user_data_address=0x123460000ull;
   Require(R::MaterializeResources(mesh,runtime,&snapshot,&error));Require(snapshot.buffers[0].dwords[0]==0x42000000u);
+  Require(snapshot.guest_reads==std::vector<R::GuestReadRange>{{0x123460000ull,16}});
+  auto malformed=snapshot;malformed.guest_reads[0].size=0;
+  Require(!R::ValidateResourceSnapshot(mesh,malformed,&error));
   const auto saved=snapshot;runtime.mesh_gs_user_data_address.reset();
   Require(!R::MaterializeResources(mesh,runtime,&snapshot,&error));
   Require(snapshot.buffers==saved.buffers && snapshot.flattened_srt==saved.flattened_srt && snapshot.user_data==saved.user_data);
+  Require(snapshot.guest_reads==saved.guest_reads);
+  runtime.mesh_gs_user_data_address=0x123450000ull;
+  struct Failure {R::SrtMemoryReader reader;unsigned reads=0;} failure{runtime.read_memory};
+  runtime.userdata=&failure;
+  runtime.read_memory=[](void* userdata,uint64_t address,uint32_t* value){
+   auto& f=*static_cast<Failure*>(userdata);
+   return f.reads++<2 && f.reader(nullptr,address,value);
+  };
+  Require(!R::MaterializeResources(mesh,runtime,&snapshot,&error));
+  Require(snapshot.guest_reads==saved.guest_reads && snapshot.buffers==saved.buffers);
   std::puts("[MESH-RESOURCES] production GS-root buffer materialization refresh missing-root rollback=passed");
  }
 
