@@ -1107,16 +1107,37 @@ static void ProbeVideoTargetPixels(CommandBuffer* command,const DrawRenderState&
  const auto target=color.base_addr;const auto format=uint32_t(image->format);
  command->OnFenceComplete([ctx,backing,ordinal,target,format,element,color_bytes,half_float,packed_alpha]{
   void* mapped=nullptr;VulkanMapMemory(ctx,&backing->memory,&mapped);
-  const auto* bytes=static_cast<const uint8_t*>(mapped);uint32_t nonzero=0;
+  const auto* bytes=static_cast<const uint8_t*>(mapped);uint32_t nonzero=0,bright=0,nonfinite=0;
+  float peak=0;
+  auto unsigned_float=[](uint32_t bits,uint32_t mantissa_bits) {
+   const auto exponent=bits>>mantissa_bits;const auto fraction=bits&((1u<<mantissa_bits)-1);
+   return exponent==31 ? std::numeric_limits<float>::infinity() :
+    exponent==0 ? std::ldexp(float(fraction),1-15-int(mantissa_bits)) :
+    std::ldexp(1.f+float(fraction)/float(1u<<mantissa_bits),int(exponent)-15);
+  };
   for(uint32_t i=0;i<1024;++i) {
    if(packed_alpha) {uint32_t word;std::memcpy(&word,bytes+i*element,4);nonzero+=(word&0x3fffffffu)!=0;}
    else {uint8_t bits=0;for(uint32_t b=0;b<color_bytes;++b)
     bits|=bytes[i*element+b]&(half_float && b%2 ? 0x7fu : 0xffu);
     nonzero+=bits!=0;}
+   float pixel_peak=0;uint32_t word=0;
+   if(element==4 && color_bytes==4)std::memcpy(&word,bytes+i*element,4);
+   for(uint32_t c=0;c<3;++c) {
+    float value=0;
+    if(element==8) {
+     uint16_t raw;std::memcpy(&raw,bytes+i*element+c*2,2);
+     value=half_float ? unsigned_float(raw&0x7fffu,10)*((raw&0x8000u) ? -1.f : 1.f) : float(raw)/65535.f;
+    } else if(color_bytes==3)value=float(bytes[i*element+c])/255.f;
+    else if(packed_alpha)value=float((word>>(c*10))&1023u)/1023.f;
+    else value=c==2 ? unsigned_float(word>>22,5) : unsigned_float((word>>(c*11))&2047u,6);
+    if(!std::isfinite(value)){++nonfinite;continue;}
+    pixel_peak=std::max(pixel_peak,value);
+   }
+   peak=std::max(peak,pixel_peak);bright+=pixel_peak>.02f;
   }
   VulkanUnmapMemory(ctx,&backing->memory);
-  printf("[VIDEO-TARGET-PIXELS] draw=%u target=0x%016" PRIx64 " format=%u rgb_nonzero=%u/1024 source=completed-draw-readback\n",
-         ordinal,target,format,nonzero);
+  printf("[VIDEO-TARGET-PIXELS] draw=%u target=0x%016" PRIx64 " format=%u rgb_nonzero=%u/1024 bright_above_002=%u/1024 positive_peak=%.9g nonfinite=%u source=completed-draw-readback\n",
+         ordinal,target,format,nonzero,bright,peak,nonfinite);
  });
 }
 
