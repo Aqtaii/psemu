@@ -1,3 +1,4 @@
+#include "graphics/shader/recompiler/pushConstantExtent.h"
 #include "common/assert.h"
 #include "common/common.h"
 #include "common/emulatorConfig.h"
@@ -431,7 +432,7 @@ static void CreateLayout(vk::DescriptorSetLayout* set_layouts, uint32_t* set_lay
 
 		push_constant_info[index].stageFlags = vk_stage;
 		push_constant_info[index].offset     = bindings.push_constant_offset;
-		push_constant_info[index].size       = bindings.push_constant_size;
+		push_constant_info[index].size       = ShaderRecompiler::IR::PushConstantBlockExtent(bindings.push_constant_size);
 		(*push_constant_info_num)++;
 	}
 

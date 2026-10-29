@@ -1,3 +1,4 @@
+#include "graphics/shader/recompiler/pushConstantExtent.h"
 #include "graphics/shader/recompiler/spirvEmitter/guestScalarBufferRead.h"
 #include "graphics/shader/recompiler/spirvEmitter/guestBvhIntersect.h"
 #include "graphics/shader/recompiler/spirvEmitter/guestAddressFault.h"
@@ -718,7 +719,7 @@ void EmitHeaderAndTypes(EmitterState* state) {
 	if (state->push_constant_variable != 0) {
 		const auto row_width = ConstantU32(state, 4);
 		const auto row_count = ConstantU32(
-		    state, std::max((state->program->bindings.push_constant_size + 15u) / 16u, 1u));
+		    state, std::max(IR::PushConstantBlockExtent(state->program->bindings.push_constant_size) / 16u, 1u));
 		state->builder.AddType(
 		    {OpTypeArray, state->push_constant_u32x4_array_type, state->uint_type, row_width});
 		state->builder.AddType({OpTypeArray, state->push_constant_rows_array_type,

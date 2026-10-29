@@ -1,11 +1,20 @@
+#include "../gpu/src/graphics/shader/recompiler/pushConstantExtent.h"
 #include "../gpu/src/graphics/shader/recompiler/meshOutputProbe.h"
 #include <vulkan/vulkan.h>
+#include <atomic>
+#include <cstdlib>
 #include <cstdio>
 #include <fstream>
 #include <stdexcept>
 #include <vector>
 #include <cstring>
 #include <string>
+static std::atomic<uint32_t> validation_issues{0};
+static VKAPI_ATTR VkBool32 VKAPI_CALL ValidationMessage(VkDebugUtilsMessageSeverityFlagBitsEXT,
+ VkDebugUtilsMessageTypeFlagsEXT,const VkDebugUtilsMessengerCallbackDataEXT* data,void*) {
+ validation_issues.fetch_add(1,std::memory_order_relaxed);
+ std::fprintf(stderr,"[MESH-VALIDATION] %s\n",data && data->pMessage ? data->pMessage : "missing diagnostic");return VK_FALSE;
+}
 static void Check(VkResult r,const char* operation){if(r!=VK_SUCCESS){std::fprintf(stderr,"%s: VkResult %d\n",operation,int(r));throw std::runtime_error(operation);}}
 #define VK_CHECK(call) Check(call,#call)
 static uint32_t MemoryType(VkPhysicalDevice gpu,uint32_t bits,VkMemoryPropertyFlags flags){
@@ -25,7 +34,21 @@ int main(int argc,char** argv){try{
  if(argc!=3 && argc!=4)throw std::runtime_error("Usage: mesh_gpu_smoke.exe mesh.spv fragment.spv");
  VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};app.pApplicationName="psemu Mesh smoke";app.apiVersion=VK_API_VERSION_1_3;
  VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};ici.pApplicationInfo=&app;
- VkInstance instance;VK_CHECK(vkCreateInstance(&ici,nullptr,&instance));
+ const char* validation_layer="VK_LAYER_KHRONOS_validation";const char* requested_layers=std::getenv("VK_INSTANCE_LAYERS");
+ if(requested_layers && std::strstr(requested_layers,validation_layer)){ici.enabledLayerCount=1;ici.ppEnabledLayerNames=&validation_layer;}
+ uint32_t extension_count=0;VK_CHECK(vkEnumerateInstanceExtensionProperties(nullptr,&extension_count,nullptr));
+ std::vector<VkExtensionProperties> extensions(extension_count);VK_CHECK(vkEnumerateInstanceExtensionProperties(nullptr,&extension_count,extensions.data()));
+ bool debug_utils=false;for(const auto& extension:extensions)if(std::strcmp(extension.extensionName,VK_EXT_DEBUG_UTILS_EXTENSION_NAME)==0)debug_utils=true;
+ const char* debug_extension=VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+ VkDebugUtilsMessengerCreateInfoEXT debug_info{VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
+ debug_info.messageSeverity=VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT|VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+ debug_info.messageType=VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT|VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+ debug_info.pfnUserCallback=ValidationMessage;
+ if(debug_utils){ici.enabledExtensionCount=1;ici.ppEnabledExtensionNames=&debug_extension;ici.pNext=&debug_info;}
+ VkInstance instance;VK_CHECK(vkCreateInstance(&ici,nullptr,&instance));VkDebugUtilsMessengerEXT messenger=VK_NULL_HANDLE;
+ if(debug_utils){const auto create=reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(instance,"vkCreateDebugUtilsMessengerEXT"));
+  if(!create)throw std::runtime_error("Debug utils entry unavailable");VK_CHECK(create(instance,&debug_info,nullptr,&messenger));}
+
  uint32_t count=0;VK_CHECK(vkEnumeratePhysicalDevices(instance,&count,nullptr));std::vector<VkPhysicalDevice> devices(count);
  VK_CHECK(vkEnumeratePhysicalDevices(instance,&count,devices.data()));VkPhysicalDevice gpu=VK_NULL_HANDLE;uint32_t family=0;
  for(auto candidate:devices){
@@ -75,10 +98,11 @@ int main(int argc,char** argv){try{
  dci.queueCreateInfoCount=1;dci.pQueueCreateInfos=&qci;dci.enabledExtensionCount=1;dci.ppEnabledExtensionNames=&extension;
  VkDevice device;VK_CHECK(vkCreateDevice(gpu,&dci,nullptr,&device));VkQueue queue;vkGetDeviceQueue(device,family,0,&queue);
  const bool buffer_reads=argc==4 && std::string(argv[3])=="buffer-reads";
+ const bool sampled_reads=argc==4 && std::string(argv[3])=="sampled-reads";
  const VkDeviceSize input_bytes=output_probe ? sizeof(Libs::Graphics::ShaderRecompiler::MeshOutputProbe) : 4096;
  const bool point_push=point_output_probe || point_output_miss || buffer_reads || (argc==4 && std::string(argv[3])=="point-push");
  const bool vertex_probe=argc==4 && std::string(argv[3])=="vertex-probe";
- if(argc==4 && !point_push && !vertex_probe && !primitive_probe && !output_probe) throw std::runtime_error("Unknown Mesh GPU test mode");
+ if(argc==4 && !point_push && !vertex_probe && !primitive_probe && !output_probe && !sampled_reads) throw std::runtime_error("Unknown Mesh GPU test mode");
  auto draw=reinterpret_cast<PFN_vkCmdDrawMeshTasksEXT>(vkGetDeviceProcAddr(device,"vkCmdDrawMeshTasksEXT"));if(!draw)throw std::runtime_error("Mesh draw entry unavailable");
  constexpr uint32_t width=32,height=32,bytes=width*height*4;
  VkImageCreateInfo image_info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};image_info.imageType=VK_IMAGE_TYPE_2D;image_info.format=VK_FORMAT_R8G8B8A8_UNORM;
@@ -115,6 +139,8 @@ int main(int argc,char** argv){try{
  VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};cb.attachmentCount=1;cb.pAttachments=&blend;
  VkDescriptorSetLayout storage_layout=VK_NULL_HANDLE;VkDescriptorPool storage_pool=VK_NULL_HANDLE;
  VkDescriptorSet storage_set=VK_NULL_HANDLE;VkBuffer input_buffer=VK_NULL_HANDLE;VkDeviceMemory input_memory=VK_NULL_HANDLE;
+ VkImage sample_image=VK_NULL_HANDLE;VkDeviceMemory sample_memory=VK_NULL_HANDLE;VkImageView sample_view=VK_NULL_HANDLE;VkSampler sample_sampler=VK_NULL_HANDLE;
+ VkBuffer sample_upload=VK_NULL_HANDLE;VkDeviceMemory sample_upload_memory=VK_NULL_HANDLE;
  if(buffer_reads || output_probe) {
   VkDescriptorSetLayoutBinding binding{};binding.binding=0;binding.descriptorCount=1;
   binding.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;binding.stageFlags=VK_SHADER_STAGE_MESH_BIT_EXT;
@@ -137,8 +163,38 @@ int main(int argc,char** argv){try{
   write.dstSet=storage_set;write.dstBinding=0;write.descriptorCount=1;write.descriptorType=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;write.pBufferInfo=&buffer_info;
   vkUpdateDescriptorSets(device,1,&write,0,nullptr);
  }
- VkPushConstantRange push_range{VK_SHADER_STAGE_MESH_BIT_EXT,0,24};
- VkPipelineLayoutCreateInfo li{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};if(point_push){li.pushConstantRangeCount=1;li.pPushConstantRanges=&push_range;}if(buffer_reads || output_probe){li.setLayoutCount=1;li.pSetLayouts=&storage_layout;}VkPipelineLayout layout;VK_CHECK(vkCreatePipelineLayout(device,&li,nullptr,&layout));
+ if(sampled_reads) {
+  VkImageCreateInfo sample_info{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};sample_info.imageType=VK_IMAGE_TYPE_2D;sample_info.format=VK_FORMAT_R32G32B32A32_SFLOAT;
+  sample_info.extent={2,2,1};sample_info.mipLevels=1;sample_info.arrayLayers=1;sample_info.samples=VK_SAMPLE_COUNT_1_BIT;
+  sample_info.tiling=VK_IMAGE_TILING_OPTIMAL;sample_info.usage=VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+  VK_CHECK(vkCreateImage(device,&sample_info,nullptr,&sample_image));vkGetImageMemoryRequirements(device,sample_image,&mr);
+  alloc.allocationSize=mr.size;alloc.memoryTypeIndex=MemoryType(gpu,mr.memoryTypeBits,VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+  VK_CHECK(vkAllocateMemory(device,&alloc,nullptr,&sample_memory));VK_CHECK(vkBindImageMemory(device,sample_image,sample_memory,0));
+  VkImageViewCreateInfo sample_vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};sample_vi.image=sample_image;sample_vi.viewType=VK_IMAGE_VIEW_TYPE_2D;
+  sample_vi.format=sample_info.format;sample_vi.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};VK_CHECK(vkCreateImageView(device,&sample_vi,nullptr,&sample_view));
+  VkSamplerCreateInfo sampler_info{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};sampler_info.magFilter=sampler_info.minFilter=VK_FILTER_NEAREST;
+  sampler_info.mipmapMode=VK_SAMPLER_MIPMAP_MODE_NEAREST;sampler_info.addressModeU=sampler_info.addressModeV=sampler_info.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+  sampler_info.maxAnisotropy=1;VK_CHECK(vkCreateSampler(device,&sampler_info,nullptr,&sample_sampler));
+  VkBufferCreateInfo upload_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};upload_info.size=16*sizeof(float);upload_info.usage=VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+  VK_CHECK(vkCreateBuffer(device,&upload_info,nullptr,&sample_upload));vkGetBufferMemoryRequirements(device,sample_upload,&mr);
+  alloc.allocationSize=mr.size;alloc.memoryTypeIndex=MemoryType(gpu,mr.memoryTypeBits,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+  VK_CHECK(vkAllocateMemory(device,&alloc,nullptr,&sample_upload_memory));VK_CHECK(vkBindBufferMemory(device,sample_upload,sample_upload_memory,0));
+  void* mapped;VK_CHECK(vkMapMemory(device,sample_upload_memory,0,VK_WHOLE_SIZE,0,&mapped));for(uint32_t i=0;i<16;++i)static_cast<float*>(mapped)[i]=float(i+1);vkUnmapMemory(device,sample_upload_memory);
+  VkDescriptorSetLayoutBinding bindings[2]={{0,VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,1,VK_SHADER_STAGE_MESH_BIT_EXT,nullptr},{1,VK_DESCRIPTOR_TYPE_SAMPLER,1,VK_SHADER_STAGE_MESH_BIT_EXT,nullptr}};
+  VkDescriptorSetLayoutCreateInfo layout_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};layout_info.bindingCount=2;layout_info.pBindings=bindings;
+  VK_CHECK(vkCreateDescriptorSetLayout(device,&layout_info,nullptr,&storage_layout));
+  VkDescriptorPoolSize sizes[2]={{VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,1},{VK_DESCRIPTOR_TYPE_SAMPLER,1}};
+  VkDescriptorPoolCreateInfo pool_info{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};pool_info.maxSets=1;pool_info.poolSizeCount=2;pool_info.pPoolSizes=sizes;
+  VK_CHECK(vkCreateDescriptorPool(device,&pool_info,nullptr,&storage_pool));
+  VkDescriptorSetAllocateInfo set_info{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};set_info.descriptorPool=storage_pool;set_info.descriptorSetCount=1;set_info.pSetLayouts=&storage_layout;
+  VK_CHECK(vkAllocateDescriptorSets(device,&set_info,&storage_set));
+  VkDescriptorImageInfo image_binding{VK_NULL_HANDLE,sample_view,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL},sampler_binding{sample_sampler,VK_NULL_HANDLE,VK_IMAGE_LAYOUT_UNDEFINED};
+  VkWriteDescriptorSet writes[2]{};for(uint32_t i=0;i<2;++i){writes[i].sType=VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;writes[i].dstSet=storage_set;writes[i].dstBinding=i;writes[i].descriptorCount=1;}
+  writes[0].descriptorType=VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;writes[0].pImageInfo=&image_binding;writes[1].descriptorType=VK_DESCRIPTOR_TYPE_SAMPLER;writes[1].pImageInfo=&sampler_binding;
+  vkUpdateDescriptorSets(device,2,writes,0,nullptr);
+ }
+ VkPushConstantRange push_range{VK_SHADER_STAGE_MESH_BIT_EXT,0,Libs::Graphics::ShaderRecompiler::IR::PushConstantBlockExtent(24)};
+ VkPipelineLayoutCreateInfo li{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};if(point_push){li.pushConstantRangeCount=1;li.pPushConstantRanges=&push_range;}if(buffer_reads || output_probe || sampled_reads){li.setLayoutCount=1;li.pSetLayouts=&storage_layout;}VkPipelineLayout layout;VK_CHECK(vkCreatePipelineLayout(device,&li,nullptr,&layout));
  VkPipelineVertexInputStateCreateInfo vertex_input{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
  VkPipelineInputAssemblyStateCreateInfo assembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};assembly.topology=VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
  VkGraphicsPipelineCreateInfo pi{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};pi.stageCount=2;pi.pStages=stages;pi.pViewportState=&vp;pi.pRasterizationState=&raster;pi.pMultisampleState=&ms;pi.pColorBlendState=&cb;pi.layout=layout;pi.renderPass=render_pass;
@@ -152,10 +208,23 @@ int main(int argc,char** argv){try{
  for(uint32_t point_case=0;point_case<((point_push && !output_probe)?2u:1u);++point_case) {
  if(point_case!=0) VK_CHECK(vkResetCommandBuffer(cmd,0));
  VK_CHECK(vkBeginCommandBuffer(cmd,&begin));
+ if(sampled_reads) {
+  VkImageMemoryBarrier sample_barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};sample_barrier.image=sample_image;
+  sample_barrier.srcQueueFamilyIndex=sample_barrier.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;
+  sample_barrier.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};sample_barrier.oldLayout=VK_IMAGE_LAYOUT_UNDEFINED;
+  sample_barrier.newLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;sample_barrier.dstAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;
+  vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,0,nullptr,0,nullptr,1,&sample_barrier);
+  VkBufferImageCopy sample_copy{};sample_copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};sample_copy.imageExtent={2,2,1};
+  vkCmdCopyBufferToImage(cmd,sample_upload,sample_image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&sample_copy);
+  sample_barrier.oldLayout=VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;sample_barrier.newLayout=VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+  sample_barrier.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;sample_barrier.dstAccessMask=VK_ACCESS_SHADER_READ_BIT;
+  vkCmdPipelineBarrier(cmd,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_MESH_SHADER_BIT_EXT,0,0,nullptr,0,nullptr,1,&sample_barrier);
+ }
+
  if(primitive_probe)vkCmdResetQueryPool(cmd,primitive_pool,0,1);
  VkClearValue clear{};clear.color.float32[3]=1;VkRenderPassBeginInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};rp.renderPass=render_pass;rp.framebuffer=framebuffer;rp.renderArea=scissor;rp.clearValueCount=1;rp.pClearValues=&clear;
  vkCmdBeginRenderPass(cmd,&rp,VK_SUBPASS_CONTENTS_INLINE);vkCmdBindPipeline(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,pipeline);
- if(buffer_reads || output_probe) vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,layout,0,1,&storage_set,0,nullptr);
+ if(buffer_reads || output_probe || sampled_reads) vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,layout,0,1,&storage_set,0,nullptr);
  if(point_push) {
   const uint32_t payload[6]={0x87654321u,point_case?2u:1u,point_case?41u:25u,point_case?43u:27u,point_case?0xabcdef11u:0xabcdef01u,0x12345678u};
   if(output_probe) {
@@ -217,13 +286,18 @@ int main(int argc,char** argv){try{
  vkDestroyFence(device,fence,nullptr);
  }
 
- if(buffer_reads || output_probe) {
+ if(buffer_reads || output_probe || sampled_reads) {
   vkDestroyDescriptorPool(device,storage_pool,nullptr);vkDestroyDescriptorSetLayout(device,storage_layout,nullptr);
   vkDestroyBuffer(device,input_buffer,nullptr);vkFreeMemory(device,input_memory,nullptr);
  }
+ if(sampled_reads){vkDestroySampler(device,sample_sampler,nullptr);vkDestroyImageView(device,sample_view,nullptr);
+  vkDestroyImage(device,sample_image,nullptr);vkFreeMemory(device,sample_memory,nullptr);vkDestroyBuffer(device,sample_upload,nullptr);vkFreeMemory(device,sample_upload_memory,nullptr);}
  if(primitive_pool)vkDestroyQueryPool(device,primitive_pool,nullptr);
  vkDestroyCommandPool(device,pool,nullptr);vkDestroyPipeline(device,pipeline,nullptr);vkDestroyPipelineLayout(device,layout,nullptr);
  vkDestroyShaderModule(device,mesh_shader,nullptr);vkDestroyShaderModule(device,fragment_shader,nullptr);vkDestroyFramebuffer(device,framebuffer,nullptr);vkDestroyRenderPass(device,render_pass,nullptr);
- vkDestroyImageView(device,view,nullptr);vkDestroyImage(device,image,nullptr);vkFreeMemory(device,image_memory,nullptr);vkDestroyBuffer(device,buffer,nullptr);vkFreeMemory(device,buffer_memory,nullptr);vkDestroyDevice(device,nullptr);vkDestroyInstance(instance,nullptr);
+ vkDestroyImageView(device,view,nullptr);vkDestroyImage(device,image,nullptr);vkFreeMemory(device,image_memory,nullptr);vkDestroyBuffer(device,buffer,nullptr);vkFreeMemory(device,buffer_memory,nullptr);vkDestroyDevice(device,nullptr);
+ if(messenger){const auto destroy=reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(instance,"vkDestroyDebugUtilsMessengerEXT"));if(destroy)destroy(instance,messenger,nullptr);}
+ vkDestroyInstance(instance,nullptr);
+ const auto issues=validation_issues.load(std::memory_order_relaxed);std::printf("[MESH-VALIDATION] issues=%u callback=%u\n",issues,debug_utils);readbacks_passed=readbacks_passed && issues==0;
  return readbacks_passed?0:1;
 }catch(const std::exception& e){std::fprintf(stderr,"Mesh GPU smoke failed: %s\n",e.what());return 2;}}

@@ -1,3 +1,4 @@
+#include <bit>
 #include "graphics/shader/recompiler/spirvEmitter/bufferMemoryGroup.h"
 #include "graphics/shader/recompiler/meshBarrierPlan.h"
 #include "graphics/shader/recompiler/meshOutputProbe.h"
@@ -469,13 +470,15 @@ bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst) {
 	}
 
 	if (inst.execution == IR::InstructionExecution::Vector) {
-  if(inst.op==IR::Opcode::BufferLoadDword) {
+  if(inst.op==IR::Opcode::BufferLoadDword || inst.op==IR::Opcode::BufferLoadUbyte) {
    const auto& mem=inst.memory;
    auto plain=[](const IR::Operand& o) {
     return !o.dpp && o.sdwa_sel==6 && !o.sdwa_sext && !o.op_sel && !o.op_sel_hi &&
      !o.negate && !o.negate_hi && !o.absolute && !o.clamp && o.omod==0;
    };
-   if(mem.kind!=IR::ResourceKind::Buffer || mem.data_bits!=32 || mem.data_dwords!=1 ||
+   if(mem.kind!=IR::ResourceKind::Buffer ||
+      mem.data_bits!=(inst.op==IR::Opcode::BufferLoadUbyte ? 8u : 32u) || mem.data_dwords!=1 ||
+      (inst.op==IR::Opcode::BufferLoadUbyte && (mem.component_count!=1 || mem.component_index!=0)) ||
       mem.typed || mem.formatted || mem.glc || mem.slc || mem.guest_buffer_read ||
       mem.component_count<1 || mem.component_count>4 || mem.component_index>=mem.component_count ||
       mem.resource>=state->program->info.buffers.size() ||
@@ -485,6 +488,29 @@ bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst) {
    for(uint32_t i=0;i<inst.src_count;++i)
     if((inst.src[i].kind!=IR::OperandKind::Register && inst.src[i].kind!=IR::OperandKind::ImmediateU32) ||
        !plain(inst.src[i])) return false;
+  }
+  if(inst.op==IR::Opcode::ImageSample) {
+   const auto& mem=inst.memory;
+   const uint32_t components=std::popcount(mem.dmask&15u);
+   const auto plain=[](const IR::Operand& o){return !o.dpp && o.sdwa_sel==6 && !o.sdwa_sext &&
+    !o.op_sel && !o.op_sel_hi && !o.negate && !o.negate_hi && !o.absolute && !o.clamp && o.omod==0;};
+   if(mem.kind!=IR::ResourceKind::Image || mem.image_dimension!=Decoder::ImageDimension::Dim2D ||
+      mem.image_sample_flags!=Decoder::ImageSampleFlagLevelZero || mem.image_address_components!=2 ||
+      mem.image_nsa_dwords>1 || mem.data_bits!=32 || mem.data_dwords!=components ||
+      mem.dmask==0 || (mem.dmask&~15u)!=0 || mem.component_count!=components || mem.component_index!=0 || mem.image_has_mip ||
+      mem.resource>=state->program->info.images.size() || mem.sampler>=state->program->info.samplers.size() ||
+      inst.src_count!=1 || inst.dst2.kind!=IR::OperandKind::Null ||
+      inst.dst.kind!=IR::OperandKind::Register || inst.dst.reg.file!=IR::RegisterFile::Vector || !plain(inst.dst) ||
+      inst.src[0].kind!=IR::OperandKind::Register || inst.src[0].reg.file!=IR::RegisterFile::Vector || !plain(inst.src[0])) return false;
+   const auto& image=state->program->info.images[mem.resource];
+   if(image.kind!=IR::ResourceKind::Image || image.dimension!=Decoder::ImageDimension::Dim2D || image.depth_compare) return false;
+   const uint32_t y=mem.image_nsa_dwords ? mem.image_nsa_addr[0] : inst.src[0].reg.index+1;
+   for(uint32_t half=0;half<2;++half) {
+    if(!PointerForRegisterHalf(*state,inst.src[0].reg,half) ||
+       !PointerForRegisterHalf(*state,{IR::RegisterFile::Vector,y},half)) return false;
+    for(uint32_t c=0;c<components;++c)
+     if(!PointerForRegisterHalf(*state,{IR::RegisterFile::Vector,inst.dst.reg.index+c},half)) return false;
+   }
   }
   const bool address_alu=inst.op==IR::Opcode::ShiftLeftAddU32 ||
    inst.op==IR::Opcode::ShiftLeftLogicalU32 || inst.op==IR::Opcode::BitwiseAndU32;
@@ -517,7 +543,8 @@ bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst) {
       !plain(inst.dst) || !plain(inst.src[0]) ||
       (inst.src[0].kind!=IR::OperandKind::ImmediateU32 &&
        !(inst.src[0].kind==IR::OperandKind::Register &&
-         (inst.src[0].reg.file==IR::RegisterFile::Vector || inst.src[0].reg.file==IR::RegisterFile::Scalar)))) return false;
+         (inst.src[0].reg.file==IR::RegisterFile::Vector || inst.src[0].reg.file==IR::RegisterFile::Scalar ||
+          inst.src[0].reg.file==IR::RegisterFile::Vcc)))) return false;
   }
 		// Add opcode families only with tests for their cross-half dependencies.
 		switch (inst.op) {
@@ -529,8 +556,31 @@ bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst) {
 			case IR::Opcode::SelectMaskU32: case IR::Opcode::SelectMaskF32Bits:
 			case IR::Opcode::MaskedBitCountLowU32: case IR::Opcode::MaskedBitCountHighU32:
 			case IR::Opcode::Export: case IR::Opcode::DsReadB32: case IR::Opcode::DsWriteB32:
-   case IR::Opcode::BufferLoadDword:
+   case IR::Opcode::BufferLoadDword: case IR::Opcode::BufferLoadUbyte: case IR::Opcode::ImageSample:
    case IR::Opcode::ConvertI32ToF32:
+   case IR::Opcode::CompareMaskGtI32: case IR::Opcode::UMulHighU32:
+   case IR::Opcode::CompareGeF32:
+   case IR::Opcode::CompareLtF32:
+   case IR::Opcode::CompareGtF32:
+   case IR::Opcode::CompareLeF32:
+   case IR::Opcode::CompareGtI32:
+   case IR::Opcode::CompareMaskUnordGtF32:
+   case IR::Opcode::BitwiseXorU32:
+   case IR::Opcode::IAdd3U32:
+   case IR::Opcode::ConvertU32ToF32:
+   case IR::Opcode::TruncF32:
+   case IR::Opcode::FMaxF32:
+   case IR::Opcode::FAddF32:
+   case IR::Opcode::CosF32:
+   case IR::Opcode::SqrtF32:
+   case IR::Opcode::FMinF32:
+   case IR::Opcode::Log2F32:
+   case IR::Opcode::Exp2F32:
+   case IR::Opcode::ConvertByteU32ToF32:
+   case IR::Opcode::ConvertF32ToU32:
+   case IR::Opcode::ISubU32:
+   case IR::Opcode::BitwiseOrU32:
+   case IR::Opcode::IAddCarryU32:
    case IR::Opcode::FMadF32: case IR::Opcode::FMulF32: case IR::Opcode::FSubF32:
    case IR::Opcode::RcpF32: case IR::Opcode::InverseSqrtF32: case IR::Opcode::SinF32:
    case IR::Opcode::IMulU32: case IR::Opcode::UMulU24U32: case IR::Opcode::UMaxU32:

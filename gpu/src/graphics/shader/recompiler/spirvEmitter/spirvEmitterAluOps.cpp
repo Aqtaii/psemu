@@ -1647,8 +1647,14 @@ void EmitCompareClassF32(EmitterState* state, const IR::Instruction& inst) {
 void EmitCompareMaskF32(EmitterState* state, const IR::Instruction& inst, uint32_t opcode) {
 	const auto lhs  = EmitFloatLoad(state, inst.src[0]);
 	const auto rhs  = EmitFloatLoad(state, inst.src[1]);
-	const auto cond = state->builder.AllocateId();
-	state->builder.AddFunction({opcode, state->bool_type, cond, lhs, rhs});
+	auto cond = state->builder.AllocateId();
+	// Preserve the unordered NaN case explicitly, using integer bit classification.
+	const bool unordered_gt=opcode==OpFUnordGreaterThan;
+	state->builder.AddFunction({unordered_gt ? OpFOrdGreaterThan : opcode, state->bool_type, cond, lhs, rhs});
+	if(unordered_gt) {
+		const auto nan=EmitLogicalOrBool(state,EmitClassifyF32(state,lhs).nan,EmitClassifyF32(state,rhs).nan);
+		cond=EmitLogicalOrBool(state,cond,nan);
+	}
 	EmitCompareResult(state, inst.dst, cond);
 }
 

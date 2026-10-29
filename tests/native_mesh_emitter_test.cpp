@@ -29,7 +29,7 @@ void Require(bool ok,const std::string& error={},std::source_location where=std:
 // Exercise the production register allocator/load/store emitter without enabling public wave64.
 // A render readback must distinguish upper/lower VGPR values while seeing a shared scalar write.
 void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInputInfo& info,
-                             const IR::ResourceSnapshot& resources, bool upper_outputs=false, bool phased=false, bool point_push=false, bool buffer_reads=false) {
+                             const IR::ResourceSnapshot& resources, bool upper_outputs=false, bool phased=false, bool point_push=false, bool buffer_reads=false, bool sampled_reads=false) {
  using namespace Spirv::Emitter;
  EmitterState state;state.builder=Spirv::Builder(0x00010400u);
  auto mesh_info=info;
@@ -49,6 +49,15 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
   fixture_program.bindings.descriptors.push_back(binding);
   IR::DescriptorValue descriptor;descriptor.dword_count=4;descriptor.dwords={0x40000000u,16u<<16,256,0};
   fixture_resources.buffers.push_back(descriptor);
+ }
+ if(sampled_reads) {
+  fixture_program.bindings.descriptors.clear();fixture_program.bindings.mesh_output_probe=false;
+  IR::ImageResource image;image.kind=IR::ResourceKind::Image;image.dimension=Decoder::ImageDimension::Dim2D;image.read=true;
+  fixture_program.info.images.push_back(image);fixture_program.info.samplers.push_back({});fixture_program.info.sampled_pairs.push_back({0,0,0});
+  IR::DescriptorBinding binding;binding.kind=IR::DescriptorBindingKind::Sampled2D;binding.resources={0};binding.binding=0;
+  fixture_program.bindings.descriptors.push_back(binding);binding.kind=IR::DescriptorBindingKind::Samplers;binding.binding=1;fixture_program.bindings.descriptors.push_back(binding);
+  IR::DescriptorValue descriptor;descriptor.dword_count=8;descriptor.dwords={0x100000,0xc4700001,0x0007c007,0x90500fac,0,0x00700000,0,0};fixture_resources.images.push_back(descriptor);
+  descriptor={};descriptor.dword_count=4;fixture_resources.samplers.push_back(descriptor);
  }
  mesh_info.mesh.lds_dwords=2*info.mesh.invocations;
  const uint32_t upper_base=2*info.mesh.invocations-32;
@@ -72,6 +81,7 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  CollectRegister(&state.registers,{IR::RegisterFile::Scalar,29});
  CollectRegister(&state.registers,{IR::RegisterFile::Scalar,46});
  CollectRegister(&state.registers,{IR::RegisterFile::Scalar,47});
+ if(sampled_reads)for(uint32_t reg=30;reg<=33;++reg)CollectRegister(&state.registers,{IR::RegisterFile::Vector,reg});
  CollectRegister(&state.registers,SccRegister());
  CollectRegister(&state.registers,{IR::RegisterFile::Vector,17});
  for(uint32_t reg=18;reg<=20;++reg) CollectRegister(&state.registers,{IR::RegisterFile::Vector,reg});
@@ -324,6 +334,57 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
   rejected=load;rejected.src[0].dpp=true;Require(!EmitGuestInstruction(&state,rejected));
   Require(state.instruction_register_values.empty() && state.lane_half==0);
  }
+ if(sampled_reads) {
+  IR::Instruction sample;sample.op=IR::Opcode::ImageSample;sample.execution=IR::InstructionExecution::Vector;
+  sample.dst=Reg(IR::RegisterFile::Vector,30);sample.src_count=1;sample.src[0]=sample.dst;
+  sample.memory.kind=IR::ResourceKind::Image;sample.memory.resource=sample.memory.sampler=0;
+  sample.memory.image_dimension=Decoder::ImageDimension::Dim2D;sample.memory.image_sample_flags=Decoder::ImageSampleFlagLevelZero;
+  sample.memory.image_address_components=2;sample.memory.data_bits=32;sample.memory.data_dwords=4;
+  sample.memory.dmask=15;sample.memory.component_count=4;
+  for(uint32_t mask=1;mask<=15;++mask)for(bool nsa:{false,true})for(bool sparse:{false,true}) {
+   const uint32_t components=std::popcount(mask);sample.memory.dmask=mask;sample.memory.data_dwords=sample.memory.component_count=components;
+   const uint32_t y=nsa?32:31;sample.memory.image_nsa_dwords=nsa?1:0;sample.memory.image_nsa_addr[0]=nsa?y:0;
+   for(uint32_t half=0;half<2;++half){state.lane_half=half;
+    for(uint32_t c=0;c<4;++c)EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,30+c),ConstantU32(&state,0xdeadbeef));
+    for(uint32_t reg:{30u,y})EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,reg),ConstantU32(&state,half?0x3f400000:0x3e800000));}
+   state.lane_half=0;
+   EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,sparse?2:0xffffffff));
+   EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,sparse?4:0xffffffff));
+   Require(EmitGuestInstruction(&state,sample));
+   for(uint32_t half=0;half<2;++half){state.lane_half=half;const auto active=state.builder.AllocateId();
+    state.builder.AddFunction({OpIEqual,state.bool_type,active,EmitSubgroupLocalInvocationId(&state),ConstantU32(&state,half?2:1)});
+    uint32_t source=0;
+    for(uint32_t c=0;c<4;++c){
+     const auto original=ConstantU32(&state,(c==0 || 30+c==y)?(half?0x3f400000:0x3e800000):0xdeadbeef);
+     auto expected=original;
+     if(c<components){while((mask&(1u<<source))==0)++source;
+      const auto wanted=ConstantU32(&state,std::bit_cast<uint32_t>(float((half?13:1)+source++)));
+      expected=sparse?EmitSelectU32Value(&state,active,wanted,original):wanted;}
+     abi_check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,30+c}),expected);}}
+   state.lane_half=0;EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,0xffffffff));
+   EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,0xffffffff));
+  }
+  auto invalid=sample;invalid.memory.image_dimension=Decoder::ImageDimension::Dim3D;Require(!EmitGuestInstruction(&state,invalid));
+  invalid=sample;invalid.memory.image_nsa_dwords=2;Require(!EmitGuestInstruction(&state,invalid));
+  invalid=sample;invalid.memory.image_sample_flags=0;Require(!EmitGuestInstruction(&state,invalid));
+  invalid=sample;invalid.src[0]=Reg(IR::RegisterFile::Scalar,46);Require(!EmitGuestInstruction(&state,invalid));
+ }
+ if(buffer_reads) {
+  IR::Instruction byte;byte.op=IR::Opcode::BufferLoadUbyte;byte.execution=IR::InstructionExecution::Vector;
+  byte.dst=Reg(IR::RegisterFile::Vector,21);byte.src_count=2;byte.src[0]=byte.dst;byte.src[1]=Imm(0);
+  byte.memory.kind=IR::ResourceKind::Buffer;byte.memory.resource=0;byte.memory.data_bits=8;byte.memory.data_dwords=1;byte.memory.component_count=1;byte.memory.idxen=true;
+  for(uint32_t component=0;component<4;++component) {
+   for(uint32_t half=0;half<2;++half){state.lane_half=half;EmitStoreU32(&state,byte.dst,EmitBinaryU32(&state,OpBitwiseAnd,EmitMeshGuestLocalInvocationIndex(&state),ConstantU32(&state,127)));}
+   state.lane_half=0;byte.memory.offset=192+component;Require(EmitGuestInstruction(&state,byte));
+   for(uint32_t half=0;half<2;++half){state.lane_half=half;
+    const auto record=EmitBinaryU32(&state,OpBitwiseAnd,EmitMeshGuestLocalInvocationIndex(&state),ConstantU32(&state,127));
+    const auto word=EmitBinaryU32(&state,OpIAdd,EmitBinaryU32(&state,OpIMul,record,ConstantU32(&state,4)),ConstantU32(&state,0x2030));
+    abi_check(EmitRegisterLoad(&state,byte.dst.reg),EmitBinaryU32(&state,OpBitwiseAnd,EmitBinaryU32(&state,OpShiftRightLogical,word,ConstantU32(&state,component*8)),ConstantU32(&state,255)));}
+   state.lane_half=0;
+  }
+  auto invalid=byte;invalid.memory.typed=true;Require(!EmitGuestInstruction(&state,invalid));
+  invalid=byte;invalid.memory.component_count=2;Require(!EmitGuestInstruction(&state,invalid));
+ }
  // Full-shader ALU families: distinct bank values, in-place destinations and sparse EXEC.
  {
   const auto old_low=EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,0});
@@ -343,6 +404,81 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
    state.lane_half=0;
   };
   const auto v=Reg(IR::RegisterFile::Vector,20);
+  // The captured 80-vertex Astro Mesh uses these additional per-lane ALU families.
+  banks(0xffffffff,0x80000000);run(IR::Opcode::UMulHighU32,{v,Imm(2)});expect(1,1);
+  banks(0xffffffff,0xfffffffe);run(IR::Opcode::UMulHighU32,{v,Imm(0xffffffff)});expect(0xfffffffe,0xfffffffd);
+  banks(0x10000,0x20000);run(IR::Opcode::UMulHighU32,{v,Imm(0x10000)});expect(1,2);
+  banks(0x55,0xaa);run(IR::Opcode::BitwiseXorU32,{v,Imm(0xff)});expect(0xaa,0x55);
+  banks(1,2);run(IR::Opcode::IAdd3U32,{v,Imm(3),Imm(4)});expect(8,9);
+  banks(5,2);run(IR::Opcode::ISubU32,{v,Imm(3)});expect(2,0xffffffff);
+  banks(1,2);run(IR::Opcode::BitwiseOrU32,{v,Imm(8)});expect(9,10);
+  banks(0x80000000,0xffffffff);run(IR::Opcode::ConvertU32ToF32,{v});expect(0x4f000000,0x4f800000);
+  banks(0xbfe00000,0x40300000);run(IR::Opcode::TruncF32,{v});expect(0xbf800000,0x40000000);
+  banks(0x3f800000,0x40000000);run(IR::Opcode::FAddF32,{v,Imm(0x40000000)});expect(0x40400000,0x40800000);
+  banks(0,0);run(IR::Opcode::CosF32,{v});expect(0x3f800000,0x3f800000);
+  banks(0x40800000,0x41100000);run(IR::Opcode::SqrtF32,{v});expect(0x40000000,0x40400000);
+  auto abs_source=v;abs_source.absolute=true;
+  banks(0xc0800000,0xc1000000);run(IR::Opcode::Log2F32,{abs_source});expect(0x40000000,0x40400000);
+  banks(0x40000000,0x40400000);run(IR::Opcode::Exp2F32,{v});expect(0x40800000,0x41000000);
+  banks(0xc0800000,0xc0000000);run(IR::Opcode::FMinF32,{abs_source,Imm(0x40400000)});expect(0x40400000,0x40000000);
+  banks(0x12345678,0x9abcdeff);run(IR::Opcode::ConvertByteU32ToF32,{v,Imm(1)});expect(0x42ac0000,0x435e0000);
+  banks(0xbfc00000,0x40300000);run(IR::Opcode::ConvertF32ToU32,{v});expect(0,2);
+  IR::Instruction clamped;clamped.op=IR::Opcode::FMaxF32;clamped.execution=IR::InstructionExecution::Vector;
+  clamped.dst=v;clamped.dst.clamp=true;clamped.src_count=2;clamped.src[0]=Imm(0);clamped.src[1]=v;
+  banks(0xbf800000,0x40000000);Require(EmitGuestInstruction(&state,clamped));expect(0,0x3f800000);
+  auto comparison=[&](IR::Opcode op,IR::Operand lhs,IR::Operand rhs,IR::Operand dst,uint32_t low,uint32_t high) {
+   IR::Instruction i;i.op=op;i.execution=IR::InstructionExecution::Vector;i.dst=dst;i.src_count=2;i.src[0]=lhs;i.src[1]=rhs;
+   Require(EmitGuestInstruction(&state,i));check(EmitRegisterLoad(&state,dst.reg),low);
+   auto upper=dst.reg;++upper.index;check(EmitRegisterLoad(&state,upper),high);
+  };
+  auto mask=Reg(IR::RegisterFile::Scalar,46);
+  banks(0xbf800000,0x3f800000);
+  comparison(IR::Opcode::CompareGeF32,Imm(0),v,mask,0xffffffff,0);
+  comparison(IR::Opcode::CompareGtF32,Imm(0),v,mask,0xffffffff,0);
+  comparison(IR::Opcode::CompareLtF32,Imm(0),v,mask,0,0xffffffff);
+  comparison(IR::Opcode::CompareLeF32,Imm(0),v,mask,0,0xffffffff);
+  banks(uint32_t(-1),1);comparison(IR::Opcode::CompareGtI32,Imm(0),v,mask,0xffffffff,0);
+  banks(0,0x80000000);comparison(IR::Opcode::CompareGeF32,Imm(0),v,mask,0xffffffff,0xffffffff);
+  banks(0x7fc00000,0);comparison(IR::Opcode::CompareGeF32,Imm(0),v,mask,0,0xffffffff);
+  banks(0x7f800000,0xff800000);comparison(IR::Opcode::CompareGeF32,Imm(0),v,mask,0,0xffffffff);
+  // A shared scalar source aliases the low result; both halves must see its original float bits.
+  EmitStoreU32(&state,mask,ConstantU32(&state,0x40000000));banks(0x3f800000,0x40000000);
+  comparison(IR::Opcode::CompareGeF32,mask,v,mask,0xffffffff,0xffffffff);
+  banks(0,0);EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,2));
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,4));
+  comparison(IR::Opcode::CompareGeF32,Imm(0),v,mask,2,4);
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,0xffffffff));
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,0xffffffff));
+  banks(0x80000000,0x7fffffff);
+  comparison(IR::Opcode::CompareMaskGtI32,Imm(0),v,Reg(IR::RegisterFile::Exec,0),0xffffffff,0);
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,0xffffffff));
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,0xffffffff));
+  banks(uint32_t(-1),uint32_t(-1));
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,2));
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,4));
+  comparison(IR::Opcode::CompareMaskGtI32,Imm(0),v,Reg(IR::RegisterFile::Exec,0),2,4);
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,0xffffffff));
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,0xffffffff));
+  banks(0x7fc00000,0xbf800000);
+  comparison(IR::Opcode::CompareMaskUnordGtF32,v,Imm(0),Reg(IR::RegisterFile::Exec,0),0xffffffff,0);
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,0xffffffff));
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,0xffffffff));
+  banks(0x7fc00000,0);
+  comparison(IR::Opcode::CompareMaskUnordGtF32,Imm(0),v,Reg(IR::RegisterFile::Exec,0),0xffffffff,0);
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,0xffffffff));
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,0xffffffff));
+  banks(0xffffffff,0xfffffffe);
+  auto carry_mask=Reg(IR::RegisterFile::Vcc,0);
+  EmitStoreU32(&state,carry_mask,ConstantU32(&state,2));
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Vcc,1),ConstantU32(&state,4));
+  IR::Instruction add_carry;add_carry.op=IR::Opcode::IAddCarryU32;add_carry.execution=IR::InstructionExecution::Vector;
+  add_carry.dst=v;add_carry.dst2=carry_mask;add_carry.src_count=3;add_carry.src[0]=v;add_carry.src[1]=Imm(0);add_carry.src[2]=carry_mask;
+  Require(EmitGuestInstruction(&state,add_carry));
+  for(uint32_t half=0;half<2;++half){state.lane_half=half;const auto active=state.builder.AllocateId();
+   state.builder.AddFunction({OpIEqual,state.bool_type,active,EmitSubgroupLocalInvocationId(&state),ConstantU32(&state,half?2u:1u)});
+   abi_check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,20}),EmitSelectU32Value(&state,active,
+    ConstantU32(&state,half?0xffffffff:0),ConstantU32(&state,half?0xfffffffe:0xffffffff)));}
+  state.lane_half=0;check(EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,0}),2);check(EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,1}),0);
   // In-place signed conversion must snapshot both banks before writing either one.
   banks(uint32_t(-3),17);run(IR::Opcode::ConvertI32ToF32,{v});expect(0xc0400000,0x41880000);
   banks(0x80000000,0x7fffffff);run(IR::Opcode::ConvertI32ToF32,{v});expect(0xcf000000,0x4f000000);
@@ -353,6 +489,11 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
   conversion.src[0]=Reg(IR::RegisterFile::Scalar,46);
   EmitStoreU32(&state,conversion.src[0],ConstantU32(&state,uint32_t(-7)));
   Require(EmitGuestInstruction(&state,conversion));expect(0xc0e00000,0xc0e00000);
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Vcc,0),ConstantU32(&state,uint32_t(-9)));
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Vcc,1),ConstantU32(&state,17));
+  auto from_vcc=conversion;from_vcc.src[0]=Reg(IR::RegisterFile::Vcc,0);
+  Require(EmitGuestInstruction(&state,from_vcc));expect(0xc1100000,0xc1100000);
+  from_vcc.src[0]=Reg(IR::RegisterFile::Vcc,1);Require(EmitGuestInstruction(&state,from_vcc));expect(0x41880000,0x41880000);
   auto bad_conversion=conversion;bad_conversion.src[0].dpp=true;Require(!EmitGuestInstruction(&state,bad_conversion));
   bad_conversion=conversion;bad_conversion.dst.clamp=true;Require(!EmitGuestInstruction(&state,bad_conversion));
   bad_conversion=conversion;bad_conversion.src[0].sdwa_sel=0;Require(!EmitGuestInstruction(&state,bad_conversion));
@@ -684,7 +825,7 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  state.builder.AddFunction({OpReturn});state.builder.AddFunction({OpFunctionEnd});
  EmitNativeMeshEntryPoint(&state);
  const auto words=state.builder.Build();
- auto* file=std::fopen(buffer_reads ? "native_mesh_buffer_reads.spv" : point_push ? "native_mesh_point_push.spv" : phased ? "native_mesh_phased_dispatcher.spv" : upper_outputs ? (info.mesh.invocations==64 ? "native_mesh_upper_outputs_multiwave.spv" : "native_mesh_upper_outputs.spv") : "native_mesh_lane_backing.spv","wb");Require(file!=nullptr);
+ auto* file=std::fopen(sampled_reads ? (info.mesh.invocations==64 ? "native_mesh_sampled_reads_multiwave.spv" : "native_mesh_sampled_reads.spv") : buffer_reads ? "native_mesh_buffer_reads.spv" : point_push ? "native_mesh_point_push.spv" : phased ? "native_mesh_phased_dispatcher.spv" : upper_outputs ? (info.mesh.invocations==64 ? "native_mesh_upper_outputs_multiwave.spv" : "native_mesh_upper_outputs.spv") : "native_mesh_lane_backing.spv","wb");Require(file!=nullptr);
  Require(std::fwrite(words.data(),sizeof(uint32_t),words.size(),file)==words.size());
  Require(std::fclose(file)==0);
 }
@@ -869,6 +1010,7 @@ int main(int argc,char** argv){
  Require(Spirv::EmitProgram(p,resources,&info,nullptr,nullptr,&words,&error),error);
  auto* file=std::fopen(argc==2 ? "native_mesh_emitter_multiwave.spv" : "native_mesh_emitter.spv","wb");Require(file!=nullptr);
  Require(std::fwrite(words.data(),sizeof(uint32_t),words.size(),file)==words.size());Require(std::fclose(file)==0);
+ WriteLaneBackingFixture(p,info,resources,false,false,false,false,true);
  if(argc==1){WriteLaneBackingFixture(p,info,resources);WriteLaneBackingFixture(p,info,resources,true);}
  else {WriteLaneBackingFixture(p,info,resources,true);WriteLaneBackingFixture(p,info,resources,false,true);auto point_info=info;point_info.mesh.invocations=128;WriteLaneBackingFixture(p,point_info,resources,true,false,true);WriteLaneBackingFixture(p,point_info,resources,true,false,true,true);}
  {
