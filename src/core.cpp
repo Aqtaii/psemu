@@ -8078,6 +8078,47 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
         ss_init() << " | " << (access_type == 0 ? "READ" : (access_type == 1 ? "WRITE" : "EXEC"))
            << " violation @ 0x" << std::hex << access_addr;
 
+        // Observe the already-failing Animation argument list without changing fault recovery.
+        static const bool null_resource_probe=[] {
+            const char* value=std::getenv("PSEMU_ASTRO_NULL_RESOURCE_PROBE");
+            return value && value[0]=='1';
+        }();
+        if(null_resource_probe && ctx->Rip==g_base_addr+0x37f34c && ctx->Rax==0) {
+            auto read_exact=[](uint64_t address,void* output,size_t bytes) {
+                if(address<0x10000 || address>UINT64_MAX-bytes)return false;
+                SIZE_T copied=0;
+                return ReadProcessMemory(GetCurrentProcess(),reinterpret_cast<const void*>(address),output,bytes,&copied) && copied==bytes;
+            };
+            auto words=[&](const char* label,uint64_t address) {
+                std::array<uint64_t,8> data{};
+                ss_init()<<"\n[-] [NULL-RESOURCE-"<<label<<"] address=0x"<<std::hex<<address;
+                if(!read_exact(address,data.data(),sizeof(data))){ss_init()<<" unreadable=1";return;}
+                for(auto value:data)ss_init()<<" 0x"<<std::hex<<value;
+            };
+            ss_init()<<"\n[-] [NULL-RESOURCE] bounded_snapshot=1 other_threads_not_frozen=1 guest_state_unchanged=1";
+            words("COMPONENT",ctx->Rdi);words("MATCHED-NODE",ctx->R14);
+            uint64_t node=0;
+            if(read_exact(ctx->Rsi,&node,sizeof(node))) {
+                std::array<uint64_t,8> visited{};
+                for(size_t i=0;i<visited.size() && node;++i) {
+                    if(std::find(visited.begin(),visited.begin()+i,node)!=visited.begin()+i)break;
+                    visited[i]=node;
+                    std::array<uint64_t,8> data{};
+                    if(!read_exact(node,data.data(),sizeof(data)))break;
+                    ss_init()<<"\n[-] [NULL-RESOURCE-NODE] index="<<std::dec<<i<<" address=0x"<<std::hex<<node;
+                    for(auto value:data)ss_init()<<" 0x"<<std::hex<<value;
+                    std::array<char,33> tag{};
+                    if(read_exact(data[0],tag.data(),32)) {
+                        const auto end=std::find(tag.begin(),tag.begin()+32,'\0');
+                        const bool printable=end!=tag.begin() && std::all_of(tag.begin(),end,[](unsigned char c){return c>=32 && c<127;});
+                        if(printable)ss_init()<<" tag="<<std::string(tag.begin(),end);
+                    }
+                    if(data[2])words("PAYLOAD",data[2]);
+                    node=data[1];
+                }
+            }
+        }
+
         // Faulting komutun kendi baytlarini goster - tahmin yerine gercek veriyle
         // ilerleyebilmek icin. RIP oyun modulu icindeyse (yani gercekten calisan
         // bir komuttan kaynaklaniyorsa, sentinel/unmapped bir hedef degilse) anlamli.
