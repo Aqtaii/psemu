@@ -174,6 +174,8 @@ void ResolveRenderDepthTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 	    z.htile_surface.dst_outside_zero_to_one != 0 || z.z_read_base_addr == 0 ||
 	    z.z_write_base_addr != z.z_read_base_addr || (z.z_read_base_addr & 0xffffu) != 0 ||
 	    dc.zfunc > static_cast<uint8_t>(vk::CompareOp::eAlways)) {
+		depth_state_print(hw);
+		std::fflush(stdout);
 		DepthFatal("unsupported depth register state");
 	}
 	if (msaa_compat) {

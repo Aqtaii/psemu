@@ -1323,6 +1323,18 @@ void hw_check(const HW::Context& hw) {
 	// EXIT_NOT_IMPLEMENTED(hw.GetStencilClearValue() != 0);
 }
 
+// Failure-only snapshot: use the same decoders as the normal debug dump, without
+// enabling per-draw logging or changing the guest register state.
+void depth_state_print(const HW::Context& hw) {
+	LOGF("[DEPTH-FAULT-STATE]\n");
+	ZPrint("DepthRenderTarget:", hw.GetDepthRenderTarget());
+	RcPrint("RenderControl:", hw.GetRenderControl());
+	DPrint("DepthStencilControlMask:", hw.GetDepthControl(), hw.GetStencilControl(),
+	       hw.GetStencilMask());
+	LOGF("\t depth_clear_value = %f bounds = (%f, %f)\n", hw.GetDepthClearValue(),
+	     hw.GetDepthBoundsMin(), hw.GetDepthBoundsMax());
+}
+
 void hw_print(const HW::Context& hw) {
 	const auto  rt_slot = render_target_first_bound_slot(hw);
 	const auto& rt      = hw.GetRenderTarget(rt_slot);

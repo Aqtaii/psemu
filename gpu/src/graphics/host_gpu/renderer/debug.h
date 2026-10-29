@@ -35,6 +35,7 @@ void                     sh_check(const HW::Shader& uc);
 std::vector<std::string> rt_print(const char* func, const HW::RenderTarget& rt);
 bool                     RenderIsColorTileModeLinear(uint32_t tile_mode);
 void                     hw_print(const HW::Context& hw);
+void                     depth_state_print(const HW::Context& hw);
 void                     hw_check(const HW::Context& hw);
 void                     LogDrawPhase(const char* draw_name, const char* phase);
 ScissorRect calc_final_scissor(const HW::ScreenViewport& vp, const HW::ScanModeControl& smc,
