@@ -1,0 +1,13 @@
+#version 450
+layout(local_size_x=8,local_size_y=8) in;
+layout(r32ui,set=0,binding=0) uniform uimage2D target;
+void main() {
+    const uvec2 position=gl_GlobalInvocationID.xy;
+    const uvec2 extent=uvec2(imageSize(target));
+    if(any(greaterThanEqual(position,extent)))return;
+    const uint old=imageAtomicAdd(target,ivec2(0),1u);
+    memoryBarrierImage();
+    const uint index=position.y*extent.x+position.x+1u;
+    if(index<extent.x*extent.y)
+        imageStore(target,ivec2(index%extent.x,index/extent.x),uvec4(old));
+}

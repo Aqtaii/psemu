@@ -1121,8 +1121,9 @@ uint32_t EmitAtomicPointer(EmitterState* state, const IR::Instruction& inst) {
 	}
 }
 
-void EmitDeviceAtomicMemoryBarrier(EmitterState* state) {
-	const auto semantics = MemorySemanticsAcquireRelease | MemorySemanticsUniformMemory;
+void EmitDeviceAtomicMemoryBarrier(EmitterState* state,bool image) {
+	const auto semantics = MemorySemanticsAcquireRelease |
+        (image ? MemorySemanticsImageMemory : MemorySemanticsUniformMemory);
 	state->builder.AddFunction(
 	    {OpMemoryBarrier, ConstantU32(state, ScopeDevice), ConstantU32(state, semantics)});
 }
@@ -1176,7 +1177,7 @@ void EmitAtomicU32(EmitterState* state, const IR::Instruction& inst, uint32_t op
 	                            ConstantU32(state, MemorySemanticsNone), value});
 	if (inst.memory.kind == IR::ResourceKind::StorageImageUint ||
 	    inst.memory.kind == IR::ResourceKind::Gds) {
-		EmitDeviceAtomicMemoryBarrier(state);
+		EmitDeviceAtomicMemoryBarrier(state,inst.memory.kind == IR::ResourceKind::StorageImageUint);
 	}
 	EmitStoreU32(state, inst.dst, old);
 }

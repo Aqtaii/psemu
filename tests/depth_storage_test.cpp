@@ -2,6 +2,30 @@
 static void Require(bool ok,std::source_location where=std::source_location::current()) {if(!ok) {std::fprintf(stderr,"Regression failed at %s:%u\n",where.file_name(),where.line());throw std::runtime_error("regression failed");}}
 int main() {
  {
+  using R=ShaderRecompiler::IR::ResourceKind;
+  ShaderRecompiler::IR::ImageResource resource{R::StorageImageUint,ShaderRecompiler::Decoder::ImageDimension::Dim2D};
+  resource.read=true;resource.written=true;resource.atomic=true;
+  ShaderTextureResource d;d.fields[0]=0x100;d.fields[1]=20u<<20;d.fields[2]=0;d.fields[3]=0x90000fac;
+  d.fields[4]=0;d.fields[5]=0x00700000;d.fields[6]=d.fields[7]=0;
+  Require(IsSupportedStorageTextureDescriptor(resource,d) && IsSupportedStorageTextureEncoding(d));
+  for(uint32_t format:{1u,5u,11u,21u,22u,71u}){auto bad=d;bad.fields[1]=format<<20;Require(!IsSupportedStorageTextureDescriptor(resource,bad));}
+  for(int field=0;field<7;++field){auto bad=d;
+   if(field==0)bad.fields[3]|=1u<<12;if(field==1)bad.fields[3]|=1u<<16;if(field==2)bad.fields[5]|=1u<<4;
+   if(field==3)bad.fields[6]=1;if(field==4)bad.fields[7]=1;if(field==5)bad.fields[3]^=1;if(field==6)bad.fields[3]=(bad.fields[3]&0x0fffffffu)|0xa0000000u;
+   Require(!IsSupportedStorageTextureDescriptor(resource,bad));
+  }
+  resource.read=false;Require(!IsSupportedStorageTextureDescriptor(resource,d));
+  resource.read=true;resource.kind=R::StorageImage;Require(!IsSupportedStorageTextureDescriptor(resource,d));
+  resource.kind=R::StorageImageUint;
+  ShaderTextureResource captured;captured.fields[0]=0xed7a0400;captured.fields[1]=0xc1400001;
+  captured.fields[2]=0x000fc1ff;captured.fields[3]=0x91b00204;captured.fields[4]=0;
+  captured.fields[5]=0x00700000;captured.fields[6]=captured.fields[7]=0;
+  Require(captured.Width5()+1==2048 && captured.Height5()+1==64);
+  Require(IsSupportedStorageTextureDescriptor(resource,captured) && IsSupportedStorageTextureEncoding(captured));
+  for(uint32_t swizzle:{0u,0x203u,0x205u,0x324u}){auto bad=captured;bad.fields[3]=(bad.fields[3]&~0xfffu)|swizzle;Require(!IsSupportedStorageTextureDescriptor(resource,bad));}
+  std::puts("[ATOMIC-IMAGE-POLICY] captured2048x64 R32Uint tile27 R001 identity typed negatives=passed");
+ }
+ {
   const uint64_t rt=0x16eeb170000ull,rt_size=0xff0000,linear=rt+rt_size,linear_size=0x3f4800;
   Require(CanCombineImageWriteOwners(rt,rt_size,linear,linear_size));
   Require(CanCombineImageWriteOwners(linear,linear_size,rt,rt_size));

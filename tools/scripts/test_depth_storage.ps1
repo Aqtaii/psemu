@@ -82,7 +82,7 @@ $ir=[IO.File]::ReadAllText("$root\gpu\src\graphics\shader\recompiler\ShaderIR.h"
 $dimension=[regex]::Match($decoder,'enum class ImageDimension : uint32_t \{[\s\S]*?\};').Value
 $resourceKind=[regex]::Match($ir,'enum class ResourceKind \{[\s\S]*?\};').Value
 if(!$dimension -or !$resourceKind){throw 'Production image enums missing'}
-$header+='namespace ShaderRecompiler { namespace Decoder {'+$dimension+'} namespace IR {'+$resourceKind+'struct ImageResource {ResourceKind kind;Decoder::ImageDimension dimension;bool read=false,written=true;};}}'
+$header+='namespace ShaderRecompiler { namespace Decoder {'+$dimension+'} namespace IR {'+$resourceKind+'struct ImageResource {ResourceKind kind;Decoder::ImageDimension dimension;bool read=false,written=true,atomic=false;};}}'
 $header+=Slice $views '[[nodiscard]] inline bool IsSupportedStorageDepthTile(' '[[noreturn]] inline void UnsupportedColorView('
 $header+=Slice $descriptorDefs 'static bool IsValidTextureMipView(' 'void ValidateStorageTexture('
 $source=Join-Path $out 'depth_storage_production.cpp'

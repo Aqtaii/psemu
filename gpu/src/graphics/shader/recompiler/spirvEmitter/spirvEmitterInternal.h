@@ -109,6 +109,7 @@ enum : uint32_t {
 	MemorySemanticsAcquireRelease  = 0x00000008u,
 	MemorySemanticsUniformMemory   = 0x00000040u,
 	MemorySemanticsWorkgroupMemory = 0x00000100u,
+	MemorySemanticsImageMemory     = 0x00000800u,
 };
 
 enum : uint32_t {
@@ -994,7 +995,7 @@ bool EmitBufferIntegerFormatStore(EmitterState* state, const IR::Instruction& in
 
 uint32_t EmitAtomicPointer(EmitterState* state, const IR::Instruction& inst);
 
-void EmitDeviceAtomicMemoryBarrier(EmitterState* state);
+void EmitDeviceAtomicMemoryBarrier(EmitterState* state, bool image=false);
 
 void EmitAtomicU32(EmitterState* state, const IR::Instruction& inst, uint32_t opcode);
 

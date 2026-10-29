@@ -227,7 +227,10 @@ IsSupportedStorageImageResource(const ShaderRecompiler::IR::ImageResource& resou
 	        resource.dimension == ShaderRecompiler::Decoder::ImageDimension::Dim3D ||
 	        resource.dimension == ShaderRecompiler::Decoder::ImageDimension::Dim2DArray) &&
 	       resource.mip_mode == ShaderRecompiler::IR::ImageMipMode::None && resource.written &&
-	       !resource.atomic && !resource.depth_compare;
+	       (!resource.atomic ||
+            (resource.kind == ShaderRecompiler::IR::ResourceKind::StorageImageUint &&
+             resource.dimension == ShaderRecompiler::Decoder::ImageDimension::Dim2D && resource.read)) &&
+           !resource.depth_compare;
 }
 
 inline void

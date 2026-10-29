@@ -1,4 +1,5 @@
 #include "graphics/host_gpu/vulkanCommon.h"
+#include "graphics/host_gpu/renderer/videoGraphProbe.h"
 
 #if defined(__clang__)
 #pragma clang diagnostic push
@@ -214,6 +215,7 @@ void VulkanDeleteImage(GraphicContext* ctx, VulkanImage* image) {
 
 	auto& memory = image->memory;
 	VulkanUntrackAllocation(&memory);
+	VideoGraphProbeImageDestroyed(memory.unique_id);
 	vmaDestroyImage(ctx->allocator, image->image, memory.allocation);
 	image->image           = nullptr;
 	memory.memory          = nullptr;

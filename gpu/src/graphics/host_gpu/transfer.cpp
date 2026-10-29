@@ -203,7 +203,7 @@ static void RecordBufferToImageCopy(CommandBuffer& command, VulkanBuffer& src_bu
                                     std::span<const vk::BufferImageCopy> regions,
                                     vk::ImageAspectFlags                 transition_aspects,
                                     vk::ImageLayout initial_layout, vk::ImageLayout final_layout) {
-	VideoGraphProbeLogTransfer("buffer-to-image",nullptr,static_cast<void*>(dst_image.image),0,0,0);
+	VideoGraphProbeLogTransfer("buffer-to-image",nullptr,&dst_image,0,0,0);
 	auto vk_command = command.Handle();
 	SetBufferMemoryBarrier(vk_command, src_buffer.buffer, 0, VK_WHOLE_SIZE,
 	                       vk::AccessFlagBits::eMemoryWrite, vk::AccessFlagBits::eTransferRead,
@@ -342,7 +342,7 @@ public:
 	void DownloadFromImage(GraphicContext* ctx, void* dst_data, uint64_t size, uint32_t dst_pitch,
 	                       VulkanImage* src_image, vk::ImageLayout src_layout,
 	                       vk::ImageAspectFlags aspect) {
-  VideoGraphProbeLogTransfer("image-download",src_image ? static_cast<void*>(src_image->image) : nullptr,nullptr,0,reinterpret_cast<uint64_t>(dst_data),size);
+  VideoGraphProbeLogTransfer("image-download",src_image,nullptr,0,reinterpret_cast<uint64_t>(dst_data),size);
 		Common::LockGuard lock(m_mutex);
 
 		EnsureBuffer(ctx, size, vk::BufferUsageFlagBits::eTransferDst);
@@ -658,8 +658,7 @@ static void CopyBlockImageToCompressedImage(vk::CommandBuffer vk_buffer, const I
 
 void CopyImage(CommandBuffer* buffer, std::span<const ImageImageCopy> regions,
                VulkanImage* dst_image, vk::ImageLayout dst_layout) {
- for(const auto& r:regions)VideoGraphProbeLogTransfer("image-copy",r.src_image ? static_cast<void*>(r.src_image->image) : nullptr,
-  dst_image ? static_cast<void*>(dst_image->image) : nullptr,0,0,0);
+ for(const auto& r:regions)VideoGraphProbeLogTransfer("image-copy",r.src_image,dst_image,0,0,0);
 	auto vk_buffer = buffer->Handle();
 
 	bool                 same_image_copy        = false;
@@ -775,7 +774,7 @@ void CopyImageViaBuffer(CommandBuffer* buffer, GraphicContext* ctx, VulkanImage*
                         vk::ImageAspectFlags src_aspect, VulkanImage* dst_image,
                         vk::ImageAspectFlags dst_aspect, uint32_t bytes_per_element,
                         vk::ImageLayout dst_layout) {
- VideoGraphProbeLogTransfer("image-via-buffer",src_image ? static_cast<void*>(src_image->image) : nullptr,dst_image ? static_cast<void*>(dst_image->image) : nullptr,0,0,0);
+ VideoGraphProbeLogTransfer("image-via-buffer",src_image,dst_image,0,0,0);
 	if (!IsSingleImageAspect(src_aspect) || !IsSingleImageAspect(dst_aspect) ||
 	    (bytes_per_element != 2 && bytes_per_element != 4) || src_image->layers != 1 ||
 	    dst_image->layers != 1 || src_image->mip_levels != 1 || dst_image->mip_levels != 1 ||

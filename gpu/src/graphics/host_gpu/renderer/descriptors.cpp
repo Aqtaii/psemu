@@ -576,9 +576,19 @@ static bool IsSupportedStorageTextureDescriptor(const ShaderRecompiler::IR::Imag
 	                            supported_depth_tile;
 	const bool supported_swizzle =
 	    IsSupportedStorageSwizzle(descriptor.Format(), descriptor.DstSelXYZW()) &&
-	    (descriptor.DstSelXYZW() == DstSel(4, 5, 6, 7) || !resource.read);
+	    (descriptor.DstSelXYZW() == DstSel(4, 5, 6, 7) || !resource.read ||
+         (resource.atomic && descriptor.Format() == Prospero::GpuEnumValue(Prospero::BufferFormat::k32UInt) &&
+          descriptor.DstSelXYZW() == DstSel(4,0,0,1)));
 	const bool supported_mip_view = descriptor.BaseLevel() == 0 || is_2d;
-	return (is_1d || is_2d || is_2d_array || is_3d) && supported_tile && supported_mip_view &&
+    const bool atomic_red_view = resource.atomic &&
+        descriptor.Format() == Prospero::GpuEnumValue(Prospero::BufferFormat::k32UInt) &&
+        descriptor.DstSelXYZW() == DstSel(4,0,0,1);
+    const bool atomic_layout = !resource.atomic ||
+        (is_2d && resource.kind == ShaderRecompiler::IR::ResourceKind::StorageImageUint && resource.read && resource.written &&
+         descriptor.Format() == Prospero::GpuEnumValue(Prospero::BufferFormat::k32UInt) &&
+         descriptor.BaseLevel() == 0 && descriptor.LastLevel() == 0 && descriptor.MaxMip() == 0 &&
+         (descriptor.DstSelXYZW() == DstSel(4,5,6,7) || atomic_red_view) && descriptor.fields[6] == 0 && descriptor.fields[7] == 0);
+	return atomic_layout && (is_1d || is_2d || is_2d_array || is_3d) && supported_tile && supported_mip_view &&
 	       descriptor.BaseLevel() == descriptor.LastLevel() &&
 	       IsValidTextureMipView(descriptor) && descriptor.MinLod() == 0 &&
 	       descriptor.BaseArray5() == 0 && supported_swizzle && descriptor.BCSwizzle() == 0 &&
@@ -729,6 +739,7 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 		ValidateStorageImageResource(resource);
 	}
 	if (descriptor.IsNull()) {
+        if(resource.atomic)EXIT("null atomic storage image is unsupported\n");
 		// psemu tani: NULL texture descriptor -> BOS (dummy) texture baglanir,
 		// yani cizim yapilir ama GORUNMEZ olur. Onceki [TEX] tanisi address!=0
 		// kosulundaydi ve bu yolu HIC gormuyordu. Menu yazilari boyle
@@ -791,6 +802,11 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 	                     (address & (static_cast<uint64_t>(size.align) - 1u)) != 0);
 	if (storage) {
 		ValidateStorageTexture(resource, descriptor, size.size);
+        if(resource.atomic) {
+            const auto features=g_render_ctx->GetGraphicCtx()->GetFormatProperties(view_format).optimalTilingFeatures;
+            if(view_format!=vk::Format::eR32Uint || !(features & vk::FormatFeatureFlagBits::eStorageImageAtomic))
+                EXIT("atomic storage image requires native R32Uint storage-image-atomic support: format=%u\n",uint32_t(view_format));
+        }
 		g_render_ctx->GetBufferCache()->ValidateGpuAccess(address, size.size, resource.read,
 		                                                  resource.written);
 	}
@@ -1272,6 +1288,8 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 	}
 	descriptors.images.reserve(program.info.images.size());
 	for (uint32_t i = 0; i < program.info.images.size(); i++) {
+        if(program.info.images[i].atomic && program.stage!=ShaderType::Compute)
+            EXIT("native image atomics currently require Compute stage\n");
 		const auto kind = program.info.images[i].kind;
 		if ((kind == ShaderRecompiler::IR::ResourceKind::StorageImage ||
 		     kind == ShaderRecompiler::IR::ResourceKind::StorageImageUint) &&
@@ -1295,10 +1313,11 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
         static std::atomic_uint watched_edges{0};
         for(size_t i=0;i<snapshot.images.size();++i) {
             ShaderTextureResource sharp;CopyNativeDescriptor(snapshot.images[i],sharp.fields);
-            if(!VideoGraphProbeTouchesTarget(sharp.Base40(),1) || watched_edges.fetch_add(1)>=64)continue;
+            const auto allocation_id=descriptors.images[i].image ? descriptors.images[i].image->memory.unique_id : 0;
+            if((!VideoGraphProbeTouchesTarget(sharp.Base40(),1) && !VideoGraphProbeMatchesAllocation(allocation_id)) || watched_edges.fetch_add(1)>=64)continue;
             printf("[VIDEO-TARGET-IMAGE] shader=0x%016" PRIx64 " stage=%u slot=%zu address=0x%016" PRIx64
-                   " image=%p read=%u write=%u metadata_only=1\n",program.shader_hash,uint32_t(program.stage),i,
-                   sharp.Base40(),static_cast<void*>(descriptors.images[i].image),program.info.images[i].read,program.info.images[i].written);
+                   " image=%p allocation_id=%" PRIu64 " allocation_match=%u read=%u write=%u metadata_only=1\n",program.shader_hash,uint32_t(program.stage),i,
+                   sharp.Base40(),static_cast<void*>(descriptors.images[i].image),allocation_id,unsigned(VideoGraphProbeMatchesAllocation(allocation_id)),program.info.images[i].read,program.info.images[i].written);
         }
         for(size_t i=0;i<snapshot.buffers.size();++i) {
             ShaderBufferResource sharp;CopyNativeDescriptor(snapshot.buffers[i],sharp.fields);
