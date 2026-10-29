@@ -40,6 +40,13 @@ namespace Libs::Graphics {
 	EXIT("unsupported render state; details were printed above\n");
 }
 
+template <typename... Args>
+[[noreturn]] static void DepthFatalState(const HW::Context& hw, const char* format,
+                                       const Args&... args) {
+	depth_state_print(hw);
+	DepthFatal(format, args...);
+}
+
 static vk::StencilOp ConvertStencilOp(uint8_t value) {
 	switch (static_cast<Prospero::StencilOp>(value)) {
 		case Prospero::StencilOp::kKeep: return vk::StencilOp::eKeep;
@@ -150,20 +157,20 @@ void ResolveRenderDepthTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 	switch (view.type) {
 		case TargetViewType::Image2D: break;
 		case TargetViewType::Image2DArray:
-			DepthFatal("layered depth views are unsupported: base=%u count=%u", view.base_layer,
+			DepthFatalState(hw, "layered depth views are unsupported: base=%u count=%u", view.base_layer,
 			           view.layer_count);
 		case TargetViewType::Unsupported:
-			DepthFatal("invalid depth view: base=%u last=%u", z.depth_view.slice_start,
+			DepthFatalState(hw, "invalid depth view: base=%u last=%u", z.depth_view.slice_start,
 			           z.depth_view.slice_max);
 	}
 	// Prospero defines the compression-disable bits as tile writeback policy. Vulkan attachments
 	// expose the same logical depth/stencil values regardless of the driver's backing compression.
 	if ((stencil_active && !has_stencil) || rc.resummarize_enable || rc.copy_centroid ||
 	    rc.copy_sample != 0 || z.z_info.expclear_enabled || z.stencil_info.expclear_enabled ||
-	    z.z_info.embedded_sample_locations || z.z_info.partially_resident ||
-	    z.stencil_info.partially_resident || z.z_info.plane_compression != 0 ||
+	    !z.z_info.HasValidTextureCompatibility() || z.z_info.partially_resident ||
+	    z.stencil_info.partially_resident ||
 	    (z.z_info.num_samples != 0 && !msaa_compat) || z.z_info.num_mip_levels != 0 ||
-	    z.z_info.tile_mode_index != 0 || z.z_info.zrange_precision > 1 ||
+	    z.z_info.zrange_precision > 1 ||
 	    z.depth_view.current_mip_level != 0 || z.depth_info.addr5_swizzle_mask != 0 ||
 	    z.depth_info.array_mode != 0 || z.depth_info.pipe_config != 0 ||
 	    z.depth_info.bank_width != 0 || z.depth_info.bank_height != 0 ||
@@ -174,9 +181,7 @@ void ResolveRenderDepthTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 	    z.htile_surface.dst_outside_zero_to_one != 0 || z.z_read_base_addr == 0 ||
 	    z.z_write_base_addr != z.z_read_base_addr || (z.z_read_base_addr & 0xffffu) != 0 ||
 	    dc.zfunc > static_cast<uint8_t>(vk::CompareOp::eAlways)) {
-		depth_state_print(hw);
-		std::fflush(stdout);
-		DepthFatal("unsupported depth register state");
+		DepthFatalState(hw, "unsupported depth register state");
 	}
 	if (msaa_compat) {
 		static std::atomic<uint32_t> logged_fragments = 0;
@@ -190,12 +195,12 @@ void ResolveRenderDepthTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 		// Prospero defines Hi-Stencil as HTile-backed acceleration of the logical stencil plane.
 		// Keep the plane native in Vulkan while tracking HTile separately.
 		if (z.stencil_info.format != Prospero::GpuEnumValue(Prospero::StencilFormat::k8UInt) ||
-		    z.stencil_info.tile_mode_index != 0 || z.stencil_info.tile_split != 0 ||
-		    !htile_stencil_compat || z.stencil_info.texture_compatible_stencil ||
+		    !z.stencil_info.HasValidTextureCompatibility() || z.stencil_info.tile_split != 0 ||
+		    !htile_stencil_compat ||
 		    z.stencil_read_base_addr == 0 ||
 		    z.stencil_write_base_addr != z.stencil_read_base_addr ||
 		    (z.stencil_read_base_addr & 0xffffu) != 0 || z.depth_view.stencil_write_disable) {
-			DepthFatal("unsupported stencil attachment state");
+			DepthFatalState(hw, "unsupported stencil attachment state");
 		}
 		if (!z.stencil_info.tile_stencil_disable) {
 			static std::atomic_bool logged = false;
@@ -208,22 +213,22 @@ void ResolveRenderDepthTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 	} else if (z.stencil_read_base_addr != 0 || z.stencil_write_base_addr != 0 ||
 	           z.stencil_info.tile_mode_index != 0 || z.stencil_info.tile_split != 0 ||
 	           !htile_stencil_compat || z.stencil_info.texture_compatible_stencil) {
-		DepthFatal("stencil state without an active stencil attachment");
+		DepthFatalState(hw, "stencil state without an active stencil attachment");
 	}
 	if (has_htile) {
 		if (z.htile_data_base_addr == 0 || (z.htile_data_base_addr & 0x7fffu) != 0) {
-			DepthFatal("invalid HTile metadata address");
+			DepthFatalState(hw, "invalid HTile metadata address");
 		}
 		if (z.depth_view.slice_max >= 32) {
-			DepthFatal("HTile clear tracking supports at most 32 slices");
+			DepthFatalState(hw, "HTile clear tracking supports at most 32 slices");
 		}
 	} else if (z.htile_data_base_addr != 0) {
-		DepthFatal("HTile address without an enabled tile surface");
+		DepthFatalState(hw, "HTile address without an enabled tile surface");
 	}
 	const bool size_xy_valid = z.size.valid;
 	const bool wh_valid      = z.width_height_valid && z.width != 0 && z.height != 0;
 	if (!size_xy_valid && !wh_valid) {
-		DepthFatal("missing depth extent");
+		DepthFatalState(hw, "missing depth extent");
 	}
 	const uint32_t width  = size_xy_valid ? static_cast<uint32_t>(z.size.x_max) + 1u : z.width;
 	const uint32_t height = size_xy_valid ? static_cast<uint32_t>(z.size.y_max) + 1u : z.height;
@@ -231,17 +236,17 @@ void ResolveRenderDepthTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 	    (size_xy_valid && wh_valid && (width != z.width || height != z.height)) ||
 	    (!z.pitch_height_valid &&
 	     (z.pitch_div8_minus1 != 0 || z.height_div8_minus1 != 0 || z.slice_div64_minus1 != 0))) {
-		DepthFatal("inconsistent depth extent or encoded layout");
+		DepthFatalState(hw, "inconsistent depth extent or encoded layout");
 	}
 	const auto* policy = FindDepthFormatPolicy(z.z_info.format);
 	if (policy == nullptr) {
-		DepthFatal("unsupported depth/stencil format pair");
+		DepthFatalState(hw, "unsupported depth/stencil format pair");
 	}
 	const auto ideal_format = DepthAttachmentFormat(*policy, has_stencil);
 	r->format =
 	    ResolveHostDepthAttachmentFormat(g_render_ctx->GetGraphicCtx(), *policy, has_stencil);
 	if (r->format == vk::Format::eUndefined) {
-		DepthFatal("no host depth/stencil format supports required usage for %s",
+		DepthFatalState(hw, "no host depth/stencil format supports required usage for %s",
 		           VulkanToString(ideal_format).c_str());
 	}
 	const uint32_t guest_format = Prospero::GpuEnumValue(policy->guest_format);
@@ -251,7 +256,7 @@ void ResolveRenderDepthTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 	if (z.pitch_height_valid && ((static_cast<uint64_t>(z.pitch_div8_minus1) + 1u) * 8u != pitch ||
 	                             (static_cast<uint64_t>(z.height_div8_minus1) + 1u) * 8u !=
 	                                 ((static_cast<uint64_t>(height) + 7u) & ~7ull))) {
-		DepthFatal("encoded depth pitch or height mismatch");
+		DepthFatalState(hw, "encoded depth pitch or height mismatch");
 	}
 	const uint32_t block_width = bytes == 2 ? 256u : 128u;
 	const uint64_t padded_width =
@@ -260,7 +265,7 @@ void ResolveRenderDepthTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 	    (static_cast<uint64_t>(height) + 127u) & ~static_cast<uint64_t>(127u);
 	if (padded_width > UINT64_MAX / padded_height ||
 	    padded_width * padded_height > UINT64_MAX / bytes) {
-		DepthFatal("depth footprint overflow");
+		DepthFatalState(hw, "depth footprint overflow");
 	}
 	const uint64_t expected_size = padded_width * padded_height * bytes;
 	TileSizeAlign  depth_size {};
@@ -272,7 +277,7 @@ void ResolveRenderDepthTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 		    depth_size.align != 65536 || depth_size.size != expected_size ||
 		    (has_stencil != (stencil_size.align == 65536 && stencil_size.size != 0)) ||
 		    (has_htile != (htile_size.align == 32768 && htile_size.size != 0))) {
-			DepthFatal("unsupported depth/stencil/HTile footprint");
+			DepthFatalState(hw, "unsupported depth/stencil/HTile footprint");
 		}
 	} else {
 		TileGetTextureTotalSize(guest_format, width, height, 1, pitch, 1,
@@ -283,7 +288,7 @@ void ResolveRenderDepthTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 	    depth_size.size != expected_size ||
 	    (z.pitch_height_valid &&
 	     (static_cast<uint64_t>(z.slice_div64_minus1) + 1u) * 64u != expected_size)) {
-		DepthFatal("depth footprint mismatch: extent=%ux%u pitch=%u expected=0x%016" PRIx64
+		DepthFatalState(hw, "depth footprint mismatch: extent=%ux%u pitch=%u expected=0x%016" PRIx64
 		           " calculated=0x%016" PRIx64 "/0x%016" PRIx64
 		           " encoded_valid=%u encoded=0x%016" PRIx64,
 		           width, height, pitch, expected_size, depth_size.size, depth_size.align,
@@ -293,7 +298,7 @@ void ResolveRenderDepthTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 	if (depth_size.size > UINT64_MAX / view.image_layers ||
 	    stencil_size.size > UINT64_MAX / view.image_layers ||
 	    htile_size.size > UINT64_MAX / view.image_layers) {
-		DepthFatal("layered depth footprint overflow");
+		DepthFatalState(hw, "layered depth footprint overflow");
 	}
 	const auto depth_backing_size   = depth_size.size * view.image_layers;
 	const auto stencil_backing_size = stencil_size.size * view.image_layers;
@@ -301,7 +306,7 @@ void ResolveRenderDepthTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 	if (depth_backing_size > TRACKER_ADDRESS_SIZE - z.z_read_base_addr ||
 	    (has_stencil && stencil_backing_size > TRACKER_ADDRESS_SIZE - z.stencil_read_base_addr) ||
 	    (has_htile && htile_backing_size > TRACKER_ADDRESS_SIZE - z.htile_data_base_addr)) {
-		DepthFatal("layered depth backing range is invalid");
+		DepthFatalState(hw, "layered depth backing range is invalid");
 	}
 	r->htile                = has_htile;
 	r->width                = width;
@@ -317,7 +322,7 @@ void ResolveRenderDepthTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 		cache->RegisterMeta(r->htile_buffer_vaddr, r->htile_buffer_size, view.image_layers);
 	}
 	if (has_htile && rc.depth_clear_enable && !cache->ClearMeta(z.htile_data_base_addr)) {
-		DepthFatal("failed to acquire HTile metadata for a depth clear");
+		DepthFatalState(hw, "failed to acquire HTile metadata for a depth clear");
 	}
 	const bool meta_clear =
 	    has_htile && cache->IsMetaCleared(z.htile_data_base_addr, z.depth_view.slice_start);
@@ -345,7 +350,7 @@ void ResolveRenderDepthTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 		    (dc.backface_enable &&
 		     UsesStencilOpValue(sc.stencil_fail_bf, sc.stencil_zpass_bf, sc.stencil_zfail_bf) &&
 		     sm.stencil_opval_bf != sm.stencil_testval_bf)) {
-			DepthFatal("unsupported stencil compare or replacement state");
+			DepthFatalState(hw, "unsupported stencil compare or replacement state");
 		}
 		r->stencil_static_front = {
 		    ConvertStencilOp(sc.stencil_fail), ConvertStencilOp(sc.stencil_zpass),
@@ -401,8 +406,20 @@ void ResolveRenderDepthTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 	r->vulkan_view   = cache->GetDepthTargetAttachmentView(
 	    g_render_ctx->GetGraphicCtx(), r->vulkan_buffer, view.base_layer, view.layer_count);
 	if (meta_clear && !cache->TouchMeta(z.htile_data_base_addr, z.depth_view.slice_start, false)) {
-		DepthFatal("failed to consume HTile clear state");
+		DepthFatalState(hw, "failed to consume HTile clear state");
 	}
+	const uint32_t texture_compatibility = (z.z_info.plane_compression != 0 ? 1u : 0u) |
+	    (has_stencil && z.stencil_info.texture_compatible_stencil ? 2u : 0u);
+	if (texture_compatibility != 0) {
+		static std::atomic<uint32_t> logged {0};
+		const uint32_t bit = 1u << (texture_compatibility + 4u * z.z_info.format);
+		if ((logged.fetch_or(bit, std::memory_order_relaxed) & bit) == 0) {
+			std::printf("[DEPTH-TEXTURE-COMPAT] resolved=attachment depth=%u stencil=%u format=%u address=0x%016" PRIx64 "\n",
+			            texture_compatibility & 1u, (texture_compatibility >> 1u) & 1u,
+			            z.z_info.format, z.z_read_base_addr);
+		}
+	}
+
 }
 
 void MarkRenderTargetGpuWritten(const RenderDepthInfo& target) {

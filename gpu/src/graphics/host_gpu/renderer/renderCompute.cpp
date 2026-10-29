@@ -62,22 +62,24 @@ bool ResolveHtileClearTarget(const HW::DepthRenderTarget& z, uint64_t descriptor
 	const auto* depth_policy = FindDepthFormatPolicy(z.z_info.format);
 	const bool  msaa_compat  = depth_msaa_single_sample_compatible(z.z_info.num_samples);
 	const bool  supported_depth_state =
-	    z.z_info.tile_surface_enable && depth_policy != nullptr && z.z_info.tile_mode_index == 0 &&
+	    z.z_info.tile_surface_enable && depth_policy != nullptr && z.z_info.HasValidTextureCompatibility() &&
 	    (z.z_info.num_samples == 0 || msaa_compat) && z.z_info.zrange_precision <= 1 &&
-	    !z.z_info.expclear_enabled && !z.z_info.embedded_sample_locations &&
+	    !z.z_info.expclear_enabled &&
 	    !z.z_info.partially_resident && z.z_info.num_mip_levels == 0 &&
-	    z.z_info.plane_compression == 0 && z.depth_view.current_mip_level == 0 &&
+	    z.depth_view.current_mip_level == 0 &&
 	    z.depth_view.slice_start == 0 && z.depth_view.slice_max == 0 &&
 	    z.depth_info.addr5_swizzle_mask == 0 && z.depth_info.array_mode == 0 &&
 	    z.depth_info.pipe_config == 0 && z.depth_info.bank_width == 0 &&
 	    z.depth_info.bank_height == 0 && z.depth_info.macro_tile_aspect == 0 &&
 	    z.depth_info.num_banks == 0;
 	const bool supported_stencil_state =
-	    z.stencil_info.tile_mode_index == 0 && z.stencil_info.tile_split == 0 &&
+	    z.stencil_info.HasValidTextureCompatibility() &&
+	    (has_stencil || !z.stencil_info.texture_compatible_stencil) &&
+	    z.stencil_info.tile_split == 0 &&
 	    !z.stencil_info.expclear_enabled &&
 	    depth_htile_stencil_acceleration_compatible(has_stencil, true,
 	                                                z.stencil_info.tile_stencil_disable) &&
-	    !z.stencil_info.texture_compatible_stencil && !z.stencil_info.partially_resident &&
+	    !z.stencil_info.partially_resident &&
 	    (!has_stencil ||
 	     (z.stencil_info.format == Prospero::GpuEnumValue(Prospero::StencilFormat::k8UInt) &&
 	      !z.depth_view.stencil_write_disable));

@@ -22,6 +22,12 @@ namespace Libs::Graphics {
 foreach($signature in @('template <typename... Args>','static void ZPrint(','static void RcPrint(','static void DPrint(','void depth_state_print(')) {
  $fixture+="`n"+(Extract $signature)+"`n"
 }
+$depthSource=[IO.File]::ReadAllText("$root\gpu\src\graphics\host_gpu\renderer\depthRenderTarget.cpp")
+$wrapperStart=$depthSource.IndexOf('template <typename... Args>')
+$wrapperEnd=$depthSource.IndexOf("`n}",$wrapperStart)
+if($wrapperStart -lt 0 -or $wrapperEnd -lt 0){throw 'Missing production fatal-state bridge'}
+$fixture+='[[noreturn]] static void DepthFatal(const char*, ...) {throw std::runtime_error("expected terminal failure");}'+"`n"
+$fixture+=$depthSource.Substring($wrapperStart,$wrapperEnd+2-$wrapperStart)+"`n"
 $fixture+=@'
 }
 int main() {
@@ -31,7 +37,12 @@ int main() {
  z.z_info.num_mip_levels=3;
  z.z_read_base_addr=0x123456780000ull;
  hw.SetDepthRenderTarget(z);
- Libs::Graphics::depth_state_print(hw);
+ try {Libs::Graphics::DepthFatalState(hw, "fixture");}
+ catch(const std::runtime_error& e) {
+  if(std::string(e.what())=="expected terminal failure") return 0;
+  throw;
+ }
+ return 1;
 }
 '@
 $cpp=Join-Path $out 'depth_fault_print_test.cpp'

@@ -141,6 +141,13 @@ struct DepthZInfo {
 	bool     partially_resident        = false;
 	uint8_t  num_mip_levels            = 0;
 	uint8_t  plane_compression         = 0;
+
+	// PS5 0x02900800 spans these legacy-named fields; it is one canonical
+	// texture-compatible depth encoding, not three independent layout options.
+	[[nodiscard]] constexpr bool HasValidTextureCompatibility() const {
+		return (tile_mode_index == 0 && !embedded_sample_locations && plane_compression == 0) ||
+		       (tile_mode_index == 1 && embedded_sample_locations && plane_compression == 5);
+	}
 };
 
 struct DepthStencilInfo {
@@ -151,6 +158,12 @@ struct DepthStencilInfo {
 	bool     tile_stencil_disable       = false;
 	bool     texture_compatible_stencil = false;
 	bool     partially_resident         = false;
+
+	// PS5 0x00100800 is the corresponding canonical stencil encoding.
+	[[nodiscard]] constexpr bool HasValidTextureCompatibility() const {
+		return (tile_mode_index == 0 && !texture_compatible_stencil) ||
+		       (tile_mode_index == 1 && texture_compatible_stencil);
+	}
 };
 
 struct DepthRenderTargetDepthInfo {
