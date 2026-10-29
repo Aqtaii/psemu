@@ -1,4 +1,6 @@
+param([string]$AtomicEmitterSpirv='')
 $ErrorActionPreference='Stop'
+if($AtomicEmitterSpirv -ne ''){$AtomicEmitterSpirv=(Resolve-Path -LiteralPath $AtomicEmitterSpirv).Path}
 $root=(Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $out=Join-Path $root 'build\native-atomic-tests'
 $helper=[IO.File]::ReadAllText("$root\gpu\src\graphics\shader\recompiler\spirvEmitter\spirvEmitterImageHelpers.cpp")
@@ -27,6 +29,10 @@ try {
  if($LASTEXITCODE){throw 'Atomic storage SPIR-V validation failed'}
  & clang-cl /nologo /std:c++20 /O2 /EHsc /MD "/I$env:VULKAN_SDK\Include" storage_mip_gpu_production.cpp /Fe:storage_mip_gpu_test.exe /link "/LIBPATH:$env:VULKAN_SDK\Lib" vulkan-1.lib
  if($LASTEXITCODE){throw 'Storage mip GPU test compilation failed'}
+ if($AtomicEmitterSpirv -ne '') {
+  & .\storage_mip_gpu_test.exe $AtomicEmitterSpirv 0 atomic-emitter
+  if($LASTEXITCODE){throw 'Production emitter image atomic Vulkan test failed'}
+ }
  & .\storage_mip_gpu_test.exe storage_atomic_gpu.spv 0 atomic
  if($LASTEXITCODE){throw 'R32Uint atomic storage Vulkan test failed'}
  foreach($target in @(0,1,7)) {

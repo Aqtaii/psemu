@@ -14,7 +14,7 @@
 #define VKOK(x) CHECK((x)==VK_SUCCESS)
 // PRODUCTION_INVERSE
 int main(int argc,char** argv) {try {
- CHECK(argc>=2 && argc<=4);const bool atomic_image=argc==4 && std::strcmp(argv[3],"atomic")==0;const bool packed=argc==4 && std::strcmp(argv[3],"packed")==0;const bool unorm=argc==4 && std::strcmp(argv[3],"unorm-linear")==0;const bool full_tail=argc==4 && std::strcmp(argv[3],"rgba16-tail")==0;const bool rgba16=unorm || full_tail || (argc==4 && std::strcmp(argv[3],"rgba16")==0);const uint32_t target=argc>=3?uint32_t(std::strtoul(argv[2],nullptr,10)):0;CHECK(target<8);
+ CHECK(argc>=2 && argc<=4);const bool atomic_emitter=argc==4 && std::strcmp(argv[3],"atomic-emitter")==0;const bool atomic_image=atomic_emitter || (argc==4 && std::strcmp(argv[3],"atomic")==0);const bool packed=argc==4 && std::strcmp(argv[3],"packed")==0;const bool unorm=argc==4 && std::strcmp(argv[3],"unorm-linear")==0;const bool full_tail=argc==4 && std::strcmp(argv[3],"rgba16-tail")==0;const bool rgba16=unorm || full_tail || (argc==4 && std::strcmp(argv[3],"rgba16")==0);const uint32_t target=argc>=3?uint32_t(std::strtoul(argv[2],nullptr,10)):0;CHECK(target<8);
  std::ifstream input(argv[1],std::ios::binary|std::ios::ate);CHECK(input);
  size_t shader_bytes=size_t(input.tellg());CHECK(shader_bytes && shader_bytes%4==0);
  std::vector<uint32_t> code(shader_bytes/4);input.seekg(0);input.read(reinterpret_cast<char*>(code.data()),shader_bytes);CHECK(input);
@@ -30,6 +30,16 @@ int main(int argc,char** argv) {try {
  float priority=1;VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};qci.queueFamilyIndex=family;qci.queueCount=1;qci.pQueuePriorities=&priority;
  VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};dci.queueCreateInfoCount=1;dci.pQueueCreateInfos=&qci;
  VkPhysicalDeviceFeatures enabled{};
+ if(atomic_emitter){
+  VkPhysicalDeviceFeatures supported{};vkGetPhysicalDeviceFeatures(physical,&supported);
+  auto capability=[&](uint32_t value){for(size_t i=5;i<code.size();){const auto count=code[i]>>16;CHECK(count && count<=code.size()-i);if((code[i]&65535)==17 && count==2 && code[i+1]==value)return true;i+=count;}return false;};
+  if(capability(11)){CHECK(supported.shaderInt64);enabled.shaderInt64=VK_TRUE;}
+  if(capability(10)){CHECK(supported.shaderFloat64);enabled.shaderFloat64=VK_TRUE;}
+  if(capability(55)){CHECK(supported.shaderStorageImageReadWithoutFormat);enabled.shaderStorageImageReadWithoutFormat=VK_TRUE;}
+  if(capability(56)){CHECK(supported.shaderStorageImageWriteWithoutFormat);enabled.shaderStorageImageWriteWithoutFormat=VK_TRUE;}
+  dci.pEnabledFeatures=&enabled;
+ }
+
  if(packed || rgba16){VkPhysicalDeviceFeatures supported{};vkGetPhysicalDeviceFeatures(physical,&supported);CHECK(supported.shaderStorageImageWriteWithoutFormat);enabled.shaderStorageImageWriteWithoutFormat=VK_TRUE;dci.pEnabledFeatures=&enabled;}
  VkDevice device;VKOK(vkCreateDevice(physical,&dci,nullptr,&device));VkQueue queue;vkGetDeviceQueue(device,family,0,&queue);
  VkPhysicalDeviceMemoryProperties memory_properties{};vkGetPhysicalDeviceMemoryProperties(physical,&memory_properties);
@@ -85,10 +95,11 @@ int main(int argc,char** argv) {try {
  vkCmdCopyImageToBuffer(command,image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,buffer,levels,copies.data());
  VkMemoryBarrier host{VK_STRUCTURE_TYPE_MEMORY_BARRIER};host.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;host.dstAccessMask=VK_ACCESS_HOST_READ_BIT;vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&host,0,nullptr,0,nullptr);VKOK(vkEndCommandBuffer(command));
  VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};submit.commandBufferCount=1;submit.pCommandBuffers=&command;VKOK(vkQueueSubmit(queue,1,&submit,VK_NULL_HANDLE));VKOK(vkQueueWaitIdle(queue));
- std::vector<bool> visible(bytes/4,false);size_t changed=0;std::vector<bool> atomic_returns(atomic_image?size_t(width)*height:0,false);
- for(uint32_t l=0;l<levels;++l)for(uint32_t y=0;y<copies[l].imageExtent.height;++y)for(uint32_t x=0;x<copies[l].imageExtent.width;++x){size_t index=offsets[l]/4+(y*pitches[l]+x)*words_per_pixel;for(uint32_t c=0;c<words_per_pixel;c++){visible[index+c]=true;if(atomic_image){const auto value=pixels[index+c];if(index==0)CHECK(value==width*height);else{CHECK(value<width*height);CHECK(!atomic_returns[value]);atomic_returns[value]=true;}}else{const uint32_t written=rgba16?(unorm?0xffff0000u:(c==0?0x38003400u:0x3c003c00u)):(packed?((15u<<5u)<<22u)|((14u<<6u)<<11u)|(13u<<6u):0x3e800000u);CHECK(pixels[index+c]==(l==target?written:expected[index+c]));}}changed+=l==target;}
+ std::vector<bool> visible(bytes/4,false);size_t changed=0;std::vector<bool> atomic_returns(atomic_image&&!atomic_emitter?size_t(width)*height:0,false);
+ for(uint32_t l=0;l<levels;++l)for(uint32_t y=0;y<copies[l].imageExtent.height;++y)for(uint32_t x=0;x<copies[l].imageExtent.width;++x){size_t index=offsets[l]/4+(y*pitches[l]+x)*words_per_pixel;for(uint32_t c=0;c<words_per_pixel;c++){visible[index+c]=true;if(atomic_image){const auto value=pixels[index+c];if(index==0){const uint32_t count=atomic_emitter?((width+7)/8)*((height+7)/8)*64:width*height;if(value!=count)std::printf("[ATOMIC-COUNT] actual=%u expected=%u\n",value,count);CHECK(value==count);}else if(atomic_emitter)CHECK(value==0);else{CHECK(value<width*height);CHECK(!atomic_returns[value]);atomic_returns[value]=true;}}else{const uint32_t written=rgba16?(unorm?0xffff0000u:(c==0?0x38003400u:0x3c003c00u)):(packed?((15u<<5u)<<22u)|((14u<<6u)<<11u)|(13u<<6u):0x3e800000u);CHECK(pixels[index+c]==(l==target?written:expected[index+c]));}}changed+=l==target;}
  for(size_t i=0;i<visible.size();++i)if(!visible[i])CHECK(pixels[i]==expected[i]);
- if(atomic_image){CHECK(std::count(atomic_returns.begin(),atomic_returns.end(),true)==size_t(width)*height-1);std::printf("[STORAGE-ATOMIC-GPU] device=%s R32Uint2D counter=%u unique_old_values=%u padding_preserved=1 fixture_shader=GLSL Astro=not-executed\n",properties.deviceName,width*height,width*height-1);}
+ if(atomic_emitter)std::printf("[STORAGE-ATOMIC-PRODUCTION-GPU] device=%s R32Uint2D R001 counter=%u other_texels_unchanged=1 padding_preserved=1 production_emitter=1 Astro=not-executed\n",properties.deviceName,((width+7)/8)*((height+7)/8)*64);
+ else if(atomic_image){CHECK(std::count(atomic_returns.begin(),atomic_returns.end(),true)==size_t(width)*height-1);std::printf("[STORAGE-ATOMIC-GPU] device=%s R32Uint2D counter=%u unique_old_values=%u padding_preserved=1 fixture_shader=GLSL Astro=not-executed\n",properties.deviceName,width*height,width*height-1);}
  else if(packed)std::printf("[STORAGE-PACKED-GPU] device=%s R11G11B10 RGB1 identity_storage formatless_write=1 native_clear=checked sampled_RGB1=checked written_pixels=%zu packed_bits=checked padding_preserved=1 Astro=not-executed\n",properties.deviceName,changed);
  else if(rgba16)std::printf("[STORAGE-RGBA16-MIP-GPU] device=%s format=%s target_mip=%u written_pixels=%zu backing_levels=%u unchanged_mips=%u sampled_levels=%u identity_RGBA=checked component_bits=checked padding_preserved=1 Astro=not-executed\n",properties.deviceName,unorm?"UNorm-linear":"Sfloat",target,changed,levels,levels-1,sampled_levels);
  else std::printf("[STORAGE-MIP-GPU] device=%s R32Float RRR1 source=%d target_mip=%u written_pixels=%zu unchanged_mips=7 sampled_mips=8 sampled_RRR1=checked padding_preserved=1 Astro=not-executed\n",properties.deviceName,source,target,changed);

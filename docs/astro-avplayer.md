@@ -80,3 +80,16 @@ The next native candidate permits atomics only in Compute on unsigned2D R32Uint 
 CPU tests pass for the exact captured2048x64/tile27/R001 descriptor, identity, and malformed format/mip/metadata/swizzle cases. Production native-mesh emission and1D storage regressions pass. A standalone GLSL Vulkan fixture on Arc B580 atomically increments one R32Uint image counter129600 times, checks129599 distinct returned old values, checks all other image texels and preserves padding. Existing R32Float mip, packed RGB and RGBA16/UNorm GPU cases also pass, with no Khronos validation errors/warnings in the complete log. This is native API evidence with a fixture shader, not an actual Astro atomic dispatch. The full local Windows candidate and matching map build successfully; real Astro validation remains pending.
 
 The latest video-target observer is no longer limited to the early64..128 movie draws. It uses the existing unique VMA allocation ID, refreshes that identity only from actual video producers, and disables the watch when that allocation is actually destroyed. No native object is kept alive by diagnostics. Image-binding and transfer logs include allocation identities; all shader slots and DMA address intersections remain bounded separately. This avoids treating reused opaque handles as the captured image while allowing a delayed title compositor to be observed. It does not alter copies, pixels, ownership or presentation.
+
+
+### Production emitter image-atomic GPU regression
+
+`test_atomic_image_emitter.ps1` now produces a small synthetic Compute IR program through the real `Spirv::EmitProgram` path, validates its SPIR-V, checks for both the image atomic instruction and an AcquireRelease/ImageMemory barrier, and optionally executes the result through the native Vulkan fixture. It uses an R32Uint/R001 resource and no game data. `-GpuLibrary` optionally links a current CMake GPU library to avoid recompiling the same production source set; without it the script compiles those sources directly.
+
+On Arc B580, the production-emitted shader performed130560 increments to one image texel (all60x34 groups of64 invocations), preserving every other texel and padding. The separate GLSL fixture still performs129600 increments because it clips the two dispatch-edge rows, and checks129599 unique returned old values. Both production and fixture modules pass SPIR-V validation; the complete GPU run reports no Khronos warnings/errors. Existing mip/packed/RGBA16 storage cases remain passing. This verifies production image-atomic emission plus native execution with synthetic IR/resources, not the complete8512-byte Astro kernel or final game presentation.
+
+```powershell
+.\tools\scripts\test_atomic_image_emitter.ps1 -GpuLibrary D:\proje\psemu\build-local\gpu\psemu_gpu.lib -RunGpu
+```
+
+The live30f3425 video watch was independently verified read-only from its matching map: nonzero allocation ID26642, watched guest base0x2659e4e0000,33177600 bytes. No watched consumer had been logged at that observation. This rules out an inactive zero-ID observer at that moment; it does not prove absence of all future consumers or transfer paths.
