@@ -1350,7 +1350,7 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
          ResolveStorageImageOverlaps(command,ctx,backing,false);
          if(command->GetRecordingGeneration()!=recording_generation)return nullptr;
          if(needs_array_drain)printf("[STORAGE-ARRAY-EXPAND] address=0x%016" PRIx64
-          " old_bytes=0x%016" PRIx64 " requested_bytes=0x%016" PRIx64 " gpu_prefix_published=1 tail_from_coherent_source=1\n",
+          " old_bytes=0x%016" PRIx64 " requested_bytes=0x%016" PRIx64 " gpu_prefix_published=1 tail_not_overwritten=1\n",
           info.address,info.size/2,info.size);
          static std::atomic_uint sampled_reconstruct_logs{0};
          if(sampled_reconstruct_logs.fetch_add(1)<8)printf("[STORAGE-SAMPLED-RECONSTRUCT] requested=0x%016" PRIx64

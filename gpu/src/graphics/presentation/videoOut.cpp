@@ -22,6 +22,8 @@
 #include "libs/libs.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cstdlib>
 #include <limits>
 #include <list>
 #include <vector>
@@ -802,6 +804,10 @@ void FlipQueue::Prepare(uint64_t request_id, Graphics::CommandBuffer* buffer) {
 	Graphics::VideoOutVulkanImage* source  = nullptr;
 	uint32_t                       width   = 0;
 	uint32_t                       height  = 0;
+    int selected_index=-1;
+    bool fallback_to_zero=false;
+    int requested_gpu_written=-1;
+    uint64_t source_address=0,source_allocation_id=0;
 	{
 		Common::LockGuard lock(cfg->mutex);
 		if (cfg->closing) {
@@ -812,6 +818,7 @@ void FlipQueue::Prepare(uint64_t request_id, Graphics::CommandBuffer* buffer) {
 			height = cfg->height;
 			if (cfg->buffers[0].buffer_vulkan != nullptr) {
 				source = cfg->buffers[0].buffer_vulkan;
+                selected_index=0;
 			}
 		} else {
 			if (cfg->unregistering[index]) {
@@ -820,11 +827,27 @@ void FlipQueue::Prepare(uint64_t request_id, Graphics::CommandBuffer* buffer) {
 			}
 			source = cfg->buffers[index].buffer_vulkan;
 			bool is_written = (source != nullptr) && Graphics::g_render_ctx->GetTextureCache()->IsGpuWritten(source);
+            requested_gpu_written=int(is_written);
+            selected_index=index;
 			if ((source == nullptr || (index != 0 && !is_written)) && cfg->buffers[0].buffer_vulkan != nullptr) {
 				source = cfg->buffers[0].buffer_vulkan;
+                selected_index=0;fallback_to_zero=true;
 			}
 		}
+        if(source!=nullptr) {
+            source_address=reinterpret_cast<uint64_t>(cfg->buffers[selected_index].buffer);
+            source_allocation_id=source->memory.unique_id;
+        }
 	}
+    static const bool source_probe=[]{const char* v=std::getenv("PSEMU_ASTRO_VIDEO_BINDING_PROBE");return v!=nullptr && v[0]!='0';}();
+    if(source_probe) {
+        static std::atomic_uint source_flips{0},source_records{0};
+        const auto ordinal=source_flips.fetch_add(1,std::memory_order_relaxed);
+        if((ordinal<8 || ordinal%256==0) && source_records.fetch_add(1,std::memory_order_relaxed)<32)
+            printf("[VIDEOOUT-SOURCE] flip=%u request=%d selected=%d special=%u buffer0_fallback=%u requested_gpu_written=%d address=0x%016" PRIx64
+                   " allocation_id=%" PRIu64 " source_present=%u metadata_only=1\n",ordinal,index,selected_index,unsigned(special),unsigned(fallback_to_zero),requested_gpu_written,
+                   source_address,source_allocation_id,unsigned(source!=nullptr));
+    }
 	auto* frame = (source != nullptr) ? Graphics::WindowPrepareFrame(buffer, source)
 	                                  : Graphics::WindowPrepareBlankFrame(buffer, width, height,
 	                                                                     index == VIDEO_OUT_BUFFER_INDEX_BLACK);
