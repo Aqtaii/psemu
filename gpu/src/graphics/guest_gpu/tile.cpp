@@ -2066,6 +2066,18 @@ void TileConvertTiledToLinearStandard4KB(void* dst, const void* src, uint32_t fo
 	}
 }
 
+void TileConvertLinearToTiledStandard4KB64(void* dst,const void* src,uint32_t width,
+ uint32_t height,uint32_t pitch,uint64_t size) {
+ if(!dst || !src || width!=32 || height!=32 || pitch!=32 || size!=8192)
+  EXIT("unsupported Standard4KB64 storage readback shape\n");
+ // Use the same established Standard4KB byte-address function as the detiler.
+ // Every byte of these two complete blocks is written; no padding is synthesized.
+ for(uint32_t y=0;y<32;++y)for(uint32_t x=0;x<32;++x) {
+  const uint64_t tiled=uint64_t(y/16)*4096+Gen5Standard4KBOffsetInBlock(x,y%16,8);
+  std::memcpy(static_cast<uint8_t*>(dst)+tiled,static_cast<const uint8_t*>(src)+(uint64_t(y)*32+x)*8,8);
+ }
+}
+
 void TileConvertTiledToLinearStandard4KB3D(void* dst, const void* src, uint32_t format,
                                            uint32_t width, uint32_t height, uint32_t depth,
                                            uint32_t pitch, uint64_t dst_slice_stride,

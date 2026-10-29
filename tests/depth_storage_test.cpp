@@ -2,6 +2,38 @@
 static void Require(bool ok,std::source_location where=std::source_location::current()) {if(!ok) {std::fprintf(stderr,"Regression failed at %s:%u\n",where.file_name(),where.line());throw std::runtime_error("regression failed");}}
 int main() {
  {
+  ImageInfo info{};info.address=0x15f28f2e000;info.size=8192;info.format=71;info.tile=5;info.type=9;
+  info.width=info.height=info.pitch=32;info.depth=1;info.base_level=0;info.levels=info.view_levels=1;info.swizzle=0xfac;
+  if(!IsSupportedStandard4KBRgba16Storage(info))return 201;
+  for(int f=0;f<12;++f){auto bad=info;
+   if(f==0)bad.width=31;if(f==1)bad.height=33;if(f==2)bad.pitch=64;if(f==3)bad.size=8191;
+   if(f==4)bad.depth=2;if(f==5)bad.type=13;if(f==6)bad.tile=1;if(f==7)bad.format=20;
+   if(f==8)bad.levels=2;if(f==9)bad.base_array=1;if(f==10)bad.swizzle=0x204;if(f==11)++bad.address;
+   if(IsSupportedStandard4KBRgba16Storage(bad))return 202;
+  }
+  ShaderTextureResource sharp{};const uint32_t words[]={0x5f28f2e0,0xc4700001,0x0007c007,0x90500fac,0,0x00700000,0,0};
+  std::memcpy(sharp.fields,words,sizeof(words));
+  ShaderRecompiler::IR::ImageResource resource{};resource.kind=ShaderRecompiler::IR::ResourceKind::StorageImage;
+  resource.dimension=ShaderRecompiler::Decoder::ImageDimension::Dim2D;resource.written=true;
+  if(!IsSupportedStorageTextureDescriptor(resource,sharp) || !IsSupportedStorageTextureEncoding(sharp))return 203;
+  resource.read=true;if(IsSupportedStorageTextureDescriptor(resource,sharp))return 204;resource.read=false;
+  resource.atomic=true;if(IsSupportedStorageTextureDescriptor(resource,sharp))return 205;resource.atomic=false;
+  auto bad=sharp;bad.fields[6]=1;if(IsSupportedStorageTextureEncoding(bad))return 206;
+  std::vector<uint64_t> linear(1024),guest(1024+8,0xdeadbeefcafebabeull),decoded(1024+8,0xdeadbeefcafebabeull);
+  for(uint32_t i=0;i<1024;++i)linear[i]=0x3c00380034003000ull^uint64_t(i)*0x0102040810204081ull;
+  TileConvertLinearToTiledStandard4KB64(guest.data(),linear.data(),32,32,32,8192);
+  DetileStandard4KBTyped<uint64_t>(decoded.data(),guest.data(),32,32,32,32,5,4,8192,8192,0,0);
+  for(uint32_t i=0;i<1024;++i)if(decoded[i]!=linear[i])return 207;
+  for(uint32_t i=1024;i<1032;++i)if(guest[i]!=0xdeadbeefcafebabeull || decoded[i]!=0xdeadbeefcafebabeull)return 208;
+  const uint32_t xy[][3]={{1,0,8},{2,0,64},{4,0,128},{8,0,512},{16,0,2048},{0,1,16},{0,2,32},{0,4,256},{0,8,1024},{0,16,4096},{31,31,8184}};
+  for(const auto& q:xy)if(guest[q[2]/8]!=linear[q[1]*32+q[0]])return 209;
+  const auto before=guest;bool rejected=false;
+  try{TileConvertLinearToTiledStandard4KB64(guest.data(),linear.data(),31,32,32,8192);}catch(const std::runtime_error&){rejected=true;}
+  if(!rejected || guest!=before)return 210;
+  std::puts("[STANDARD4KB-STORAGE] captured32x32 RGBA16F policy=passed all1024_texels=bit_exact golden_block_addresses=passed guards=preserved");
+ }
+
+ {
   ImageInfo old{};old.address=0x2657b990000ull;old.size=0x1900000;old.format=71;
   old.width=old.pitch=10240;old.height=320;old.depth=1;old.type=13;old.tile=0;old.swizzle=0xfac;
   auto expanded=old;expanded.depth=2;expanded.size*=2;

@@ -492,6 +492,16 @@ using DepthStorageMipLayout=std::array<DepthStorageMip,16>;
  return PlanDepthStorageMipLayout(info,nullptr);
 }
 
+// Captured single-mip RGBA16F Standard4KB backing: two complete 32x16 blocks.
+[[nodiscard]] inline bool IsSupportedStandard4KBRgba16Storage(const ImageInfo& info) {
+ return info.address!=0 && (info.address&0xfffu)==0 && info.size==8192 &&
+        info.size<=UINT64_MAX-info.address && info.format==Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float) &&
+        info.tile==Prospero::GpuEnumValue(Prospero::TileMode::kStandard4KB) &&
+        info.type==Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) &&
+        info.width==32 && info.height==32 && info.pitch==32 && info.depth==1 &&
+        info.base_level==0 && info.levels==1 && info.view_levels==1 && info.base_array==0 && info.swizzle==0xfac;
+}
+
 [[nodiscard]] inline constexpr bool IsTiledRenderTarget(const RenderTargetInfo& info) noexcept {
 	return info.tile_mode == Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) ||
 	       IsSupportedStandard64RenderTarget(info);

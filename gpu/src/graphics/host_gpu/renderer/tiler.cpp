@@ -182,6 +182,10 @@ void TileDepthStorageMipsPreservePadding(void* dst,const void* src,const ImageIn
 }
 
 void Tiler::TileImage(void* dst, const void* src, const ImageInfo& info) const {
+    if(IsSupportedStandard4KBRgba16Storage(info)) {
+        TileConvertLinearToTiledStandard4KB64(dst,src,info.width,info.height,info.pitch,info.size);
+        return;
+    }
 	if (IsSupportedDepthStorageBacking(info)) {
         std::memset(dst,0,info.size);
         TileDepthStorageMipsPreservePadding(dst,src,info);

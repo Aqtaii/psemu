@@ -496,13 +496,17 @@ struct TextureCache::ReadbackWorker {
         const bool depth_storage=storage && IsSupportedDepthStorageBacking(cached.info);
         const bool color_storage=storage && IsSupportedColorStorageBacking(cached.info);
         const bool linear_array=storage && cached.info.depth==1 && IsLinearRgba16ArrayBacking(cached.info);
+        const bool standard4kb_storage=storage && IsSupportedStandard4KBRgba16Storage(cached.info);
+        if(standard4kb_storage && (cached.image==nullptr || cached.image->format!=vk::Format::eR16G16B16A16Sfloat ||
+           cached.image->layers!=1 || cached.image->mip_levels!=1 || cached.image->extent.width!=32 || cached.image->extent.height!=32))
+            EXIT("TextureCache: Standard4KB RGBA16F native shape is inconsistent\n");
         if(linear_array && (cached.image==nullptr || cached.image->format!=vk::Format::eR16G16B16A16Sfloat ||
            cached.image->layers!=1 || cached.image->mip_levels!=1 ||
            cached.image->extent.width!=cached.info.width || cached.image->extent.height!=cached.info.height))
             EXIT("TextureCache: linear array readback native shape is inconsistent\n");
 		const bool tiled_storage =
 		    storage && (info.tile_mode == Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) ||
-		                IsSupportedDepthStorageBacking(cached.info));
+		                IsSupportedDepthStorageBacking(cached.info) || standard4kb_storage);
 		bool single_layer_storage = false;
 		if (storage) {
 			switch (static_cast<Prospero::ImageType>(cached.info.type)) {
@@ -530,7 +534,7 @@ struct TextureCache::ReadbackWorker {
 		const bool meta_overlap   = cache.HasMetaOverlapLocked(info.address, info.size);
 		const bool buffer_overlap = cache.m_buffer_cache.HasPageOverlap(info.address, info.size);
         const bool full_storage_publication = storage && preserve_backing_padding &&
-                                              (depth_storage || color_storage || linear_array);
+                                              (depth_storage || color_storage || linear_array || standard4kb_storage);
 		if (meta_overlap || (buffer_overlap && ((!target && !full_storage_publication) ||
             (!preserve_backing_padding && access != PageFaultAccess::Read)))) {
 			EXIT("TextureCache: color-image readback storage is unsupported, addr=0x%016" PRIx64
@@ -591,6 +595,8 @@ struct TextureCache::ReadbackWorker {
                  if(!LibKernel::Memory::TryReadBacking(info.address,guest.data(),info.size))
                   EXIT("TextureCache: cannot preserve depth mip readback backing\n");
                  TileDepthStorageMipsPreservePadding(guest.data(),download.data(),cached.info);
+                } else if(standard4kb_storage) {
+                 cache.m_tiler.TileImage(guest.data(),download.data(),cached.info);
                 } else if (preserve_backing_padding || color_storage) {
 					if (!IsTiledRenderTarget(layout) || (layout.bytes_per_element != 2 && layout.bytes_per_element != 4 && layout.bytes_per_element != 8) ||
 					    !Libs::LibKernel::Memory::TryReadBacking(info.address, guest.data(), info.size)) {
@@ -1580,7 +1586,7 @@ StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   com
 	    info.view_levels != 1 || info.base_array != 0 || !supported_type ||
 	    (info.tile != Prospero::GpuEnumValue(Prospero::TileMode::kLinear) &&
 	     info.tile != Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) &&
-	     !supported_depth_tile) ||
+	     !supported_depth_tile && !IsSupportedStandard4KBRgba16Storage(info)) ||
 	    !IsSupportedStorageSwizzle(info.format, info.swizzle)) {
 		EXIT("TextureCache: unsupported storage-image request, command=%p ctx=%p "
 		     "addr=0x%016" PRIx64 " size=0x%016" PRIx64

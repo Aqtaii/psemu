@@ -7,6 +7,17 @@ $helper=[IO.File]::ReadAllText("$root\gpu\src\graphics\shader\recompiler\spirvEm
 $a=$helper.IndexOf('uint32_t InverseStorageSwizzleComponent(');$b=$helper.IndexOf('uint32_t StorageImageSwizzle(',$a)
 if($a -lt 0 -or $b -le $a){throw 'Production inverse swizzle not found'}
 $source=[IO.File]::ReadAllText("$root\tests\storage_mip_gpu_test.cpp").Replace('// PRODUCTION_INVERSE',$helper.Substring($a,$b-$a))
+$tile=[IO.File]::ReadAllText("$root\gpu\src\graphics\guest_gpu\tile.cpp")
+function TileSlice([string]$start,[string]$end){
+ $a=$tile.IndexOf($start);$b=$tile.IndexOf($end,$a+1)
+ if($a -lt 0 -or $b -le $a){throw "Production Standard4KB extraction failed: $start"}
+ return $tile.Substring($a,$b-$a)
+}
+$tileCode='#define EXIT(...) throw std::runtime_error("unsupported tile shape")'+"`n"
+$tileCode+=TileSlice 'static uint32_t Gen5Standard4KBOffsetInBlock(' 'static uint32_t Gen5Standard4KBVolumeOffsetInBlock('
+$tileCode+="`ntemplate <typename T>`n"+(TileSlice 'static void DetileStandard4KBTyped(' 'template <typename T>')
+$tileCode+=TileSlice 'void TileConvertLinearToTiledStandard4KB64(' 'void TileConvertTiledToLinearStandard4KB3D('
+$source=$source.Replace('// PRODUCTION_STANDARD4KB',$tileCode)
 New-Item -ItemType Directory -Path $out -Force | Out-Null
 [IO.File]::WriteAllText("$out\storage_mip_gpu_production.cpp",$source,[Text.UTF8Encoding]::new($false))
 Push-Location $out
@@ -45,6 +56,8 @@ try {
  if($LASTEXITCODE){throw 'RGBA16 mip6 Vulkan test failed'}
  & .\storage_mip_gpu_test.exe storage_rgba16_mip_gpu.spv 6 rgba16-tail
  if($LASTEXITCODE){throw 'RGBA16 full backing/narrow view Vulkan test failed'}
+ & .\storage_mip_gpu_test.exe storage_rgba16_mip_gpu.spv 0 standard4kb
+ if($LASTEXITCODE){throw 'RGBA16 Standard4KB storage/readback Vulkan test failed'}
  & .\storage_mip_gpu_test.exe storage_rgba16_mip_gpu.spv 0 unorm-linear
  if($LASTEXITCODE){throw 'RGBA16 UNorm linear storage Vulkan test failed'}
 } finally {Pop-Location}
