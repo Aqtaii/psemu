@@ -507,6 +507,18 @@ bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst) {
        !plain(source)) return false;
    }
   }
+  if(inst.op==IR::Opcode::ConvertI32ToF32) {
+   const auto plain=[](const IR::Operand& o) {
+    return !o.dpp && o.sdwa_sel==6 && !o.sdwa_sext && !o.op_sel && !o.op_sel_hi &&
+     !o.negate && !o.negate_hi && !o.absolute && !o.clamp && o.omod==0;
+   };
+   if(inst.src_count!=1 || inst.dst.kind!=IR::OperandKind::Register ||
+      inst.dst.reg.file!=IR::RegisterFile::Vector || inst.dst2.kind!=IR::OperandKind::Null ||
+      !plain(inst.dst) || !plain(inst.src[0]) ||
+      (inst.src[0].kind!=IR::OperandKind::ImmediateU32 &&
+       !(inst.src[0].kind==IR::OperandKind::Register &&
+         (inst.src[0].reg.file==IR::RegisterFile::Vector || inst.src[0].reg.file==IR::RegisterFile::Scalar)))) return false;
+  }
 		// Add opcode families only with tests for their cross-half dependencies.
 		switch (inst.op) {
 			case IR::Opcode::MoveU32: case IR::Opcode::MoveF32Bits:
@@ -518,6 +530,7 @@ bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst) {
 			case IR::Opcode::MaskedBitCountLowU32: case IR::Opcode::MaskedBitCountHighU32:
 			case IR::Opcode::Export: case IR::Opcode::DsReadB32: case IR::Opcode::DsWriteB32:
    case IR::Opcode::BufferLoadDword:
+   case IR::Opcode::ConvertI32ToF32:
    case IR::Opcode::FMadF32: case IR::Opcode::FMulF32: case IR::Opcode::FSubF32:
    case IR::Opcode::RcpF32: case IR::Opcode::InverseSqrtF32: case IR::Opcode::SinF32:
    case IR::Opcode::IMulU32: case IR::Opcode::UMulU24U32: case IR::Opcode::UMaxU32:

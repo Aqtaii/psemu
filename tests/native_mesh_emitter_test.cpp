@@ -343,6 +343,22 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
    state.lane_half=0;
   };
   const auto v=Reg(IR::RegisterFile::Vector,20);
+  // In-place signed conversion must snapshot both banks before writing either one.
+  banks(uint32_t(-3),17);run(IR::Opcode::ConvertI32ToF32,{v});expect(0xc0400000,0x41880000);
+  banks(0x80000000,0x7fffffff);run(IR::Opcode::ConvertI32ToF32,{v});expect(0xcf000000,0x4f000000);
+  banks(16777219,uint32_t(-16777219));run(IR::Opcode::ConvertI32ToF32,{v});expect(0x4b800002,0xcb800002);
+  run(IR::Opcode::ConvertI32ToF32,{Imm(uint32_t(-1))});expect(0xbf800000,0xbf800000);
+  IR::Instruction conversion;conversion.op=IR::Opcode::ConvertI32ToF32;
+  conversion.execution=IR::InstructionExecution::Vector;conversion.dst=v;conversion.src_count=1;
+  conversion.src[0]=Reg(IR::RegisterFile::Scalar,46);
+  EmitStoreU32(&state,conversion.src[0],ConstantU32(&state,uint32_t(-7)));
+  Require(EmitGuestInstruction(&state,conversion));expect(0xc0e00000,0xc0e00000);
+  auto bad_conversion=conversion;bad_conversion.src[0].dpp=true;Require(!EmitGuestInstruction(&state,bad_conversion));
+  bad_conversion=conversion;bad_conversion.dst.clamp=true;Require(!EmitGuestInstruction(&state,bad_conversion));
+  bad_conversion=conversion;bad_conversion.src[0].sdwa_sel=0;Require(!EmitGuestInstruction(&state,bad_conversion));
+  bad_conversion=conversion;bad_conversion.src_count=2;Require(!EmitGuestInstruction(&state,bad_conversion));
+  bad_conversion=conversion;bad_conversion.dst=Reg(IR::RegisterFile::Scalar,46);Require(!EmitGuestInstruction(&state,bad_conversion));
+  Require(state.instruction_register_values.empty() && state.lane_half==0);
   banks(0x40000000,0x40800000);run(IR::Opcode::FMadF32,{v,Imm(0x40400000),Imm(0x3f800000)});expect(0x40e00000,0x41500000); // 7,13
   auto negative=v;negative.negate=true;
   run(IR::Opcode::FMulF32,{negative,Imm(0x40000000)});expect(0xc1600000,0xc1d00000); // -14,-26
@@ -395,6 +411,17 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
    state.builder.AddFunction({OpIEqual,state.bool_type,active,EmitSubgroupLocalInvocationId(&state),ConstantU32(&state,half?2u:1u)});
    abi_check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,20}),EmitSelectU32Value(&state,active,
     ConstantU32(&state,half?0x41500000:0x40e00000),ConstantU32(&state,half?0x40800000:0x40000000)));}
+  state.lane_half=0;
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,0xffffffff));
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,0xffffffff));
+  banks(uint32_t(-3),17);
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,2));
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,4));
+  run(IR::Opcode::ConvertI32ToF32,{v});
+  for(uint32_t half=0;half<2;++half){state.lane_half=half;const auto active=state.builder.AllocateId();
+   state.builder.AddFunction({OpIEqual,state.bool_type,active,EmitSubgroupLocalInvocationId(&state),ConstantU32(&state,half?2u:1u)});
+   abi_check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,20}),EmitSelectU32Value(&state,active,
+    ConstantU32(&state,half?0x41880000:0xc0400000),ConstantU32(&state,half?17u:uint32_t(-3))));}
   state.lane_half=0;
   EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,0xffffffff));
   EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,0xffffffff));

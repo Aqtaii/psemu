@@ -1150,7 +1150,15 @@ bool ShaderCompileInfoMesh(const HW::VertexShaderInfo& regs,const ShaderMeshInpu
  R::BindingLayoutOptions layout;layout.mesh_point_inputs=true;layout.mesh_output_probe=output_probe;
  if(!R::CollectShaderInfo(&program,opts,error) || !R::AllocateBindings(&program,layout,error)) return false;
  auto next=std::make_unique<Entry>();
- if(!ShaderRecompiler::Spirv::EmitMergedPointMeshProgram(program,resources,*info,assembly,&next->spirv,error)) return false;
+ if(!ShaderRecompiler::Spirv::EmitMergedPointMeshProgram(program,resources,*info,assembly,&next->spirv,error)) {
+  const char* capture=std::getenv("PSEMU_ASTRO_MESH_CAPTURE_FAILURE");
+  if(capture && capture[0]=='1') {
+   printf("[MESH-FAILURE-CAPTURE] max_vertices=%u max_primitives=%u invocations=%u lds_dwords=%u primitive_group=%u vertex_group=%u vertices_per_primitive=%u user_count=%u code_only=1 GPU=not-submitted\n",
+    mesh.max_vertices,mesh.max_primitives,mesh.invocations,mesh.lds_dwords,primitive_group,vertex_group,vertices_per_primitive,user_count);
+   ShaderDumpSkippedGe(regs);
+  }
+  return false;
+ }
  if(!SpirvValidateBinary("Merged Mesh",regs.gs_regs.chksum,next->spirv,true)) {
   if(error) *error="merged Mesh SPIR-V validation failed";return false;
  }
