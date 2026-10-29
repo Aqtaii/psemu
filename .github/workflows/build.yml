@@ -57,6 +57,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_guest_thread_start.ps1
 
+      - name: Test guest reader writer exclusion and ownership
+        shell: pwsh
+        run: ./tools/scripts/test_guest_rwlock.ps1
+
       - name: Test positioned guest file reads and cursor preservation
         shell: pwsh
         run: ./tools/scripts/test_guest_positioned_read.ps1
@@ -325,6 +329,23 @@ jobs:
         run: |
           $taskScratch=Join-Path $env:RUNNER_TEMP 'psemu-avplayer-test'
           ./tools/scripts/test_avplayer.ps1 -LoaderPath (Resolve-Path dist/loader.exe).Path -ScratchDirectory $taskScratch
+
+      - name: Test native SysV reader writer lock routing
+        shell: pwsh
+        run: |
+          $p=[Diagnostics.Process]::new()
+          $p.StartInfo.FileName=(Resolve-Path 'dist/loader.exe').Path
+          $p.StartInfo.Arguments='--rwlock-self-test'
+          $p.StartInfo.UseShellExecute=$false
+          $p.StartInfo.CreateNoWindow=$true
+          $p.StartInfo.RedirectStandardOutput=$true
+          $p.StartInfo.RedirectStandardError=$true
+          $null=$p.Start()
+          if(!$p.WaitForExit(10000)){$p.Kill();throw 'RW-lock native self-test timed out'}
+          $p.StandardOutput.ReadToEnd()|Write-Output
+          $p.StandardError.ReadToEnd()|Write-Output
+          if($p.ExitCode -ne 0){throw 'RW-lock native self-test failed'}
+          $p.Dispose()
 
       - name: Test native Fiber stack switching without a game
         shell: pwsh

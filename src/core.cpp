@@ -8,6 +8,7 @@
 #include "guest_bounded_string.h"
 #include "guest_safe_memory_copy.h"
 #include "guest_thread_start.h"
+#include "guest_rwlock.h"
 #include "guest_positioned_read.h"
 #include "guest_directory.h"
 #include "common/hash.h"
@@ -1029,6 +1030,65 @@ static PSEMU_SYSV const char* NativeStrrchr(const char* s, int c) {
 // exception turu olmadan calismasi.
 static PSEMU_SYSV uint64_t NativeGetThreadId() { return GetCurrentThreadId(); }
 
+static Psemu::Rwlocks::Registry& NativeRwlockRegistry() {
+ // Guest workers may still be alive during host shutdown; the process owns this registry.
+ static auto* registry=new Psemu::Rwlocks::Registry({&SafeReadable,&SafeWritable});
+ return *registry;
+}
+template<Psemu::Rwlocks::Operation operation,bool sce>
+static PSEMU_SYSV uint64_t NativeRwlock(uint64_t slot,uint64_t argument,uint64_t) {
+ const int result=NativeRwlockRegistry().Call(operation,slot,argument);
+ static std::atomic_uint calls{0};
+ if(calls.fetch_add(1,std::memory_order_relaxed)<4)
+  std::printf("[RWLOCK-HLE] operation=%u slot=0x%llx result=%d sce=%u native=1\n",unsigned(operation),static_cast<unsigned long long>(slot),result,unsigned(sce));
+ return Psemu::Rwlocks::EncodeResult(result,sce);
+}
+static void* NativeRwlockTarget(const std::string& name) {
+ static const bool enabled=[] {const char* value=std::getenv("PSEMU_NATIVE_RWLOCK");return value && value[0]=='1';}();
+ if(!enabled)return nullptr;
+ using O=Psemu::Rwlocks::Operation;
+#define PSEMU_RWLOCK_TARGET(suffix,posix,op) \
+ if(name=="scePthreadRwlock" suffix)return reinterpret_cast<void*>(&NativeRwlock<O::op,true>); \
+ if(name=="pthread_rwlock" posix)return reinterpret_cast<void*>(&NativeRwlock<O::op,false>);
+ PSEMU_RWLOCK_TARGET("Init","_init",Init)
+ PSEMU_RWLOCK_TARGET("Destroy","_destroy",Destroy)
+ PSEMU_RWLOCK_TARGET("Rdlock","_rdlock",Read)
+ PSEMU_RWLOCK_TARGET("Wrlock","_wrlock",Write)
+ PSEMU_RWLOCK_TARGET("Tryrdlock","_tryrdlock",TryRead)
+ PSEMU_RWLOCK_TARGET("Trywrlock","_trywrlock",TryWrite)
+ PSEMU_RWLOCK_TARGET("Unlock","_unlock",Unlock)
+ PSEMU_RWLOCK_TARGET("attrInit","attr_init",AttrInit)
+ PSEMU_RWLOCK_TARGET("attrDestroy","attr_destroy",AttrDestroy)
+#undef PSEMU_RWLOCK_TARGET
+ // SCE timeouts are relative microseconds, unlike POSIX absolute timespec pointers.
+ if(name=="scePthreadRwlockTimedrdlock")return reinterpret_cast<void*>(&NativeRwlock<O::TimedRead,true>);
+ if(name=="scePthreadRwlockTimedwrlock")return reinterpret_cast<void*>(&NativeRwlock<O::TimedWrite,true>);
+ return nullptr;
+}
+
+extern "C" int PsemuRwlockSelfTest() {
+ _putenv_s("PSEMU_NATIVE_RWLOCK","1");
+ using Fn=uint64_t(PSEMU_SYSV *)(uint64_t,uint64_t,uint64_t);
+ auto fn=[](const char* name){return reinterpret_cast<Fn>(NativeRwlockTarget(name));};
+ const auto init=fn("scePthreadRwlockInit"),read=fn("scePthreadRwlockRdlock"),write=fn("scePthreadRwlockWrlock");
+ const auto unlock=fn("scePthreadRwlockUnlock"),destroy=fn("scePthreadRwlockDestroy");
+ const auto attr_init=fn("scePthreadRwlockattrInit"),attr_destroy=fn("scePthreadRwlockattrDestroy");
+ const auto try_posix=fn("pthread_rwlock_trywrlock");
+ if(!init || !read || !write || !unlock || !destroy || !attr_init || !attr_destroy || !try_posix)return 1;
+ uint64_t attr=0,slot=0,guard=0xabcdefff12345678ull;
+ const auto address=reinterpret_cast<uint64_t>(&slot),attribute=reinterpret_cast<uint64_t>(&attr);
+ if(attr_init(attribute,0,0) || !attr || init(address,attribute,0) || !slot || attr_destroy(attribute,0,0) || attr)return 2;
+ if(read(address,0,0) || try_posix(address,0,0)!=16 || write(address,0,0)!=0x8002000bull)return 3;
+ if(unlock(address,0,0) || write(address,0,0))return 4;
+ uint64_t foreign_result=0;
+ std::thread other([&]{foreign_result=unlock(address,0,0);});other.join();
+ if(foreign_result!=0x80020001ull || unlock(address,0,0))return 5;
+ if(destroy(address,0,0) || slot || guard!=0xabcdefff12345678ull)return 6;
+ if(read(1,0,0)!=0x80020016ull || read(0,0,0)!=0x80020016ull)return 7;
+ std::puts("[RWLOCK-NATIVE-TEST] SysV Sony/POSIX routing, guest handles, ownership, errors and invalid pointers passed");
+ return 0;
+}
+
 static PSEMU_SYSV int NativeMutexLock(uint64_t* slot) {
     GuestMutex* m = GetOrCreateMutex(slot);
     if (m != nullptr) EnterCriticalSection(&m->cs);
@@ -1548,6 +1608,7 @@ extern "C" void* PsemuNativePltStub(int plt_index) {
         return reinterpret_cast<void*>(&NativeGettimeofday);
 
     // Senkronizasyon & Is Parcacigi
+    if(void* target=NativeRwlockTarget(n))return target;
     if (n == "scePthreadMutexLock" || n == "pthread_mutex_lock")
         return reinterpret_cast<void*>(&NativeMutexLock);
     if (n == "scePthreadMutexUnlock" || n == "pthread_mutex_unlock")
@@ -7050,6 +7111,11 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 // sonucu beklemesin diye bittigini soyluyoruz.
                 ctx->Rax = 2;
                 special_return_set = true;
+            }
+            else if (void* target=NativeRwlockTarget(readable_name);target!=nullptr) {
+                using RwlockFn=uint64_t(PSEMU_SYSV *)(uint64_t,uint64_t,uint64_t);
+                ctx->Rax=reinterpret_cast<RwlockFn>(target)(ctx->Rdi,ctx->Rsi,ctx->Rdx);
+                special_return_set=true;
             }
             else if (readable_name == "scePthreadMutexInit" ||
                      readable_name == "pthread_mutex_init") {

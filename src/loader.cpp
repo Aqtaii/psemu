@@ -1008,6 +1008,7 @@ extern "C" int PsemuEventFlagSelfTest();
 extern "C" int PsemuSecureCopySelfTest();
 extern "C" int PsemuHdrToneMapSelfTest();
 extern "C" int PsemuUnaryFloatSelfTest();
+extern "C" int PsemuRwlockSelfTest();
 extern "C" int PsemuDirectorySelfTest(const char* path);
 extern "C" int PsemuNativeBackingSelfTest();
 extern "C" int PsemuHttpSelfTest();
@@ -1033,6 +1034,7 @@ int main(int argc, char** argv) {
     if (argc==2 && std::strcmp(argv[1],"--native-backing-self-test")==0) return PsemuNativeBackingSelfTest();
     if (argc==3 && std::strcmp(argv[1],"--directory-self-test")==0) return PsemuDirectorySelfTest(argv[2]);
     if (argc==2 && std::strcmp(argv[1],"--unary-float-self-test")==0) return PsemuUnaryFloatSelfTest();
+    if (argc==2 && std::strcmp(argv[1],"--rwlock-self-test")==0) return PsemuRwlockSelfTest();
     if (argc==2 && std::strcmp(argv[1],"--hdr-tone-map-self-test")==0) return PsemuHdrToneMapSelfTest();
     if (argc==2 && std::strcmp(argv[1],"--secure-copy-self-test")==0) return PsemuSecureCopySelfTest();
 

@@ -843,7 +843,7 @@ void FlipQueue::Prepare(uint64_t request_id, Graphics::CommandBuffer* buffer) {
     if(source_probe) {
         static std::atomic_uint source_flips{0},source_records{0};
         const auto ordinal=source_flips.fetch_add(1,std::memory_order_relaxed);
-        if((ordinal<8 || ordinal%256==0) && source_records.fetch_add(1,std::memory_order_relaxed)<32)
+        if((ordinal<8 || ordinal%256<=1) && source_records.fetch_add(1,std::memory_order_relaxed)<32)
             printf("[VIDEOOUT-SOURCE] flip=%u request=%d selected=%d special=%u buffer0_fallback=%u requested_gpu_written=%d address=0x%016" PRIx64
                    " allocation_id=%" PRIu64 " source_present=%u metadata_only=1\n",ordinal,index,selected_index,unsigned(special),unsigned(fallback_to_zero),requested_gpu_written,
                    source_address,source_allocation_id,unsigned(source!=nullptr));
