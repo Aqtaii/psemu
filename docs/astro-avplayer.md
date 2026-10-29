@@ -186,3 +186,10 @@ This is a reference-backed capability correction. Whether it explains the observ
 
 
 All terminal errors inside `ResolveRenderDepthTarget` now go through the same unconditional state-snapshot bridge, so a later extent, stencil, HTile or view rejection also retains its state. The fatal-printer regression invokes that production bridge with a terminal sentinel, verifies delegation and still forbids use of the optional logger.
+
+
+### 2026-10-29: actual 81-shader failure is an unbound stencil enable
+
+The `e97624c` trial (`astro_20261029_depth_stderr`, PID 25236, 23:15:44--23:46:17 Istanbul, exit 321) retained the complete terminal state. The failed target is 960x540 D32 (format 3), sample encoding 0, with no stencil plane (format 0, both stencil addresses zero). Depth testing is enabled with compare 3, depth writes disabled, read/write depth addresses equal, no clear or HTile, and canonical disabled texture-compatibility fields `(0, false, 0)`. The stencil test enable remains set, with ALWAYS front/back comparisons, KEEP operations and 0xff masks. The sole failing condition in the general guard is therefore `stencil_active && !has_stencil`; the separately prepared texture-compatibility support is not the cause of this recorded failure.
+
+Stencil usage is now derived from attachment presence before target activation and propagated consistently to test enable, clear enable, stencil decoding and cache load-clear state. Format zero does not manufacture a stencil plane from stale enable bits. This follows the reference resolver's attachment-conditioned stencil behavior. The existing depth state and actual bound-stencil validation remain active. The new regression recreates the captured control/format state using the real HW types and production usage/read-only policies: absent stencil remains disabled and D32 remains read-only even with stale 0xff stencil masks; actual bound stencil writes and clears still request writable attachment access. Canonical encoding and fatal-snapshot regressions also pass. The dedicated candidate is `astro-unbound-stencil-output`; runtime passage through this gate and final visible output remain pending.

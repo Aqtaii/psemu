@@ -109,7 +109,10 @@ void ResolveRenderDepthTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 	const auto& sm = hw.GetStencilMask();
 	const bool  depth_active =
 	    dc.z_enable || dc.z_write_enable || dc.depth_bounds_enable || rc.depth_clear_enable;
-	const bool stencil_active = dc.stencil_enable || rc.stencil_clear_enable;
+	const auto stencil_usage = ResolveStencilAttachmentUsage(
+	    z.stencil_info.format, dc.stencil_enable, rc.stencil_clear_enable);
+	const bool has_stencil = stencil_usage.bound;
+	const bool stencil_active = stencil_usage.test || stencil_usage.clear;
 	if (!depth_active && !stencil_active) {
 		return;
 	}
@@ -147,8 +150,7 @@ void ResolveRenderDepthTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 		}
 		return;
 	}
-	const bool has_stencil =
-	    z.stencil_info.format != Prospero::GpuEnumValue(Prospero::StencilFormat::kInvalid);
+
 	const bool has_htile            = z.z_info.tile_surface_enable;
 	const bool msaa_compat          = depth_msaa_single_sample_compatible(z.z_info.num_samples);
 	const bool htile_stencil_compat = depth_htile_stencil_acceleration_compatible(
@@ -165,7 +167,7 @@ void ResolveRenderDepthTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 	}
 	// Prospero defines the compression-disable bits as tile writeback policy. Vulkan attachments
 	// expose the same logical depth/stencil values regardless of the driver's backing compression.
-	if ((stencil_active && !has_stencil) || rc.resummarize_enable || rc.copy_centroid ||
+	if (rc.resummarize_enable || rc.copy_centroid ||
 	    rc.copy_sample != 0 || z.z_info.expclear_enabled || z.stencil_info.expclear_enabled ||
 	    !z.z_info.HasValidTextureCompatibility() || z.z_info.partially_resident ||
 	    z.stencil_info.partially_resident ||
@@ -338,10 +340,10 @@ void ResolveRenderDepthTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 	r->depth_min_bounds         = hw.GetDepthBoundsMin();
 	r->depth_max_bounds         = hw.GetDepthBoundsMax();
 
-	r->stencil_clear_enable = rc.stencil_clear_enable;
+	r->stencil_clear_enable = stencil_usage.clear;
 	r->stencil_clear_value  = hw.GetStencilClearValue();
-	r->stencil_test_enable  = dc.stencil_enable;
-	if (dc.stencil_enable) {
+	r->stencil_test_enable  = stencil_usage.test;
+	if (r->stencil_test_enable) {
 		if (dc.stencilfunc > static_cast<uint8_t>(vk::CompareOp::eAlways) ||
 		    (dc.backface_enable &&
 		     dc.stencilfunc_bf > static_cast<uint8_t>(vk::CompareOp::eAlways)) ||
@@ -394,7 +396,7 @@ void ResolveRenderDepthTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 	info.tile_mode          = Prospero::GpuEnumValue(Prospero::TileMode::kDepth);
 	info.layers             = view.image_layers;
 	info.depth_load_clear   = r->depth_load_clear_enable;
-	info.stencil_load_clear = rc.stencil_clear_enable;
+	info.stencil_load_clear = r->stencil_clear_enable;
 	info.stencil_access =
 	    r->stencil_clear_enable ||
 	    (r->stencil_test_enable &&

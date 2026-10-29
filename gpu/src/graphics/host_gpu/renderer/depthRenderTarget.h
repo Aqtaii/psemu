@@ -21,6 +21,19 @@ inline constexpr bool depth_htile_stencil_acceleration_compatible(bool has_stenc
 	return acceleration_disabled || (has_stencil && has_htile);
 }
 
+struct StencilAttachmentUsage {
+	bool bound = false;
+	bool test = false;
+	bool clear = false;
+};
+
+// Stencil format zero is unbound. Enable bits do not create an attachment.
+[[nodiscard]] inline constexpr StencilAttachmentUsage ResolveStencilAttachmentUsage(
+    uint32_t format, bool requested_test, bool requested_clear) {
+	const bool bound = format != 0;
+	return {bound, bound && requested_test, bound && requested_clear};
+}
+
 struct RenderDepthInfo {
 	vk::Format                  format                   = vk::Format::eUndefined;
 	uint32_t                    width                    = 0;
