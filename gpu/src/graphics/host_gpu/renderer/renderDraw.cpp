@@ -60,6 +60,27 @@ namespace Libs::Graphics {
 
 static std::atomic_uint g_video_graph_draws{0};
 static std::atomic_bool g_video_graph_started{false};
+static std::atomic_uint64_t g_video_graph_target_base{0},g_video_graph_target_bytes{0};
+static std::atomic<const void*> g_video_graph_target_image{nullptr};
+bool VideoGraphProbeTouchesTarget(uint64_t address,uint64_t size) {
+ const auto base=g_video_graph_target_base.load(std::memory_order_acquire);
+ if(!base || !size || size>std::numeric_limits<uint64_t>::max()-address)return false;
+ const auto bytes=g_video_graph_target_bytes.load(std::memory_order_relaxed);
+ return address>=base ? address-base<bytes : base-address<size;
+}
+void VideoGraphProbeLogTransfer(const char* operation,const void* source_image,
+ const void* target_image,uint64_t source_address,uint64_t target_address,uint64_t size) {
+ if(!g_video_graph_target_base.load(std::memory_order_acquire))return;
+ const auto image=g_video_graph_target_image.load(std::memory_order_relaxed);
+ const bool source_hit=(source_image && source_image==image) || VideoGraphProbeTouchesTarget(source_address,size);
+ const bool target_hit=(target_image && target_image==image) || VideoGraphProbeTouchesTarget(target_address,size);
+ if(!source_hit && !target_hit)return;
+ static std::atomic_uint records{0};if(records.fetch_add(1,std::memory_order_relaxed)>=128)return;
+ printf("[VIDEO-TARGET-TRANSFER] operation=%s source_image=%p target_image=%p source=0x%016" PRIx64
+        " target=0x%016" PRIx64 " bytes=0x%016" PRIx64 " source_hit=%u target_hit=%u metadata_only=1 native_identity_may_be_reused=1\n",
+        operation,source_image,target_image,source_address,target_address,size,unsigned(source_hit),unsigned(target_hit));
+}
+
 bool VideoGraphProbeActive() {return g_video_graph_draws.load(std::memory_order_relaxed)!=0;}
 static uint32_t TakeVideoGraphDraw() {
  auto remaining=g_video_graph_draws.load(std::memory_order_relaxed);
@@ -1097,6 +1118,15 @@ static void ProbeVideoTargetPixels(CommandBuffer* command,const DrawRenderState&
  if(!enabled || !state.ps_active || !state.color_count ||
     state.ps_input_info.stage.program->shader_hash!=0x7313c4a5u)return;
  static std::atomic_uint count{0};const auto ordinal=count.fetch_add(1);
+ if(ordinal==129) {
+  g_video_graph_target_base.store(0,std::memory_order_release);
+  g_video_graph_target_image.store(nullptr,std::memory_order_relaxed);
+  printf("[VIDEO-TARGET-WATCH-END] after_video_draw=128\n");
+ }
+ if(ordinal>64 && ordinal<=128 && state.color_info[0].base_addr==g_video_graph_target_base.load(std::memory_order_acquire)) {
+  const auto* current=state.color_info[0].vulkan_buffer;
+  if(current)g_video_graph_target_image.store(static_cast<void*>(current->image),std::memory_order_relaxed);
+ }
  if(ordinal!=0 && ordinal!=64 && ordinal!=128 && ordinal!=256 && ordinal!=448)return;
  const auto& color=state.color_info[0];auto* image=color.vulkan_buffer;
  if(!image || image->layers!=1 || image->mip_levels!=1 || !image->extent.width ||
@@ -1141,6 +1171,9 @@ static void ProbeVideoTargetPixels(CommandBuffer* command,const DrawRenderState&
   full.imageSubresource={vk::ImageAspectFlagBits::eColor,0,0,1};full.imageExtent={width,height,1};
  }
  if(ordinal==64 && !g_video_graph_started.exchange(true,std::memory_order_relaxed)) {
+  g_video_graph_target_bytes.store(uint64_t(width)*height*element,std::memory_order_relaxed);
+  g_video_graph_target_image.store(static_cast<void*>(image->image),std::memory_order_relaxed);
+  g_video_graph_target_base.store(color.base_addr,std::memory_order_release);
   g_video_graph_draws.store(64,std::memory_order_relaxed);
   printf("[VIDEO-GRAPH-BEGIN] target=0x%016" PRIx64 " following_graphics_draws=64\n",color.base_addr);
  }

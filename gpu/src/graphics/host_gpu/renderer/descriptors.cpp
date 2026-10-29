@@ -720,6 +720,12 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 	                     resource.kind == ShaderRecompiler::IR::ResourceKind::StorageImageUint;
 	const auto variant = NativeTextureVariant(resource);
 	if (storage) {
+        if(!IsSupportedStorageImageResource(resource))
+            printf("[STORAGE-IMAGE-REJECT] pc=0x%x address=0x%016" PRIx64 " format=%u type=%u extent=%ux%ux%u tile=%u swizzle=0x%x raw=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
+                   resource.first_use_pc,descriptor.Base40(),uint32_t(descriptor.Format()),uint32_t(descriptor.Type()),
+                   uint32_t(descriptor.Width5())+1,uint32_t(descriptor.Height5())+1,uint32_t(descriptor.Depth())+1,
+                   uint32_t(descriptor.TileMode()),uint32_t(descriptor.DstSelXYZW()),descriptor.fields[0],descriptor.fields[1],
+                   descriptor.fields[2],descriptor.fields[3],descriptor.fields[4],descriptor.fields[5],descriptor.fields[6],descriptor.fields[7]);
 		ValidateStorageImageResource(resource);
 	}
 	if (descriptor.IsNull()) {
@@ -1285,6 +1291,23 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 			return;
 		}
 	}
+    if(video_probe) {
+        static std::atomic_uint watched_edges{0};
+        for(size_t i=0;i<snapshot.images.size();++i) {
+            ShaderTextureResource sharp;CopyNativeDescriptor(snapshot.images[i],sharp.fields);
+            if(!VideoGraphProbeTouchesTarget(sharp.Base40(),1) || watched_edges.fetch_add(1)>=64)continue;
+            printf("[VIDEO-TARGET-IMAGE] shader=0x%016" PRIx64 " stage=%u slot=%zu address=0x%016" PRIx64
+                   " image=%p read=%u write=%u metadata_only=1\n",program.shader_hash,uint32_t(program.stage),i,
+                   sharp.Base40(),static_cast<void*>(descriptors.images[i].image),program.info.images[i].read,program.info.images[i].written);
+        }
+        for(size_t i=0;i<snapshot.buffers.size();++i) {
+            ShaderBufferResource sharp;CopyNativeDescriptor(snapshot.buffers[i],sharp.fields);
+            if(!VideoGraphProbeTouchesTarget(sharp.Base48(),uint64_t(descriptors.buffers[i].range)) || watched_edges.fetch_add(1)>=64)continue;
+            printf("[VIDEO-TARGET-BUFFER] shader=0x%016" PRIx64 " stage=%u slot=%zu address=0x%016" PRIx64
+                   " range=0x%016" PRIx64 " read=%u write=%u metadata_only=1\n",program.shader_hash,uint32_t(program.stage),i,
+                   sharp.Base48(),uint64_t(descriptors.buffers[i].range),program.info.buffers[i].read,program.info.buffers[i].written);
+        }
+    }
     if(video_probe && VideoGraphProbeActive()) {
         static std::atomic_uint edges{0};
         for(size_t i=0;i<snapshot.images.size() && i<8;++i) {

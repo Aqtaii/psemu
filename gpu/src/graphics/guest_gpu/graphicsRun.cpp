@@ -14,6 +14,7 @@
 #include "graphics/host_gpu/graphicContext.h"
 #include "graphics/host_gpu/objects/label.h"
 #include "graphics/host_gpu/renderer/render.h"
+#include "graphics/host_gpu/renderer/videoGraphProbe.h"
 #include "graphics/host_gpu/renderer/renderContext.h"
 #include "graphics/host_gpu/renderer/sync.h"
 #include "graphics/presentation/displayBuffer.h"
@@ -694,6 +695,8 @@ void CommandProcessor::DmaData(uint8_t engine, uint8_t dst_sel, uint8_t dst_cach
 	EXIT_NOT_IMPLEMENTED(block_engine > 1);
 	const bool dst_memory = dst_sel == 0 || dst_sel == 3;
 	const bool src_memory = src_sel == 0 || src_sel == 3;
+ VideoGraphProbeLogTransfer("dma-data",nullptr,nullptr,
+  src_memory ? src_address_or_offset_or_immediate : 0,dst_memory ? dst_address_or_offset : 0,num_bytes);
 	if (!dst_memory && dst_sel != 1) {
 		EXIT("unsupported dmaData destination selector 0x%02" PRIx8 "\n", dst_sel);
 	}

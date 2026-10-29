@@ -17,6 +17,8 @@ $prefix=@'
 #define EXIT_NOT_IMPLEMENTED(x) do {if(x)throw std::runtime_error("unsupported");} while(0)
 #define EXIT(...) throw std::runtime_error("unsupported")
 #define LOGF(...) ((void)0)
+// The extracted production router has a metadata-only external observer.
+static void VideoGraphProbeLogTransfer(const char*,const void*,const void*,uint64_t,uint64_t,uint64_t) {}
 namespace Common {struct LockGuard {explicit LockGuard(int&) {}};}
 struct Resources {
  int kind=0;uint64_t dst=0,src=0,size=0;uint32_t value=0;bool dst_gds=false,src_gds=false;
