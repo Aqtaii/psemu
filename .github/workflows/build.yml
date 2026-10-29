@@ -233,9 +233,18 @@ jobs:
           $installer = Join-Path $env:RUNNER_TEMP 'vulkan_sdk.exe'
           $sdk = Join-Path $env:RUNNER_TEMP "VulkanSDK\$env:VULKAN_VERSION"
           $url = "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/vulkan_sdk.exe"
-          Invoke-WebRequest -Uri $url -OutFile $installer
-          $args = @('--root', $sdk, '--accept-licenses', '--default-answer', '--confirm-command', 'install', 'copy_only=1')
-          $process = Start-Process -FilePath $installer -ArgumentList $args -Wait -PassThru -WindowStyle Hidden
+          for ($sdkAttempt = 1; $sdkAttempt -le 4; $sdkAttempt++) {
+            try {
+              Invoke-WebRequest -Uri $url -OutFile $installer -TimeoutSec 180
+              break
+            } catch {
+              if ($sdkAttempt -eq 4) { throw }
+              Write-Warning "Pinned SDK download attempt $sdkAttempt failed; retrying: $($_.Exception.Message)"
+              Start-Sleep -Seconds 3
+            }
+          }
+          $sdkArguments = @('--root', $sdk, '--accept-licenses', '--default-answer', '--confirm-command', 'install', 'copy_only=1')
+          $process = Start-Process -FilePath $installer -ArgumentList $sdkArguments -Wait -PassThru -WindowStyle Hidden
           if ($process.ExitCode -ne 0) { throw "Vulkan SDK installer failed: $($process.ExitCode)" }
           foreach ($file in @('Include\spirv-tools\libspirv.hpp', 'Lib\vulkan-1.lib', 'Lib\SPIRV-Tools.lib', 'Lib\SPIRV-Tools-opt.lib', 'Lib\SPIRV-Tools-link.lib')) {
             if (!(Test-Path -LiteralPath (Join-Path $sdk $file))) { throw "SDK dependency missing: $file" }
@@ -276,6 +285,8 @@ jobs:
             build/native-atomic-tests/native_mesh_phased_dispatcher.spv
             build/native-atomic-tests/native_mesh_point_push.spv
             build/native-atomic-tests/native_mesh_buffer_reads.spv
+            build/native-atomic-tests/native_mesh_sampled_reads.spv
+            build/native-atomic-tests/native_mesh_sampled_reads_multiwave.spv
             build/native-atomic-tests/native_mesh_full_adapter.spv
             build/native-atomic-tests/native_mesh_emitter.spvasm
             build/native-atomic-tests/native_mesh_emitter_test.exe
@@ -438,6 +449,8 @@ jobs:
             build/native-atomic-tests/native_mesh_phased_dispatcher.spv
             build/native-atomic-tests/native_mesh_point_push.spv
             build/native-atomic-tests/native_mesh_buffer_reads.spv
+            build/native-atomic-tests/native_mesh_sampled_reads.spv
+            build/native-atomic-tests/native_mesh_sampled_reads_multiwave.spv
             build/native-atomic-tests/native_mesh_full_adapter.spv
             build/native-atomic-tests/mesh_outputs.spv
             build/native-atomic-tests/mesh_fragment.spv
