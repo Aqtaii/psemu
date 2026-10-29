@@ -1218,11 +1218,33 @@ CanReconstructStorageForRenderTarget(const ImageInfo& storage, bool gpu_modified
            storage.size<=target.size-(storage.address-target.address);
 }
 
+// Captured linear RGBA16F array backing: no row padding or auxiliary subresources.
+[[nodiscard]] inline bool IsLinearRgba16ArrayBacking(const ImageInfo& info) {
+ return info.address!=0 && info.size!=0 && info.size<=UINT32_MAX &&
+        info.size<=UINT64_MAX-info.address && ((info.address|info.size)&(TRACKER_PAGE_SIZE-1))==0 &&
+        info.format==Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float) &&
+        info.type==Prospero::GpuEnumValue(Prospero::ImageType::kColor2DArray) &&
+        info.tile==Prospero::GpuEnumValue(Prospero::TileMode::kLinear) &&
+        info.width!=0 && info.width<=16384 && info.height!=0 && info.height<=16384 &&
+        info.pitch==info.width && (info.depth==1 || info.depth==2) &&
+        info.base_level==0 && info.levels==1 && info.view_levels==1 && info.base_array==0 && info.swizzle==0xfac &&
+        info.size==uint64_t(info.width)*info.height*8u*info.depth;
+}
+[[nodiscard]] inline bool CanExpandLinearRgba16Array(const ImageInfo& old,bool gpu,bool buffer,bool tracker_gpu,
+ bool cpu,bool same_context,bool buffers,const ImageInfo& requested) {
+ return gpu && tracker_gpu && !buffer && !cpu && same_context && !buffers &&
+        IsLinearRgba16ArrayBacking(old) && IsLinearRgba16ArrayBacking(requested) &&
+        old.depth==1 && requested.depth==2 && old.address==requested.address &&
+        old.width==requested.width && old.height==requested.height && old.pitch==requested.pitch &&
+        requested.size==old.size*2;
+}
+
 // Distinct transient storage owners must publish their complete GPU backing before reuse.
 // Publish validated depth/color storage layouts before reuse; no competing owners.
 [[nodiscard]] inline bool
 CanReconstructStorageForStorage(const ImageInfo& old,bool gpu,bool buffer,bool tracker_gpu,
                                bool cpu,bool same_context,bool buffers,const ImageInfo& requested) {
+ if(CanExpandLinearRgba16Array(old,gpu,buffer,tracker_gpu,cpu,same_context,buffers,requested))return true;
  return gpu && tracker_gpu && !buffer && !cpu && same_context && !buffers &&
         (IsSupportedDepthStorageBacking(old) || IsSupportedColorStorageBacking(old)) &&
         (IsSupportedDepthStorageBacking(requested) || IsSupportedColorStorageBacking(requested)) &&

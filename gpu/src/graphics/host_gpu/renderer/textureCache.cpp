@@ -495,6 +495,11 @@ struct TextureCache::ReadbackWorker {
 		const bool tiled_target = target && IsTiledRenderTarget(cached.target);
         const bool depth_storage=storage && IsSupportedDepthStorageBacking(cached.info);
         const bool color_storage=storage && IsSupportedColorStorageBacking(cached.info);
+        const bool linear_array=storage && cached.info.depth==1 && IsLinearRgba16ArrayBacking(cached.info);
+        if(linear_array && (cached.image==nullptr || cached.image->format!=vk::Format::eR16G16B16A16Sfloat ||
+           cached.image->layers!=1 || cached.image->mip_levels!=1 ||
+           cached.image->extent.width!=cached.info.width || cached.image->extent.height!=cached.info.height))
+            EXIT("TextureCache: linear array readback native shape is inconsistent\n");
 		const bool tiled_storage =
 		    storage && (info.tile_mode == Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) ||
 		                IsSupportedDepthStorageBacking(cached.info));
@@ -525,7 +530,7 @@ struct TextureCache::ReadbackWorker {
 		const bool meta_overlap   = cache.HasMetaOverlapLocked(info.address, info.size);
 		const bool buffer_overlap = cache.m_buffer_cache.HasPageOverlap(info.address, info.size);
         const bool full_storage_publication = storage && preserve_backing_padding &&
-                                              (depth_storage || color_storage);
+                                              (depth_storage || color_storage || linear_array);
 		if (meta_overlap || (buffer_overlap && ((!target && !full_storage_publication) ||
             (!preserve_backing_padding && access != PageFaultAccess::Read)))) {
 			EXIT("TextureCache: color-image readback storage is unsupported, addr=0x%016" PRIx64
@@ -1301,6 +1306,21 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
 		     static_cast<const void*>(command), static_cast<const void*>(ctx), info.address,
 		     info.size, info.width, info.height, info.depth, info.levels);
 	}
+    bool needs_array_drain=false;
+    if(IsLinearRgba16ArrayBacking(info) && info.depth==2) {
+        std::lock_guard transaction(m_resource_mutex);
+        FaultSafeTextureLock lock(this,m_lock);
+        for(const auto& cached:m_images) {
+            if(cached->kind==CachedImage::Kind::StorageTexture &&
+               CanExpandLinearRgba16Array(cached->info,cached->gpu_modified,cached->buffer_modified,
+                m_memory_tracker.IsRegionGpuModified(cached->Address(),cached->Size()),
+                cached->info.IsCpuDirty() || m_memory_tracker.IsRegionCpuModified(cached->Address(),cached->Size()),
+                cached->ctx==ctx,(m_buffer_cache.IsRegionGpuModified(cached->Address(),cached->Size()) ||
+                 m_buffer_cache.IsCachedRegionCpuModified(cached->Address(),cached->Size())),info))needs_array_drain=true;
+        }
+    }
+    // The old GPU layer must be submitted before readback; take no cache locks while draining.
+    if(needs_array_drain)GraphicsRunSynchronizeCommandProcessors();
     const auto recording_generation=command->GetRecordingGeneration();
 	std::lock_guard transaction(m_resource_mutex);
 	{
@@ -1318,6 +1338,8 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
            cached->info.IsCpuDirty() || m_memory_tracker.IsRegionCpuModified(cached->Address(),cached->Size()),
            cached->ctx==ctx,(m_buffer_cache.IsRegionGpuModified(cached->Address(),cached->Size()) ||
             m_buffer_cache.IsCachedRegionCpuModified(cached->Address(),cached->Size())),info)) {
+          if(IsLinearRgba16ArrayBacking(cached->info) && !needs_array_drain)
+           EXIT("TextureCache: array expansion has no ordered producer drain\n");
           reconstruct_storage=true;break;
          }
         }
@@ -1327,6 +1349,9 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
          // prepare the sampled buffer/image source from the newly authoritative bytes.
          ResolveStorageImageOverlaps(command,ctx,backing,false);
          if(command->GetRecordingGeneration()!=recording_generation)return nullptr;
+         if(needs_array_drain)printf("[STORAGE-ARRAY-EXPAND] address=0x%016" PRIx64
+          " old_bytes=0x%016" PRIx64 " requested_bytes=0x%016" PRIx64 " gpu_prefix_published=1 tail_from_coherent_source=1\n",
+          info.address,info.size/2,info.size);
          static std::atomic_uint sampled_reconstruct_logs{0};
          if(sampled_reconstruct_logs.fetch_add(1)<8)printf("[STORAGE-SAMPLED-RECONSTRUCT] requested=0x%016" PRIx64
           "+0x%016" PRIx64 " full_gpu_backing_published=1\n",info.address,info.size);

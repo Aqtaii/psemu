@@ -357,6 +357,7 @@ public:
 	void DownloadFromImage(GraphicContext* ctx, void* dst_data, uint64_t size,
 	                       std::span<const ImageBufferCopy> regions, VulkanImage* src_image,
 	                       vk::ImageLayout src_layout) {
+        VideoGraphProbeLogTransfer("image-regions-download",src_image,nullptr,0,reinterpret_cast<uint64_t>(dst_data),size);
 		Common::LockGuard lock(m_mutex);
 		EnsureBuffer(ctx, size, vk::BufferUsageFlagBits::eTransferDst);
 		ExecuteImmediateCommands([&](CommandBuffer* command, vk::CommandBuffer) {

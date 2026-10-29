@@ -2,6 +2,26 @@
 static void Require(bool ok,std::source_location where=std::source_location::current()) {if(!ok) {std::fprintf(stderr,"Regression failed at %s:%u\n",where.file_name(),where.line());throw std::runtime_error("regression failed");}}
 int main() {
  {
+  ImageInfo old{};old.address=0x2657b990000ull;old.size=0x1900000;old.format=71;
+  old.width=old.pitch=10240;old.height=320;old.depth=1;old.type=13;old.tile=0;old.swizzle=0xfac;
+  auto expanded=old;expanded.depth=2;expanded.size*=2;
+  Require(IsLinearRgba16ArrayBacking(old) && IsLinearRgba16ArrayBacking(expanded));
+  Require(CanExpandLinearRgba16Array(old,true,false,true,false,true,false,expanded));
+  Require(CanReconstructStorageForSampled(old,true,false,true,false,true,false,expanded));
+  Require(CanReconstructStorageForStorage(old,true,false,true,false,true,false,expanded));
+  for(int bad=0;bad<6;++bad)Require(!CanExpandLinearRgba16Array(old,bad!=0,bad==1,bad!=2,bad==3,bad!=4,bad==5,expanded));
+  for(int field=0;field<12;++field){auto bad=expanded;
+   if(field==0)bad.format=66;if(field==1)bad.tile=27;if(field==2)bad.pitch+=32;if(field==3)--bad.size;
+   if(field==4)bad.address+=4096;if(field==5)bad.depth=3;if(field==6)bad.base_array=1;if(field==7)bad.base_level=1;
+   if(field==8)bad.levels=2;if(field==9)bad.swizzle=0x924;if(field==10)bad.type=9;if(field==11)bad.view_levels=0;
+   Require(!CanExpandLinearRgba16Array(old,true,false,true,false,true,false,bad));
+  }
+  auto overflow=old;overflow.address=UINT64_MAX-4095;
+  Require(!IsLinearRgba16ArrayBacking(overflow));
+  Require(!CanExpandLinearRgba16Array(expanded,true,false,true,false,true,false,old));
+  std::puts("[RGBA16-ARRAY-EXPANSION] captured1to2 exact-layout state isolation malformed negatives=passed");
+ }
+ {
   using R=ShaderRecompiler::IR::ResourceKind;
   ShaderRecompiler::IR::ImageResource resource{R::StorageImageUint,ShaderRecompiler::Decoder::ImageDimension::Dim2D};
   resource.read=true;resource.written=true;resource.atomic=true;
