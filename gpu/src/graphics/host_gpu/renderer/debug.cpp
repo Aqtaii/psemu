@@ -1,5 +1,7 @@
 #include "graphics/host_gpu/renderer/debug.h"
 
+#include <cstdio>
+
 #include "common/assert.h"
 #include "common/common.h"
 #include "common/emulatorConfig.h"
@@ -425,10 +427,21 @@ static void RtCheck(const HW::RenderTarget& rt) {
 	}
 }
 
-static void ZPrint(const char* func, const HW::DepthRenderTarget& z) {
-	LOGF("%s\n", func);
+// Fatal snapshots bypass the optional per-draw logger.
+template <typename... Args>
+static void DepthPrint(bool failure, const char* format, const Args&... args) {
+	if (failure) {
+		const auto text = fmt::sprintf(format, args...);
+		std::fwrite(text.data(), 1, text.size(), stderr);
+	} else {
+		LOGF(format, args...);
+	}
+}
 
-	LOGF("\t z_info.format                         = 0x%08" PRIx32 "\n"
+static void ZPrint(const char* func, const HW::DepthRenderTarget& z, bool failure = false) {
+	DepthPrint(failure, "%s\n", func);
+
+	DepthPrint(failure, "\t z_info.format                         = 0x%08" PRIx32 "\n"
 	     "\t z_info.tile_mode_index                = 0x%08" PRIx32 "\n"
 	     "\t z_info.num_samples                    = 0x%08" PRIx32 "\n"
 	     "\t z_info.tile_surface_enable            = %s\n"
@@ -699,10 +712,10 @@ static void ClipCheck(const HW::ClipControl& c) {
 	                     c.force_viewport_index_from_vs_enable);
 }
 
-static void RcPrint(const char* func, const HW::RenderControl& c) {
-	LOGF("%s\n", func);
+static void RcPrint(const char* func, const HW::RenderControl& c, bool failure = false) {
+	DepthPrint(failure, "%s\n", func);
 
-	LOGF("\t depth_clear_enable       = %s\n"
+	DepthPrint(failure, "\t depth_clear_enable       = %s\n"
 	     "\t stencil_clear_enable     = %s\n"
 	     "\t resummarize_enable       = %s\n"
 	     "\t stencil_compress_disable = %s\n"
@@ -853,10 +866,10 @@ static void BcCheck(const HW::BlendControl& /*c*/, const HW::BlendColor& color,
 }
 
 static void DPrint(const char* func, const HW::DepthControl& c, const HW::StencilControl& s,
-                   const HW::StencilMask& sm) {
-	LOGF("%s\n", func);
+                   const HW::StencilMask& sm, bool failure = false) {
+	DepthPrint(failure, "%s\n", func);
 
-	LOGF("\t stencil_enable       = %s\n"
+	DepthPrint(failure, "\t stencil_enable       = %s\n"
 	     "\t z_enable             = %s\n"
 	     "\t z_write_enable       = %s\n"
 	     "\t depth_bounds_enable  = %s\n"
@@ -1323,16 +1336,16 @@ void hw_check(const HW::Context& hw) {
 	// EXIT_NOT_IMPLEMENTED(hw.GetStencilClearValue() != 0);
 }
 
-// Failure-only snapshot: use the same decoders as the normal debug dump, without
-// enabling per-draw logging or changing the guest register state.
+// Failure-only snapshot remains available with PSEMU_GPU_LOG=0.
 void depth_state_print(const HW::Context& hw) {
-	LOGF("[DEPTH-FAULT-STATE]\n");
-	ZPrint("DepthRenderTarget:", hw.GetDepthRenderTarget());
-	RcPrint("RenderControl:", hw.GetRenderControl());
+	DepthPrint(true, "[DEPTH-FAULT-STATE]\n");
+	ZPrint("DepthRenderTarget:", hw.GetDepthRenderTarget(), true);
+	RcPrint("RenderControl:", hw.GetRenderControl(), true);
 	DPrint("DepthStencilControlMask:", hw.GetDepthControl(), hw.GetStencilControl(),
-	       hw.GetStencilMask());
-	LOGF("\t depth_clear_value = %f bounds = (%f, %f)\n", hw.GetDepthClearValue(),
-	     hw.GetDepthBoundsMin(), hw.GetDepthBoundsMax());
+	       hw.GetStencilMask(), true);
+	DepthPrint(true, "\t depth_clear_value = %f bounds = (%f, %f)\n", hw.GetDepthClearValue(),
+	           hw.GetDepthBoundsMin(), hw.GetDepthBoundsMax());
+	std::fflush(stderr);
 }
 
 void hw_print(const HW::Context& hw) {

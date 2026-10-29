@@ -139,6 +139,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_depth_storage.ps1
 
+      - name: Test fatal depth snapshot with GPU logging disabled
+        shell: pwsh
+        run: ./tools/scripts/test_depth_fault_print.ps1
+
       - name: Test captured texture mip view backing and tail layout
         shell: pwsh
         run: ./tools/scripts/test_texture_mip_view.ps1
