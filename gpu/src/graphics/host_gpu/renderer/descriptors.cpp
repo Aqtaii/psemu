@@ -1207,8 +1207,8 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
     if(ShaderRecompiler::IR::FindBinding(program.bindings,
            ShaderRecompiler::IR::DescriptorBindingKind::GuestAddressTable)) {
         auto* cache=g_render_ctx->GetBufferCache();
-        // CPU SRT evaluation is not residency. Prepare those exact successful reads
-        // before capturing the GPU table, using the ordinary coherence/ownership path.
+        // CPU SRT evaluation and exact direct Compute entry reads need residency.
+        // Prepare the snapshot footprint through the ordinary coherence/ownership path.
         for(const auto& read:snapshot.guest_reads) {
             const auto resident=cache->ObtainBuffer(buffer,g_render_ctx->GetGraphicCtx(),
                                                    read.address,read.size,false,true,false,true);

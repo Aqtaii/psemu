@@ -3,6 +3,9 @@
 #include "graphics/shader/recompiler/ShaderIR.h"
 #include "graphics/shader/recompiler/MergedMeshResources.h"
 #include "graphics/shader/recompiler/ResourceMaterialization.h"
+#include "graphics/shader/recompiler/ScalarProvenance.h"
+#include "graphics/shader/recompiler/ResourceTracking.h"
+#include "graphics/shader/recompiler/SrtPatcher.h"
 #include "common/assert.h"
 #include <array>
 #include <fstream>
@@ -163,6 +166,68 @@ int main(int argc,char** argv) {
   Require(!R::MaterializeResources(mesh,runtime,&snapshot,&error));
   Require(snapshot.guest_reads==saved.guest_reads && snapshot.buffers==saved.buffers);
   std::puts("[MESH-RESOURCES] production GS-root buffer materialization refresh missing-root rollback=passed");
+ }
+
+ // Compute entry S_LOADs without host descriptor consumers need exact residency.
+ {
+  namespace R=Libs::Graphics::ShaderRecompiler::IR;
+  using Libs::Graphics::ShaderType;
+  auto make_program=[](bool overlap) {
+   R::Program p;p.stage=ShaderType::Compute;p.wave_size=64;p.user_data_count=16;
+   p.uses_guest_address_table=true;p.blocks.resize(3);
+   for(uint32_t i=0;i<3;++i){p.blocks[i].id=i;p.blocks[i].start_pc=i*0x100;}
+   p.blocks[0].successors={1,2};p.blocks[1].predecessors={0};p.blocks[2].predecessors={0};
+   p.blocks[0].terminator.kind=Libs::Graphics::ShaderRecompiler::CFG::TerminatorKind::ConditionalBranch;
+   p.blocks[0].terminator.true_block=1;p.blocks[0].terminator.false_block=2;
+   auto add=[&](size_t block,uint32_t pc,uint32_t root,uint32_t dst,uint32_t offset,uint32_t count,bool dynamic=false) {
+    for(uint32_t c=0;c<count;++c) {
+     R::Instruction load;load.op=R::Opcode::SLoadDword;load.pc=pc;
+     load.execution=R::InstructionExecution::Scalar;load.dst.kind=R::OperandKind::Register;
+     load.dst.reg={R::RegisterFile::Scalar,dst+c};load.src_count=1;
+     load.src[0].kind=dynamic ? R::OperandKind::Register : R::OperandKind::ImmediateU32;
+     if(dynamic)load.src[0].reg={R::RegisterFile::Scalar,6};
+     load.memory.kind=R::ResourceKind::ScalarBuffer;load.memory.resource=root;
+     load.memory.offset=offset+c*4;load.memory.data_bits=32;load.memory.data_dwords=1;
+     load.memory.component_count=count;load.memory.component_index=c;
+     load.scalar_memory_group={true,root,c,count,load.src[0],2};
+     p.blocks[block].instructions.push_back(load);
+    }
+   };
+   // Reproduce the failing kernel's entry read shape, using synthetic operands.
+   add(0,0xc,0,overlap?0:24,16,4);
+   // Overlap checks the grouped read's pre-write root. Subsequent reads through
+   // its loaded pointer belong to the existing host SRT evaluator, not this path.
+   if(!overlap){add(0,0x1c,0,28,0,2);add(0,0x28,0,31,8,1);}
+   add(0,0x84,14,36,0,8);
+   if(!overlap)add(0,0x90,2,50,0x40,1,true);
+   add(1,0x100,4,52,0x80,1); // Conditional block must not be prefetched.
+   std::string error;
+   Require(R::BuildScalarProvenance(&p,&error));Require(R::BuildSrtPlan(&p,&error));Require(R::PatchSrtReads(&p,&error));
+   if(!R::TrackResources(&p,&error)){std::fprintf(stderr,"Compute fixture tracking failed: %s\n",error.c_str());Require(false);}
+   Require(p.uses_guest_address_table);
+   return p;
+  };
+  auto p=make_program(false);std::array<uint32_t,16> words{};
+  auto set_root=[&](size_t index,uint64_t base){words[index]=uint32_t(base);words[index+1]=uint32_t(base>>32);};
+  set_root(0,0x123450000ull);set_root(2,0x123470000ull);set_root(4,0x123480000ull);set_root(14,0x123460000ull);
+  unsigned cpu_reads=0;R::SrtRuntime runtime;runtime.user_data=words;runtime.userdata=&cpu_reads;
+  runtime.read_memory=[](void* userdata,uint64_t,uint32_t*){++*static_cast<unsigned*>(userdata);return false;};
+  R::ResourceSnapshot snapshot;std::string error;
+  Require(R::MaterializeResources(p,runtime,&snapshot,&error));Require(cpu_reads==0);
+  Require(snapshot.guest_reads==std::vector<R::GuestReadRange>{{0x123450000ull,12},{0x123450010ull,16},{0x123460000ull,32}});
+  set_root(0,0x123550000ull);Require(R::MaterializeResources(p,runtime,&snapshot,&error));
+  Require(snapshot.guest_reads==std::vector<R::GuestReadRange>{{0x123460000ull,32},{0x123550000ull,12},{0x123550010ull,16}});
+  auto overlapping=make_program(true);set_root(0,0x123450000ull);
+  Require(R::MaterializeResources(overlapping,runtime,&snapshot,&error));Require(cpu_reads==0);
+  Require(snapshot.guest_reads==std::vector<R::GuestReadRange>{{0x123450010ull,16},{0x123460000ull,32}});
+  auto unresolved=make_program(false);
+  for(auto& block:unresolved.blocks)for(auto& i:block.instructions)i.memory.resource_source=R::ScalarProvenance::Unknown;
+  Require(R::MaterializeResources(unresolved,runtime,&snapshot,&error));Require(snapshot.guest_reads.empty());Require(cpu_reads==0);
+  p.stage=ShaderType::Vertex;Require(R::MaterializeResources(p,runtime,&snapshot,&error));Require(snapshot.guest_reads.empty());
+  p.stage=ShaderType::Compute;words[1]=0xffff0001u;
+  Require(R::MaterializeResources(p,runtime,&snapshot,&error));Require(cpu_reads==0);
+  Require(snapshot.guest_reads==std::vector<R::GuestReadRange>{{0x123460000ull,32}});
+  std::puts("[COMPUTE-ENTRY-READS] direct roots refresh overlaps conditional/dynamic exclusion no CPU reads=passed");
  }
 
  // Static phase analysis must reject bypasses, repeated barriers and early exit.

@@ -1,5 +1,6 @@
 #include "graphics/shader/recompiler/ResourceMaterialization.h"
 #include "graphics/shader/recompiler/BindingLayout.h"
+#include "graphics/shader/recompiler/ScalarProvenance.h"
 
 #include "graphics/guest_gpu/gpu_format.h"
 #include "graphics/shader/shaderBindings.h"
@@ -285,6 +286,42 @@ bool MaterializeResources(const Program& program, const SrtRuntime& runtime,
 		return false;
 	}
 
+    // A checked Compute S_LOAD may have no host descriptor consumer at all.
+    // Prepare only exact entry-block reads whose two reaching definitions are
+    // unchanged initial user SGPRs. No guest reads, pointer chasing, conditional
+    // blocks, dynamic offsets, or replacement of GPU instructions are involved.
+    if(program.uses_guest_address_table && program.stage==ShaderType::Compute &&
+       !program.blocks.empty() && program.blocks.front().start_pc==0 &&
+       program.blocks.front().predecessors.empty()) {
+        for(const auto& inst:program.blocks.front().instructions) {
+            const auto& group=inst.scalar_memory_group;
+            if(inst.op!=Opcode::SLoadDword || !inst.memory.guest_address_read ||
+               !group.valid || group.descriptor_dwords!=2 ||
+               group.dynamic_offset.kind!=OperandKind::ImmediateU32)continue;
+            const auto* source=GetDescriptorSource(program,inst.memory.resource_source);
+            if(source==nullptr || source->dword_count!=2)continue;
+            uint32_t words[2]{};bool initial=true;
+            for(uint32_t i=0;i<2;++i) {
+                const auto id=source->dwords[i];
+                if(id<=ScalarProvenance::Unknown || id>=program.provenance.values.size()){initial=false;break;}
+                const auto& value=program.provenance.values[id];
+                if(value.op!=ScalarValueOp::UserData || value.imm<program.user_data_base ||
+                   value.imm-program.user_data_base>=runtime.user_data.size()){initial=false;break;}
+                words[i]=runtime.user_data[value.imm-program.user_data_base];
+            }
+            if(!initial || words[1]>=65536u)continue;
+            const auto base=uint64_t(words[0])|(uint64_t(words[1])<<32u);
+            const auto offset=uint64_t(group.dynamic_offset.imm&~3u)+uint64_t(inst.memory.offset&~3u);
+            const auto address=base+offset;
+            // Invalid GPU addresses remain invalid; do not wrap them into resident memory.
+            if(!address || (address&3u) || address>0x0000fffffffffffcull)continue;
+            if(trace.addresses.size()>=MaxGuestReadDwords) {
+                if(error)*error="excessive Compute entry scalar read footprint";
+                return false;
+            }
+            trace.addresses.push_back(address);
+        }
+    }
 	ResourceSnapshot next;
     if(!BuildGuestReadFootprint(trace.addresses,&next.guest_reads)) {
         if(error)*error="invalid or excessive guest source read footprint";

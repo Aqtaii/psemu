@@ -22,6 +22,7 @@ struct ResourceSnapshot {
 	std::vector<Address>         addresses;
 	std::vector<uint32_t>        flattened_srt;
 	std::vector<uint32_t>        user_data;
+    // Exact host-evaluated reads and direct initial-user-data Compute entry reads.
     std::vector<GuestReadRange> guest_reads;
 };
 
