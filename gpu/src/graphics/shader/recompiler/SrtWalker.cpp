@@ -516,26 +516,9 @@ private:
 				                        value.pc, base_aligned, relative));
 			}
 		}
-		if (m_runtime.read_memory != nullptr &&
-		    !m_runtime.read_memory(m_runtime.userdata, address, result)) {
+		if (!ReadSrtRuntimeMemory(m_runtime, address, result)) {
 			return Fail(
 			    error, fmt::format("ReadConst pc=0x{:08x} failed at 0x{:016x}", value.pc, address));
-		}
-		if (m_runtime.read_memory == nullptr) {
-#ifdef _WIN32
-			// Runtime-derived SRT pointers can be unresolved or unmapped. Do not
-			// dereference them in the host; retain a diagnostic and transactional output.
-			uint32_t staged = 0;
-			SIZE_T copied = 0;
-			if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(address),
-			                       &staged, sizeof(staged), &copied) || copied != sizeof(staged)) {
-				return Fail(error, fmt::format("ReadConst pc=0x{:08x} failed at 0x{:016x}",
-				                              value.pc, address));
-			}
-			*result = staged;
-#else
-			std::memcpy(result, reinterpret_cast<const void*>(address), sizeof(*result));
-#endif
 		}
 		return true;
 	}
@@ -548,6 +531,28 @@ private:
 };
 
 } // namespace
+
+bool ReadSrtRuntimeMemory(const SrtRuntime& runtime, uint64_t address, uint32_t* value) {
+	if (value == nullptr) {
+		return false;
+	}
+	if (runtime.read_memory != nullptr) {
+		return runtime.read_memory(runtime.userdata, address, value);
+	}
+#ifdef _WIN32
+	// Preserve the evaluator's guarded read and publish only complete dwords.
+	uint32_t staged = 0;
+	SIZE_T copied = 0;
+	if (!ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<const void*>(address),
+	                       &staged, sizeof(staged), &copied) || copied != sizeof(staged)) {
+		return false;
+	}
+	*value = staged;
+#else
+	std::memcpy(value, reinterpret_cast<const void*>(address), sizeof(*value));
+#endif
+	return true;
+}
 
 bool FoldScalarConstant(const ScalarProvenance& provenance, uint32_t value, uint32_t* result) {
 	if (result == nullptr) {

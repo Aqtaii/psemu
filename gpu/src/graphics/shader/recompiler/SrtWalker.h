@@ -19,6 +19,9 @@ struct SrtRuntime {
 	std::optional<uint64_t>   mesh_gs_user_data_address;
 };
 
+// Use the supplied reader, or the same guarded local-process read as the evaluator.
+bool ReadSrtRuntimeMemory(const SrtRuntime& runtime, uint64_t address, uint32_t* value);
+
 struct DescriptorSourceRequest {
 	uint32_t source = 0;
 	uint32_t use_pc = 0;

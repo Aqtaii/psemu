@@ -272,12 +272,12 @@ bool MaterializeResources(const Program& program, const SrtRuntime& runtime,
         std::vector<uint64_t> addresses;
     } trace{&runtime,{}};
     auto evaluated_runtime=runtime;
-    if(program.uses_guest_address_table && runtime.read_memory) {
+    if(program.uses_guest_address_table) {
         evaluated_runtime.userdata=&trace;
         evaluated_runtime.read_memory=[](void* userdata,uint64_t address,uint32_t* value) {
             auto& trace=*static_cast<ReadTrace*>(userdata);
             if(trace.addresses.size()>=MaxGuestReadDwords ||
-               !trace.source->read_memory(trace.source->userdata,address,value))return false;
+               !ReadSrtRuntimeMemory(*trace.source,address,value))return false;
             trace.addresses.push_back(address);
             return true;
         };

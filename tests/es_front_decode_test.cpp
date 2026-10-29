@@ -165,6 +165,25 @@ int main(int argc,char** argv) {
   };
   Require(!R::MaterializeResources(mesh,runtime,&snapshot,&error));
   Require(snapshot.guest_reads==saved.guest_reads && snapshot.buffers==saved.buffers);
+  // Live ShaderStageRuntime supplies no callback. Exercise that exact default path.
+  std::array<uint32_t,4> host_descriptor{0x43000000u,16u<<16,256,0};
+  const auto host_root=reinterpret_cast<uint64_t>(host_descriptor.data());
+  runtime.read_memory=nullptr;runtime.userdata=nullptr;runtime.mesh_gs_user_data_address=host_root;
+  Require(R::MaterializeResources(mesh,runtime,&snapshot,&error));
+  Require(snapshot.buffers[0].dwords[0]==0x43000000u);
+  Require(snapshot.guest_reads==std::vector<R::GuestReadRange>{{host_root,16}});
+  host_descriptor[0]=0x44000000u;
+  Require(R::MaterializeResources(mesh,runtime,&snapshot,&error));
+  Require(snapshot.buffers[0].dwords[0]==0x44000000u);
+  Require(snapshot.guest_reads==std::vector<R::GuestReadRange>{{host_root,16}});
+#ifdef _WIN32
+  uint32_t canary=0x12345678u;
+  Require(!R::ReadSrtRuntimeMemory(runtime,0,&canary));Require(canary==0x12345678u);
+  const auto default_saved=snapshot;runtime.mesh_gs_user_data_address=0;
+  Require(!R::MaterializeResources(mesh,runtime,&snapshot,&error));
+  Require(snapshot.guest_reads==default_saved.guest_reads && snapshot.buffers==default_saved.buffers);
+#endif
+  std::puts("[MESH-DEFAULT-READER] actual host pointer footprint refresh guarded failure rollback=passed");
   std::puts("[MESH-RESOURCES] production GS-root buffer materialization refresh missing-root rollback=passed");
  }
 
