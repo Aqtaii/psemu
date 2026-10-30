@@ -223,6 +223,7 @@ struct DepthRenderTarget {
 };
 
 struct RenderControl {
+	uint32_t raw = 0; // Preserve unmodeled DB_RENDER_CONTROL bits for failure diagnostics.
 	bool    depth_clear_enable       = false;
 	bool    stencil_clear_enable     = false;
 	bool    resummarize_enable       = false;

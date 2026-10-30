@@ -823,6 +823,10 @@ static void RefreshShaders(HW::Context* ctx, HW::Shader* sh_ctx, const DrawCallI
       ShaderRecompiler::MeshOutputProbeEnabled() &&
       ShaderRecompiler::MeshOutputProbeIncludesDraw(draw.index_count,draw.instance_count,draw.first_instance,
           ShaderRecompiler::MeshOutputProbeInstance()))) {
+   std::fprintf(stderr,"[MESH-FAULT-STATE] draw=%s count=%u instances=%u stages=0x%08x color_mode=%u color_mask=0x%08x\n",
+    draw.name,draw.index_count,draw.instance_count,ctx->GetShaderStages(),
+    unsigned(ctx->GetColorControl().mode),ctx->GetRenderTargetMask());
+   depth_state_print(*ctx);
    EXIT("Astro Mesh compilation failed: %s\n",error.c_str());
   }
  } else if (!ShaderCompileInfoVS(&vertex_shader_info, &shader_regs, lane_mask_mode,

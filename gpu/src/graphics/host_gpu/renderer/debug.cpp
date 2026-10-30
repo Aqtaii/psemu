@@ -714,6 +714,7 @@ static void ClipCheck(const HW::ClipControl& c) {
 
 static void RcPrint(const char* func, const HW::RenderControl& c, bool failure = false) {
 	DepthPrint(failure, "%s\n", func);
+	DepthPrint(failure, "\t db_render_control_raw    = 0x%08" PRIx32 "\n", c.raw);
 
 	DepthPrint(failure, "\t depth_clear_enable       = %s\n"
 	     "\t stencil_clear_enable     = %s\n"
