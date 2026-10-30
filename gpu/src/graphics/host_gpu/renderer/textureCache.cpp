@@ -2319,6 +2319,7 @@ DepthStencilVulkanImage* TextureCache::FindDepthTarget(CommandBuffer* command, G
 		for (const auto& entry: m_images) {
 			const auto& cached = *entry;
 			if (cached.kind == CachedImage::Kind::StorageTexture &&
+			    cached.info.address == info.address && cached.info.size == info.size &&
 			    CanReconstructStorageForDepthTarget(cached.info, cached.gpu_modified,
 			        cached.buffer_modified, m_memory_tracker.IsRegionGpuModified(cached.Address(), cached.Size()),
 			        cached.info.IsCpuDirty() || m_memory_tracker.IsRegionCpuModified(cached.Address(), cached.Size()),
