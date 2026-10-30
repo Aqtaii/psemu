@@ -1117,6 +1117,20 @@ bool ShaderCompileInfoMesh(const HW::VertexShaderInfo& regs,const ShaderMeshInpu
  const auto gs=ShaderGetMappedCode(regs.gs_regs.data_addr,"Merged Mesh GS",regs.gs_regs.chksum);
  const auto user_count=std::max<uint32_t>(regs.gs_regs.rsrc2.user_sgpr,16u);
  if(user_count>std::size(regs.gs_user_sgpr.value)) return false;
+ const auto failed=[&](const char* phase) {
+  const char* capture=std::getenv("PSEMU_ASTRO_MESH_CAPTURE_FAILURE");
+  if(capture && capture[0]=='1') {
+   printf("[MESH-FAILURE-CAPTURE] phase=%s es=0x%016" PRIx64 " gs=0x%016" PRIx64
+    " max_vertices=%u max_primitives=%u invocations=%u lds_dwords=%u primitive_group=%u vertex_group=%u vertices_per_primitive=%u user_count=%u code_only=1 GPU=not-submitted error=%s\n",
+    phase,regs.es_regs.data_addr,regs.gs_regs.data_addr,mesh.max_vertices,mesh.max_primitives,
+    mesh.invocations,mesh.lds_dwords,primitive_group,vertex_group,vertices_per_primitive,user_count,
+    error?error->c_str():"not provided");
+   std::fflush(stdout);
+   ShaderDumpSkippedGe(regs);
+  }
+  return false;
+ };
+
  R::SrtRuntime runtime;runtime.user_data=std::span<const uint32_t>(regs.gs_user_sgpr.value,user_count);
  runtime.shader_base=regs.es_regs.data_addr;runtime.mesh_gs_user_data_address=regs.gs_regs.user_data_addr;
  struct Entry {std::vector<uint32_t> es,gs,spirv;ShaderMeshInputInfo mesh;MeshAssemblyPlan assembly;
@@ -1131,38 +1145,32 @@ bool ShaderCompileInfoMesh(const HW::VertexShaderInfo& regs,const ShaderMeshInpu
      !std::equal(es.begin(),es.end(),e->es.begin(),e->es.end()) ||
      !std::equal(gs.begin(),gs.end(),e->gs.begin(),e->gs.end())) continue;
   R::ResourceSnapshot resources;
-  if(!R::MaterializeResources(*e->program,runtime,&resources,error)) return false;
+  if(!R::MaterializeResources(*e->program,runtime,&resources,error)) return failed("cached-resources");
   if(!R::ValidateResourceSpecialization(*e->program,resources,error)) continue;
   info->stage.program=e->program;info->stage.resources=std::make_shared<const R::ResourceSnapshot>(std::move(resources));
   ApplyVertexOutputs(info,*e->program);*spirv=MakeShaderSpirvView(e->spirv);return true;
  }
  ShaderRecompiler::Decoder::Program decoded;std::vector<uint32_t> joined;
- if(!ShaderRecompiler::Decoder::DecodeFusedProgram(es,gs,&joined,&decoded,error)) return false;
+ if(!ShaderRecompiler::Decoder::DecodeFusedProgram(es,gs,&joined,&decoded,error)) return failed("decode");
  ShaderRecompiler::CFG::Graph graph;
- if(!ShaderRecompiler::CFG::BuildGraph(decoded,&graph,error)) return false;
+ if(!ShaderRecompiler::CFG::BuildGraph(decoded,&graph,error)) return failed("cfg");
  R::Program program;
- if(!R::LowerProgram(decoded,graph,ShaderType::Mesh,64,&program,error)) return false;
+ if(!R::LowerProgram(decoded,graph,ShaderType::Mesh,64,&program,error)) return failed("lower");
  program.dispatcher_fallback=true;
- if(!R::BuildMergedMeshResourcePlan(&program,user_count,error)) return false;
+ if(!R::BuildMergedMeshResourcePlan(&program,user_count,error)) return failed("resource-plan");
  R::ResourceSnapshot resources;
- if(!R::MaterializeResources(program,runtime,&resources,error) || !R::SpecializeResources(&program,resources,error)) return false;
+ if(!R::MaterializeResources(program,runtime,&resources,error) || !R::SpecializeResources(&program,resources,error)) return failed("resources");
  R::ShaderInfoOptions opts;opts.vertex=info;
  R::BindingLayoutOptions layout;layout.mesh_point_inputs=true;layout.mesh_output_probe=output_probe;
- if(!R::CollectShaderInfo(&program,opts,error) || !R::AllocateBindings(&program,layout,error)) return false;
+ if(!R::CollectShaderInfo(&program,opts,error) || !R::AllocateBindings(&program,layout,error)) return failed("bindings");
  auto next=std::make_unique<Entry>();
  if(!ShaderRecompiler::Spirv::EmitMergedPointMeshProgram(program,resources,*info,assembly,&next->spirv,error)) {
-  const char* capture=std::getenv("PSEMU_ASTRO_MESH_CAPTURE_FAILURE");
-  if(capture && capture[0]=='1') {
-   printf("[MESH-FAILURE-CAPTURE] max_vertices=%u max_primitives=%u invocations=%u lds_dwords=%u primitive_group=%u vertex_group=%u vertices_per_primitive=%u user_count=%u code_only=1 GPU=not-submitted\n",
-    mesh.max_vertices,mesh.max_primitives,mesh.invocations,mesh.lds_dwords,primitive_group,vertex_group,vertices_per_primitive,user_count);
-   ShaderDumpSkippedGe(regs);
-  }
-  return false;
+  return failed("emit");
  }
  if(!SpirvValidateBinary("Merged Mesh",regs.gs_regs.chksum,next->spirv,true)) {
-  if(error) *error="merged Mesh SPIR-V validation failed";return false;
+  if(error) *error="merged Mesh SPIR-V validation failed";return failed("spirv-validation");
  }
- if(cache.size()>=64) {if(error) *error="merged Mesh program cache limit reached";return false;}
+ if(cache.size()>=64) {if(error) *error="merged Mesh program cache limit reached";return failed("cache-limit");}
  next->es.assign(es.begin(),es.end());next->gs.assign(gs.begin(),gs.end());next->mesh=mesh;next->assembly=assembly;
  next->program=std::make_shared<const R::Program>(std::move(program));info->stage.program=next->program;
  info->stage.resources=std::make_shared<const R::ResourceSnapshot>(std::move(resources));
