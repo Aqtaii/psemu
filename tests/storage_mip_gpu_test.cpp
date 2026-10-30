@@ -21,8 +21,9 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL ValidationMessage(VkDebugUtilsMessageSever
 }
 // PRODUCTION_INVERSE
 // PRODUCTION_STANDARD4KB
+// PRODUCTION_R32_ALIAS
 int main(int argc,char** argv) {try {
- CHECK(argc>=2 && argc<=4);const bool standard4kb=argc==4 && std::strcmp(argv[3],"standard4kb")==0;const bool atomic_emitter=argc==4 && std::strcmp(argv[3],"atomic-emitter")==0;const bool atomic_image=atomic_emitter || (argc==4 && std::strcmp(argv[3],"atomic")==0);const bool packed=argc==4 && std::strcmp(argv[3],"packed")==0;const bool unorm=argc==4 && std::strcmp(argv[3],"unorm-linear")==0;const bool full_tail=argc==4 && std::strcmp(argv[3],"rgba16-tail")==0;const bool rgba16=standard4kb || unorm || full_tail || (argc==4 && std::strcmp(argv[3],"rgba16")==0);const uint32_t target=argc>=3?uint32_t(std::strtoul(argv[2],nullptr,10)):0;CHECK(target<8);
+ CHECK(argc>=2 && argc<=4);const bool depth_rebuild=argc==4 && std::strcmp(argv[3],"depth-rebuild")==0;const bool standard4kb=argc==4 && std::strcmp(argv[3],"standard4kb")==0;const bool atomic_emitter=argc==4 && std::strcmp(argv[3],"atomic-emitter")==0;const bool atomic_image=atomic_emitter || (argc==4 && std::strcmp(argv[3],"atomic")==0);const bool packed=argc==4 && std::strcmp(argv[3],"packed")==0;const bool unorm=argc==4 && std::strcmp(argv[3],"unorm-linear")==0;const bool full_tail=argc==4 && std::strcmp(argv[3],"rgba16-tail")==0;const bool rgba16=standard4kb || unorm || full_tail || (argc==4 && std::strcmp(argv[3],"rgba16")==0);const uint32_t target=argc>=3?uint32_t(std::strtoul(argv[2],nullptr,10)):0;CHECK(target<8);
  std::ifstream input(argv[1],std::ios::binary|std::ios::ate);CHECK(input);
  size_t shader_bytes=size_t(input.tellg());CHECK(shader_bytes && shader_bytes%4==0);
  std::vector<uint32_t> code(shader_bytes/4);input.seekg(0);input.read(reinterpret_cast<char*>(code.data()),shader_bytes);CHECK(input);
@@ -48,7 +49,7 @@ int main(int argc,char** argv) {try {
  VkPhysicalDevice physical=physicals[0];VkPhysicalDeviceProperties properties{};vkGetPhysicalDeviceProperties(physical,&properties);
  uint32_t family_count=0;vkGetPhysicalDeviceQueueFamilyProperties(physical,&family_count,nullptr);
  std::vector<VkQueueFamilyProperties> families(family_count);vkGetPhysicalDeviceQueueFamilyProperties(physical,&family_count,families.data());
- uint32_t family=0;while(family<family_count && !(families[family].queueFlags&VK_QUEUE_COMPUTE_BIT))++family;CHECK(family<family_count);
+ uint32_t family=0;while(family<family_count && ((families[family].queueFlags & (VK_QUEUE_COMPUTE_BIT | (depth_rebuild?VK_QUEUE_GRAPHICS_BIT:0))) != (VK_QUEUE_COMPUTE_BIT | (depth_rebuild?VK_QUEUE_GRAPHICS_BIT:0))))++family;CHECK(family<family_count);
  float priority=1;VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};qci.queueFamilyIndex=family;qci.queueCount=1;qci.pQueuePriorities=&priority;
  VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};dci.queueCreateInfoCount=1;dci.pQueueCreateInfos=&qci;
  VkPhysicalDeviceFeatures enabled{};
@@ -66,12 +67,13 @@ int main(int argc,char** argv) {try {
  VkDevice device;VKOK(vkCreateDevice(physical,&dci,nullptr,&device));VkQueue queue;vkGetDeviceQueue(device,family,0,&queue);
  VkPhysicalDeviceMemoryProperties memory_properties{};vkGetPhysicalDeviceMemoryProperties(physical,&memory_properties);
  auto allocate=[&](VkMemoryRequirements requirements,VkMemoryPropertyFlags flags){uint32_t type=0;while(type<memory_properties.memoryTypeCount && (!(requirements.memoryTypeBits&(1u<<type)) || (memory_properties.memoryTypes[type].propertyFlags&flags)!=flags))++type;CHECK(type<memory_properties.memoryTypeCount);VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};ai.allocationSize=requirements.size;ai.memoryTypeIndex=type;VkDeviceMemory result;VKOK(vkAllocateMemory(device,&ai,nullptr,&result));return result;};
- const uint32_t width=standard4kb?32:(unorm?960:((packed||rgba16)?1920:480)),height=standard4kb?32:(unorm?540:((packed||rgba16)?1080:270)),levels=(standard4kb||packed||unorm||atomic_image)?1:(full_tail?11:(rgba16?7:8)),sampled_levels=full_tail?6:levels,words_per_pixel=rgba16?2:1;VkDeviceSize bytes=packed?0x870000:0x160000;CHECK(target<levels);
+ const uint32_t width=depth_rebuild?960:standard4kb?32:(unorm?960:((packed||rgba16)?1920:480)),height=depth_rebuild?540:standard4kb?32:(unorm?540:((packed||rgba16)?1080:270)),levels=(depth_rebuild||standard4kb||packed||unorm||atomic_image)?1:(full_tail?11:(rgba16?7:8)),sampled_levels=full_tail?6:levels,words_per_pixel=rgba16?2:1;VkDeviceSize bytes=packed?0x870000:0x160000;CHECK(target<levels);
  const VkFormat format=atomic_image?VK_FORMAT_R32_UINT:packed?VK_FORMAT_B10G11R11_UFLOAT_PACK32:(unorm?VK_FORMAT_R16G16B16A16_UNORM:(rgba16?VK_FORMAT_R16G16B16A16_SFLOAT:VK_FORMAT_R32_SFLOAT));
  VkFormatProperties format_properties{};vkGetPhysicalDeviceFormatProperties(physical,format,&format_properties);CHECK(format_properties.optimalTilingFeatures&VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT);if(atomic_image)CHECK(format_properties.optimalTilingFeatures&VK_FORMAT_FEATURE_STORAGE_IMAGE_ATOMIC_BIT);
  std::array<VkDeviceSize,16> offsets{0,0xc0000,0x100000,0x110000,0x120000,0x130000,0x140000,0x150000};
  std::array<uint32_t,16> pitches{512,256,128,128,128,128,128,128};
  if(packed)pitches[0]=1920;
+ if(depth_rebuild){bytes=0x280000;pitches[0]=1024;}
  if(rgba16){bytes=0;for(uint32_t l=0;l<levels;l++){offsets[l]=bytes;pitches[l]=std::max(width>>l,1u);bytes=(bytes+VkDeviceSize(pitches[l])*std::max(height>>l,1u)*8+255)&~VkDeviceSize(255);}}
  VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};bci.size=bytes;bci.usage=VK_BUFFER_USAGE_TRANSFER_SRC_BIT|VK_BUFFER_USAGE_TRANSFER_DST_BIT;
  VkBuffer buffer;VKOK(vkCreateBuffer(device,&bci,nullptr,&buffer));VkMemoryRequirements requirements{};vkGetBufferMemoryRequirements(device,buffer,&requirements);
@@ -108,7 +110,7 @@ int main(int argc,char** argv) {try {
  barrier(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_GENERAL,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_WRITE_BIT|VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
  int source=int(InverseStorageSwizzleComponent((rgba16||atomic_image)?0xfac:(packed?0x3ac:0x324),0));CHECK(source==0);
  if(packed){CHECK(InverseStorageSwizzleComponent(0x3ac,1)==1 && InverseStorageSwizzleComponent(0x3ac,2)==2 && InverseStorageSwizzleComponent(0x3ac,3)==UINT32_MAX);}else if(rgba16||atomic_image){for(uint32_t c=0;c<4;c++)CHECK(InverseStorageSwizzleComponent(0xfac,c)==c);}else CHECK(InverseStorageSwizzleComponent(0x324,1)==UINT32_MAX);
- vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline);vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline_layout,0,1,&set,0,nullptr);const int push[]={rgba16?(unorm?-int(sampled_levels):int(sampled_levels)):source,int(target)};vkCmdPushConstants(command,pipeline_layout,VK_SHADER_STAGE_COMPUTE_BIT,0,8,push);vkCmdDispatch(command,(std::max(width>>target,1u)+7)/8,(std::max(height>>target,1u)+7)/8,1);
+ vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline);vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline_layout,0,1,&set,0,nullptr);const int push[]={depth_rebuild?-2:rgba16?(unorm?-int(sampled_levels):int(sampled_levels)):source,int(target)};vkCmdPushConstants(command,pipeline_layout,VK_SHADER_STAGE_COMPUTE_BIT,0,8,push);vkCmdDispatch(command,(std::max(width>>target,1u)+7)/8,(std::max(height>>target,1u)+7)/8,1);
  if(packed){
   barrier(VK_IMAGE_LAYOUT_GENERAL,VK_IMAGE_LAYOUT_GENERAL,VK_ACCESS_SHADER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT|VK_ACCESS_SHADER_WRITE_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
   const int sample_push[]={source,1};vkCmdPushConstants(command,pipeline_layout,VK_SHADER_STAGE_COMPUTE_BIT,0,8,sample_push);vkCmdDispatch(command,(width+7)/8,(height+7)/8,1);
@@ -118,8 +120,70 @@ int main(int argc,char** argv) {try {
  VkMemoryBarrier host{VK_STRUCTURE_TYPE_MEMORY_BARRIER};host.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;host.dstAccessMask=VK_ACCESS_HOST_READ_BIT;vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&host,0,nullptr,0,nullptr);VKOK(vkEndCommandBuffer(command));
  VkSubmitInfo submit{VK_STRUCTURE_TYPE_SUBMIT_INFO};submit.commandBufferCount=1;submit.pCommandBuffers=&command;VKOK(vkQueueSubmit(queue,1,&submit,VK_NULL_HANDLE));VKOK(vkQueueWaitIdle(queue));
  std::vector<bool> visible(bytes/4,false);size_t changed=0;std::vector<bool> atomic_returns(atomic_image&&!atomic_emitter?size_t(width)*height:0,false);
- for(uint32_t l=0;l<levels;++l)for(uint32_t y=0;y<copies[l].imageExtent.height;++y)for(uint32_t x=0;x<copies[l].imageExtent.width;++x){size_t index=offsets[l]/4+(y*pitches[l]+x)*words_per_pixel;for(uint32_t c=0;c<words_per_pixel;c++){visible[index+c]=true;if(atomic_image){const auto value=pixels[index+c];if(index==0){const uint32_t count=atomic_emitter?((width+7)/8)*((height+7)/8)*64:width*height;if(value!=count)std::printf("[ATOMIC-COUNT] actual=%u expected=%u\n",value,count);CHECK(value==count);}else if(atomic_emitter)CHECK(value==0);else{CHECK(value<width*height);CHECK(!atomic_returns[value]);atomic_returns[value]=true;}}else{const uint32_t written=rgba16?(unorm?0xffff0000u:(c==0?0x38003400u:0x3c003c00u)):(packed?((15u<<5u)<<22u)|((14u<<6u)<<11u)|(13u<<6u):0x3e800000u);CHECK(pixels[index+c]==(l==target?written:expected[index+c]));}}changed+=l==target;}
+ for(uint32_t l=0;l<levels;++l)for(uint32_t y=0;y<copies[l].imageExtent.height;++y)for(uint32_t x=0;x<copies[l].imageExtent.width;++x){size_t index=offsets[l]/4+(y*pitches[l]+x)*words_per_pixel;for(uint32_t c=0;c<words_per_pixel;c++){visible[index+c]=true;if(atomic_image){const auto value=pixels[index+c];if(index==0){const uint32_t count=atomic_emitter?((width+7)/8)*((height+7)/8)*64:width*height;if(value!=count)std::printf("[ATOMIC-COUNT] actual=%u expected=%u\n",value,count);CHECK(value==count);}else if(atomic_emitter)CHECK(value==0);else{CHECK(value<width*height);CHECK(!atomic_returns[value]);atomic_returns[value]=true;}}else{const uint32_t written=rgba16?(unorm?0xffff0000u:(c==0?0x38003400u:0x3c003c00u)):(packed?((15u<<5u)<<22u)|((14u<<6u)<<11u)|(13u<<6u):0x3e800000u);if(depth_rebuild){const float depth=0.25f+float((x+3*y)&1023u)/2048.f;uint32_t bits;std::memcpy(&bits,&depth,4);CHECK(pixels[index+c]==bits);}else CHECK(pixels[index+c]==(l==target?written:expected[index+c]));}}changed+=l==target;}
  for(size_t i=0;i<visible.size();++i)if(!visible[i])CHECK(pixels[i]==expected[i]);
+ if(depth_rebuild) {
+  const std::vector<uint32_t> gpu_values(pixels,pixels+bytes/4);
+  VkFormatProperties depth_properties{};
+  vkGetPhysicalDeviceFormatProperties(physical,VK_FORMAT_D32_SFLOAT,&depth_properties);
+  CHECK(depth_properties.optimalTilingFeatures&VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT);
+  for(const uint32_t source_tile : {24u,27u}) {
+   std::vector<uint32_t> guest(bytes/4+2,0x7eab1234u), mask(bytes/4), ones(bytes/4,1), decoded(bytes/4);
+   if(source_tile==24){
+    TileConvertLinearToTiledDepthPreservePadding(guest.data()+1,gpu_values.data(),22,width,height,pitches[0],bytes);
+    TileConvertLinearToTiledDepthPreservePadding(mask.data(),ones.data(),22,width,height,pitches[0],bytes);
+   } else {
+    TileConvertLinearToTiledRenderTarget32PreservePadding(guest.data()+1,gpu_values.data(),width,height,pitches[0],bytes);
+    TileConvertLinearToTiledRenderTarget32PreservePadding(mask.data(),ones.data(),width,height,pitches[0],bytes);
+   }
+   CHECK(guest.front()==0x7eab1234u && guest.back()==0x7eab1234u);
+   for(size_t i=0;i<mask.size();++i)if(!mask[i])CHECK(guest[i+1]==0x7eab1234u);
+   TileConvertTiledToLinearDepth(decoded.data(),guest.data()+1,22,width,height,pitches[0],bytes);
+   for(uint32_t y=0;y<height;++y)for(uint32_t x=0;x<width;++x)
+    CHECK(decoded[y*pitches[0]+x]==gpu_values[y*pitches[0]+x]);
+   std::memcpy(pixels,decoded.data(),size_t(bytes));
+   VkImageCreateInfo depth_ci=imci;depth_ci.format=VK_FORMAT_D32_SFLOAT;
+   depth_ci.usage=VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+   VkImage depth_image;VKOK(vkCreateImage(device,&depth_ci,nullptr,&depth_image));
+   vkGetImageMemoryRequirements(device,depth_image,&requirements);
+   VkDeviceMemory depth_memory=allocate(requirements,VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+   VKOK(vkBindImageMemory(device,depth_image,depth_memory,0));
+   VkImageViewCreateInfo depth_view_ci=vci;depth_view_ci.image=depth_image;depth_view_ci.format=VK_FORMAT_D32_SFLOAT;
+   depth_view_ci.subresourceRange={VK_IMAGE_ASPECT_DEPTH_BIT,0,1,0,1};
+   VkImageView depth_view;VKOK(vkCreateImageView(device,&depth_view_ci,nullptr,&depth_view));
+   VkAttachmentDescription attachment{};attachment.format=VK_FORMAT_D32_SFLOAT;attachment.samples=VK_SAMPLE_COUNT_1_BIT;
+   attachment.loadOp=VK_ATTACHMENT_LOAD_OP_LOAD;attachment.storeOp=VK_ATTACHMENT_STORE_OP_STORE;
+   attachment.stencilLoadOp=VK_ATTACHMENT_LOAD_OP_DONT_CARE;attachment.stencilStoreOp=VK_ATTACHMENT_STORE_OP_DONT_CARE;
+   attachment.initialLayout=attachment.finalLayout=VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL;
+   VkAttachmentReference depth_ref{0,VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL};
+   VkSubpassDescription subpass{};subpass.pipelineBindPoint=VK_PIPELINE_BIND_POINT_GRAPHICS;subpass.pDepthStencilAttachment=&depth_ref;
+   VkRenderPassCreateInfo rp_ci{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};rp_ci.attachmentCount=1;rp_ci.pAttachments=&attachment;rp_ci.subpassCount=1;rp_ci.pSubpasses=&subpass;
+   VkRenderPass render_pass;VKOK(vkCreateRenderPass(device,&rp_ci,nullptr,&render_pass));
+   VkFramebufferCreateInfo fb_ci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};fb_ci.renderPass=render_pass;fb_ci.attachmentCount=1;fb_ci.pAttachments=&depth_view;fb_ci.width=width;fb_ci.height=height;fb_ci.layers=1;
+   VkFramebuffer framebuffer;VKOK(vkCreateFramebuffer(device,&fb_ci,nullptr,&framebuffer));
+   VKOK(vkResetCommandPool(device,command_pool,0));VKOK(vkBeginCommandBuffer(command,&begin));
+   auto depth_barrier=[&](VkImageLayout before,VkImageLayout after,VkAccessFlags src,VkAccessFlags dst,VkPipelineStageFlags src_stage,VkPipelineStageFlags dst_stage){
+    VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};b.oldLayout=before;b.newLayout=after;b.srcAccessMask=src;b.dstAccessMask=dst;
+    b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;b.image=depth_image;b.subresourceRange={VK_IMAGE_ASPECT_DEPTH_BIT,0,1,0,1};
+    vkCmdPipelineBarrier(command,src_stage,dst_stage,0,0,nullptr,0,nullptr,1,&b);
+   };
+   VkBufferImageCopy depth_copy=copies[0];depth_copy.imageSubresource.aspectMask=VK_IMAGE_ASPECT_DEPTH_BIT;
+   depth_barrier(VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,0,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
+   vkCmdCopyBufferToImage(command,buffer,depth_image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&depth_copy);
+   constexpr auto depth_stages=VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT|VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
+   depth_barrier(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,depth_stages);
+   VkRenderPassBeginInfo rp_begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};rp_begin.renderPass=render_pass;rp_begin.framebuffer=framebuffer;rp_begin.renderArea.extent={width,height};
+   vkCmdBeginRenderPass(command,&rp_begin,VK_SUBPASS_CONTENTS_INLINE);vkCmdEndRenderPass(command);
+   depth_barrier(VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT,VK_ACCESS_TRANSFER_READ_BIT,depth_stages,VK_PIPELINE_STAGE_TRANSFER_BIT);
+   vkCmdCopyImageToBuffer(command,depth_image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,buffer,1,&depth_copy);
+   vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&host,0,nullptr,0,nullptr);
+   VKOK(vkEndCommandBuffer(command));VKOK(vkQueueSubmit(queue,1,&submit,VK_NULL_HANDLE));VKOK(vkQueueWaitIdle(queue));
+   for(size_t i=0;i<decoded.size();++i)CHECK(pixels[i]==decoded[i]);
+   std::printf("[STORAGE-DEPTH-ATTACHMENT-GPU] device=%s source_tile=%u extent=960x540 gpu_storage_write=spatial_pattern production_retile_detile=bit_exact D32_readonly_load_store=bit_exact backing_padding_guards=preserved fixture=synthetic Astro=not-executed\n",properties.deviceName,source_tile);
+   vkDestroyFramebuffer(device,framebuffer,nullptr);vkDestroyRenderPass(device,render_pass,nullptr);vkDestroyImageView(device,depth_view,nullptr);
+   vkDestroyImage(device,depth_image,nullptr);vkFreeMemory(device,depth_memory,nullptr);
+  }
+ }
  if(standard4kb) {
   std::vector<uint64_t> tiled(1032,0xdeadbeefcafebabeull),linear(1032,0xdeadbeefcafebabeull);
   TileConvertLinearToTiledStandard4KB64(tiled.data(),pixels+offsets[0]/4,32,32,32,8192);
@@ -132,7 +196,7 @@ int main(int argc,char** argv) {try {
  else if(atomic_image){CHECK(std::count(atomic_returns.begin(),atomic_returns.end(),true)==size_t(width)*height-1);std::printf("[STORAGE-ATOMIC-GPU] device=%s R32Uint2D counter=%u unique_old_values=%u padding_preserved=1 fixture_shader=GLSL Astro=not-executed\n",properties.deviceName,width*height,width*height-1);}
  else if(packed)std::printf("[STORAGE-PACKED-GPU] device=%s R11G11B10 RGB1 identity_storage formatless_write=1 native_clear=checked sampled_RGB1=checked written_pixels=%zu packed_bits=checked padding_preserved=1 Astro=not-executed\n",properties.deviceName,changed);
  else if(rgba16)std::printf("[STORAGE-RGBA16-MIP-GPU] device=%s format=%s target_mip=%u written_pixels=%zu backing_levels=%u unchanged_mips=%u sampled_levels=%u identity_RGBA=checked component_bits=checked padding_preserved=1 Astro=not-executed\n",properties.deviceName,unorm?"UNorm-linear":"Sfloat",target,changed,levels,levels-1,sampled_levels);
- else std::printf("[STORAGE-MIP-GPU] device=%s R32Float RRR1 source=%d target_mip=%u written_pixels=%zu unchanged_mips=7 sampled_mips=8 sampled_RRR1=checked padding_preserved=1 Astro=not-executed\n",properties.deviceName,source,target,changed);
+ else if(!depth_rebuild)std::printf("[STORAGE-MIP-GPU] device=%s R32Float RRR1 source=%d target_mip=%u written_pixels=%zu unchanged_mips=7 sampled_mips=8 sampled_RRR1=checked padding_preserved=1 Astro=not-executed\n",properties.deviceName,source,target,changed);
  vkDestroyCommandPool(device,command_pool,nullptr);vkDestroyPipeline(device,pipeline,nullptr);vkDestroyShaderModule(device,shader,nullptr);vkDestroyPipelineLayout(device,pipeline_layout,nullptr);vkDestroyDescriptorPool(device,pool,nullptr);vkDestroyDescriptorSetLayout(device,set_layout,nullptr);vkDestroySampler(device,sampler,nullptr);vkDestroyImageView(device,sampled_view,nullptr);vkDestroyImageView(device,view,nullptr);vkDestroyImage(device,image,nullptr);vkFreeMemory(device,image_memory,nullptr);vkUnmapMemory(device,buffer_memory);vkDestroyBuffer(device,buffer,nullptr);vkFreeMemory(device,buffer_memory,nullptr);vkDestroyDevice(device,nullptr);
  if(messenger){const auto destroy=reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(instance,"vkDestroyDebugUtilsMessengerEXT"));CHECK(destroy);destroy(instance,messenger,nullptr);}
  vkDestroyInstance(instance,nullptr);

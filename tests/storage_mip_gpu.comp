@@ -4,6 +4,11 @@ layout(set=0,binding=0,r32f) uniform writeonly image2D output_image;
 layout(set=0,binding=1) uniform sampler2D sampled_image;
 layout(push_constant) uniform Push {int source_component;int target_mip;} pc;
 void main(){ivec2 p=ivec2(gl_GlobalInvocationID.xy);if(any(greaterThanEqual(p,imageSize(output_image))))return;
+ if(pc.source_component==-2){
+  bool valid=textureQueryLevels(sampled_image)==1;
+  float depth=0.25+float((p.x+3*p.y)&1023)/2048.0;
+  imageStore(output_image,p,vec4(valid?depth:-1.0));return;
+ }
  bool correct=textureQueryLevels(sampled_image)==8;
  for(int level=0;level<8;++level){if(level==pc.target_mip)continue;vec4 v=texelFetch(sampled_image,ivec2(0),level);float expected=0.125+float(level)/16.0;
   correct=correct && all(equal(v,vec4(expected,expected,expected,1.0)));}

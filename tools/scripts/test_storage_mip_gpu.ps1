@@ -18,6 +18,24 @@ $tileCode+=TileSlice 'static uint32_t Gen5Standard4KBOffsetInBlock(' 'static uin
 $tileCode+="`ntemplate <typename T>`n"+(TileSlice 'static void DetileStandard4KBTyped(' 'template <typename T>')
 $tileCode+=TileSlice 'void TileConvertLinearToTiledStandard4KB64(' 'void TileConvertTiledToLinearStandard4KB3D('
 $source=$source.Replace('// PRODUCTION_STANDARD4KB',$tileCode)
+$aliasCode=@'
+#define KYTY_PROFILER_FUNCTION()
+#define EXIT_IF(x) do {if(x) EXIT();} while(0)
+#define EXIT_NOT_IMPLEMENTED(x) EXIT_IF(x)
+namespace Common {struct LockGuard {explicit LockGuard(int&) {}};}
+struct Job {template<class F> void Execute(F f) {f();} void Wait() {}};
+struct TilerTest {int m_mutex;Job m_job1;};
+TilerTest test_tiler{};auto* g_tiler=&test_tiler;
+namespace Prospero {uint32_t NumBytesPerElement(uint32_t format) {if(format!=22)EXIT();return 4;}}
+#include <cinttypes>
+'@
+$aliasCode+="`n"
+$aliasCode+=TileSlice 'static bool Gen5Thin64KBBlockSizeFromElementBytes(' 'struct Gen5MipTailLocation'
+$aliasCode+="`ntemplate <typename T>`n"+(TileSlice 'static uint32_t Gen5RenderTargetOffsetInBlock(' 'static const Standard64KB16Tables& GetStandard64KB16Tables(')
+$aliasCode+=TileSlice 'void TileConvertLinearToTiledRenderTarget32PreservePadding(' 'void TileConvertLinearToTiledRenderTarget64PreservePadding('
+$aliasCode+=TileSlice 'static constexpr uint32_t Depth64KB8XOffsetBytes' 'void TileConvertTiledToLinearStandard4KB('
+$source=$source.Replace('// PRODUCTION_R32_ALIAS',$aliasCode)
+
 New-Item -ItemType Directory -Path $out -Force | Out-Null
 [IO.File]::WriteAllText("$out\storage_mip_gpu_production.cpp",$source,[Text.UTF8Encoding]::new($false))
 Push-Location $out
@@ -44,6 +62,8 @@ try {
   & .\storage_mip_gpu_test.exe $AtomicEmitterSpirv 0 atomic-emitter
   if($LASTEXITCODE){throw 'Production emitter image atomic Vulkan test failed'}
  }
+ & .\storage_mip_gpu_test.exe storage_mip_gpu.spv 0 depth-rebuild
+ if($LASTEXITCODE){throw 'R32 storage to D32 attachment Vulkan test failed'}
  & .\storage_mip_gpu_test.exe storage_atomic_gpu.spv 0 atomic
  if($LASTEXITCODE){throw 'R32Uint atomic storage Vulkan test failed'}
  foreach($target in @(0,1,7)) {
