@@ -2,6 +2,55 @@
 static void Require(bool ok,std::source_location where=std::source_location::current()) {if(!ok) {std::fprintf(stderr,"Regression failed at %s:%u\n",where.file_name(),where.line());throw std::runtime_error("regression failed");}}
 int main() {
  {
+  DepthTargetInfo target{};target.address=0x145db3e0000ull;target.size=0x280000;
+  target.format=vk::Format::eD32Sfloat;target.guest_format=Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float);
+  target.width=960;target.height=540;target.pitch=1024;target.bytes_per_element=4;
+  target.tile_mode=Prospero::GpuEnumValue(Prospero::TileMode::kDepth);target.layers=1;
+  for(uint32_t tile:{Prospero::GpuEnumValue(Prospero::TileMode::kDepth),Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget)}) {
+   ImageInfo source{};source.address=target.address;source.size=target.size;source.format=target.guest_format;
+   source.width=target.width;source.height=target.height;source.pitch=target.pitch;source.tile=tile;
+   source.type=Prospero::GpuEnumValue(Prospero::ImageType::kColor2D);source.depth=source.levels=source.view_levels=1;
+   Require(CanReconstructStorageForDepthTarget(source,true,false,true,false,true,true,false,true,target));
+   for(int bad=0;bad<8;++bad)
+    Require(!CanReconstructStorageForDepthTarget(source,bad!=0,bad==1,bad!=2,bad==3,bad!=4,bad!=5,bad==6,bad!=7,target));
+   for(int bad=0;bad<13;++bad) {
+    auto malformed=target;
+    switch(bad) {case 0:malformed.address+=0x10000;break;case 1:malformed.size-=0x10000;break;
+     case 2:malformed.width--;break;case 3:malformed.pitch=960;break;case 4:malformed.layers=2;break;
+     case 5:malformed.bytes_per_element=2;break;case 6:malformed.format=vk::Format::eD16Unorm;break;
+     case 7:malformed.tile_mode=Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget);break;
+     case 8:malformed.depth_load_clear=true;break;case 9:malformed.stencil_address=0x15000000000ull;break;
+     case 10:malformed.stencil_size=0x10000;break;case 11:malformed.htile_address=0x16000000000ull;break;
+     case 12:malformed.htile_size=0x8000;break;}
+    Require(!CanReconstructStorageForDepthTarget(source,true,false,true,false,true,true,false,true,malformed));
+   }
+   // Publish GPU-visible texels through the original permutation, preserving all
+   // backing bytes, then decode the captured D32 target rather than copying a view.
+   std::vector<uint32_t> linear(source.size/4), guest(linear.size()+2,0x7eab1234u);
+   std::vector<uint32_t> mask(linear.size()), ones(linear.size(),1), decoded(linear.size());
+   for(uint32_t y=0;y<source.height;++y)for(uint32_t x=0;x<source.width;++x)
+    linear[y*source.pitch+x]=0x3e000000u+((y*source.width+x)*13u & 0x7fffffu);
+   if(tile==Prospero::GpuEnumValue(Prospero::TileMode::kDepth)) {
+    TileDepthStorageMipsPreservePadding(guest.data()+1,linear.data(),source);
+    TileDepthStorageMipsPreservePadding(mask.data(),ones.data(),source);
+   } else {
+    TileConvertLinearToTiledRenderTarget32PreservePadding(guest.data()+1,linear.data(),source.width,source.height,source.pitch,source.size);
+    TileConvertLinearToTiledRenderTarget32PreservePadding(mask.data(),ones.data(),source.width,source.height,source.pitch,source.size);
+   }
+   Require(guest.front()==0x7eab1234u && guest.back()==0x7eab1234u);
+   for(size_t i=0;i<mask.size();++i)if(!mask[i])Require(guest[i+1]==0x7eab1234u);
+   TileConvertTiledToLinearDepth(decoded.data(),guest.data()+1,target.guest_format,target.width,target.height,target.pitch,target.size);
+   for(uint32_t y=0;y<target.height;++y)for(uint32_t x=0;x<target.width;++x)
+    Require(decoded[y*target.pitch+x]==linear[y*source.pitch+x]);
+   auto wrong=source;wrong.levels=2;Require(!CanReconstructStorageForDepthTarget(wrong,true,false,true,false,true,true,false,true,target));
+   wrong=source;wrong.depth=2;Require(!CanReconstructStorageForDepthTarget(wrong,true,false,true,false,true,true,false,true,target));
+   wrong=source;wrong.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k32UInt);
+   Require(!CanReconstructStorageForDepthTarget(wrong,true,false,true,false,true,true,false,true,target));
+  }
+  std::puts("[STORAGE-DEPTH-POLICY] captured960x540 exact ranges, source layouts and ownership negatives=passed");
+ }
+
+ {
   ImageInfo info{};info.address=0x15f28f2e000;info.size=8192;info.format=71;info.tile=5;info.type=9;
   info.width=info.height=info.pitch=32;info.depth=1;info.base_level=0;info.levels=info.view_levels=1;info.swizzle=0xfac;
   if(!IsSupportedStandard4KBRgba16Storage(info))return 201;

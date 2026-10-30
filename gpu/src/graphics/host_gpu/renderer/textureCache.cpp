@@ -2311,12 +2311,33 @@ DepthStencilVulkanImage* TextureCache::FindDepthTarget(CommandBuffer* command, G
 	if (has_htile) {
 		RegisterMeta(info.htile_address, info.htile_size, info.layers);
 	}
+	bool needs_storage_drain = false;
+	{
+		std::lock_guard transaction(m_resource_mutex);
+		FaultSafeTextureLock lock(this, m_lock);
+		const bool buffers = m_buffer_cache.HasPageOverlap(info.address, info.size);
+		for (const auto& entry: m_images) {
+			const auto& cached = *entry;
+			if (cached.kind == CachedImage::Kind::StorageTexture &&
+			    CanReconstructStorageForDepthTarget(cached.info, cached.gpu_modified,
+			        cached.buffer_modified, m_memory_tracker.IsRegionGpuModified(cached.Address(), cached.Size()),
+			        cached.info.IsCpuDirty() || m_memory_tracker.IsRegionCpuModified(cached.Address(), cached.Size()),
+			        cached.ctx == ctx, true, buffers, !HasOtherImagePageOwnerLocked(cached), info)) {
+				needs_storage_drain = true;
+				break;
+			}
+		}
+	}
+	if (needs_storage_drain) {
+		// Producer commands must be submitted outside both cache locks.
+		GraphicsRunSynchronizeCommandProcessors();
+	}
 	std::lock_guard transaction(m_resource_mutex);
 	// BufferCache treats an untracked guest range as CPU-current. That is useful when
 	// uploading from guest memory, but it is not evidence that a clean native image is
 	// stale. Only a genuinely overlapping buffer participates in transition selection.
 	const bool depth_buffer_overlap = m_buffer_cache.HasPageOverlap(info.address, info.size);
-	const auto depth_source         = m_buffer_cache.ObtainBufferForImage(info.address, info.size);
+	auto depth_source               = m_buffer_cache.ObtainBufferForImage(info.address, info.size);
 	const auto stencil_source =
 	    has_stencil ? m_buffer_cache.ObtainBufferForImage(info.stencil_address, info.stencil_size)
 	                : BufferImageCopySource {};
@@ -2384,6 +2405,7 @@ DepthStencilVulkanImage* TextureCache::FindDepthTarget(CommandBuffer* command, G
 		return static_cast<DepthStencilVulkanImage*>(match->image);
 	}
 	std::vector<CachedImage*>    retire;
+	std::vector<CachedImage*> reconstructed_storage_retire;
 	std::shared_ptr<CachedImage> sampled_depth_source;
 	std::shared_ptr<CachedImage> native_depth_source;
 	std::shared_ptr<CachedImage> discarded_depth_source;
@@ -2394,6 +2416,17 @@ DepthStencilVulkanImage* TextureCache::FindDepthTarget(CommandBuffer* command, G
 		    cached.OverlapsRange(info.address, info.size, true) ||
 		    (has_stencil && cached.OverlapsRange(info.stencil_address, info.stencil_size, true));
 		if (!overlaps) {
+			continue;
+		}
+		if (cached.kind == CachedImage::Kind::StorageTexture &&
+		    CanReconstructStorageForDepthTarget(cached.info, cached.gpu_modified,
+		        cached.buffer_modified, m_memory_tracker.IsRegionGpuModified(cached.Address(), cached.Size()),
+		        cached.info.IsCpuDirty() || m_memory_tracker.IsRegionCpuModified(cached.Address(), cached.Size()),
+		        cached.ctx == ctx, IsCoherentGuestImageSource(depth_source, info.address, info.size),
+		        depth_buffer_overlap, !HasOtherImagePageOwnerLocked(cached), info)) {
+			command->RetainResourceUntilFence(entry);
+			reconstructed_storage_retire.push_back(&cached);
+			retire.push_back(&cached);
 			continue;
 		}
 		DepthOverlap overlap = DepthOverlap::Unsupported;
@@ -2459,7 +2492,7 @@ DepthStencilVulkanImage* TextureCache::FindDepthTarget(CommandBuffer* command, G
 			case DepthOverlap::Unsupported: break;
 		}
 		if (!supported) {
-			LOGF("[DEPTH-ALIAS] stencil=0x%016" PRIx64 "+0x%016" PRIx64
+			std::fprintf(stderr, "[DEPTH-ALIAS] stencil=0x%016" PRIx64 "+0x%016" PRIx64
 			     " extent=%ux%u pitch=%u tile=%u layers=%u clear=%u,%u current=%u"
 			     " sampled_format=%u extent=%ux%u pitch=%u tile=%u gpu_modified=%u\n",
 			     info.stencil_address, info.stencil_size, info.width, info.height, info.pitch,
@@ -2467,6 +2500,15 @@ DepthStencilVulkanImage* TextureCache::FindDepthTarget(CommandBuffer* command, G
 			     IsCoherentGuestImageSource(stencil_source, info.stencil_address, info.stencil_size),
 			     cached.info.format, cached.info.width, cached.info.height, cached.info.pitch,
 			     cached.info.tile, cached.gpu_modified);
+			std::fprintf(stderr, "[DEPTH-ALIAS-OWNER] buffer_modified=%u cpu_dirty=%u tracker_gpu=%u"
+			             " same_context=%u buffer_overlap=%u isolated=%u type=%u depth=%u"
+			             " base_level=%u levels=%u view_levels=%u base_array=%u\n",
+			             unsigned(cached.buffer_modified), unsigned(cached.info.IsCpuDirty()),
+			             unsigned(m_memory_tracker.IsRegionGpuModified(cached.Address(), cached.Size())),
+			             unsigned(cached.ctx == ctx), unsigned(depth_buffer_overlap),
+			             unsigned(!HasOtherImagePageOwnerLocked(cached)), cached.info.type, cached.info.depth,
+			             cached.info.base_level, cached.info.levels, cached.info.view_levels, cached.info.base_array);
+			std::fflush(stderr);
 			EXIT("TextureCache: unsupported depth-target alias, depth=0x%016" PRIx64
 			     "+0x%016" PRIx64 " existing_kind=%u existing=0x%016" PRIx64 "+0x%016" PRIx64 "\n",
 			     info.address, info.size, static_cast<uint32_t>(cached.kind), cached.Address(),
@@ -2475,6 +2517,34 @@ DepthStencilVulkanImage* TextureCache::FindDepthTarget(CommandBuffer* command, G
 		retire.push_back(&cached);
 	}
 	RequireRetirementIsolation(retire, "depth target", info.address, info.size);
+	if (!reconstructed_storage_retire.empty()) {
+		if (!needs_storage_drain || reconstructed_storage_retire.size() != 1 ||
+		    sampled_depth_source != nullptr || native_depth_source != nullptr ||
+		    discarded_depth_source != nullptr || retired_storage_source != nullptr) {
+			EXIT("TextureCache: storage/depth reconstruction has competing owners or no producer drain\n");
+		}
+		auto* storage = reconstructed_storage_retire.front();
+		if (IsSupportedColorStorageBacking(storage->info)) {
+			const auto transfer = m_readback->DownloadColorImage(*storage, true);
+			m_memory_tracker.ForEachDownloadRange<true>(transfer.address, transfer.size,
+			    [](uint64_t, uint64_t) noexcept {});
+			storage->gpu_modified = false;
+		} else {
+			SynchronizeColorImageToBufferLocked(*storage, storage->info.address, storage->info.size, true);
+		}
+		storage->buffer_modified = false;
+		depth_source = m_buffer_cache.ObtainBufferForImage(info.address, info.size);
+		if (!IsCoherentGuestImageSource(depth_source, info.address, info.size)) {
+			EXIT("TextureCache: reconstructed depth backing is not CPU-current\n");
+		}
+		static std::atomic_uint logs {0};
+		if (logs.fetch_add(1, std::memory_order_relaxed) < 8) {
+			std::printf("[STORAGE-DEPTH-RECONSTRUCT] address=0x%016" PRIx64 " size=0x%016" PRIx64
+			            " source_tile=%u depth_tile=%u full_backing=1 padding_preserved=1\n",
+			            info.address, info.size, storage->info.tile, info.tile_mode);
+		}
+	}
+
 	if (retired_storage_source != nullptr) {
 		m_memory_tracker.UnmarkRegionAsGpuModified(retired_storage_source->info.address,
 		                                           retired_storage_source->info.size);

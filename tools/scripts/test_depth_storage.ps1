@@ -23,7 +23,7 @@ $header=@'
 #define KYTY_PROFILER_FUNCTION()
 #define EXIT(...) throw std::runtime_error("invalid conversion")
 #define EXIT_IF(x) do {if(x) EXIT();} while(0)
-namespace vk {enum class Format {eUndefined,eR32Sfloat,eR32Uint,eB10G11R11UfloatPack32,eR8G8B8A8Unorm,eR8G8B8A8Srgb,eB8G8R8A8Unorm,eB8G8R8A8Srgb};}
+namespace vk {enum class Format {eUndefined,eD32Sfloat,eD16Unorm,eR32Sfloat,eR32Uint,eB10G11R11UfloatPack32,eR8G8B8A8Unorm,eR8G8B8A8Srgb,eB8G8R8A8Unorm,eB8G8R8A8Srgb};}
 namespace Common {struct LockGuard {explicit LockGuard(int&) {}};}
 struct Job {template<class F> void Execute(F f) {f();} void Wait() {}};
 struct TilerTest {int m_mutex;Job m_job1;};

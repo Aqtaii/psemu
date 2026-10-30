@@ -1215,6 +1215,30 @@ CanReconstructStorageForRenderTarget(const ImageInfo& storage, bool gpu_modified
         IsSupportedRenderTargetReconstructionFootprint(backing);
 }
 
+// Preserve the complete authoritative R32Float storage allocation before an exact
+// single-layer D32 depth target interprets those bytes in the depth permutation.
+[[nodiscard]] inline bool CanReconstructStorageForDepthTarget(
+    const ImageInfo& storage, bool gpu, bool buffer, bool tracker_gpu, bool cpu_dirty,
+    bool same_context, bool coherent_target, bool target_buffers, bool isolated,
+    const DepthTargetInfo& depth) {
+	if (!gpu || buffer || !tracker_gpu || cpu_dirty || !same_context || !coherent_target ||
+	    target_buffers || !isolated || storage.format != Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float) ||
+	    storage.levels != 1 || storage.base_level != 0 || storage.view_levels != 1 ||
+	    storage.depth != 1 || storage.base_array != 0 ||
+	    (!IsSupportedDepthStorageBacking(storage) && !IsSupportedColorStorageBacking(storage)) ||
+	    depth.format != vk::Format::eD32Sfloat || depth.guest_format != storage.format ||
+	    depth.bytes_per_element != 4 || depth.tile_mode != Prospero::GpuEnumValue(Prospero::TileMode::kDepth) ||
+	    depth.layers != 1 || depth.depth_load_clear || depth.stencil_address != 0 || depth.stencil_size != 0 ||
+	    depth.htile_address != 0 || depth.htile_size != 0 || depth.width == 0 || depth.height == 0 ||
+	    depth.width > 16384 || depth.height > 16384 || depth.address == 0 || (depth.address & 0xffffu) != 0 ||
+	    depth.size > UINT32_MAX || depth.size > UINT64_MAX-depth.address) return false;
+	const uint64_t pitch = (uint64_t(depth.width)+127u)&~uint64_t{127u};
+	const uint64_t height = (uint64_t(depth.height)+127u)&~uint64_t{127u};
+	return depth.pitch == pitch && depth.size == pitch*height*4u &&
+	       storage.address == depth.address && storage.size == depth.size &&
+	       storage.width == depth.width && storage.height == depth.height && storage.pitch == depth.pitch;
+}
+
 // Complete native color storage publication before a containing transient target takes ownership.
 [[nodiscard]] inline bool CanReconstructColorStorageForRenderTarget(
     const ImageInfo& storage, bool gpu, bool buffer, bool tracker_gpu, bool cpu_dirty,

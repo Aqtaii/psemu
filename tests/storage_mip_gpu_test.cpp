@@ -10,8 +10,15 @@
 #include <cstdint>
 #include <algorithm>
 #include <cstdlib>
+#include <atomic>
 #define CHECK(x) do{if(!(x))throw std::runtime_error(#x);}while(0)
 #define VKOK(x) CHECK((x)==VK_SUCCESS)
+static std::atomic<uint32_t> validation_issues{0};
+static VKAPI_ATTR VkBool32 VKAPI_CALL ValidationMessage(VkDebugUtilsMessageSeverityFlagBitsEXT,
+ VkDebugUtilsMessageTypeFlagsEXT,const VkDebugUtilsMessengerCallbackDataEXT* data,void*) {
+ validation_issues.fetch_add(1,std::memory_order_relaxed);
+ std::fprintf(stderr,"[STORAGE-VALIDATION] %s\n",data && data->pMessage ? data->pMessage : "missing diagnostic");return VK_FALSE;
+}
 // PRODUCTION_INVERSE
 // PRODUCTION_STANDARD4KB
 int main(int argc,char** argv) {try {
@@ -21,7 +28,21 @@ int main(int argc,char** argv) {try {
  std::vector<uint32_t> code(shader_bytes/4);input.seekg(0);input.read(reinterpret_cast<char*>(code.data()),shader_bytes);CHECK(input);
  VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};app.apiVersion=VK_API_VERSION_1_2;
  VkInstanceCreateInfo ici{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};ici.pApplicationInfo=&app;
- VkInstance instance;VKOK(vkCreateInstance(&ici,nullptr,&instance));
+ const char* validation_layer="VK_LAYER_KHRONOS_validation";const char* requested_layers=std::getenv("VK_INSTANCE_LAYERS");
+ if(requested_layers && std::strstr(requested_layers,validation_layer)){ici.enabledLayerCount=1;ici.ppEnabledLayerNames=&validation_layer;}
+ uint32_t extension_count=0;VKOK(vkEnumerateInstanceExtensionProperties(nullptr,&extension_count,nullptr));
+ std::vector<VkExtensionProperties> extensions(extension_count);VKOK(vkEnumerateInstanceExtensionProperties(nullptr,&extension_count,extensions.data()));
+ bool debug_utils=false;for(const auto& extension:extensions)if(std::strcmp(extension.extensionName,VK_EXT_DEBUG_UTILS_EXTENSION_NAME)==0)debug_utils=true;
+ const char* debug_extension=VK_EXT_DEBUG_UTILS_EXTENSION_NAME;
+ VkDebugUtilsMessengerCreateInfoEXT debug_info{VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
+ debug_info.messageSeverity=VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT|VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+ debug_info.messageType=VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT|VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+ debug_info.pfnUserCallback=ValidationMessage;
+ if(debug_utils){ici.enabledExtensionCount=1;ici.ppEnabledExtensionNames=&debug_extension;ici.pNext=&debug_info;}
+ VkInstance instance;VKOK(vkCreateInstance(&ici,nullptr,&instance));VkDebugUtilsMessengerEXT messenger=VK_NULL_HANDLE;
+ if(debug_utils){const auto create=reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(instance,"vkCreateDebugUtilsMessengerEXT"));
+  if(!create)throw std::runtime_error("Debug utils entry unavailable");VKOK(create(instance,&debug_info,nullptr,&messenger));}
+
  uint32_t physical_count=0;VKOK(vkEnumeratePhysicalDevices(instance,&physical_count,nullptr));CHECK(physical_count);
  std::vector<VkPhysicalDevice> physicals(physical_count);VKOK(vkEnumeratePhysicalDevices(instance,&physical_count,physicals.data()));
  VkPhysicalDevice physical=physicals[0];VkPhysicalDeviceProperties properties{};vkGetPhysicalDeviceProperties(physical,&properties);
@@ -112,6 +133,9 @@ int main(int argc,char** argv) {try {
  else if(packed)std::printf("[STORAGE-PACKED-GPU] device=%s R11G11B10 RGB1 identity_storage formatless_write=1 native_clear=checked sampled_RGB1=checked written_pixels=%zu packed_bits=checked padding_preserved=1 Astro=not-executed\n",properties.deviceName,changed);
  else if(rgba16)std::printf("[STORAGE-RGBA16-MIP-GPU] device=%s format=%s target_mip=%u written_pixels=%zu backing_levels=%u unchanged_mips=%u sampled_levels=%u identity_RGBA=checked component_bits=checked padding_preserved=1 Astro=not-executed\n",properties.deviceName,unorm?"UNorm-linear":"Sfloat",target,changed,levels,levels-1,sampled_levels);
  else std::printf("[STORAGE-MIP-GPU] device=%s R32Float RRR1 source=%d target_mip=%u written_pixels=%zu unchanged_mips=7 sampled_mips=8 sampled_RRR1=checked padding_preserved=1 Astro=not-executed\n",properties.deviceName,source,target,changed);
- vkDestroyCommandPool(device,command_pool,nullptr);vkDestroyPipeline(device,pipeline,nullptr);vkDestroyShaderModule(device,shader,nullptr);vkDestroyPipelineLayout(device,pipeline_layout,nullptr);vkDestroyDescriptorPool(device,pool,nullptr);vkDestroyDescriptorSetLayout(device,set_layout,nullptr);vkDestroySampler(device,sampler,nullptr);vkDestroyImageView(device,sampled_view,nullptr);vkDestroyImageView(device,view,nullptr);vkDestroyImage(device,image,nullptr);vkFreeMemory(device,image_memory,nullptr);vkUnmapMemory(device,buffer_memory);vkDestroyBuffer(device,buffer,nullptr);vkFreeMemory(device,buffer_memory,nullptr);vkDestroyDevice(device,nullptr);vkDestroyInstance(instance,nullptr);
+ vkDestroyCommandPool(device,command_pool,nullptr);vkDestroyPipeline(device,pipeline,nullptr);vkDestroyShaderModule(device,shader,nullptr);vkDestroyPipelineLayout(device,pipeline_layout,nullptr);vkDestroyDescriptorPool(device,pool,nullptr);vkDestroyDescriptorSetLayout(device,set_layout,nullptr);vkDestroySampler(device,sampler,nullptr);vkDestroyImageView(device,sampled_view,nullptr);vkDestroyImageView(device,view,nullptr);vkDestroyImage(device,image,nullptr);vkFreeMemory(device,image_memory,nullptr);vkUnmapMemory(device,buffer_memory);vkDestroyBuffer(device,buffer,nullptr);vkFreeMemory(device,buffer_memory,nullptr);vkDestroyDevice(device,nullptr);
+ if(messenger){const auto destroy=reinterpret_cast<PFN_vkDestroyDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(instance,"vkDestroyDebugUtilsMessengerEXT"));CHECK(destroy);destroy(instance,messenger,nullptr);}
+ vkDestroyInstance(instance,nullptr);
+ const auto issues=validation_issues.load(std::memory_order_relaxed);std::printf("[STORAGE-VALIDATION] issues=%u callback=%u\n",issues,debug_utils);CHECK(issues==0);
  return 0;
  }catch(const std::exception& e){std::printf("[STORAGE-MIP-GPU] FAIL: %s\n",e.what());return 1;}}
