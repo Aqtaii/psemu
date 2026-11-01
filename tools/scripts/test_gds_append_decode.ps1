@@ -29,6 +29,9 @@ try {
  $emitter=[IO.File]::ReadAllText("$dir\SpirvEmitter.cpp")
  $begin=$emitter.IndexOf('bool Fail(')
  $end=$emitter.IndexOf('bool ValidateNativeProgram(')
+ # The saved-mask proof belongs to full-program validation, not the isolated GDS contract.
+ $proof=$emitter.IndexOf('bool IsEntryExecWordPredicate(')
+ if($proof -gt $begin -and $proof -lt $end){$end=$proof}
  if($begin -lt 0 -or $end -le $begin){throw 'Emitter contract extraction failed'}
  $contract=$emitter.Substring($begin,$end-$begin)
  $oldContract=$contract.Replace('inst.dst.kind != IR::OperandKind::Register)) ||','inst.dst.kind != IR::OperandKind::Register || (kind == IR::ResourceKind::Gds && inst.memory.offset != 0))) ||')
