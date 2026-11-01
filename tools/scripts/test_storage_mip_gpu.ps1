@@ -32,7 +32,7 @@ namespace Prospero {uint32_t NumBytesPerElement(uint32_t format) {if(format!=22)
 $aliasCode+="`n"
 $aliasCode+=TileSlice 'static bool Gen5Thin64KBBlockSizeFromElementBytes(' 'struct Gen5MipTailLocation'
 $aliasCode+="`ntemplate <typename T>`n"+(TileSlice 'static uint32_t Gen5RenderTargetOffsetInBlock(' 'static const Standard64KB16Tables& GetStandard64KB16Tables(')
-$aliasCode+=TileSlice 'void TileConvertLinearToTiledRenderTarget32PreservePadding(' 'void TileConvertLinearToTiledRenderTarget64PreservePadding('
+$aliasCode+=TileSlice 'void TileConvertLinearToTiledRenderTarget32PreservePadding(' 'void TileConvertLinearToTiledRenderTarget('
 $aliasCode+=TileSlice 'static constexpr uint32_t Depth64KB8XOffsetBytes' 'void TileConvertTiledToLinearStandard4KB('
 $source=$source.Replace('// PRODUCTION_R32_ALIAS',$aliasCode)
 
@@ -80,4 +80,7 @@ try {
  if($LASTEXITCODE){throw 'RGBA16 Standard4KB storage/readback Vulkan test failed'}
  & .\storage_mip_gpu_test.exe storage_rgba16_mip_gpu.spv 0 unorm-linear
  if($LASTEXITCODE){throw 'RGBA16 UNorm linear storage Vulkan test failed'}
+
+ & .\storage_mip_gpu_test.exe storage_rgba16_mip_gpu.spv 0 rgba16-crossing
+ if($LASTEXITCODE -ne 0){throw 'Crossing tiled RGBA16F storage GPU regression failed'}
 } finally {Pop-Location}

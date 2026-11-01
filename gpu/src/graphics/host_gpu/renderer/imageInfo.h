@@ -1291,6 +1291,23 @@ CanReconstructStorageForRenderTarget(const ImageInfo& storage, bool gpu_modified
            storage.size<=target.size-(storage.address-target.address);
 }
 
+// A formatted write may cross a tiled color-storage edge. Publish the complete
+// original image first; a yielded image subsequently belongs to the buffer.
+[[nodiscard]] inline BufferImageWrite ClassifyTiledColorStorageBufferWrite(
+    uint64_t address, uint64_t size, const ImageInfo& info, bool gpu, bool buffer,
+    bool tracker_gpu, bool cpu, bool formatted, bool page_conflict, bool buffer_conflict) {
+ if (!IsSupportedColorStorageBacking(info) ||
+     info.tile!=Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) ||
+     address==0 || size==0 || size>UINT64_MAX-address || info.size>UINT64_MAX-info.address ||
+     ((address|size|info.address|info.size)&(TRACKER_PAGE_SIZE-1))!=0 ||
+     !ImageRangeOverlaps(address,size,info.address,info.size) ||
+     !formatted || page_conflict || cpu) return BufferImageWrite::Unsupported;
+ if (gpu && !buffer && tracker_gpu && !buffer_conflict)
+  return BufferImageWrite::SynchronizeStorageTexture;
+ if (!gpu && buffer && !tracker_gpu) return BufferImageWrite::InvalidateStorageTexture;
+ return BufferImageWrite::Unsupported;
+}
+
 // Captured linear RGBA16F array backing: no row padding or auxiliary subresources.
 [[nodiscard]] inline bool IsLinearRgba16ArrayBacking(const ImageInfo& info) {
  return info.address!=0 && info.size!=0 && info.size<=UINT32_MAX &&

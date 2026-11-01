@@ -3258,6 +3258,40 @@ void TextureCache::SynchronizeColorImageToBufferLocked(CachedImage& cached, uint
 		SynchronizeLinearStorageImageToBufferLocked(cached, write_address, write_size);
 		return;
 	}
+	if (cached.kind==CachedImage::Kind::StorageTexture && IsSupportedColorStorageBacking(cached.info) &&
+	    cached.info.tile==Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget)) {
+		const auto& info=cached.info;
+		const auto offset=write_address>=info.address ? write_address-info.address : UINT64_MAX;
+		const bool contained=offset<=info.size && write_size<=info.size-offset;
+		if (!contained) {
+			const bool page_conflict=HasOtherImagePageOwnerLocked(cached) || HasMetaOverlapLocked(info.address,info.size);
+			const bool buffer_conflict=m_buffer_cache.IsRegionGpuModified(info.address,info.size) ||
+			                           m_buffer_cache.IsCachedRegionCpuModified(info.address,info.size);
+			if (ClassifyTiledColorStorageBufferWrite(write_address,write_size,info,cached.gpu_modified,
+			        cached.buffer_modified,m_memory_tracker.IsRegionGpuModified(info.address,info.size),
+			        info.IsCpuDirty() || m_memory_tracker.IsRegionCpuModified(info.address,info.size),
+			        true,page_conflict,buffer_conflict)!=BufferImageWrite::SynchronizeStorageTexture ||
+			    cached.ctx==nullptr || cached.image==nullptr || cached.image->format!=VulkanFormat(info.format) ||
+			    cached.image->extent.width!=info.width || cached.image->extent.height!=info.height ||
+			    cached.image->layers!=1 || cached.image->mip_levels!=1)
+				EXIT("TextureCache: invalid crossing tiled-storage buffer ownership\n");
+			// ObtainBuffer drains recording image producers before entering this transaction.
+			Transfer::WaitForGraphicsIdle(cached.ctx);
+			const bool buffers=m_buffer_cache.HasPageOverlap(info.address,info.size);
+			const auto transfer=m_readback->DownloadColorImage(cached,true);
+			if (!buffers) m_buffer_cache.PublishReconstructedImageBacking(transfer.address,transfer.size);
+			m_memory_tracker.ForEachDownloadRange<true>(transfer.address,transfer.size,[](uint64_t,uint64_t) noexcept {});
+			cached.gpu_modified=false;
+			cached.buffer_modified=true;
+			static std::atomic_uint crossing_logs{0};
+			if (crossing_logs.fetch_add(1,std::memory_order_relaxed)<8)
+				printf("[TILED-STORAGE-BUFFER-SYNC] image=0x%016" PRIx64 "+0x%016" PRIx64
+				       " write=0x%016" PRIx64 "+0x%016" PRIx64
+				       " extent=%ux%u format=%u full_backing=1 padding_preserved=1\n",
+				       info.address,info.size,write_address,write_size,info.width,info.height,info.format);
+			return;
+		}
+	}
 	const bool       render_target = cached.kind == CachedImage::Kind::RenderTarget;
 	const bool       video_out     = cached.kind == CachedImage::Kind::VideoOut;
 	const bool       storage       = cached.kind == CachedImage::Kind::StorageTexture;
@@ -3630,6 +3664,16 @@ bool TextureCache::InvalidateMemoryFromGPU(uint64_t vaddr, uint64_t size,
 			    cached.info.IsCpuDirty() || m_memory_tracker.IsRegionCpuModified(cached.info.address, cached.info.size),
 			    formatted_buffer_write, linear_page_conflict, linear_buffer_conflict);
 		}
+		if (next==BufferImageWrite::Unsupported && cached.kind==CachedImage::Kind::StorageTexture &&
+		    IsSupportedColorStorageBacking(cached.info) &&
+		    cached.info.tile==Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget)) {
+			next=ClassifyTiledColorStorageBufferWrite(vaddr,size,cached.info,cached.gpu_modified,cached.buffer_modified,
+			    m_memory_tracker.IsRegionGpuModified(cached.Address(),cached.Size()),
+			    cached.info.IsCpuDirty() || m_memory_tracker.IsRegionCpuModified(cached.Address(),cached.Size()),
+			    formatted_buffer_write,HasOtherImagePageOwnerLocked(cached) || HasMetaOverlapLocked(cached.Address(),cached.Size()),
+			    m_buffer_cache.IsRegionGpuModified(cached.Address(),cached.Size()) ||
+			    m_buffer_cache.IsCachedRegionCpuModified(cached.Address(),cached.Size()));
+		}
 		bool owner_pages_overlap = false;
 		for (const auto& match: matches) {
 			const auto& previous = match.first;
@@ -3643,11 +3687,17 @@ bool TextureCache::InvalidateMemoryFromGPU(uint64_t vaddr, uint64_t size,
 			EXIT("TextureCache: unsupported GPU invalidation alias, addr=0x%016" PRIx64
 			     " size=0x%016" PRIx64 " cached_kind=%u cached=0x%016" PRIx64 "+0x%016" PRIx64
 			     " gpu_modified=%d buffer_modified=%d formatted=%d ambiguous=%d"
-			     " shape={fmt=%u tile=%u extent=%ux%u pitch=%u levels=%u} linear_page_conflict=%d linear_buffer_conflict=%d\n",
+			     " shape={fmt=%u tile=%u extent=%ux%u pitch=%u levels=%u} linear_page_conflict=%d linear_buffer_conflict=%d"
+			     " tracker_gpu=%d tracker_cpu=%d page_owner_conflict=%d buffer_gpu=%d buffer_cpu=%d\n",
 			     vaddr, size, static_cast<uint32_t>(cached.kind), cached.Address(), cached.Size(),
 			     cached.gpu_modified, cached.buffer_modified, formatted_buffer_write,
 			     owner_pages_overlap, cached.info.format, cached.info.tile, cached.info.width,
-			     cached.info.height, cached.info.pitch, cached.info.levels, linear_page_conflict, linear_buffer_conflict);
+			     cached.info.height, cached.info.pitch, cached.info.levels, linear_page_conflict, linear_buffer_conflict,
+			     m_memory_tracker.IsRegionGpuModified(cached.Address(),cached.Size()),
+			     cached.info.IsCpuDirty() || m_memory_tracker.IsRegionCpuModified(cached.Address(),cached.Size()),
+			     HasOtherImagePageOwnerLocked(cached) || HasMetaOverlapLocked(cached.Address(),cached.Size()),
+			     m_buffer_cache.IsRegionGpuModified(cached.Address(),cached.Size()),
+			     m_buffer_cache.IsCachedRegionCpuModified(cached.Address(),cached.Size()));
 		}
 		matches.emplace_back(*it, next);
 	}

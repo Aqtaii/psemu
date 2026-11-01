@@ -2,6 +2,59 @@
 static void Require(bool ok,std::source_location where=std::source_location::current()) {if(!ok) {std::fprintf(stderr,"Regression failed at %s:%u\n",where.file_name(),where.line());throw std::runtime_error("regression failed");}}
 int main() {
  {
+  ImageInfo old{};old.address=0x1dee87c0000ull;old.size=0x1a20000;old.format=71;
+  old.width=old.pitch=2432;old.height=1368;old.tile=27;old.type=9;old.depth=old.levels=old.view_levels=1;
+  const uint64_t write=0x1dee8210000ull,bytes=0x870000;
+  Require(old.format==Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float));
+  Require(old.address-write==0x5b0000 && write+bytes-old.address==0x2c0000);
+  Require(IsSupportedColorStorageBacking(old));
+  Require(ClassifyBufferImageWrite(write,bytes,old.address,old.size,BufferImageBinding::StorageTexture,true,true)==BufferImageWrite::Unsupported);
+  const auto classify=[&](uint64_t a,uint64_t n){return ClassifyTiledColorStorageBufferWrite(a,n,old,true,false,true,false,true,false,false);};
+  for(auto [a,n]:std::array<std::pair<uint64_t,uint64_t>,5>{{{write,bytes},{old.address,old.size},
+      {old.address+0x1000,0x2000},{old.address+old.size-0x1000,0x2000},{old.address-0x1000,old.size+0x2000}}})
+   Require(classify(a,n)==BufferImageWrite::SynchronizeStorageTexture);
+  Require(ClassifyTiledColorStorageBufferWrite(write,bytes,old,false,true,false,false,true,false,true)==BufferImageWrite::InvalidateStorageTexture);
+  for(int bad=0;bad<8;bad++)Require(ClassifyTiledColorStorageBufferWrite(write,bytes,old,
+   bad!=0 && bad!=7,bad==1 || bad==7,bad!=2,bad==3,bad!=4,bad==5,bad==6)==BufferImageWrite::Unsupported);
+  for(auto [a,n]:std::array<std::pair<uint64_t,uint64_t>,6>{{{write,0},{write+1,bytes},{write,bytes+1},
+      {old.address-4096,4096},{old.address+old.size,4096},{UINT64_MAX-4095,8192}}})Require(classify(a,n)==BufferImageWrite::Unsupported);
+  for(int field=0;field<11;field++) {
+   auto bad=old;if(field==0)bad.format=20;if(field==1)bad.tile=24;if(field==2)bad.levels=2;
+   if(field==3)bad.view_levels=0;if(field==4)bad.base_array=1;if(field==5)bad.depth=2;
+   if(field==6)bad.pitch--;if(field==7)bad.size--;if(field==8)bad.type=10;if(field==9)bad.base_level=1;if(field==10)bad.address=UINT64_MAX-65535;
+   Require(ClassifyTiledColorStorageBufferWrite(write,bytes,bad,true,false,true,false,true,false,false)==BufferImageWrite::Unsupported);
+  }
+  std::vector<uint64_t> gpu(old.size/8),ones(gpu.size(),1),mask(gpu.size());
+  for(uint32_t y=0;y<old.height;y++)for(uint32_t x=0;x<old.width;x++)gpu[y*old.pitch+x]=0x3c003c0038003400ull+((x+3*y)&31u);
+  TileConvertLinearToTiledRenderTarget64PreservePadding(mask.data(),ones.data(),old.width,old.height,old.pitch,old.size);
+  Libs::LibKernel::Memory::fixture_base=write;
+  auto& backing=Libs::LibKernel::Memory::fixture_backing;backing.assign(old.address-write+old.size+4096,0x5a);
+  BufferCache cache;bool copied=false;
+  cache.ReconstructImageBacking(old.address,old.size,[&]{copied=true;
+   TileConvertLinearToTiledRenderTarget64PreservePadding(backing.data()+(old.address-write),gpu.data(),old.width,old.height,old.pitch,old.size);});
+  Require(copied && cache.m_memory_tracker.published==std::vector<std::pair<uint64_t,uint64_t>>{{old.address,old.size}});
+  const auto published=backing;
+  for(size_t i=0;i<backing.size();i++)if(i<old.address-write || i>=old.address-write+old.size)Require(backing[i]==0x5a);
+  for(size_t i=0;i<mask.size();i++)if(!mask[i]){uint64_t value;std::memcpy(&value,backing.data()+(old.address-write)+i*8,8);Require(value==0x5a5a5a5a5a5a5a5aull);}
+  // Model the subsequent raw buffer write: every old byte outside it survives.
+  std::fill(backing.begin(),backing.begin()+bytes,0xa5);
+  for(size_t i=bytes;i<backing.size();i++)Require(backing[i]==published[i]);
+  const auto after_write=backing;
+  for(int conflict=0;conflict<3;conflict++) {
+   BufferCache rejected;const auto tail=old.address+old.size-1;
+   if(conflict==0)rejected.m_memory_tracker.gpu.emplace_back(tail,1);
+   if(conflict==1)rejected.m_gpu_modified_ranges.dirty.emplace_back(tail,1);
+   if(conflict==2) {
+    auto fragment=std::make_unique<BufferCache::CachedBuffer>();fragment->size=4096;
+    rejected.m_buffers.emplace(tail&~uint64_t(4095),std::move(fragment));rejected.m_memory_tracker.cpu.emplace_back(tail,1);
+   }
+   bool called=false,threw=false;
+   try{rejected.ReconstructImageBacking(old.address,old.size,[&]{called=true;});}catch(const std::runtime_error&){threw=true;}
+   Require(threw && !called && backing==after_write);
+  }
+  std::puts("[TILED-STORAGE-CROSSING] raw71 2432x1368 captured prefix overlap0x2c0000, full backing/padding/exterior and ownership guards=passed");
+ }
+ {
   ImageInfo old{};old.address=0x23a61690000ull;old.size=0x870000;old.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k11_11_10Float);
   old.width=old.pitch=1920;old.height=1080;old.tile=27;old.type=9;old.depth=old.levels=old.view_levels=1;old.swizzle=0x3ac;
   RenderTargetInfo target{};target.address=0x23a61120000ull;target.size=0xff0000;target.tile_mode=27;

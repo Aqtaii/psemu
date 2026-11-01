@@ -23,7 +23,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL ValidationMessage(VkDebugUtilsMessageSever
 // PRODUCTION_STANDARD4KB
 // PRODUCTION_R32_ALIAS
 int main(int argc,char** argv) {try {
- CHECK(argc>=2 && argc<=4);const bool depth_rebuild=argc==4 && std::strcmp(argv[3],"depth-rebuild")==0;const bool standard4kb=argc==4 && std::strcmp(argv[3],"standard4kb")==0;const bool atomic_emitter=argc==4 && std::strcmp(argv[3],"atomic-emitter")==0;const bool atomic_image=atomic_emitter || (argc==4 && std::strcmp(argv[3],"atomic")==0);const bool packed=argc==4 && std::strcmp(argv[3],"packed")==0;const bool unorm=argc==4 && std::strcmp(argv[3],"unorm-linear")==0;const bool full_tail=argc==4 && std::strcmp(argv[3],"rgba16-tail")==0;const bool rgba16=standard4kb || unorm || full_tail || (argc==4 && std::strcmp(argv[3],"rgba16")==0);const uint32_t target=argc>=3?uint32_t(std::strtoul(argv[2],nullptr,10)):0;CHECK(target<8);
+ CHECK(argc>=2 && argc<=4);const bool depth_rebuild=argc==4 && std::strcmp(argv[3],"depth-rebuild")==0;const bool standard4kb=argc==4 && std::strcmp(argv[3],"standard4kb")==0;const bool atomic_emitter=argc==4 && std::strcmp(argv[3],"atomic-emitter")==0;const bool atomic_image=atomic_emitter || (argc==4 && std::strcmp(argv[3],"atomic")==0);const bool packed=argc==4 && std::strcmp(argv[3],"packed")==0;const bool unorm=argc==4 && std::strcmp(argv[3],"unorm-linear")==0;const bool full_tail=argc==4 && std::strcmp(argv[3],"rgba16-tail")==0;const bool crossing=argc==4 && std::strcmp(argv[3],"rgba16-crossing")==0;const bool rgba16=crossing || standard4kb || unorm || full_tail || (argc==4 && std::strcmp(argv[3],"rgba16")==0);const uint32_t target=argc>=3?uint32_t(std::strtoul(argv[2],nullptr,10)):0;CHECK(target<8);
  std::ifstream input(argv[1],std::ios::binary|std::ios::ate);CHECK(input);
  size_t shader_bytes=size_t(input.tellg());CHECK(shader_bytes && shader_bytes%4==0);
  std::vector<uint32_t> code(shader_bytes/4);input.seekg(0);input.read(reinterpret_cast<char*>(code.data()),shader_bytes);CHECK(input);
@@ -67,7 +67,7 @@ int main(int argc,char** argv) {try {
  VkDevice device;VKOK(vkCreateDevice(physical,&dci,nullptr,&device));VkQueue queue;vkGetDeviceQueue(device,family,0,&queue);
  VkPhysicalDeviceMemoryProperties memory_properties{};vkGetPhysicalDeviceMemoryProperties(physical,&memory_properties);
  auto allocate=[&](VkMemoryRequirements requirements,VkMemoryPropertyFlags flags){uint32_t type=0;while(type<memory_properties.memoryTypeCount && (!(requirements.memoryTypeBits&(1u<<type)) || (memory_properties.memoryTypes[type].propertyFlags&flags)!=flags))++type;CHECK(type<memory_properties.memoryTypeCount);VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};ai.allocationSize=requirements.size;ai.memoryTypeIndex=type;VkDeviceMemory result;VKOK(vkAllocateMemory(device,&ai,nullptr,&result));return result;};
- const uint32_t width=depth_rebuild?960:standard4kb?32:(unorm?960:((packed||rgba16)?1920:480)),height=depth_rebuild?540:standard4kb?32:(unorm?540:((packed||rgba16)?1080:270)),levels=(depth_rebuild||standard4kb||packed||unorm||atomic_image)?1:(full_tail?11:(rgba16?7:8)),sampled_levels=full_tail?6:levels,words_per_pixel=rgba16?2:1;VkDeviceSize bytes=packed?0x870000:0x160000;CHECK(target<levels);
+ const uint32_t width=crossing?2432:depth_rebuild?960:standard4kb?32:(unorm?960:((packed||rgba16)?1920:480)),height=crossing?1368:depth_rebuild?540:standard4kb?32:(unorm?540:((packed||rgba16)?1080:270)),levels=(crossing||depth_rebuild||standard4kb||packed||unorm||atomic_image)?1:(full_tail?11:(rgba16?7:8)),sampled_levels=full_tail?6:levels,words_per_pixel=rgba16?2:1;VkDeviceSize bytes=packed?0x870000:0x160000;CHECK(target<levels);
  const VkFormat format=atomic_image?VK_FORMAT_R32_UINT:packed?VK_FORMAT_B10G11R11_UFLOAT_PACK32:(unorm?VK_FORMAT_R16G16B16A16_UNORM:(rgba16?VK_FORMAT_R16G16B16A16_SFLOAT:VK_FORMAT_R32_SFLOAT));
  VkFormatProperties format_properties{};vkGetPhysicalDeviceFormatProperties(physical,format,&format_properties);CHECK(format_properties.optimalTilingFeatures&VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT);if(atomic_image)CHECK(format_properties.optimalTilingFeatures&VK_FORMAT_FEATURE_STORAGE_IMAGE_ATOMIC_BIT);
  std::array<VkDeviceSize,16> offsets{0,0xc0000,0x100000,0x110000,0x120000,0x130000,0x140000,0x150000};
@@ -191,6 +191,30 @@ int main(int argc,char** argv) {try {
   for(uint32_t i=0;i<1024;++i)CHECK(linear[i]==0x3c003c0038003400ull);
   for(uint32_t i=1024;i<1032;++i)CHECK(tiled[i]==0xdeadbeefcafebabeull && linear[i]==0xdeadbeefcafebabeull);
   std::printf("[STANDARD4KB-STORAGE-GPU] device=%s RGBA16F32x32 stored_pixels=1024 production_retile_detile=bit_exact guards_preserved=1 fixture_shader=GLSL Astro=not-executed\n",properties.deviceName);
+ }
+ if(crossing) {
+  constexpr size_t prefix=0x5b0000,footprint=0x1a20000,write_size=0x870000,guard=16;
+  CHECK(width==2432 && height==1368 && pitches[0]==2432 && levels==1 && write_size-prefix==0x2c0000);
+  std::vector<uint8_t> guest(guard+prefix+footprint+guard,0x5a);
+  TileConvertLinearToTiledRenderTarget64PreservePadding(guest.data()+guard+prefix,pixels,width,height,pitches[0],footprint);
+  std::vector<uint64_t> mask(footprint/8),ones(mask.size(),1);
+  TileConvertLinearToTiledRenderTarget64PreservePadding(mask.data(),ones.data(),width,height,pitches[0],footprint);
+  for(size_t i=0;i<mask.size();i++)if(!mask[i])for(size_t j=0;j<8;j++)CHECK(guest[guard+prefix+i*8+j]==0x5a);
+  // Real GPU raw write crosses the old tiled image's prefix. Its untouched suffix
+  // must retain the complete production-retiled image, including backing padding.
+  VkBufferCreateInfo raw_ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};raw_ci.size=guest.size();raw_ci.usage=VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+  VkBuffer raw;VKOK(vkCreateBuffer(device,&raw_ci,nullptr,&raw));VkMemoryRequirements raw_requirements{};vkGetBufferMemoryRequirements(device,raw,&raw_requirements);
+  VkDeviceMemory raw_memory=allocate(raw_requirements,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+  VKOK(vkBindBufferMemory(device,raw,raw_memory,0));void* raw_mapped=nullptr;VKOK(vkMapMemory(device,raw_memory,0,guest.size(),0,&raw_mapped));
+  std::memcpy(raw_mapped,guest.data(),guest.size());
+  VKOK(vkResetCommandPool(device,command_pool,0));VKOK(vkBeginCommandBuffer(command,&begin));
+  vkCmdFillBuffer(command,raw,guard,write_size,0xa5a5a5a5u);
+  vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&host,0,nullptr,0,nullptr);
+  VKOK(vkEndCommandBuffer(command));VKOK(vkQueueSubmit(queue,1,&submit,VK_NULL_HANDLE));VKOK(vkQueueWaitIdle(queue));
+  const auto* actual=static_cast<const uint8_t*>(raw_mapped);
+  for(size_t i=0;i<guest.size();i++)CHECK(actual[i]==(i>=guard && i<guard+write_size?0xa5:guest[i]));
+  vkUnmapMemory(device,raw_memory);vkDestroyBuffer(device,raw,nullptr);vkFreeMemory(device,raw_memory,nullptr);
+  std::printf("[TILED-STORAGE-CROSSING-GPU] device=%s RGBA16F2432x1368 texels=%u production_retile=1 GPU_prefix_write=0x870000 overlap=0x2c0000 untouched_suffix_padding_guards=preserved fixture=synthetic Astro=not-executed\n",properties.deviceName,width*height);
  }
  if(atomic_emitter)std::printf("[STORAGE-ATOMIC-PRODUCTION-GPU] device=%s R32Uint2D R001 counter=%u other_texels_unchanged=1 padding_preserved=1 production_emitter=1 Astro=not-executed\n",properties.deviceName,((width+7)/8)*((height+7)/8)*64);
  else if(atomic_image){CHECK(std::count(atomic_returns.begin(),atomic_returns.end(),true)==size_t(width)*height-1);std::printf("[STORAGE-ATOMIC-GPU] device=%s R32Uint2D counter=%u unique_old_values=%u padding_preserved=1 fixture_shader=GLSL Astro=not-executed\n",properties.deviceName,width*height,width*height-1);}
