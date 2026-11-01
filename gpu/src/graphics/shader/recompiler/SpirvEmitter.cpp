@@ -201,6 +201,39 @@ bool ValidateInstructionContract(const IR::Instruction& inst, std::string* error
 	return true;
 }
 
+// Limited proof for a per-invocation word predicate saved from entry EXEC_LO.
+// Word AND/ANDNOT cannot introduce bits outside the saved 0/1 representation.
+bool IsEntryExecWordPredicate(const IR::Program& program, const IR::Instruction& use) {
+ if(program.blocks.empty())return false;
+ const auto source=use.src[0].reg;
+ const auto& entry=program.blocks.front();size_t seed=entry.instructions.size();
+ const auto plain=[](const IR::Operand& o){return !o.dpp && o.sdwa_sel==6 && !o.sdwa_sext &&
+  !o.op_sel && !o.op_sel_hi && !o.negate && !o.negate_hi && !o.absolute && !o.clamp && o.omod==0;};
+ const auto same=[&](const IR::Operand& o){return o.kind==IR::OperandKind::Register && o.reg.file==source.file && o.reg.index==source.index;};
+ for(size_t i=0;i<entry.instructions.size();++i) {
+  const auto& inst=entry.instructions[i];
+  if(same(inst.dst) && inst.op==IR::Opcode::MoveU32 && inst.src_count==1 && plain(inst.dst) && plain(inst.src[0]) &&
+     inst.src[0].kind==IR::OperandKind::Register && inst.src[0].reg.file==IR::RegisterFile::Exec && inst.src[0].reg.index==0) {seed=i;break;}
+  if((inst.dst.kind==IR::OperandKind::Register && inst.dst.reg.file==IR::RegisterFile::Exec) ||
+     (inst.dst2.kind==IR::OperandKind::Register && inst.dst2.reg.file==IR::RegisterFile::Exec) ||
+     inst.op==IR::Opcode::SaveexecB32 || inst.op==IR::Opcode::SaveexecB64)return false;
+ }
+ if(seed==entry.instructions.size())return false;
+ bool found_use=false;
+ for(const auto& block:program.blocks)for(size_t i=0;i<block.instructions.size();++i) {
+  const auto& inst=block.instructions[i];
+  if(&inst==&use){found_use=true;if(&block==&entry && i<=seed)return false;}
+  const bool upper_write=Emitter::IsPairDwordOpcode(inst.op) && inst.dst.kind==IR::OperandKind::Register &&
+   inst.dst.reg.file==source.file && uint64_t(inst.dst.reg.index)+1==source.index;
+  if(!same(inst.dst) && !same(inst.dst2) && !upper_write)continue;
+  if(&block==&entry && i==seed)continue;
+  if((&block==&entry && i<seed) || upper_write || same(inst.dst2) || !same(inst.dst) || !plain(inst.dst) ||
+     inst.src_count!=2 || !same(inst.src[0]) || !plain(inst.src[0]) || !plain(inst.src[1]) ||
+     (inst.op!=IR::Opcode::BitwiseAndNotU32 && inst.op!=IR::Opcode::BitwiseAndU32))return false;
+ }
+ return found_use;
+}
+
 bool ValidateNativeProgram(const IR::Program& program, std::string* error) {
 	using Kind                                             = IR::DescriptorBindingKind;
 	constexpr auto                               KindCount = static_cast<size_t>(Kind::Count);
@@ -296,7 +329,8 @@ bool ValidateNativeProgram(const IR::Program& program, std::string* error) {
 	for (const auto& block: program.blocks) {
 		for (const auto& inst: block.instructions) {
    if(inst.op==IR::Opcode::WqmB32 && program.lane_mask_mode==ShaderLaneMaskMode::PerInvocation &&
-      inst.src[0].kind==IR::OperandKind::Register && inst.src[0].reg.file==IR::RegisterFile::Scalar)
+      inst.src[0].kind==IR::OperandKind::Register && inst.src[0].reg.file==IR::RegisterFile::Scalar &&
+      !IsEntryExecWordPredicate(program,inst))
     return Fail(error,"per-invocation WQM32 SGPR mask provenance is not supported");
 			if (!ValidateInstructionContract(inst, error)) {
 				return false;

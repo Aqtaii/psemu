@@ -113,11 +113,15 @@ uint32_t EmitWqmLaneU32(EmitterState* state, uint32_t src) {
 void EmitWqmB32(EmitterState* state, const IR::Instruction& inst) {
  const auto mask_operand=[](const IR::Operand& o){return o.kind==IR::OperandKind::Register && IsMaskRegisterFile(o.reg.file);};
  auto source=EmitValueLoad(state,inst.src[0]);
- if(state->per_invocation_masks && mask_operand(inst.src[0])) {
+ if(state->per_invocation_masks && inst.src[0].kind==IR::OperandKind::Register &&
+    (mask_operand(inst.src[0]) || inst.src[0].reg.file==IR::RegisterFile::Scalar)) {
+  // Scalar sources reach this path only after the entry EXEC predicate proof.
+  const bool mask=mask_operand(inst.src[0]);
+  const auto predicate=mask ? EmitMaskActiveBool(state,inst.src[0].reg.file) : EmitNotEqualZeroBool(state,source);
   const auto ballot=state->builder.AllocateId(),word=state->builder.AllocateId();
   state->builder.AddFunction({OpGroupNonUniformBallot,state->vec4_uint_type,ballot,
-   ConstantU32(state,ScopeSubgroup),EmitMaskActiveBool(state,inst.src[0].reg.file)});
-  state->builder.AddFunction({OpCompositeExtract,state->uint_type,word,ballot,inst.src[0].reg.index});
+   ConstantU32(state,ScopeSubgroup),predicate});
+  state->builder.AddFunction({OpCompositeExtract,state->uint_type,word,ballot,mask?inst.src[0].reg.index:0u});
   source=word;
  }
  auto result=EmitWqmLaneU32(state,source);
