@@ -1,4 +1,23 @@
-# Astro Bot ilerleme planı — 10 Ekim 2026
+# Astro Bot ilerleme planı
+
+## Current verified checkpoint - 1 November 2026
+
+Recognizable final-window Astro output is still unconfirmed. Use this checkpoint for current status; the dated sections below are historical records. Detailed evidence and limitations are in [astro-avplayer.md](astro-avplayer.md).
+
+- [x] Portable Windows build/test tools and separate Astro candidates run under D:. The installed Sarah loader and user launch scripts are preserved.
+- [x] Native opening audio was heard by the user. The real opening montage is visually verified in a completed intermediate Vulkan target; this is not final presentation.
+- [x] Complete fused Mesh (2467 instructions, seven actual guest buffers) and standalone Mesh (2858 instructions, six actual guest buffers) translate into independently valid native SPIR-V.
+- [x] Actual R32 storage-to-D32 backing reconstruction passes, preserving the complete allocation and padding.
+- [x] Full Pixel4a801f49 (2320 instructions,136 CFG blocks) compiles with actual metadata/resources: wave32,30 user registers,273738 SPIR-V words. WQM32, saved EXEC predicates and narrow ORN2 SAVEEXEC are covered by CPU and real Fragment GPU fixtures.
+- [x] Standalone virtual64 Mesh now selects physical subgroup32 without requiring a GS-root resource. The native run passes that gate and reaches83 shaders and the next compute resource binding. This is not independent fence-completion evidence for the full Mesh draw.
+- [x] Source d88ab02: local checks and full GitHub build/test run41316715912 pass. Its final present-source capture remains entirely black.
+- [x] Source14ab521 implements clean exact D32-to-R32 storage retirement; local policy/data-path tests and CI41319853838 pass. Its native trial still rejects the same allocation: the request is actually R11G11B10Float (raw36), not R32Float. The new terminal diagnostic confirms clean D32/k32Float (raw22), no stencil/HTile/clear state and coherent backing. The earlier R32 fixture was an incorrect interpretation of the captured request.
+- [x] The clean32-bit policy now also accepts the actual packed-color format. CPU tests assert the raw36/22 pair, retain R32 coverage and reject wider/dirty/ambiguous cases; the R11G11B10 Vulkan data-path fixture passes2073600 pixels and zero active-validation issues. This does not yet prove native retirement.
+- [ ] Verify the packed-color candidate through the actual clean alias in a native trial. Preserve backing bits, old-view fence lifetime and all guest depth/stencil state.
+- [ ] Resolve any subsequent real shader/resource/post-processing blockers using captured evidence and the Jetsku reference.
+- [ ] Obtain recognizable content in the actual final presentation path and confirm it in the game window.
+- [ ] Repeat startup and check basic input/stability after the first visible frame.
+
 
 ## Full Mesh pipeline checkpoint - 13 October 2026
 

@@ -1215,7 +1215,7 @@ CanReconstructStorageForRenderTarget(const ImageInfo& storage, bool gpu_modified
         IsSupportedRenderTargetReconstructionFootprint(backing);
 }
 
-// Clean D32 views may be replaced by an exact R32Float color-storage view.
+// Clean D32 views may be replaced by exact 32-bit float/packed-color storage views.
 // Guest-layout backing is already current; retaining the old view requires no readback.
 [[nodiscard]] inline bool CanRetireCleanDepthTargetForStorage(
     const DepthTargetInfo& depth, bool gpu, bool buffer, bool tracker_gpu, bool cpu,
@@ -1230,7 +1230,8 @@ CanReconstructStorageForRenderTarget(const ImageInfo& storage, bool gpu_modified
     depth.width==0 || depth.height==0 || depth.width>16384 || depth.height>16384 ||
     depth.address==0 || (depth.address&0xffffu)!=0 || depth.size>UINT32_MAX ||
     depth.size>UINT64_MAX-depth.address ||
-    storage.format!=Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float) ||
+    (storage.format!=Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float) &&
+     storage.format!=Prospero::GpuEnumValue(Prospero::BufferFormat::k11_11_10Float)) ||
     !IsSupportedColorStorageBacking(storage)) return false;
  const uint64_t pitch=(uint64_t(depth.width)+127u)&~uint64_t{127u};
  const uint64_t height=(uint64_t(depth.height)+127u)&~uint64_t{127u};

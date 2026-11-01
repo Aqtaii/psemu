@@ -6,11 +6,17 @@ int main() {
   depth.format=vk::Format::eD32Sfloat;depth.guest_format=Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float);
   depth.width=960;depth.height=540;depth.pitch=1024;depth.bytes_per_element=4;
   depth.tile_mode=Prospero::GpuEnumValue(Prospero::TileMode::kDepth);
-  ImageInfo storage{};storage.address=depth.address;storage.size=depth.size;storage.format=depth.guest_format;
+  ImageInfo storage{};storage.address=depth.address;storage.size=depth.size;
+  storage.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k11_11_10Float);
+  Require(storage.format==36 && depth.guest_format==22); // exact raw native capture, not a guessed format
   storage.width=960;storage.height=540;storage.pitch=1024;storage.depth=storage.levels=storage.view_levels=1;
   storage.tile=Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget);
   storage.type=Prospero::GpuEnumValue(Prospero::ImageType::kColor2D);
   Require(CanRetireCleanDepthTargetForStorage(depth,false,false,false,false,true,true,false,storage));
+  auto r32=storage;r32.format=depth.guest_format;
+  Require(CanRetireCleanDepthTargetForStorage(depth,false,false,false,false,true,true,false,r32));
+  auto wide=storage;wide.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float);
+  Require(!CanRetireCleanDepthTargetForStorage(depth,false,false,false,false,true,true,false,wide));
   for(int bad=0;bad<7;++bad)
    Require(!CanRetireCleanDepthTargetForStorage(depth,bad==0,bad==1,bad==2,bad==3,bad!=4,bad!=5,bad==6,storage));
   for(int bad=0;bad<21;++bad) {
@@ -37,7 +43,7 @@ int main() {
    }
    Require(!CanRetireCleanDepthTargetForStorage(depth,false,false,false,false,true,true,false,v));
   }
-  std::puts("[DEPTH-STORAGE-CLEAN-POLICY] captured960x540 layout27 exact backing, dirty/alias/shape negatives=passed");
+  std::puts("[DEPTH-STORAGE-CLEAN-POLICY] captured_raw_formats36_from22 960x540 layout27 exact backing, R32_positive wide_format/dirty/alias/shape negatives=passed");
  }
  {
   DepthTargetInfo target{};target.address=0x145db3e0000ull;target.size=0x280000;
