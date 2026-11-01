@@ -213,6 +213,7 @@ struct Shader {
 };
 
 struct ShaderMappedData {
+	uint8_t binary_type = 0xff; // Registered AGC type; never infer fusion from stale GS registers.
 	ShaderUserData* user_data           = nullptr;
 	ShaderSemantic* input_semantics     = nullptr;
 	uint32_t        num_input_semantics = 0;

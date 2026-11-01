@@ -574,7 +574,7 @@ static bool IsAstroMeshDraw(const HW::Context* ctx,const HW::UserConfig* ucfg,co
  if(!flag || flag[0]=='0' || ctx->GetShaderStages()!=0x2030 || uint32_t(ucfg->GetPrimType())!=1) return false;
  const auto& regs=ctx->GetShaderRegisters();const auto& ge=ucfg->GetGeControl();const auto& v=sh->GetVs();
  auto* gctx=g_render_ctx->GetGraphicCtx();
- if(!gctx->mesh_shader_enabled || regs.m_vgtGsOutPrimType!=2 || !v.es_regs.data_addr || !v.gs_regs.data_addr) return false;
+ if(!gctx->mesh_shader_enabled || regs.m_vgtGsOutPrimType!=2 || !v.es_regs.data_addr) return false;
  MeshAssemblyPlan plan;
  if(!PlanPointMeshAssembly(ge.primitive_group_size,ge.vertex_group_size,regs.m_vgtGsMaxVertOut,
      regs.m_geMaxOutputPerSubgroup,64,&plan)) return false;

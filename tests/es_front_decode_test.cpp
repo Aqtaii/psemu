@@ -1,4 +1,5 @@
 #include "graphics/shader/recompiler/ShaderDecoder.h"
+#include "graphics/shader/meshProgramKind.h"
 #include "graphics/shader/recompiler/ShaderCFG.h"
 #include "graphics/shader/recompiler/ShaderIR.h"
 #include "graphics/shader/recompiler/MergedMeshResources.h"
@@ -37,6 +38,33 @@ std::vector<uint32_t> ReadCapturedCode(const char* path) {
  return words;
 }
 int main(int argc,char** argv) {
+ {
+  using namespace Libs::Graphics;
+  Require(SelectMeshProgramKind(2)==MeshProgramKind::Standalone);
+  Require(SelectMeshProgramKind(4)==MeshProgramKind::Fused);
+  for(uint8_t bad:{0u,1u,3u,5u,6u,7u,8u,255u})Require(SelectMeshProgramKind(bad)==MeshProgramKind::Unsupported);
+  // This debug condition is cleared in the guest GPU model. Its dormant target can
+  // lie beyond S_ENDPGM; it must not create a CFG edge or change SCC/VCC/EXEC.
+  for(uint32_t imm:{0u,0x24u,0xfffcu}) {
+   const std::array<uint32_t,3> code{0xbf970000u|imm,0xbe800380u,0xbf810000u};
+   Program decoded;std::string diagnostic;
+   Require(DecodeProgram(code,&decoded,&diagnostic));
+   Require(decoded.instructions[0].opcode==Opcode::SCbranchCdbgSys && decoded.instructions[0].src0.value==imm);
+   Libs::Graphics::ShaderRecompiler::CFG::Graph graph;
+   Require(Libs::Graphics::ShaderRecompiler::CFG::BuildGraph(decoded,&graph,&diagnostic));
+   for(const auto& block:graph.blocks)Require(block.terminator.kind!=Libs::Graphics::ShaderRecompiler::CFG::TerminatorKind::ConditionalBranch);
+   Libs::Graphics::ShaderRecompiler::IR::Program ir;
+   Require(Libs::Graphics::ShaderRecompiler::IR::LowerProgram(decoded,graph,ShaderType::Mesh,64,&ir,&diagnostic));
+   Require(ir.blocks[0].instructions[0].op==Libs::Graphics::ShaderRecompiler::IR::Opcode::ControlNop);
+   Require(ir.blocks[0].instructions[0].dst.kind==Libs::Graphics::ShaderRecompiler::IR::OperandKind::Null);
+   Require(Libs::Graphics::ShaderRecompiler::IR::BuildStandaloneMeshResourcePlan(&ir,30,&diagnostic));
+   Require(!ir.mesh_gs_user_data && ir.user_data_base==8 && ir.user_data_count==30);
+   for(const auto& value:ir.provenance.values)
+    Require(value.op!=Libs::Graphics::ShaderRecompiler::IR::ScalarValueOp::MeshGsUserData);
+  }
+  std::puts("[STANDALONE-MESH] registered type selection, cleared debug condition and GS-root isolation=passed");
+ }
+
  Require(argc==1 || argc==3);
  if(argc==3) {
   const auto es=ReadCapturedCode(argv[1]);

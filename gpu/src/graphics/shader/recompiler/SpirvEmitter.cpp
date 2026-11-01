@@ -582,10 +582,10 @@ bool EmitProgram(const IR::Program& program, const IR::ResourceSnapshot& resourc
  return EmitProgramImpl(nullptr,program,resources,vertex,pixel,compute,spirv,error);
 }
 // Deliberately separate from automatic stage selection. Runtime draws must opt in explicitly.
-bool EmitMergedPointMeshProgram(const IR::Program& program, const IR::ResourceSnapshot& resources,
+static bool EmitPointMeshProgram(bool gs_root, const IR::Program& program, const IR::ResourceSnapshot& resources,
  const ShaderVertexInputInfo& vertex, const MeshAssemblyPlan& assembly,
  std::vector<uint32_t>* spirv, std::string* error) {
- if(program.stage!=ShaderType::Mesh || program.wave_size!=64 || !program.mesh_gs_user_data ||
+ if(program.stage!=ShaderType::Mesh || program.wave_size!=64 || program.mesh_gs_user_data!=gs_root ||
     !program.dispatcher_fallback || program.lane_mask_mode!=ShaderLaneMaskMode::NativeWave ||
     !assembly.primitives_per_group || assembly.logical_invocations!=vertex.mesh.invocations*2 ||
     assembly.max_vertices!=vertex.mesh.max_vertices || assembly.max_primitives!=vertex.mesh.max_primitives ||
@@ -593,5 +593,15 @@ bool EmitMergedPointMeshProgram(const IR::Program& program, const IR::ResourceSn
   return Fail(error,"invalid merged point Mesh runtime contract");
  }
  return EmitProgramImpl(&assembly,program,resources,&vertex,nullptr,nullptr,spirv,error);
+}
+bool EmitMergedPointMeshProgram(const IR::Program& program, const IR::ResourceSnapshot& resources,
+ const ShaderVertexInputInfo& vertex, const MeshAssemblyPlan& assembly,
+ std::vector<uint32_t>* spirv, std::string* error) {
+ return EmitPointMeshProgram(true,program,resources,vertex,assembly,spirv,error);
+}
+bool EmitStandalonePointMeshProgram(const IR::Program& program, const IR::ResourceSnapshot& resources,
+ const ShaderVertexInputInfo& vertex, const MeshAssemblyPlan& assembly,
+ std::vector<uint32_t>* spirv, std::string* error) {
+ return EmitPointMeshProgram(false,program,resources,vertex,assembly,spirv,error);
 }
 } // namespace Libs::Graphics::ShaderRecompiler::Spirv

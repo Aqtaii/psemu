@@ -84,7 +84,7 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
  if(sampled_reads)for(uint32_t reg=30;reg<=33;++reg)CollectRegister(&state.registers,{IR::RegisterFile::Vector,reg});
  CollectRegister(&state.registers,SccRegister());
  CollectRegister(&state.registers,{IR::RegisterFile::Vector,17});
- for(uint32_t reg=18;reg<=20;++reg) CollectRegister(&state.registers,{IR::RegisterFile::Vector,reg});
+ for(uint32_t reg=18;reg<=21;++reg) CollectRegister(&state.registers,{IR::RegisterFile::Vector,reg});
  if(buffer_reads) {
   for(uint32_t reg=21;reg<=24;++reg) CollectRegister(&state.registers,{IR::RegisterFile::Vector,reg});
   for(uint32_t reg=48;reg<=63;++reg) CollectRegister(&state.registers,{IR::RegisterFile::Scalar,reg});
@@ -566,6 +566,57 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
   state.lane_half=0;
   EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,0xffffffff));
   EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,0xffffffff));
+  // Captured standalone 190-vertex shader: bit operations, masks and 64-bit MAD.
+  std::array<uint32_t,2> saved_mad_high{};
+  for(uint32_t half=0;half<2;++half){state.lane_half=half;saved_mad_high[half]=EmitRegisterLoad(&state,{IR::RegisterFile::Vector,21});}
+  state.lane_half=0;
+  banks(0xf0f0f0f0,1);run(IR::Opcode::BitCountAddU32,{v,Imm(3)});expect(19,4);
+  banks(0xffffffff,0);run(IR::Opcode::BitCountAddU32,{v,Imm(0xffffffff)});expect(31,0xffffffff);
+  banks(0xf0000000,0x30000000);run(IR::Opcode::BitFieldExtract3U32,{v,Imm(28),Imm(3)});expect(7,3);
+  banks(0x80000000,0x7fffffff);run(IR::Opcode::BitFieldExtract3I32,{v,Imm(31),Imm(1)});expect(0xffffffff,0);
+  run(IR::Opcode::BitFieldExtract3U32,{v,Imm(0),Imm(0)});expect(0,0);
+  banks(0x80000000,0x7fffffff);run(IR::Opcode::BitFieldExtract3I32,{v,Imm(31),Imm(31)});expect(0xffffffff,0);
+  banks(0x80000000,0x7fffffff);run(IR::Opcode::BitFieldExtract3U32,{v,Imm(63),Imm(31)});expect(1,0);
+  banks(3,2);run(IR::Opcode::BitFieldExtract3I32,{v,Imm(0),Imm(1)});expect(0xffffffff,0);
+  run(IR::Opcode::BitFieldExtract3I32,{v,Imm(0),Imm(32)});expect(0,0);
+  banks(0x12345678,0x9abcdef0);run(IR::Opcode::BitFieldInsertSelectU32,{Imm(0x00ff00ff),v,Imm(0xabcdef01)});expect(0xab34ef78,0xabbceff0);
+  banks(0xffffffff,0);comparison(IR::Opcode::CompareGeU32,v,Imm(1),mask,0xffffffff,0);
+  comparison(IR::Opcode::CompareLtU32,v,Imm(1),mask,0,0xffffffff);
+  for(const auto op:{IR::Opcode::CompareMaskGtF32,IR::Opcode::CompareMaskGeF32,IR::Opcode::CompareMaskLeF32}) {
+   EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,0xffffffff));
+   EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,0xffffffff));
+   banks(0xc0000000,0x3f800000);auto absolute=v;absolute.absolute=true;
+   comparison(op,absolute,Imm(0x3f800000),Reg(IR::RegisterFile::Exec,0),op==IR::Opcode::CompareMaskLeF32?0:0xffffffff,op==IR::Opcode::CompareMaskGtF32?0:0xffffffff);
+   EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,2));
+   EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,4));
+   banks(0x7fc00000,0x3f800000);
+   comparison(op,v,Imm(0x3f800000),Reg(IR::RegisterFile::Exec,0),0,op==IR::Opcode::CompareMaskGtF32?0:4);
+  }
+  for(bool sparse:{false,true}) {
+   EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,0xffffffff));
+   EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,0xffffffff));
+   banks(0xffffffff,1);
+   for(uint32_t half=0;half<2;++half){state.lane_half=half;EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,21),ConstantU32(&state,half?0:0xffffffff));}
+   state.lane_half=0;
+   EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,sparse?2:0xffffffff));
+   EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,sparse?4:0xffffffff));
+   IR::Instruction mad;mad.op=IR::Opcode::UMadU64U32;mad.execution=IR::InstructionExecution::Vector;
+   mad.dst=v;mad.dst2=Reg(IR::RegisterFile::Vcc,0);mad.src_count=3;mad.src[0]=Imm(0xffffffff);mad.src[1]=v;mad.src[2]=v;
+   Require(EmitGuestInstruction(&state,mad));
+   for(uint32_t half=0;half<2;++half){state.lane_half=half;const auto active=state.builder.AllocateId();
+    state.builder.AddFunction({OpIEqual,state.bool_type,active,EmitSubgroupLocalInvocationId(&state),ConstantU32(&state,half?2u:1u)});
+    const auto low=ConstantU32(&state,0),high=ConstantU32(&state,half?1:0xfffffffe);
+    abi_check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,20}),sparse?EmitSelectU32Value(&state,active,low,ConstantU32(&state,half?1:0xffffffff)):low);
+    abi_check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,21}),sparse?EmitSelectU32Value(&state,active,high,ConstantU32(&state,half?0:0xffffffff)):high);
+   }
+   state.lane_half=0;check(EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,0}),sparse?2:0xffffffff);check(EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,1}),0);
+   auto bad=mad;bad.dst2=Reg(IR::RegisterFile::Scc,0);Require(!EmitGuestInstruction(&state,bad));
+   bad=mad;bad.src[0].absolute=true;Require(!EmitGuestInstruction(&state,bad));
+  }
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,0xffffffff));
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,0xffffffff));
+  for(uint32_t half=0;half<2;++half){state.lane_half=half;EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,21),saved_mad_high[half]);}
+  state.lane_half=0;
   EmitStoreU32(&state,Reg(IR::RegisterFile::Vcc,0),old_low);EmitStoreU32(&state,Reg(IR::RegisterFile::Vcc,1),old_high);
  }
  // Restore the triangle fixture's local vertex ID after checking the merged entry ABI.
@@ -1022,6 +1073,12 @@ int main(int argc,char** argv){
   MeshAssemblyPlan assembly;Require(PlanPointMeshAssembly(1,1,3,3,64,&assembly));
   Require(Spirv::EmitMergedPointMeshProgram(merged,resources,merged_info,assembly,&words,&error),error);
   auto* f=std::fopen("native_mesh_full_adapter.spv","wb");Require(f!=nullptr);
+  Require(std::fwrite(words.data(),4,words.size(),f)==words.size());Require(std::fclose(f)==0);
+  auto standalone=merged;standalone.mesh_gs_user_data=false;
+  Require(!Spirv::EmitMergedPointMeshProgram(standalone,resources,merged_info,assembly,&words,&error));
+  Require(!Spirv::EmitStandalonePointMeshProgram(merged,resources,merged_info,assembly,&words,&error));
+  Require(Spirv::EmitStandalonePointMeshProgram(standalone,resources,merged_info,assembly,&words,&error),error);
+  f=std::fopen("native_mesh_standalone_adapter.spv","wb");Require(f!=nullptr);
   Require(std::fwrite(words.data(),4,words.size(),f)==words.size());Require(std::fclose(f)==0);
  }
  info.mesh.invocations=31;Require(!Spirv::EmitProgram(p,resources,&info,nullptr,nullptr,&words,&error));

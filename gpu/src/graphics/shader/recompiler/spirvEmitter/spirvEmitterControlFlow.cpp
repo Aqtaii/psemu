@@ -512,6 +512,22 @@ bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst) {
      if(!PointerForRegisterHalf(*state,{IR::RegisterFile::Vector,inst.dst.reg.index+c},half)) return false;
    }
   }
+  if(inst.op==IR::Opcode::UMadU64U32) {
+   const auto plain=[](const IR::Operand& o){return !o.dpp && o.sdwa_sel==6 && !o.sdwa_sext &&
+    !o.op_sel && !o.op_sel_hi && !o.negate && !o.negate_hi && !o.absolute && !o.clamp && o.omod==0;};
+   if(inst.src_count!=3 || inst.dst.kind!=IR::OperandKind::Register || inst.dst.reg.file!=IR::RegisterFile::Vector ||
+      inst.dst2.kind!=IR::OperandKind::Register || inst.dst2.reg.file!=IR::RegisterFile::Vcc || inst.dst2.reg.index!=0 ||
+      !plain(inst.dst) || !plain(inst.dst2))return false;
+   for(uint32_t i=0;i<3;++i)if(!plain(inst.src[i]))return false;
+   auto high=inst.dst.reg;++high.index;
+   for(uint32_t half=0;half<2;++half) {
+    if(!PointerForRegisterHalf(*state,inst.dst.reg,half) || !PointerForRegisterHalf(*state,high,half))return false;
+    if(inst.src[2].kind==IR::OperandKind::Register) {
+     auto input_high=inst.src[2].reg;++input_high.index;
+     if(!PointerForRegisterHalf(*state,input_high,half))return false;
+    }
+   }
+  }
   const bool address_alu=inst.op==IR::Opcode::ShiftLeftAddU32 ||
    inst.op==IR::Opcode::ShiftLeftLogicalU32 || inst.op==IR::Opcode::BitwiseAndU32;
   if(address_alu) {
@@ -588,7 +604,12 @@ bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst) {
    case IR::Opcode::BitReverseU32: case IR::Opcode::PackLowLowU16: case IR::Opcode::BitwiseOr3U32:
    case IR::Opcode::CompareMaskEqU32: case IR::Opcode::CompareMaskNeU32:
    case IR::Opcode::CompareMaskLtU32: case IR::Opcode::CompareMaskGtU32:
-   case IR::Opcode::CompareMaskLtF32: break;
+   case IR::Opcode::CompareMaskLtF32:
+   case IR::Opcode::BitCountAddU32: case IR::Opcode::CompareGeU32: case IR::Opcode::CompareLtU32:
+   case IR::Opcode::BitFieldExtract3U32: case IR::Opcode::BitFieldExtract3I32:
+   case IR::Opcode::BitFieldInsertSelectU32: case IR::Opcode::UMadU64U32:
+   case IR::Opcode::CompareMaskGtF32: case IR::Opcode::CompareMaskGeF32:
+   case IR::Opcode::CompareMaskLeF32: break;
 			default: return false;
 		}
 		if (inst.dst2.dpp) return false;
@@ -622,7 +643,8 @@ bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst) {
 		for (uint32_t i=0;i<inst.src_count;++i) {
 			if(inst.src[i].kind != IR::OperandKind::Register) continue;
 			Capture(inst.src[i].reg);
-			if(i==0 && (inst.op==IR::Opcode::SelectMaskU32 || inst.op==IR::Opcode::SelectMaskF32Bits)) {
+			if((i==0 && (inst.op==IR::Opcode::SelectMaskU32 || inst.op==IR::Opcode::SelectMaskF32Bits)) ||
+               (i==2 && inst.op==IR::Opcode::UMadU64U32)) {
 				auto high=inst.src[i].reg;++high.index;Capture(high);
 			}
 		}

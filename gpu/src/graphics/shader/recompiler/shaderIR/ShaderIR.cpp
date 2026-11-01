@@ -985,8 +985,10 @@ bool LowerControlMarker(const Decoder::Instruction& decoded, BasicBlock* block, 
 bool LowerControlInstruction(const Decoder::Instruction& decoded, BasicBlock* block,
                              ShaderType stage, std::string* error) {
 	switch (decoded.opcode) {
+		// The guest conditional-system-debug flag is cleared; its branch falls through.
 		// No guest GPU trap handler is installed; S_TRAP falls through, as in KytyPS5.
 		case Decoder::Opcode::STrap:
+		case Decoder::Opcode::SCbranchCdbgSys:
 		case Decoder::Opcode::SNop:
 			return LowerControlMarker(decoded, block, Opcode::ControlNop, true, error);
 		case Decoder::Opcode::SWaitcnt:
@@ -1077,6 +1079,7 @@ bool LowerScalarSaveexec(const Decoder::Instruction& decoded, BasicBlock* block,
 
 bool IsControlOpcode(Decoder::Opcode opcode) {
 	switch (opcode) {
+		case Decoder::Opcode::SCbranchCdbgSys:
 		case Decoder::Opcode::SNop:
 		case Decoder::Opcode::STrap:
 		case Decoder::Opcode::SWaitcnt:

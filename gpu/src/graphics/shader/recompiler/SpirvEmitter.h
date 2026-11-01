@@ -13,6 +13,9 @@ namespace Libs::Graphics::ShaderRecompiler::Spirv {
 bool EmitMergedPointMeshProgram(const IR::Program&, const IR::ResourceSnapshot&,
  const ShaderVertexInputInfo&, const MeshAssemblyPlan&, std::vector<uint32_t>*, std::string*);
 
+bool EmitStandalonePointMeshProgram(const IR::Program&, const IR::ResourceSnapshot&,
+ const ShaderVertexInputInfo&, const MeshAssemblyPlan&, std::vector<uint32_t>*, std::string*);
+
 bool ProgramRequiresExactSubgroupSize(const IR::Program& program);
 
 bool EmitProgram(const IR::Program& program, const IR::ResourceSnapshot& resources,

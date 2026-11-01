@@ -1,5 +1,6 @@
 #include "graphics/shader/recompiler/meshOutputProbe.h"
 #include "graphics/shader/shader.h"
+#include "graphics/shader/meshProgramKind.h"
 
 #include "common/assert.h"
 #include "common/common.h"
@@ -1114,15 +1115,22 @@ bool ShaderCompileInfoMesh(const HW::VertexShaderInfo& regs,const ShaderMeshInpu
  MeshAssemblyPlan assembly;
  if(!PlanPointMeshAssembly(primitive_group,vertex_group,vertices_per_primitive,mesh.max_vertices,64,&assembly)) return false;
  const auto es=ShaderGetMappedCode(regs.es_regs.data_addr,"Merged Mesh ES",regs.es_regs.data_addr);
- const auto gs=ShaderGetMappedCode(regs.gs_regs.data_addr,"Merged Mesh GS",regs.gs_regs.chksum);
+ ShaderMappedData es_metadata;
+ if(!ShaderGetMappedData(regs.es_regs.data_addr,&es_metadata)) return false;
+ const auto kind=SelectMeshProgramKind(es_metadata.binary_type);
+ const bool fused=kind==MeshProgramKind::Fused;
+ std::span<const uint32_t> gs;
+ ShaderMappedData gs_metadata;
+ if(fused && regs.gs_regs.data_addr && ShaderGetMappedData(regs.gs_regs.data_addr,&gs_metadata))
+  gs=ShaderGetMappedCode(regs.gs_regs.data_addr,"Merged Mesh GS",regs.gs_regs.chksum);
  const auto user_count=std::max<uint32_t>(regs.gs_regs.rsrc2.user_sgpr,16u);
  if(user_count>std::size(regs.gs_user_sgpr.value)) return false;
  const auto failed=[&](const char* phase) {
   const char* capture=std::getenv("PSEMU_ASTRO_MESH_CAPTURE_FAILURE");
   if(capture && capture[0]=='1') {
-   printf("[MESH-FAILURE-CAPTURE] phase=%s es=0x%016" PRIx64 " gs=0x%016" PRIx64
+   printf("[MESH-FAILURE-CAPTURE] phase=%s es_type=%u gs_type=%u es=0x%016" PRIx64 " gs=0x%016" PRIx64
     " max_vertices=%u max_primitives=%u invocations=%u lds_dwords=%u primitive_group=%u vertex_group=%u vertices_per_primitive=%u user_count=%u code_only=1 GPU=not-submitted error=%s\n",
-    phase,regs.es_regs.data_addr,regs.gs_regs.data_addr,mesh.max_vertices,mesh.max_primitives,
+    phase,unsigned(es_metadata.binary_type),unsigned(gs_metadata.binary_type),regs.es_regs.data_addr,regs.gs_regs.data_addr,mesh.max_vertices,mesh.max_primitives,
     mesh.invocations,mesh.lds_dwords,primitive_group,vertex_group,vertices_per_primitive,user_count,
     error?error->c_str():"not provided");
    std::fflush(stdout);
@@ -1131,14 +1139,20 @@ bool ShaderCompileInfoMesh(const HW::VertexShaderInfo& regs,const ShaderMeshInpu
   return false;
  };
 
+ if(kind==MeshProgramKind::Unsupported) {
+  if(error)*error="unsupported registered Mesh shader binary type";return failed("binary-type");
+ }
+ if(fused && (gs.empty() || gs_metadata.binary_type!=Prospero::GpuEnumValue(Prospero::ShaderBinaryType::kGsBack))) {
+  if(error)*error="paired Mesh requires a registered GS-back shader";return failed("binary-type");
+ }
  R::SrtRuntime runtime;runtime.user_data=std::span<const uint32_t>(regs.gs_user_sgpr.value,user_count);
- runtime.shader_base=regs.es_regs.data_addr;runtime.mesh_gs_user_data_address=regs.gs_regs.user_data_addr;
- struct Entry {std::vector<uint32_t> es,gs,spirv;ShaderMeshInputInfo mesh;MeshAssemblyPlan assembly;
+ runtime.shader_base=regs.es_regs.data_addr;if(fused)runtime.mesh_gs_user_data_address=regs.gs_regs.user_data_addr;
+ struct Entry {MeshProgramKind kind;std::vector<uint32_t> es,gs,spirv;ShaderMeshInputInfo mesh;MeshAssemblyPlan assembly;
   std::shared_ptr<const R::Program> program;};
  static std::mutex mutex;static std::vector<std::unique_ptr<Entry>> cache;
  std::scoped_lock lock(mutex);
  for(const auto& e:cache) {
-  if(e->program->bindings.mesh_output_probe!=output_probe ||
+  if(e->kind!=kind || e->program->bindings.mesh_output_probe!=output_probe ||
      e->mesh.max_vertices!=mesh.max_vertices || e->mesh.max_primitives!=mesh.max_primitives ||
      e->mesh.invocations!=mesh.invocations || e->mesh.lds_dwords!=mesh.lds_dwords ||
      e->assembly.primitives_per_group!=assembly.primitives_per_group || e->program->user_data_count!=user_count ||
@@ -1151,33 +1165,35 @@ bool ShaderCompileInfoMesh(const HW::VertexShaderInfo& regs,const ShaderMeshInpu
   ApplyVertexOutputs(info,*e->program);*spirv=MakeShaderSpirvView(e->spirv);return true;
  }
  ShaderRecompiler::Decoder::Program decoded;std::vector<uint32_t> joined;
- if(!ShaderRecompiler::Decoder::DecodeFusedProgram(es,gs,&joined,&decoded,error)) return failed("decode");
+ if(!(fused ? ShaderRecompiler::Decoder::DecodeFusedProgram(es,gs,&joined,&decoded,error) :
+      ShaderRecompiler::Decoder::DecodeProgram(es,&decoded,error))) return failed("decode");
  ShaderRecompiler::CFG::Graph graph;
  if(!ShaderRecompiler::CFG::BuildGraph(decoded,&graph,error)) return failed("cfg");
  R::Program program;
  if(!R::LowerProgram(decoded,graph,ShaderType::Mesh,64,&program,error)) return failed("lower");
  program.dispatcher_fallback=true;
- if(!R::BuildMergedMeshResourcePlan(&program,user_count,error)) return failed("resource-plan");
+ if(!R::BuildPointMeshResourcePlan(&program,user_count,fused,error)) return failed("resource-plan");
  R::ResourceSnapshot resources;
  if(!R::MaterializeResources(program,runtime,&resources,error) || !R::SpecializeResources(&program,resources,error)) return failed("resources");
  R::ShaderInfoOptions opts;opts.vertex=info;
  R::BindingLayoutOptions layout;layout.mesh_point_inputs=true;layout.mesh_output_probe=output_probe;
  if(!R::CollectShaderInfo(&program,opts,error) || !R::AllocateBindings(&program,layout,error)) return failed("bindings");
  auto next=std::make_unique<Entry>();
- if(!ShaderRecompiler::Spirv::EmitMergedPointMeshProgram(program,resources,*info,assembly,&next->spirv,error)) {
+ const auto emit=fused ? ShaderRecompiler::Spirv::EmitMergedPointMeshProgram : ShaderRecompiler::Spirv::EmitStandalonePointMeshProgram;
+ if(!emit(program,resources,*info,assembly,&next->spirv,error)) {
   return failed("emit");
  }
  if(!SpirvValidateBinary("Merged Mesh",regs.gs_regs.chksum,next->spirv,true)) {
   if(error) *error="merged Mesh SPIR-V validation failed";return failed("spirv-validation");
  }
  if(cache.size()>=64) {if(error) *error="merged Mesh program cache limit reached";return failed("cache-limit");}
- next->es.assign(es.begin(),es.end());next->gs.assign(gs.begin(),gs.end());next->mesh=mesh;next->assembly=assembly;
+ next->kind=kind;next->es.assign(es.begin(),es.end());next->gs.assign(gs.begin(),gs.end());next->mesh=mesh;next->assembly=assembly;
  next->program=std::make_shared<const R::Program>(std::move(program));info->stage.program=next->program;
  info->stage.resources=std::make_shared<const R::ResourceSnapshot>(std::move(resources));
  ApplyVertexOutputs(info,*next->program);*spirv=MakeShaderSpirvView(next->spirv);
  DumpShaderRecompilerSpirv("mesh",regs.gs_regs.chksum,next->spirv);
- printf("[ASTRO-MESH-COMPILE] instructions=%zu buffers=%zu words=%zu resources=guest GPU=not-yet-submitted\n",
-  decoded.instructions.size(),next->program->info.buffers.size(),next->spirv.size());
+ printf("[ASTRO-MESH-COMPILE] instructions=%zu buffers=%zu words=%zu resources=guest GPU=not-yet-submitted kind=%s\n",
+  decoded.instructions.size(),next->program->info.buffers.size(),next->spirv.size(),fused?"fused":"standalone");
  cache.push_back(std::move(next));return true;
 }
 
@@ -1480,6 +1496,7 @@ void ShaderDumpSkippedGe(const HW::VertexShaderInfo& regs) {
 	const uint64_t addresses[] = {regs.es_regs.data_addr, regs.gs_regs.data_addr};
 	const char* names[] = {"es", "gs"};
 	std::span<const uint32_t> stage_code[2];
+	MeshProgramKind captured_kind=MeshProgramKind::Unsupported;
 	for (uint32_t i = 0; i < 2; i++) {
 		ShaderMappedData mapped;
 		if (addresses[i] == 0 || !ShaderGetMappedData(addresses[i], &mapped) ||
@@ -1490,6 +1507,7 @@ void ShaderDumpSkippedGe(const HW::VertexShaderInfo& regs) {
 		}
 		const auto code = ShaderGetMappedCode(addresses[i], "GE diagnostic", addresses[i]);
 		stage_code[i] = code;
+		if(i==0)captured_kind=SelectMeshProgramKind(mapped.binary_type);
 		const auto base = std::filesystem::path("tools/dumps/astro_ge") /
 		                  fmt::format("{}_{:016x}", names[i], addresses[i]);
 		Common::File::CreateDirectories(base.parent_path());
@@ -1505,7 +1523,7 @@ void ShaderDumpSkippedGe(const HW::VertexShaderInfo& regs) {
 		binary.Close();
 		ShaderRecompiler::Decoder::Program decoded;
 		std::string error;
-		const bool success = i == 0
+		const bool success = i == 0 && mapped.binary_type == Prospero::GpuEnumValue(Prospero::ShaderBinaryType::kGsFront)
 		                         ? ShaderRecompiler::Decoder::DecodeFrontProgram(code, &decoded, &error)
 		                         : ShaderRecompiler::Decoder::DecodeProgram(code, &decoded, &error);
 		Common::File text;
@@ -1517,10 +1535,10 @@ void ShaderDumpSkippedGe(const HW::VertexShaderInfo& regs) {
 			            ShaderRecompiler::Decoder::ProgramToString(decoded).c_str());
 			text.Close();
 		}
-		printf("[GE-CAPTURE] %s addr=0x%016llx bytes=%u decoded=%d\n", names[i],
-		       static_cast<unsigned long long>(addresses[i]), mapped.code_size_bytes, success);
+		printf("[GE-CAPTURE] %s addr=0x%016llx bytes=%u decoded=%d binary_type=%u\n", names[i],
+		       static_cast<unsigned long long>(addresses[i]), mapped.code_size_bytes, success, unsigned(mapped.binary_type));
 	}
-	if (!stage_code[0].empty() && !stage_code[1].empty()) {
+	if (captured_kind==MeshProgramKind::Fused && !stage_code[0].empty() && !stage_code[1].empty()) {
 		std::vector<uint32_t> joined;
 		ShaderRecompiler::Decoder::Program fused;
 		std::string error;

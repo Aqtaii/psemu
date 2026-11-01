@@ -20,6 +20,8 @@ try {
  if($LASTEXITCODE -ne 0){throw 'Native Mesh upper-half output SPIR-V validation failed'}
  & "$env:VULKAN_SDK\Bin\spirv-val.exe" --target-env vulkan1.2 .\native_mesh_full_adapter.spv
  if($LASTEXITCODE -ne 0){throw 'Full Mesh ABI/phase adapter validation failed'}
+ & "$env:VULKAN_SDK\Bin\spirv-val.exe" --target-env vulkan1.2 .\native_mesh_standalone_adapter.spv
+ if($LASTEXITCODE -ne 0){throw 'Standalone Mesh point adapter validation failed'}
  & .\native_mesh_emitter_test.exe multiwave
  if($LASTEXITCODE -ne 0){throw 'Native Mesh multiwave regression failed'}
  foreach($sampled in @('native_mesh_sampled_reads.spv','native_mesh_sampled_reads_multiwave.spv')) {

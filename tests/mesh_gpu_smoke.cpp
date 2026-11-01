@@ -67,10 +67,14 @@ int main(int argc,char** argv){try{
   uint32_t queues=0;vkGetPhysicalDeviceQueueFamilyProperties(candidate,&queues,nullptr);std::vector<VkQueueFamilyProperties> q(queues);
   vkGetPhysicalDeviceQueueFamilyProperties(candidate,&queues,q.data());
   for(uint32_t i=0;i<queues;++i)if(q[i].queueFlags&VK_QUEUE_GRAPHICS_BIT){gpu=candidate;family=i;break;}
-  if(gpu){std::printf("[MESH-GPU] device=%s\n",properties.deviceName);break;}
+  if(gpu){std::printf("[MESH-GPU] device=%s\n",properties.deviceName);
+   std::printf("[MESH-LIMITS] output_memory=%u components=%u vertices=%u primitives=%u shared_memory=%u vertex_granularity=%u primitive_granularity=%u\n",
+    limits.maxMeshOutputMemorySize,limits.maxMeshOutputComponents,limits.maxMeshOutputVertices,limits.maxMeshOutputPrimitives,
+    limits.maxMeshSharedMemorySize,limits.meshOutputPerVertexGranularity,limits.meshOutputPerPrimitiveGranularity);break;}
  }
  if(!gpu)throw std::runtime_error("No suitable Mesh GPU");
  const float priority=1;VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};qci.queueFamilyIndex=family;qci.queueCount=1;qci.pQueuePriorities=&priority;
+ const bool point_adapter=argc==4 && std::string(argv[3])=="point-adapter";
  const bool point_output_probe=argc==4 && std::string(argv[3])=="point-output-probe";
  const bool point_output_miss=argc==4 && std::string(argv[3])=="point-output-miss";
  const bool output_probe=point_output_probe || point_output_miss || (argc==4 && std::string(argv[3])=="output-probe");
@@ -100,7 +104,7 @@ int main(int argc,char** argv){try{
  const bool buffer_reads=argc==4 && std::string(argv[3])=="buffer-reads";
  const bool sampled_reads=argc==4 && std::string(argv[3])=="sampled-reads";
  const VkDeviceSize input_bytes=output_probe ? sizeof(Libs::Graphics::ShaderRecompiler::MeshOutputProbe) : 4096;
- const bool point_push=point_output_probe || point_output_miss || buffer_reads || (argc==4 && std::string(argv[3])=="point-push");
+ const bool point_push=point_adapter || point_output_probe || point_output_miss || buffer_reads || (argc==4 && std::string(argv[3])=="point-push");
  const bool vertex_probe=argc==4 && std::string(argv[3])=="vertex-probe";
  if(argc==4 && !point_push && !vertex_probe && !primitive_probe && !output_probe && !sampled_reads) throw std::runtime_error("Unknown Mesh GPU test mode");
  auto draw=reinterpret_cast<PFN_vkCmdDrawMeshTasksEXT>(vkGetDeviceProcAddr(device,"vkCmdDrawMeshTasksEXT"));if(!draw)throw std::runtime_error("Mesh draw entry unavailable");
@@ -205,7 +209,7 @@ int main(int argc,char** argv){try{
  VkCommandBuffer cmd;VK_CHECK(vkAllocateCommandBuffers(device,&cai,&cmd));VkCommandBufferBeginInfo begin{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};bool readbacks_passed=true;
  VkQueryPool primitive_pool=VK_NULL_HANDLE;
  if(primitive_probe){VkQueryPoolCreateInfo qi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};qi.queryType=VK_QUERY_TYPE_MESH_PRIMITIVES_GENERATED_EXT;qi.queryCount=1;VK_CHECK(vkCreateQueryPool(device,&qi,nullptr,&primitive_pool));}
- for(uint32_t point_case=0;point_case<((point_push && !output_probe)?2u:1u);++point_case) {
+ for(uint32_t point_case=0;point_case<((point_push && !output_probe && !point_adapter)?2u:1u);++point_case) {
  if(point_case!=0) VK_CHECK(vkResetCommandBuffer(cmd,0));
  VK_CHECK(vkBeginCommandBuffer(cmd,&begin));
  if(sampled_reads) {
@@ -227,8 +231,8 @@ int main(int argc,char** argv){try{
  if(buffer_reads || output_probe || sampled_reads) vkCmdBindDescriptorSets(cmd,VK_PIPELINE_BIND_POINT_GRAPHICS,layout,0,1,&storage_set,0,nullptr);
  if(point_push) {
   const uint32_t payload[6]={0x87654321u,point_case?2u:1u,point_case?41u:25u,point_case?43u:27u,point_case?0xabcdef11u:0xabcdef01u,0x12345678u};
-  if(output_probe) {
-   const uint32_t point_payload[5]={1,0,point_output_miss ? 1u : 0u,0,0};
+  if(output_probe || point_adapter) {
+   const uint32_t point_payload[5]={point_adapter?3u:1u,0,point_output_miss ? 1u : 0u,0,0};
    vkCmdPushConstants(cmd,layout,VK_SHADER_STAGE_MESH_BIT_EXT,0,sizeof(point_payload),point_payload);
   } else vkCmdPushConstants(cmd,layout,VK_SHADER_STAGE_MESH_BIT_EXT,0,sizeof(payload),payload);
  }

@@ -1017,21 +1017,18 @@ void EmitBitFieldExtractU32(EmitterState* state, const IR::Instruction& inst) {
 }
 
 void EmitBitFieldExtract3U32(EmitterState* state, const IR::Instruction& inst, bool signed_value) {
-	const auto src    = EmitValueLoad(state, inst.src[0]);
-	const auto offset = EmitAndConstant(state, EmitValueLoad(state, inst.src[1]), 31u);
-	const auto count  = EmitAndConstant(state, EmitValueLoad(state, inst.src[2]), 31u);
-	const auto ret    = state->builder.AllocateId();
-	if (signed_value) {
-		const auto shifted = state->builder.AllocateId();
-		const auto mask    = EmitRightAlignedMaskU32(state, count);
-		state->builder.AddFunction(
-		    {OpShiftRightArithmetic, state->uint_type, shifted, src, offset});
-		state->builder.AddFunction({OpBitwiseAnd, state->uint_type, ret, shifted, mask});
-		EmitStoreU32(state, inst.dst, ret);
-		return;
-	}
-	state->builder.AddFunction({OpBitFieldUExtract, state->uint_type, ret, src, offset, count});
-	EmitStoreU32(state, inst.dst, ret);
+ const auto src=EmitValueLoad(state,inst.src[0]);
+ const auto offset=EmitAndConstant(state,EmitValueLoad(state,inst.src[1]),31u);
+ const auto raw_count=EmitAndConstant(state,EmitValueLoad(state,inst.src[2]),31u);
+ // AMD truncates the field at the word boundary; SPIR-V requires a bounded range.
+ const auto available=state->builder.AllocateId(),use_raw=state->builder.AllocateId();
+ const auto count=state->builder.AllocateId(),ret=state->builder.AllocateId();
+ state->builder.AddFunction({OpISub,state->uint_type,available,ConstantU32(state,32),offset});
+ state->builder.AddFunction({OpULessThan,state->bool_type,use_raw,raw_count,available});
+ state->builder.AddFunction({OpSelect,state->uint_type,count,use_raw,raw_count,available});
+ // OpBitFieldSExtract extends the extracted sign bit; masking an arithmetic shift does not.
+ state->builder.AddFunction({signed_value?OpBitFieldSExtract:OpBitFieldUExtract,state->uint_type,ret,src,offset,count});
+ EmitStoreU32(state,inst.dst,ret);
 }
 
 void EmitBitFieldInsertSelectU32(EmitterState* state, const IR::Instruction& inst) {

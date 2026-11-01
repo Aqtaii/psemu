@@ -534,6 +534,7 @@ enum class Opcode {
 	SCbranchVccnz,
 	SCbranchExecz,
 	SCbranchExecnz,
+	SCbranchCdbgSys,
 	SSendmsg,
 	SSetregB32,
 	SSleep,
