@@ -959,7 +959,40 @@ void WriteCapturedMesh(const char* es_path,const char* gs_path) {
  auto* f=std::fopen("astro_full_mesh.spv","wb");Require(f!=nullptr);
  Require(std::fwrite(words.data(),4,words.size(),f)==words.size());Require(std::fclose(f)==0);
 }
+// Raster-stage coverage: only one lane per quad starts active. WQM32 must
+// activate its three neighbors before the guarded color write reaches MRT0.
+void WriteWqm32PixelFixture(bool expand) {
+ using namespace Spirv::Emitter;
+ IR::Program p;p.stage=ShaderType::Pixel;p.wave_size=64;p.lane_mask_mode=ShaderLaneMaskMode::PerInvocation;
+ p.srt_patching_complete=p.resource_tracking_complete=p.shader_info_complete=p.binding_layout_complete=true;
+ p.info.outputs={{IR::StageOutputKind::Mrt,0,0,"color"}};
+ p.blocks.resize(1);auto& block=p.blocks[0];block.terminator.kind=CFG::TerminatorKind::Return;
+ const auto v0=Reg(IR::RegisterFile::Vector,0),v1=Reg(IR::RegisterFile::Vector,1);
+ auto add=[&](IR::Opcode op,IR::Operand dst,std::initializer_list<IR::Operand> src,IR::InstructionExecution execution){
+  IR::Instruction i;i.op=op;i.dst=dst;i.execution=execution;i.pc=uint32_t(block.instructions.size()*4);
+  for(const auto& source:src)i.src[i.src_count++]=source;block.instructions.push_back(i);
+ };
+ add(IR::Opcode::MoveU32,v1,{Imm(0)},IR::InstructionExecution::Vector);
+ add(IR::Opcode::MaskedBitCountLowU32,v0,{Imm(0xffffffff),Imm(0)},IR::InstructionExecution::Vector);
+ add(IR::Opcode::BitwiseAndU32,v0,{v0,Imm(3)},IR::InstructionExecution::Vector);
+ add(IR::Opcode::CompareEqU32,Reg(IR::RegisterFile::Vcc,0),{v0,Imm(0)},IR::InstructionExecution::Vector);
+ add(IR::Opcode::MoveU64,Reg(IR::RegisterFile::Exec,0),{Reg(IR::RegisterFile::Vcc,0)},IR::InstructionExecution::Scalar);
+ if(expand){add(IR::Opcode::WqmB32,Reg(IR::RegisterFile::Exec,0),{Reg(IR::RegisterFile::Exec,0)},IR::InstructionExecution::Scalar);block.instructions.back().dst2=SccOperand();}
+ add(IR::Opcode::MoveU32,v1,{Imm(0x3f800000)},IR::InstructionExecution::Vector);
+ // Every raster invocation must export a defined value, including inactive control lanes.
+ add(IR::Opcode::MoveU64,Reg(IR::RegisterFile::Exec,0),{Imm(0xffffffff)},IR::InstructionExecution::Scalar);
+ add(IR::Opcode::Export,{}, {v1,Imm(0),Imm(0),Imm(0x3f800000)},IR::InstructionExecution::Vector);
+ block.instructions.back().export_info.kind=IR::ExportTargetKind::Mrt;block.instructions.back().export_info.en=15;
+ ShaderPixelInputInfo pixel{};pixel.target_output_mode[0]=4;
+ IR::ResourceSnapshot resources;std::vector<uint32_t> words;std::string error;
+ Require(Spirv::EmitProgram(p,resources,nullptr,&pixel,nullptr,&words,&error),error);
+ auto* file=std::fopen(expand?"native_wqm32_fragment.spv":"native_wqm32_fragment_control.spv","wb");Require(file!=nullptr);
+ Require(std::fwrite(words.data(),4,words.size(),file)==words.size());Require(std::fclose(file)==0);
+ if(expand){for(auto& i:block.instructions)if(i.op==IR::Opcode::WqmB32)i.src[0]=Reg(IR::RegisterFile::Scalar,2);
+  Require(!Spirv::EmitProgram(p,resources,nullptr,&pixel,nullptr,&words,&error));Require(error.find("SGPR mask provenance")!=std::string::npos,error);}
+}
 int main(int argc,char** argv){
+ WriteWqm32PixelFixture(true);WriteWqm32PixelFixture(false);
  {
   const std::array<uint8_t,5> bytes{0xaa,0x34,0x12,0x78,0x56};
   uint32_t vertex=99;
