@@ -1146,6 +1146,19 @@ void TextureCache::ResolveStorageImageOverlaps(CommandBuffer* command, GraphicCo
 			case StorageImageOverlap::RetireSampled: retire.push_back(cached); continue;
 			case StorageImageOverlap::PageNeighbor: continue;
 			case StorageImageOverlap::Unsupported:
+                if(cached->kind==CachedImage::Kind::DepthTarget &&
+                   CanRetireCleanDepthTargetForStorage(cached->depth,cached->gpu_modified,
+                    cached->buffer_modified,tracker_gpu,
+                    m_memory_tracker.IsRegionCpuModified(cached->Address(),cached->Size()),
+                    cached->ctx==ctx,coherent_requested_backing,
+                    m_buffer_cache.HasPageOverlap(cached->Address(),cached->Size()),requested)) {
+                 retire.push_back(cached);
+                 static std::atomic_uint depth_storage_logs{0};
+                 if(depth_storage_logs.fetch_add(1)<8)printf("[DEPTH-STORAGE-RETIRE] address=0x%016" PRIx64
+                  " size=0x%016" PRIx64 " depth_tile=%u storage_tile=%u backing_current=1 readback=0\n",
+                  cached->Address(),cached->Size(),cached->depth.tile_mode,requested.tile);
+                 continue;
+                }
                 if(cached->kind==CachedImage::Kind::StorageTexture &&
                    CanReconstructStorageForStorage(cached->info,cached->gpu_modified,cached->buffer_modified,
                     tracker_gpu,cached->info.IsCpuDirty() || m_memory_tracker.IsRegionCpuModified(cached->Address(),cached->Size()),
@@ -1185,6 +1198,16 @@ void TextureCache::ResolveStorageImageOverlaps(CommandBuffer* command, GraphicCo
                      cached->Address(),cached->Size(),requested.address,requested.size);
                     continue;
                 }
+                if(cached->kind==CachedImage::Kind::DepthTarget) {
+                 const auto& depth=cached->depth;
+                 std::fprintf(stderr,"[DEPTH-STORAGE-REJECT] extent=%ux%u pitch=%u format=%u guest_format=%u bpe=%u tile=%u layers=%u "
+                  "depth_clear=%u stencil_clear=%u stencil_access=%u compressed=%u stencil=0x%016" PRIx64
+                  "+0x%016" PRIx64 " htile=0x%016" PRIx64 "+0x%016" PRIx64 " coherent_backing=%u\n",
+                  depth.width,depth.height,depth.pitch,uint32_t(depth.format),depth.guest_format,depth.bytes_per_element,
+                  depth.tile_mode,depth.layers,unsigned(depth.depth_load_clear),unsigned(depth.stencil_load_clear),
+                  unsigned(depth.stencil_access),unsigned(depth.stencil_htile_compressed),depth.stencil_address,
+                  depth.stencil_size,depth.htile_address,depth.htile_size,unsigned(coherent_requested_backing));
+                }
                 EXIT("TextureCache: unsupported storage-image byte alias, requested=0x%016" PRIx64
 				     "+0x%016" PRIx64 " existing=0x%016" PRIx64 "+0x%016" PRIx64
 				     " kind=%u same_context=%d gpu=%d/%d buffer=%d"
@@ -1210,7 +1233,8 @@ void TextureCache::ResolveStorageImageOverlaps(CommandBuffer* command, GraphicCo
 	}
 	RequireRetirementIsolation(retire, "storage neighbor", requested.address, requested.size);
 	for (auto* cached: retire) {
-		if (cached->kind != CachedImage::Kind::RenderTarget && cached->kind != CachedImage::Kind::StorageTexture) {
+		if (cached->kind != CachedImage::Kind::RenderTarget && cached->kind != CachedImage::Kind::StorageTexture &&
+            cached->kind != CachedImage::Kind::DepthTarget) {
 			continue;
 		}
 		const auto owner = std::find_if(m_images.begin(), m_images.end(),
@@ -1224,7 +1248,7 @@ void TextureCache::ResolveStorageImageOverlaps(CommandBuffer* command, GraphicCo
 		if (retirement_logs.fetch_add(1, std::memory_order_relaxed) < 8) {
 			printf("[RT-STORAGE-RETIRE] target=0x%016" PRIx64 "+0x%016" PRIx64
 			       " storage=0x%016" PRIx64 "+0x%016" PRIx64 " backing_current=%d\n",
-			       cached->target.address, cached->target.size, requested.address, requested.size,
+			       cached->Address(), cached->Size(), requested.address, requested.size,
 			       !cached->gpu_modified);
 		}
 	}

@@ -1215,6 +1215,30 @@ CanReconstructStorageForRenderTarget(const ImageInfo& storage, bool gpu_modified
         IsSupportedRenderTargetReconstructionFootprint(backing);
 }
 
+// Clean D32 views may be replaced by an exact R32Float color-storage view.
+// Guest-layout backing is already current; retaining the old view requires no readback.
+[[nodiscard]] inline bool CanRetireCleanDepthTargetForStorage(
+    const DepthTargetInfo& depth, bool gpu, bool buffer, bool tracker_gpu, bool cpu,
+    bool same_context, bool coherent_backing, bool buffer_overlap, const ImageInfo& storage) {
+ if(gpu || buffer || tracker_gpu || cpu || !same_context || !coherent_backing || buffer_overlap ||
+    depth.format!=vk::Format::eD32Sfloat ||
+    depth.guest_format!=Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float) ||
+    depth.bytes_per_element!=4 || depth.layers!=1 || depth.depth_load_clear || depth.stencil_load_clear ||
+    depth.stencil_access || depth.stencil_htile_compressed || depth.stencil_address || depth.stencil_size ||
+    depth.htile_address || depth.htile_size ||
+    depth.tile_mode!=Prospero::GpuEnumValue(Prospero::TileMode::kDepth) ||
+    depth.width==0 || depth.height==0 || depth.width>16384 || depth.height>16384 ||
+    depth.address==0 || (depth.address&0xffffu)!=0 || depth.size>UINT32_MAX ||
+    depth.size>UINT64_MAX-depth.address ||
+    storage.format!=Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float) ||
+    !IsSupportedColorStorageBacking(storage)) return false;
+ const uint64_t pitch=(uint64_t(depth.width)+127u)&~uint64_t{127u};
+ const uint64_t height=(uint64_t(depth.height)+127u)&~uint64_t{127u};
+ return depth.pitch==pitch && depth.size==pitch*height*4u &&
+        storage.address==depth.address && storage.size==depth.size &&
+        storage.width==depth.width && storage.height==depth.height && storage.pitch==depth.pitch;
+}
+
 // Preserve the complete authoritative R32Float storage allocation before an exact
 // single-layer D32 depth target interprets those bytes in the depth permutation.
 [[nodiscard]] inline bool CanReconstructStorageForDepthTarget(

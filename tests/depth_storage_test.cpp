@@ -2,6 +2,44 @@
 static void Require(bool ok,std::source_location where=std::source_location::current()) {if(!ok) {std::fprintf(stderr,"Regression failed at %s:%u\n",where.file_name(),where.line());throw std::runtime_error("regression failed");}}
 int main() {
  {
+  DepthTargetInfo depth{};depth.address=0x1b5e42b0000ull;depth.size=0x280000;
+  depth.format=vk::Format::eD32Sfloat;depth.guest_format=Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float);
+  depth.width=960;depth.height=540;depth.pitch=1024;depth.bytes_per_element=4;
+  depth.tile_mode=Prospero::GpuEnumValue(Prospero::TileMode::kDepth);
+  ImageInfo storage{};storage.address=depth.address;storage.size=depth.size;storage.format=depth.guest_format;
+  storage.width=960;storage.height=540;storage.pitch=1024;storage.depth=storage.levels=storage.view_levels=1;
+  storage.tile=Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget);
+  storage.type=Prospero::GpuEnumValue(Prospero::ImageType::kColor2D);
+  Require(CanRetireCleanDepthTargetForStorage(depth,false,false,false,false,true,true,false,storage));
+  for(int bad=0;bad<7;++bad)
+   Require(!CanRetireCleanDepthTargetForStorage(depth,bad==0,bad==1,bad==2,bad==3,bad!=4,bad!=5,bad==6,storage));
+  for(int bad=0;bad<21;++bad) {
+   auto d=depth;
+   switch(bad) {
+    case 0:d.address+=0x10000;break;case 1:d.size-=0x10000;break;case 2:d.width--;break;
+    case 3:d.height--;break;case 4:d.pitch=960;break;case 5:d.bytes_per_element=2;break;
+    case 6:d.format=vk::Format::eD16Unorm;break;case 7:d.guest_format=Prospero::GpuEnumValue(Prospero::BufferFormat::k32UInt);break;
+    case 8:d.tile_mode=storage.tile;break;case 9:d.layers=2;break;case 10:d.depth_load_clear=true;break;
+    case 11:d.stencil_load_clear=true;break;case 12:d.stencil_access=true;break;case 13:d.stencil_htile_compressed=true;break;
+    case 14:d.stencil_address=0x20000000000ull;break;case 15:d.stencil_size=0x10000;break;
+    case 16:d.htile_address=0x20000000000ull;break;case 17:d.htile_size=0x10000;break;
+    case 18:d.address++;break;case 19:d.address=0;break;case 20:d.address=UINT64_MAX-0xffff;break;
+   }
+   Require(!CanRetireCleanDepthTargetForStorage(d,false,false,false,false,true,true,false,storage));
+  }
+  for(int bad=0;bad<13;++bad) {
+   auto v=storage;
+   switch(bad) {
+    case 0:v.address+=0x10000;break;case 1:v.size-=0x10000;break;case 2:v.width--;break;case 3:v.height--;break;
+    case 4:v.pitch=960;break;case 5:v.tile=depth.tile_mode;break;case 6:v.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k32UInt);break;
+    case 7:v.depth=2;break;case 8:v.levels=2;break;case 9:v.base_level=1;break;case 10:v.view_levels=2;break;
+    case 11:v.base_array=1;break;case 12:v.type=Prospero::GpuEnumValue(Prospero::ImageType::kColor2DArray);break;
+   }
+   Require(!CanRetireCleanDepthTargetForStorage(depth,false,false,false,false,true,true,false,v));
+  }
+  std::puts("[DEPTH-STORAGE-CLEAN-POLICY] captured960x540 layout27 exact backing, dirty/alias/shape negatives=passed");
+ }
+ {
   DepthTargetInfo target{};target.address=0x145db3e0000ull;target.size=0x280000;
   target.format=vk::Format::eD32Sfloat;target.guest_format=Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float);
   target.width=960;target.height=540;target.pitch=1024;target.bytes_per_element=4;
