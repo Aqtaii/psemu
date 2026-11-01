@@ -579,7 +579,10 @@ void EmitLaneMaskPairFromBool(EmitterState* state, const IR::Operand& dst, uint3
 	state->builder.AddFunction(
 	    {OpLogicalAnd, state->bool_type, write_mask, value_bool, EmitExecActiveBool(state)});
 	if (state->per_invocation_masks) {
-		EmitPerInvocationMask(state, dst, write_mask);
+		if(state->wave_size==32u) {
+		 // Wave32 comparisons write one word; VCC_HI/next SGPR may contain ordinary data.
+		 EmitStoreU32(state,dst,EmitSelectU32Value(state,write_mask,ConstantU32(state,1),ConstantU32(state,0)));
+		} else EmitPerInvocationMask(state, dst, write_mask);
 		return;
 	}
 	const auto ballot = state->builder.AllocateId();
@@ -593,7 +596,7 @@ void EmitLaneMaskPairFromBool(EmitterState* state, const IR::Operand& dst, uint3
 		EmitStoreU32(state, OffsetRegisterOperand(dst, state->lane_half), result);
 		return;
 	}
-	for (uint32_t part = 0; part < 2u; part++) {
+	for (uint32_t part = 0; part < (state->wave_size==32u ? 1u : 2u); part++) {
 		uint32_t result = ConstantU32(state, 0);
 		if (state->wave_size != 32u || part == 0u) {
 			result = state->builder.AllocateId();

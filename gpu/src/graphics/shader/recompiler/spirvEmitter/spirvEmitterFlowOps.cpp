@@ -187,10 +187,13 @@ void EmitWqmB64(EmitterState* state, const IR::Instruction& inst) {
 	}
 }
 
-void EmitSaveexecPerInvocation(EmitterState* state, const IR::Instruction& inst) {
+void EmitSaveexecPerInvocation(EmitterState* state, const IR::Instruction& inst, bool narrow) {
 	const auto old_exec = EmitExecActiveBool(state);
-	const auto src      = EmitLaneMaskOperandActiveBool(state, inst.src[0]);
-	EmitPerInvocationMask(state, inst.dst, old_exec);
+	const auto src = narrow ? EmitNotEqualZeroBool(state, EmitValueLoad(state, inst.src[0]))
+	                        : EmitLaneMaskOperandActiveBool(state, inst.src[0]);
+	// A narrow save cannot consume the next source or clear the next destination word.
+	if(narrow)EmitStoreU32(state,inst.dst,EmitSelectU32Value(state,old_exec,ConstantU32(state,1),ConstantU32(state,0)));
+	else EmitPerInvocationMask(state, inst.dst, old_exec);
 
 	uint32_t lhs    = old_exec;
 	uint32_t rhs    = src;
@@ -205,13 +208,15 @@ void EmitSaveexecPerInvocation(EmitterState* state, const IR::Instruction& inst)
 	}
 	const auto result =
 	    use_or ? EmitLogicalOrBool(state, lhs, rhs) : EmitLogicalAndBool(state, lhs, rhs);
-	EmitPerInvocationMask(state, MakeRegisterOperand(IR::RegisterFile::Exec, 0), result);
+	if(narrow)EmitStoreU32(state,MakeRegisterOperand(IR::RegisterFile::Exec,0),
+	 EmitSelectU32Value(state,result,ConstantU32(state,1),ConstantU32(state,0)));
+	else EmitPerInvocationMask(state, MakeRegisterOperand(IR::RegisterFile::Exec, 0), result);
 	EmitStoreSccBool(state, result);
 }
 
 void EmitSaveexecB32(EmitterState* state, const IR::Instruction& inst) {
 	if (state->per_invocation_masks) {
-		EmitSaveexecPerInvocation(state, inst);
+		EmitSaveexecPerInvocation(state, inst, true);
 		return;
 	}
 	const auto old_low = EmitRegisterLoad(state, {IR::RegisterFile::Exec, 0});
@@ -219,14 +224,18 @@ void EmitSaveexecB32(EmitterState* state, const IR::Instruction& inst) {
 
 	EmitStoreU32(state, inst.dst, old_low);
 
-	uint32_t rhs_low = src_low;
+	uint32_t lhs_low = old_low, rhs_low = src_low, opcode = OpBitwiseAnd;
+	if(inst.saveexec_mode==IR::SaveexecMode::Orn2) {
+	 lhs_low=state->builder.AllocateId();state->builder.AddFunction({OpNot,state->uint_type,lhs_low,old_low});
+	 opcode=OpBitwiseOr;
+	}
 	if (inst.saveexec_mode == IR::SaveexecMode::Andn1) {
 		rhs_low = state->builder.AllocateId();
 		state->builder.AddFunction({OpNot, state->uint_type, rhs_low, src_low});
 	}
 
 	const auto new_low = state->builder.AllocateId();
-	state->builder.AddFunction({OpBitwiseAnd, state->uint_type, new_low, rhs_low, old_low});
+	state->builder.AddFunction({opcode, state->uint_type, new_low, rhs_low, lhs_low});
 	EmitStoreU32(state, MakeRegisterOperand(IR::RegisterFile::Exec, 0), new_low);
 
 	if (state->wave_size == 32u) {
@@ -244,7 +253,7 @@ void EmitSaveexecB32(EmitterState* state, const IR::Instruction& inst) {
 
 void EmitSaveexecB64(EmitterState* state, const IR::Instruction& inst) {
 	if (state->per_invocation_masks) {
-		EmitSaveexecPerInvocation(state, inst);
+		EmitSaveexecPerInvocation(state, inst, false);
 		return;
 	}
 	const auto old_low  = EmitRegisterLoad(state, {IR::RegisterFile::Exec, 0});

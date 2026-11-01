@@ -102,7 +102,12 @@ struct ShaderComputeInputInfo {
 	ShaderStageRuntime stage;
 };
 
+// SPI_PS_IN_CONTROL: NUM_INTERP[5:0], PS_W32_EN[15].
+[[nodiscard]] inline constexpr uint32_t PixelShaderWaveSize(uint32_t control){return (control&0x8000u)?32u:64u;}
+[[nodiscard]] inline constexpr uint32_t PixelShaderInputCount(uint32_t control){return control&0x3fu;}
+
 struct ShaderPixelInputInfo {
+ uint32_t wave_size = 64;
 	uint32_t                                       interpolator_settings[32]    = {0};
 	uint32_t                                       input_num                    = 0;
 	uint32_t                                       ps_system_input_base         = 0;

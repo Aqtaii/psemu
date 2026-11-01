@@ -840,7 +840,8 @@ static void RefreshShaders(HW::Context* ctx, HW::Shader* sh_ctx, const DrawCallI
 	if (log_phases) {
 		LogDrawPhase(draw.name, "ShaderCompileInfoPS");
 	}
-	if (!ShaderCompileInfoPS(&pixel_shader_info, &shader_regs, lane_mask_mode,
+	const auto pixel_lane_mask_mode=SelectGraphicsLaneMaskMode(*g_render_ctx->GetGraphicCtx(),PixelShaderWaveSize(shader_regs.ps_in_control));
+ if (!ShaderCompileInfoPS(&pixel_shader_info, &shader_regs, pixel_lane_mask_mode,
 	                         &state->vs_input_info, target_export_mapping, &state->ps_input_info,
 	                         &state->ps_shader)) {
 		EXIT("ShaderCompileInfoPS failed for draw %s\n", draw.name);

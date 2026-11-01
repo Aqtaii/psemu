@@ -49,6 +49,7 @@ enum class Opcode {
 	SGetpcB64,
 	SSetpcB64,
 	SAndSaveexecB32,
+	SOrn2SaveexecB32,
 	SAndn1SaveexecB32,
 	SAndSaveexecB64,
 	SOrn2SaveexecB64,

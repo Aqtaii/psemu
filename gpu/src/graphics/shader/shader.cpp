@@ -841,7 +841,8 @@ static void ShaderGetStaticInputInfoPS(
 
 	*ps_info = {};
 
-	ps_info->input_num              = sh->ps_in_control;
+	ps_info->input_num              = PixelShaderInputCount(sh->ps_in_control);
+ ps_info->wave_size = PixelShaderWaveSize(sh->ps_in_control);
 	ps_info->ps_system_input_base   = ShaderCalcPsSystemInputBase(*sh);
 	const uint32_t active_inputs    = sh->ps_input_ena & sh->ps_input_addr;
 	ps_info->ps_pos_x               = (active_inputs & 0x00000100u) != 0;
@@ -1687,6 +1688,7 @@ bool ShaderCompileSpirvPS(const HW::PixelShaderInfo* regs, const HW::ShaderRegis
 
 	ShaderRecompiler::CompileOptions options;
 	options.stage                = ShaderType::Pixel;
+ options.wave_size = input_info->wave_size;
 	options.lane_mask_mode       = lane_mask_mode;
 	options.shader_hash          = shader_hash;
 	options.shader_base          = shader_addr;
@@ -1698,6 +1700,12 @@ bool ShaderCompileSpirvPS(const HW::PixelShaderInfo* regs, const HW::ShaderRegis
 	options.dump_ir              = true;
 	options.early_dump           = true;
 	options.dump_label           = "ShaderRecompiler PS";
+ const auto* capture_ps=std::getenv("PSEMU_ASTRO_MESH_CAPTURE_FAILURE");
+ if(capture_ps && capture_ps[0]=='1') {
+  static std::atomic_uint captures{0};if(captures.fetch_add(1)<128)
+   printf("[PS-COMPILE-STATE] hash=0x%016" PRIx64 " ps_in_control=0x%08x wave=%u lane_mode=%u user_count=%u GPU=not-submitted\n",
+    shader_hash,sh->ps_in_control,options.wave_size,unsigned(lane_mask_mode),options.user_data_count);
+ }
 
 	ShaderRecompiler::CompileResult result;
 	std::string                     error;
@@ -1875,6 +1883,7 @@ ShaderId ShaderGetIdPS(const HW::PixelShaderInfo* regs, const ShaderPixelInputIn
 	ret.ids.push_back(input_info->descriptor_set);
 	ret.ids.push_back(input_info->input_num);
 	ret.ids.push_back(input_info->ps_system_input_base);
+ ret.ids.push_back(input_info->wave_size);
 	ret.ids.push_back(static_cast<uint32_t>(input_info->ps_pos_x));
 	ret.ids.push_back(static_cast<uint32_t>(input_info->ps_pos_y));
 	ret.ids.push_back(static_cast<uint32_t>(input_info->ps_pos_z));

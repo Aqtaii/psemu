@@ -83,6 +83,35 @@ int main(int argc,char** argv) {
   Require(ir.blocks[0].instructions.size()==1); // no SCC compare of a projected lane predicate
   std::puts("[WQM32] captured opcode, word result and explicit whole-word SCC=passed");
  }
+ {
+  using namespace Libs::Graphics;
+  for(uint32_t count=0;count<64;++count)for(uint32_t unrelated:{0u,0x7fc0u,0xffff0000u}) {
+   const auto control=count|unrelated;
+   Require(PixelShaderInputCount(control)==count && PixelShaderWaveSize(control)==64);
+   Require(PixelShaderInputCount(control|0x8000)==count && PixelShaderWaveSize(control|0x8000)==32);
+  }
+  const std::array<uint32_t,2> code{0xbeea4020u,0xbf810000u};Program decoded;std::string diagnostic;
+  Require(DecodeProgram(code,&decoded,&diagnostic));Require(decoded.instructions[0].opcode==Opcode::SOrn2SaveexecB32);
+  Require(decoded.instructions[0].dst.kind==OperandKind::VccLo && decoded.instructions[0].src0.reg==32);
+  Libs::Graphics::ShaderRecompiler::CFG::Graph graph;
+  Require(Libs::Graphics::ShaderRecompiler::CFG::BuildGraph(decoded,&graph,&diagnostic));
+  Libs::Graphics::ShaderRecompiler::IR::Program ir;
+  Require(Libs::Graphics::ShaderRecompiler::IR::LowerProgram(decoded,graph,ShaderType::Pixel,32,&ir,&diagnostic));
+  const auto& inst=ir.blocks[0].instructions[0];
+  Require(inst.op==Libs::Graphics::ShaderRecompiler::IR::Opcode::SaveexecB32 && inst.saveexec_mode==Libs::Graphics::ShaderRecompiler::IR::SaveexecMode::Orn2);
+  std::puts("[SAVEEXEC32] captured ORN2 and PS control count/wave-size separation=passed");
+ }
+ if(argc==3 && std::string(argv[1])=="--pixel") {
+  const auto code=ReadCapturedCode(argv[2]);Program decoded;std::string diagnostic;
+  Require(DecodeProgram(code,&decoded,&diagnostic));
+  Libs::Graphics::ShaderRecompiler::CFG::Graph graph;
+  Require(Libs::Graphics::ShaderRecompiler::CFG::BuildGraph(decoded,&graph,&diagnostic));
+  const bool structured=Libs::Graphics::ShaderRecompiler::CFG::StructurizeForLowering(&graph,&diagnostic);
+  Libs::Graphics::ShaderRecompiler::IR::Program ir;
+  Require(Libs::Graphics::ShaderRecompiler::IR::LowerProgram(decoded,graph,Libs::Graphics::ShaderType::Pixel,32,&ir,&diagnostic));
+  std::printf("[PIXEL-CAPTURE] instructions=%zu blocks=%zu structured=%u full_decode_CFG_IR=passed resources=not-materialized GPU=not-executed\n",decoded.instructions.size(),graph.blocks.size(),structured);
+  argc=1; // continue common regressions without interpreting Pixel as an ES/GS pair
+ }
  Require(argc==1 || argc==3);
  if(argc==3) {
   const auto es=ReadCapturedCode(argv[1]);

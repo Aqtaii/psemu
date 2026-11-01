@@ -1041,6 +1041,7 @@ bool LowerScalarGetpcB64(const Decoder::Instruction& decoded, BasicBlock* block,
 
 bool IsScalarSaveexecOpcode(Decoder::Opcode opcode) {
 	switch (opcode) {
+		case Decoder::Opcode::SOrn2SaveexecB32:
 		case Decoder::Opcode::SAndSaveexecB32:
 		case Decoder::Opcode::SAndn1SaveexecB32:
 		case Decoder::Opcode::SAndSaveexecB64:
@@ -1052,6 +1053,7 @@ bool IsScalarSaveexecOpcode(Decoder::Opcode opcode) {
 
 SaveexecMode ScalarSaveexecMode(Decoder::Opcode opcode) {
 	switch (opcode) {
+		case Decoder::Opcode::SOrn2SaveexecB32:
 		case Decoder::Opcode::SOrn2SaveexecB64: return SaveexecMode::Orn2;
 		case Decoder::Opcode::SAndn1SaveexecB32:
 		case Decoder::Opcode::SAndn1SaveexecB64: return SaveexecMode::Andn1;
@@ -1063,7 +1065,8 @@ bool LowerScalarSaveexec(const Decoder::Instruction& decoded, BasicBlock* block,
                          std::string* error) {
 	Instruction inst;
 	inst.pc            = decoded.pc;
-	inst.op            = (decoded.opcode == Decoder::Opcode::SAndSaveexecB32 ||
+	inst.op            = (decoded.opcode == Decoder::Opcode::SOrn2SaveexecB32 ||
+	                      decoded.opcode == Decoder::Opcode::SAndSaveexecB32 ||
 	                      decoded.opcode == Decoder::Opcode::SAndn1SaveexecB32)
 	                         ? Opcode::SaveexecB32
 	                         : Opcode::SaveexecB64;

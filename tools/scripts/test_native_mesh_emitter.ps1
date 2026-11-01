@@ -22,7 +22,7 @@ try {
  if($LASTEXITCODE -ne 0){throw 'Full Mesh ABI/phase adapter validation failed'}
  & "$env:VULKAN_SDK\Bin\spirv-val.exe" --target-env vulkan1.2 .\native_mesh_standalone_adapter.spv
  if($LASTEXITCODE -ne 0){throw 'Standalone Mesh point adapter validation failed'}
- foreach($name in @('native_wqm32_fragment.spv','native_wqm32_fragment_control.spv')) {
+ foreach($name in @('native_wqm32_fragment.spv','native_wqm32_fragment_control.spv','native_wqm32_fragment_native32.spv')) {
   & "$env:VULKAN_SDK\Bin\spirv-val.exe" --target-env vulkan1.2 $name
   if($LASTEXITCODE -ne 0){throw "Pixel WQM32 SPIR-V validation failed: $name"}
  }

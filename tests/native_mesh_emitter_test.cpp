@@ -187,6 +187,7 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
   const auto saved25=EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,25});
   const auto saved26=EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,26});
   const auto saved_scc=EmitRegisterLoad(&state,SccRegister());
+  const auto saved_vcc_low=EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,0}),saved_vcc_high=EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,1});
   const auto saved_exec_low=EmitRegisterLoad(&state,{IR::RegisterFile::Exec,0});
   const auto saved_exec_high=EmitRegisterLoad(&state,{IR::RegisterFile::Exec,1});
   IR::Instruction wqm;wqm.op=IR::Opcode::WqmB32;wqm.execution=IR::InstructionExecution::Scalar;
@@ -224,6 +225,56 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
   state.wave_size=32;wqm.dst=Reg(IR::RegisterFile::Exec,1);wqm.src[0]=Imm(0xffffffff);EmitWqmB32(&state,wqm);
   check(EmitRegisterLoad(&state,{IR::RegisterFile::Exec,0}),1);check(EmitRegisterLoad(&state,SccRegister()),0);
   state.wave_size=64;state.per_invocation_masks=false;
+  IR::Instruction save;save.op=IR::Opcode::SaveexecB32;save.execution=IR::InstructionExecution::Scalar;
+  save.src_count=1;save.src[0]=Reg(IR::RegisterFile::Scalar,25);save.dst=save.src[0];
+  for(auto mode:{IR::SaveexecMode::And,IR::SaveexecMode::Andn1,IR::SaveexecMode::Orn2}) {
+   save.saveexec_mode=mode;
+   for(uint32_t old:{0u,0xffffffffu,0xffff0000u})for(uint32_t input:{0u,0xffffffffu,0x12345678u}) {
+    EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,old));
+    EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,0x55667788));
+    EmitStoreU32(&state,Reg(IR::RegisterFile::Scalar,25),ConstantU32(&state,input));
+    EmitStoreU32(&state,Reg(IR::RegisterFile::Scalar,26),ConstantU32(&state,0x89abcdef));
+    const auto expected=mode==IR::SaveexecMode::And?(old&input):mode==IR::SaveexecMode::Andn1?(old&~input):(input|~old);
+    EmitSaveexecB32(&state,save);
+    check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,25}),old);
+    check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,26}),0x89abcdef);
+    check(EmitRegisterLoad(&state,{IR::RegisterFile::Exec,0}),expected);
+    check(EmitRegisterLoad(&state,{IR::RegisterFile::Exec,1}),0x55667788);
+    check(EmitRegisterLoad(&state,SccRegister()),expected!=0);
+   }
+   state.per_invocation_masks=true;save.dst=Reg(IR::RegisterFile::Vcc,0);
+   for(uint32_t old:{0u,1u})for(uint32_t input:{0u,1u}) {
+    EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,old));
+    EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,0));
+    EmitStoreU32(&state,Reg(IR::RegisterFile::Scalar,25),ConstantU32(&state,input));
+    EmitStoreU32(&state,Reg(IR::RegisterFile::Scalar,26),ConstantU32(&state,0x89abcdef));
+    EmitStoreU32(&state,Reg(IR::RegisterFile::Vcc,1),ConstantU32(&state,0x40000000));
+    const auto expected=mode==IR::SaveexecMode::And?(old&&input):mode==IR::SaveexecMode::Andn1?(old&&!input):(input||!old);
+    EmitSaveexecB32(&state,save);
+    check(EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,0}),old);
+    check(EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,1}),0x40000000);
+    check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,26}),0x89abcdef);
+    check(EmitRegisterLoad(&state,{IR::RegisterFile::Exec,0}),expected);
+    check(EmitRegisterLoad(&state,SccRegister()),expected);
+   }
+   state.per_invocation_masks=false;save.dst=save.src[0];
+  }
+  // Wave32 VOPC destinations also preserve the adjacent raw data word.
+  state.wave_size=32;state.lanes_per_invocation=1;
+  for(bool per_invocation:{false,true}) {
+   state.per_invocation_masks=per_invocation;
+   EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,per_invocation?1u:0xffffffffu));
+   EmitStoreU32(&state,Reg(IR::RegisterFile::Vcc,1),ConstantU32(&state,0x40000000));
+   EmitLaneMaskPairFromBool(&state,Reg(IR::RegisterFile::Vcc,0),EmitTrueBool(&state));
+   check(EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,0}),per_invocation?1u:0xffffffffu);
+   check(EmitRegisterLoad(&state,{IR::RegisterFile::Vcc,1}),0x40000000);
+   EmitStoreU32(&state,Reg(IR::RegisterFile::Scalar,26),ConstantU32(&state,0x89abcdef));
+   EmitLaneMaskPairFromBool(&state,Reg(IR::RegisterFile::Scalar,25),EmitTrueBool(&state));
+   check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,26}),0x89abcdef);
+  }
+  state.wave_size=64;state.lanes_per_invocation=2;state.per_invocation_masks=false;
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Vcc,0),saved_vcc_low);
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Vcc,1),saved_vcc_high);
   EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),saved_exec_low);
   EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),saved_exec_high);
   EmitStoreU32(&state,Reg(IR::RegisterFile::Scalar,25),saved25);
@@ -961,9 +1012,9 @@ void WriteCapturedMesh(const char* es_path,const char* gs_path) {
 }
 // Raster-stage coverage: only one lane per quad starts active. WQM32 must
 // activate its three neighbors before the guarded color write reaches MRT0.
-void WriteWqm32PixelFixture(bool expand) {
+void WriteWqm32PixelFixture(bool expand, bool native32=false) {
  using namespace Spirv::Emitter;
- IR::Program p;p.stage=ShaderType::Pixel;p.wave_size=64;p.lane_mask_mode=ShaderLaneMaskMode::PerInvocation;
+ IR::Program p;p.stage=ShaderType::Pixel;p.wave_size=native32?32u:64u;p.lane_mask_mode=native32?ShaderLaneMaskMode::NativeWave:ShaderLaneMaskMode::PerInvocation;
  p.srt_patching_complete=p.resource_tracking_complete=p.shader_info_complete=p.binding_layout_complete=true;
  p.info.outputs={{IR::StageOutputKind::Mrt,0,0,"color"}};
  p.blocks.resize(1);auto& block=p.blocks[0];block.terminator.kind=CFG::TerminatorKind::Return;
@@ -986,13 +1037,13 @@ void WriteWqm32PixelFixture(bool expand) {
  ShaderPixelInputInfo pixel{};pixel.target_output_mode[0]=4;
  IR::ResourceSnapshot resources;std::vector<uint32_t> words;std::string error;
  Require(Spirv::EmitProgram(p,resources,nullptr,&pixel,nullptr,&words,&error),error);
- auto* file=std::fopen(expand?"native_wqm32_fragment.spv":"native_wqm32_fragment_control.spv","wb");Require(file!=nullptr);
+ auto* file=std::fopen(native32?"native_wqm32_fragment_native32.spv":expand?"native_wqm32_fragment.spv":"native_wqm32_fragment_control.spv","wb");Require(file!=nullptr);
  Require(std::fwrite(words.data(),4,words.size(),file)==words.size());Require(std::fclose(file)==0);
- if(expand){for(auto& i:block.instructions)if(i.op==IR::Opcode::WqmB32)i.src[0]=Reg(IR::RegisterFile::Scalar,2);
+ if(expand && !native32){for(auto& i:block.instructions)if(i.op==IR::Opcode::WqmB32)i.src[0]=Reg(IR::RegisterFile::Scalar,2);
   Require(!Spirv::EmitProgram(p,resources,nullptr,&pixel,nullptr,&words,&error));Require(error.find("SGPR mask provenance")!=std::string::npos,error);}
 }
 int main(int argc,char** argv){
- WriteWqm32PixelFixture(true);WriteWqm32PixelFixture(false);
+ WriteWqm32PixelFixture(true);WriteWqm32PixelFixture(false);WriteWqm32PixelFixture(true,true);
  {
   const std::array<uint8_t,5> bytes{0xaa,0x34,0x12,0x78,0x56};
   uint32_t vertex=99;
