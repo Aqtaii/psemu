@@ -2,6 +2,70 @@
 static void Require(bool ok,std::source_location where=std::source_location::current()) {if(!ok) {std::fprintf(stderr,"Regression failed at %s:%u\n",where.file_name(),where.line());throw std::runtime_error("regression failed");}}
 int main() {
  {
+  ImageInfo old{};old.address=0x16b6b3f0000ull;old.size=0x10000;
+  old.width=120;old.height=67;old.pitch=128;old.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k11_11_10Float);
+  old.type=Prospero::GpuEnumValue(Prospero::ImageType::kColor2D);old.depth=old.levels=old.view_levels=1;
+  old.tile=Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget);old.swizzle=0x3ac;
+  auto linear=old;linear.width=linear.pitch=960;linear.height=540;linear.size=0x3f4800;
+  linear.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16UNorm);
+  linear.tile=Prospero::GpuEnumValue(Prospero::TileMode::kLinear);linear.swizzle=0xfac;
+  Require(old.format==36 && linear.format==65 && linear.size==uint64_t(960)*540*8);
+  Require(linear.size%TRACKER_PAGE_SIZE==0x800); // exact captured partial final page
+  Require(IsSupportedLinearRgba16UnormStorageBacking(linear) && IsSupportedColorStorageBacking(linear));
+  Require(CanReconstructStorageForStorage(old,true,false,true,false,true,false,linear));
+  Require(CanReconstructStorageForStorage(linear,true,false,true,false,true,false,old));
+  for(int bad=0;bad<6;++bad) {
+   Require(!CanReconstructStorageForStorage(old,bad!=0,bad==1,bad!=2,bad==3,bad!=4,bad==5,linear));
+   Require(!CanReconstructStorageForStorage(linear,bad!=0,bad==1,bad!=2,bad==3,bad!=4,bad==5,old));
+  }
+  for(int bad=0;bad<18;++bad) {
+   auto v=linear;
+   switch(bad) {
+    case 0:v.address++;break;case 1:v.address=0;break;case 2:v.address=UINT64_MAX-0xfff;break;
+    case 3:v.size--;break;case 4:v.size++;break;case 5:v.width=0;break;case 6:v.height=0;break;
+    case 7:v.width=16385;break;case 8:v.height=16385;break;case 9:v.pitch++;break;
+    case 10:v.depth=2;break;case 11:v.levels=2;break;case 12:v.base_level=1;break;
+    case 13:v.view_levels=2;break;case 14:v.base_array=1;break;
+    case 15:v.type=Prospero::GpuEnumValue(Prospero::ImageType::kColor2DArray);break;
+    case 16:v.tile=Prospero::GpuEnumValue(Prospero::TileMode::kDepth);break;case 17:v.swizzle=0x324;break;
+   }
+   Require(!IsSupportedLinearRgba16UnormStorageBacking(v));
+  }
+  auto wrong=linear;wrong.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16UInt);
+  Require(!IsSupportedColorStorageBacking(wrong));
+  auto disjoint=old;disjoint.address+=0x400000;
+  Require(!CanReconstructStorageForStorage(disjoint,true,false,true,false,true,false,linear));
+  std::vector<uint32_t> gpu(old.size/4),ones(gpu.size(),1),mask(gpu.size());
+  std::vector<uint32_t> guest(linear.size/4+2,0xa5a5a5a5u);
+  for(uint32_t y=0;y<old.height;++y)for(uint32_t x=0;x<old.width;++x)gpu[y*old.pitch+x]=0x781c0340u+((x+3*y)&31);
+  BufferCache cache;
+  cache.ReconstructImageBacking(old.address,old.size,[&]{
+   TileConvertLinearToTiledRenderTarget32PreservePadding(guest.data()+1,gpu.data(),old.width,old.height,old.pitch,old.size);
+  });
+  TileConvertLinearToTiledRenderTarget32PreservePadding(mask.data(),ones.data(),old.width,old.height,old.pitch,old.size);
+  Require(guest.front()==0xa5a5a5a5u && guest.back()==0xa5a5a5a5u);
+  for(size_t i=0;i<linear.size/4;++i)if(i>=mask.size() || !mask[i])Require(guest[i+1]==0xa5a5a5a5u);
+  for(uint32_t y=0;y<old.height;++y)for(uint32_t x=0;x<old.width;++x)
+   Require(guest[1+Gen5RenderTargetOffsetInBlock<uint32_t>(x,y)/4]==gpu[y*old.pitch+x]);
+  Require(cache.m_memory_tracker.published==std::vector<std::pair<uint64_t,uint64_t>>{{old.address,old.size}});
+  // Full linear publication must preserve its half-page exterior and reject a
+  // dirty cached buffer even when only the final byte conflicts.
+  for(int conflict=0;conflict<4;++conflict) {
+   BufferCache linear_cache;bool called=false,rejected=false;
+   linear_cache.m_buffers.emplace(linear.address,std::make_unique<BufferCache::CachedBuffer>(BufferCache::CachedBuffer{linear.size+TRACKER_PAGE_SIZE}));
+   const auto tail=linear.address+linear.size-1;
+   if(conflict==1)linear_cache.m_memory_tracker.cpu.emplace_back(tail,1);
+   if(conflict==2)linear_cache.m_memory_tracker.gpu.emplace_back(tail,1);
+   if(conflict==3)linear_cache.m_gpu_modified_ranges.dirty.emplace_back(tail,1);
+   try {linear_cache.ReconstructImageBacking(linear.address,linear.size,[&]{called=true;});}
+   catch(const std::runtime_error&){rejected=true;}
+   Require(called==(conflict==0) && rejected==(conflict!=0));
+   if(conflict==0)Require(linear_cache.m_memory_tracker.published==std::vector<std::pair<uint64_t,uint64_t>>{{linear.address,linear.size}});
+   else Require(linear_cache.m_memory_tracker.published.empty());
+  }
+  std::puts("[LINEAR-UNORM-REUSE] captured_raw36_to65 prefix64KB into0x3f4800, complete padding/exterior and partial-page publication guards=passed");
+ }
+ {
   DepthTargetInfo depth{};depth.address=0x1b5e42b0000ull;depth.size=0x280000;
   depth.format=vk::Format::eD32Sfloat;depth.guest_format=Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float);
   depth.width=960;depth.height=540;depth.pitch=1024;depth.bytes_per_element=4;

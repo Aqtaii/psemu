@@ -1211,14 +1211,15 @@ void TextureCache::ResolveStorageImageOverlaps(CommandBuffer* command, GraphicCo
                 EXIT("TextureCache: unsupported storage-image byte alias, requested=0x%016" PRIx64
 				     "+0x%016" PRIx64 " existing=0x%016" PRIx64 "+0x%016" PRIx64
 				     " kind=%u same_context=%d gpu=%d/%d buffer=%d"
-				     " requested=%ux%u pitch=%u tile=%u fmt=%u depth=%u levels=%u"
+				     " requested=%ux%u pitch=%u tile=%u fmt=%u depth=%u levels=%u type=%u base=%u view=%u array=%u swizzle=0x%03x"
 				     " target=%ux%u pitch=%u tile=%u bpe=%u layers=%u levels=%u"
 				     " cpu=%d buffers=%d existing_info={fmt=%u width=%u height=%u pitch=%u tile=%u levels=%u base=%u view=%u swizzle=0x%03x} existing_buffers={pages=%d gpu=%d cpu=%d} existing_shape={depth=%u type=%u array=%u}\n",
 				     requested.address, requested.size, cached->Address(), cached->Size(),
 				     static_cast<uint32_t>(cached->kind), cached->ctx == ctx, cached->gpu_modified,
 				     tracker_gpu, cached->buffer_modified,
 				     requested.width,requested.height,requested.pitch,requested.tile,requested.format,
-				     requested.depth,requested.levels,cached->target.width,cached->target.height,
+				     requested.depth,requested.levels,requested.type,requested.base_level,requested.view_levels,requested.base_array,requested.swizzle,
+                     cached->target.width,cached->target.height,
 				     cached->target.pitch,cached->target.tile_mode,cached->target.bytes_per_element,
 				     cached->target.layers,cached->target.levels,
 				     m_memory_tracker.IsRegionCpuModified(cached->Address(),cached->Size()),
@@ -1261,6 +1262,13 @@ void TextureCache::ResolveStorageImageOverlaps(CommandBuffer* command, GraphicCo
 		m_memory_tracker.ForEachDownloadRange<true>(transfer.address, transfer.size,
 		                                            [](uint64_t, uint64_t) noexcept {});
 		cached->gpu_modified = false;
+        if(IsSupportedLinearRgba16UnormStorageBacking(requested)) {
+         static std::atomic_uint linear_reconstruct_logs{0};
+         if(linear_reconstruct_logs.fetch_add(1)<8)printf("[STORAGE-LINEAR-RECONSTRUCT] source=0x%016" PRIx64
+          "+0x%016" PRIx64 " format=%u target=0x%016" PRIx64 "+0x%016" PRIx64
+          " format=%u source_padding_preserved=1 backing_published=1 GPU_target=not-yet-submitted\n",
+          transfer.address,transfer.size,cached->info.format,requested.address,requested.size,requested.format);
+        }
 		static std::atomic_uint reconstruct_logs {0};
 		if (reconstruct_logs.fetch_add(1,std::memory_order_relaxed)<8) {
 			printf("[RT-STORAGE-RECONSTRUCT] addr=0x%016" PRIx64 " size=0x%016" PRIx64

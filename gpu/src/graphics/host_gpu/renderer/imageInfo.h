@@ -1201,7 +1201,21 @@ CanReconstructStorageForRenderTarget(const ImageInfo& storage, bool gpu_modified
  return t.pitch==pitch && pitch<=UINT64_MAX/height/t.bytes_per_element &&
         t.size==pitch*height*t.bytes_per_element && t.size<=UINT32_MAX;
 }
+// Captured tight linear RGBA16UNorm storage may end inside its last tracked page.
+// All bytes are texels: publication copies exactly size and preserves exterior bytes.
+[[nodiscard]] inline bool IsSupportedLinearRgba16UnormStorageBacking(const ImageInfo& info) {
+ return info.address!=0 && (info.address&(TRACKER_PAGE_SIZE-1))==0 &&
+        info.size!=0 && info.size<=UINT32_MAX && info.size<=UINT64_MAX-info.address &&
+        info.format==Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16UNorm) &&
+        info.type==Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) &&
+        info.tile==Prospero::GpuEnumValue(Prospero::TileMode::kLinear) &&
+        info.width!=0 && info.width<=16384 && info.height!=0 && info.height<=16384 &&
+        info.pitch==info.width && info.depth==1 && info.base_array==0 &&
+        info.base_level==0 && info.levels==1 && info.view_levels==1 && info.swizzle==0xfac &&
+        info.size==uint64_t(info.width)*info.height*8u;
+}
 [[nodiscard]] inline bool IsSupportedColorStorageBacking(const ImageInfo& storage) {
+ if(IsSupportedLinearRgba16UnormStorageBacking(storage)) return true;
  RenderTargetInfo backing{};backing.address=storage.address;backing.size=storage.size;
  backing.width=storage.width;backing.height=storage.height;backing.pitch=storage.pitch;
  backing.bytes_per_element=storage.format==Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float)?8:4;
