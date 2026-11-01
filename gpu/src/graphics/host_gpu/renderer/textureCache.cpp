@@ -1920,6 +1920,8 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 		std::lock_guard transaction(m_resource_mutex);
 		FaultSafeTextureLock lock(this, m_lock);
 		const bool buffers = m_buffer_cache.HasPageOverlap(info.address, info.size);
+		const bool buffer_conflicts = m_buffer_cache.IsRegionGpuModified(info.address,info.size) ||
+		                              m_buffer_cache.IsCachedRegionCpuModified(info.address,info.size);
 		for (const auto& entry: m_images) {
 			const auto& cached = *entry;
 			if (cached.kind==CachedImage::Kind::RenderTarget &&
@@ -1945,7 +1947,7 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 					 m_memory_tracker.IsRegionGpuModified(cached.Address(), cached.Size()),
 					 cached.info.IsCpuDirty() ||
 						 m_memory_tracker.IsRegionCpuModified(cached.Address(), cached.Size()),
-					 cached.ctx == ctx, true, buffers, info))) {
+					 cached.ctx == ctx, true, buffer_conflicts, info))) {
 				needs_storage_drain = true;
 				break;
 			}
@@ -2037,7 +2039,8 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 							 m_memory_tracker.IsRegionCpuModified(cached.Address(), cached.Size()),
 						 cached.ctx == ctx,
 						 IsCoherentGuestImageSource(target_source, info.address, info.size),
-						 target_buffer_overlap, info))) {
+						 (m_buffer_cache.IsRegionGpuModified(info.address,info.size) ||
+                          m_buffer_cache.IsCachedRegionCpuModified(info.address,info.size)), info))) {
 					overlap = RenderTargetOverlap::RetireTarget;
 					reconstructed_storage_retire.push_back(&cached);
 					command->RetainResourceUntilFence(entry);
@@ -2146,11 +2149,16 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 		if (!supported) {
 			EXIT("TextureCache: unsupported render-target alias, requested=0x%016" PRIx64
 			     "+0x%016" PRIx64 " existing_kind=%u existing=0x%016" PRIx64 "+0x%016" PRIx64
+			     " requested_info={format=%u extent=%ux%u pitch=%u bpe=%u tile=%u levels=%u layers=%u coherent=%u buffer_gpu=%u buffer_cpu=%u}"
 			     " gpu_modified=%d same_context=%d"
 			     " sampled_format=%u extent=%ux%ux%u pitch=%u levels=%u base_level=%u"
 			     " tile=%u type=%u base_array=%u old_target=%ux%u pitch=%u tile=%u bpe=%u tracker_gpu=%d cpu=%d buffers=%d buffer_gpu=%d buffer_cpu=%d\n",
 			     info.address, info.size, static_cast<uint32_t>(cached.kind), cached.Address(),
-			     cached.Size(), cached.gpu_modified, cached.ctx == ctx, cached.info.format,
+			     cached.Size(),uint32_t(info.format),info.width,info.height,info.pitch,info.bytes_per_element,
+                 info.tile_mode,info.levels,info.layers,unsigned(IsCoherentGuestImageSource(target_source,info.address,info.size)),
+                 unsigned(m_buffer_cache.IsRegionGpuModified(info.address,info.size)),
+                 unsigned(m_buffer_cache.IsCachedRegionCpuModified(info.address,info.size)),
+                 cached.gpu_modified, cached.ctx == ctx, cached.info.format,
 			     cached.info.width, cached.info.height, cached.info.depth, cached.info.pitch,
 			     cached.info.levels, cached.info.base_level, cached.info.tile, cached.info.type,
 			     cached.info.base_array,cached.target.width,cached.target.height,cached.target.pitch,cached.target.tile_mode,
@@ -2217,13 +2225,21 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 		}
 	}
 
-	if(!reconstructed_target_retire.empty() && m_buffer_cache.HasPageOverlap(info.address,info.size)) {
+	if((!reconstructed_target_retire.empty() || !reconstructed_storage_retire.empty()) &&
+       m_buffer_cache.HasPageOverlap(info.address,info.size)) {
 		// Reconstruction published newer guest backing after the original source query.
 		// Refresh stale resident fragments before the new image claims GPU writes.
 		// Competing owners were rejected before reconstruction; retain that guard.
 		target_source=m_buffer_cache.ObtainBufferForImage(info.address,info.size);
 		if(!IsCoherentGuestImageSource(target_source,info.address,info.size))
 			EXIT("TextureCache: reconstructed target has incoherent refreshed buffer source\n");
+        if(!reconstructed_storage_retire.empty()) {
+         static std::atomic_uint storage_buffer_refresh_logs{0};
+         if(storage_buffer_refresh_logs.fetch_add(1)<8)printf("[STORAGE-RT-BUFFER-REFRESH] target=0x%016" PRIx64
+          "+0x%016" PRIx64 " extent=%ux%u pitch=%u bpe=%u tile=%u format=%u sources=%zu coherent=1 backing_published=1\n",
+          info.address,info.size,info.width,info.height,info.pitch,info.bytes_per_element,info.tile_mode,
+          uint32_t(info.format),reconstructed_storage_retire.size());
+        }
 	}
 
 	for (auto* cached: buffer_owned_target_retire) {

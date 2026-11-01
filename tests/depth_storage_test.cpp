@@ -2,6 +2,64 @@
 static void Require(bool ok,std::source_location where=std::source_location::current()) {if(!ok) {std::fprintf(stderr,"Regression failed at %s:%u\n",where.file_name(),where.line());throw std::runtime_error("regression failed");}}
 int main() {
  {
+  ImageInfo old{};old.address=0x23a61690000ull;old.size=0x870000;old.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k11_11_10Float);
+  old.width=old.pitch=1920;old.height=1080;old.tile=27;old.type=9;old.depth=old.levels=old.view_levels=1;old.swizzle=0x3ac;
+  RenderTargetInfo target{};target.address=0x23a61120000ull;target.size=0xff0000;target.tile_mode=27;
+  target.width=target.pitch=1920;target.height=1080;target.bytes_per_element=8;
+  Require(old.format==36 && old.address-target.address==0x570000 && IsSupportedColorStorageBacking(old));
+  // The original terminal snapshot retained the range, not the requested RT geometry.
+  // Cover its supported size-compatible footprints without claiming a captured bpe.
+  for(const auto shape:std::array<std::array<uint32_t,3>,3>{{{1920,1080,8},{1920,2160,4},{3840,2160,2}}}) {
+   auto t=target;t.width=t.pitch=shape[0];t.height=shape[1];t.bytes_per_element=shape[2];
+   Require(IsSupportedRenderTargetReconstructionFootprint(t));
+   Require(CanReconstructColorStorageForRenderTarget(old,true,false,true,false,true,true,false,t));
+   Require(!CanReconstructColorStorageForRenderTarget(old,true,false,true,false,true,true,true,t));
+  }
+  std::vector<uint32_t> gpu(old.size/4),ones(gpu.size(),1),mask(gpu.size());
+  for(uint32_t y=0;y<old.height;++y)for(uint32_t x=0;x<old.width;++x)gpu[y*old.pitch+x]=0x781c0340u+((x+3*y)&31u);
+  TileConvertLinearToTiledRenderTarget32PreservePadding(mask.data(),ones.data(),old.width,old.height,old.pitch,old.size);
+  for(int conflict=0;conflict<4;++conflict) {
+   BufferCache cache;GraphicContext context;
+   Libs::LibKernel::Memory::fixture_base=target.address;
+   auto& guest=Libs::LibKernel::Memory::fixture_backing;guest.assign(target.size+4096,0x5a);
+   const auto prefix=old.address+0x1000,tail=target.address+target.size-0x1000;
+   for(const auto address:{prefix,tail}) {
+    auto cached=std::make_unique<BufferCache::CachedBuffer>();cached->size=0x2000;cached->ctx=&context;
+    cached->buffer=std::make_shared<VulkanBuffer>();cached->buffer->buffer_size=0x2000;cached->buffer->bytes.assign(0x2000,0x5a);
+    cache.m_buffers.emplace(address,std::move(cached));
+   }
+   if(conflict==1)cache.m_memory_tracker.cpu.emplace_back(prefix,1);
+   if(conflict==2)cache.m_memory_tracker.gpu.emplace_back(tail,1);
+   if(conflict==3)cache.m_gpu_modified_ranges.dirty.emplace_back(prefix,1);
+   const bool dirty=cache.IsCachedRegionCpuModified(target.address,target.size) ||
+    cache.m_memory_tracker.IsRegionGpuModified(target.address,target.size) ||
+    !cache.m_gpu_modified_ranges.Intersections(target.address,target.size).empty();
+   const bool accepted=CanReconstructColorStorageForRenderTarget(old,true,false,true,false,true,true,dirty,target);
+   Require(accepted==(conflict==0));
+   bool published=false;
+   if(accepted) {
+    cache.ReconstructImageBacking(old.address,old.size,[&]{published=true;
+     TileConvertLinearToTiledRenderTarget32PreservePadding(guest.data()+(old.address-target.address),gpu.data(),old.width,old.height,old.pitch,old.size);
+    });
+    Require(cache.m_memory_tracker.published==std::vector<std::pair<uint64_t,uint64_t>>{{old.address,old.size}});
+    cache.m_memory_tracker.cpu=cache.m_memory_tracker.published; // fixture models the tracker's publication side effect
+    Transfer::fixture_uploads=0;cache.RefreshCpuImageFragmentsLocked(target.address,target.size);
+    Require(Transfer::fixture_uploads==1 && !cache.IsCachedRegionCpuModified(target.address,target.size));
+    const auto& refreshed=cache.m_buffers.at(prefix)->buffer->bytes;
+    Require(std::memcmp(refreshed.data(),guest.data()+(prefix-target.address),refreshed.size())==0);
+    Require(std::any_of(refreshed.begin(),refreshed.end(),[](uint8_t value){return value!=0x5a;}));
+    for(auto byte:cache.m_buffers.at(tail)->buffer->bytes)Require(byte==0x5a);
+    for(size_t i=0;i<guest.size();++i)if(i<old.address-target.address || i>=old.address-target.address+old.size)Require(guest[i]==0x5a);
+    for(size_t i=0;i<mask.size();++i)if(!mask[i]) {
+     uint32_t bits;std::memcpy(&bits,guest.data()+(old.address-target.address)+i*4,4);Require(bits==0x5a5a5a5a);
+    }
+   }
+   Require(published==(conflict==0));
+   if(!accepted)for(auto byte:guest)Require(byte==0x5a);
+  }
+  std::puts("[STORAGE-RT-CLEAN-BUFFER] captured raw36 range0x870000 in0xff0000 clean fragments refreshed, dirty owners rejected before publication, padding/exterior=passed");
+ }
+ {
   ImageInfo old{};old.address=0x16b6b3f0000ull;old.size=0x10000;
   old.width=120;old.height=67;old.pitch=128;old.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k11_11_10Float);
   old.type=Prospero::GpuEnumValue(Prospero::ImageType::kColor2D);old.depth=old.levels=old.view_levels=1;
@@ -992,7 +1050,7 @@ int main() {
   d.fields[3]=0x91811324;resource.read=true;
   Require(!IsSupportedStorageTextureDescriptor(resource,d));
  }
- // After actual Sony audio: native R32 color storage inside a larger transient target.
+ // After actual Sony audio: native packed R11G11B10 storage inside a larger transient target.
  {
   ImageInfo old{};old.address=0x2d56e1e0000ull;old.size=0xc0000;old.width=480;old.height=270;
   old.pitch=512;old.format=36;old.tile=27;old.type=9;old.depth=old.levels=old.view_levels=1;

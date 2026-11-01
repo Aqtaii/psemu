@@ -1281,8 +1281,8 @@ CanReconstructStorageForRenderTarget(const ImageInfo& storage, bool gpu_modified
 // Complete native color storage publication before a containing transient target takes ownership.
 [[nodiscard]] inline bool CanReconstructColorStorageForRenderTarget(
     const ImageInfo& storage, bool gpu, bool buffer, bool tracker_gpu, bool cpu_dirty,
-    bool same_context, bool coherent_target, bool target_buffers, const RenderTargetInfo& target) {
-    return gpu && !buffer && tracker_gpu && !cpu_dirty && same_context && coherent_target && !target_buffers &&
+    bool same_context, bool coherent_target, bool target_buffer_conflicts, const RenderTargetInfo& target) {
+    return gpu && !buffer && tracker_gpu && !cpu_dirty && same_context && coherent_target && !target_buffer_conflicts &&
            IsSupportedColorStorageBacking(storage) && IsSupportedRenderTargetReconstructionFootprint(target) &&
            storage.address % TRACKER_PAGE_SIZE==0 && storage.size % TRACKER_PAGE_SIZE==0 &&
            target.address % TRACKER_PAGE_SIZE==0 && target.size % TRACKER_PAGE_SIZE==0 &&
