@@ -1,3 +1,4 @@
+#include "../gpu/src/graphics/host_gpu/renderer/meshSubgroupPolicy.h"
 #include "../gpu/src/graphics/shader/recompiler/pushConstantExtent.h"
 #include "../gpu/src/graphics/shader/recompiler/meshOutputProbe.h"
 #include <vulkan/vulkan.h>
@@ -74,6 +75,7 @@ int main(int argc,char** argv){try{
  }
  if(!gpu)throw std::runtime_error("No suitable Mesh GPU");
  const float priority=1;VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};qci.queueFamilyIndex=family;qci.queueCount=1;qci.pQueuePriorities=&priority;
+ const bool vertex_probe=argc==4 && std::string(argv[3])=="vertex-probe";
  const bool point_adapter=argc==4 && std::string(argv[3])=="point-adapter";
  const bool point_output_probe=argc==4 && std::string(argv[3])=="point-output-probe";
  const bool point_output_miss=argc==4 && std::string(argv[3])=="point-output-miss";
@@ -84,16 +86,19 @@ int main(int argc,char** argv){try{
  supported_mesh.pNext=&supported_control;
  VkPhysicalDeviceFeatures2 supported{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};supported.pNext=&supported_mesh;vkGetPhysicalDeviceFeatures2(gpu,&supported);
  VkPhysicalDeviceSubgroupSizeControlProperties control_props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_PROPERTIES};
- VkPhysicalDeviceProperties2 control_properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};control_properties.pNext=&control_props;vkGetPhysicalDeviceProperties2(gpu,&control_properties);
- const bool controlled32=output_probe && supported_control.subgroupSizeControl &&
-  (control_props.requiredSubgroupSizeStages & VK_SHADER_STAGE_MESH_BIT_EXT) &&
-  control_props.minSubgroupSize<=32 && control_props.maxSubgroupSize>=32;
+ VkPhysicalDeviceSubgroupProperties subgroup_props{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES};subgroup_props.pNext=&control_props;
+ VkPhysicalDeviceProperties2 control_properties{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};control_properties.pNext=&subgroup_props;vkGetPhysicalDeviceProperties2(gpu,&control_properties);
+ const auto mesh_policy=Libs::Graphics::SelectMeshWave32Policy(supported_control.subgroupSizeControl,
+  bool(control_props.requiredSubgroupSizeStages & VK_SHADER_STAGE_MESH_BIT_EXT),
+  control_props.minSubgroupSize,control_props.maxSubgroupSize,subgroup_props.subgroupSize);
+ if(!vertex_probe && !mesh_policy.supported)throw std::runtime_error("No supported native32 Mesh subgroup policy");
+ const bool controlled32=!vertex_probe && mesh_policy.required_size==32;
  if(output_probe && (!controlled32 || !supported_control.computeFullSubgroups))throw std::runtime_error("Explicit full Mesh subgroup32 unavailable for control test");
  if(primitive_probe && !supported_mesh.meshShaderQueries) throw std::runtime_error("Mesh primitive queries unsupported");
  VkPhysicalDeviceMeshShaderFeaturesEXT mesh{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};mesh.meshShader=VK_TRUE;mesh.meshShaderQueries=primitive_probe;
  VkPhysicalDeviceSubgroupSizeControlFeatures enabled_control{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES};
  enabled_control.subgroupSizeControl=controlled32;
- enabled_control.computeFullSubgroups=controlled32;
+ enabled_control.computeFullSubgroups=controlled32 && supported_control.computeFullSubgroups;
  if(controlled32)mesh.pNext=&enabled_control;
  const char* extension=VK_EXT_MESH_SHADER_EXTENSION_NAME;VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};dci.pNext=&mesh;
  VkPhysicalDeviceFeatures device_features{};device_features.vertexPipelineStoresAndAtomics=output_probe ? supported.features.vertexPipelineStoresAndAtomics : VK_FALSE;
@@ -105,7 +110,6 @@ int main(int argc,char** argv){try{
  const bool sampled_reads=argc==4 && std::string(argv[3])=="sampled-reads";
  const VkDeviceSize input_bytes=output_probe ? sizeof(Libs::Graphics::ShaderRecompiler::MeshOutputProbe) : 4096;
  const bool point_push=point_adapter || point_output_probe || point_output_miss || buffer_reads || (argc==4 && std::string(argv[3])=="point-push");
- const bool vertex_probe=argc==4 && std::string(argv[3])=="vertex-probe";
  if(argc==4 && !point_push && !vertex_probe && !primitive_probe && !output_probe && !sampled_reads) throw std::runtime_error("Unknown Mesh GPU test mode");
  auto draw=reinterpret_cast<PFN_vkCmdDrawMeshTasksEXT>(vkGetDeviceProcAddr(device,"vkCmdDrawMeshTasksEXT"));if(!draw)throw std::runtime_error("Mesh draw entry unavailable");
  constexpr uint32_t width=32,height=32,bytes=width*height*4;
@@ -132,8 +136,8 @@ int main(int argc,char** argv){try{
  const auto mesh_shader=Shader(device,argv[1]),fragment_shader=Shader(device,argv[2]);
  VkPipelineShaderStageCreateInfo stages[2]{};for(auto& s:stages){s.sType=VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;s.pName="main";}
  VkPipelineShaderStageRequiredSubgroupSizeCreateInfo required32{VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_REQUIRED_SUBGROUP_SIZE_CREATE_INFO};
- required32.requiredSubgroupSize=32;if(controlled32){stages[0].pNext=&required32;stages[0].flags|=VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT;}
- if(controlled32)std::printf("[MESH-SUBGROUP-GPU] required_size=32 explicit_control=1 full_subgroups=1 game_frame=0\n");
+ required32.requiredSubgroupSize=32;if(controlled32){stages[0].pNext=&required32;if(enabled_control.computeFullSubgroups)stages[0].flags|=VK_PIPELINE_SHADER_STAGE_CREATE_REQUIRE_FULL_SUBGROUPS_BIT;}
+ if(controlled32)std::printf("[MESH-SUBGROUP-GPU] required_size=32 explicit_control=1 full_subgroups=%u source=production-policy game_frame=0\n",unsigned(enabled_control.computeFullSubgroups));
  stages[0].stage=vertex_probe ? VK_SHADER_STAGE_VERTEX_BIT : VK_SHADER_STAGE_MESH_BIT_EXT;stages[0].module=mesh_shader;stages[1].stage=VK_SHADER_STAGE_FRAGMENT_BIT;stages[1].module=fragment_shader;
  VkViewport viewport{0,0,float(width),float(height),0,1};VkRect2D scissor{{0,0},{width,height}};
  VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};vp.viewportCount=1;vp.pViewports=&viewport;vp.scissorCount=1;vp.pScissors=&scissor;

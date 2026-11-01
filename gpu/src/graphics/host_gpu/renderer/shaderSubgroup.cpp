@@ -21,9 +21,10 @@ ShaderSubgroupConfiguration ConfigureShaderSubgroup(const GraphicContext&       
                                                     vk::ShaderStageFlagBits              stage,
                                                     const ShaderRecompiler::IR::Program& program) {
  if(stage==vk::ShaderStageFlagBits::eMeshEXT) {
-  if(!context.mesh_shader_enabled || program.lane_mask_mode!=ShaderLaneMaskMode::NativeWave ||
-     (program.wave_size!=32 && !(program.wave_size==64 && program.mesh_gs_user_data &&
-      program.bindings.mesh_point_input_dword!=ShaderRecompiler::IR::BindingLayout::NoMeshPointInputs))) return {};
+  if(!context.mesh_shader_enabled || program.stage!=ShaderType::Mesh ||
+     !MeshProgramUsesHostWave32(program.wave_size,program.lane_mask_mode==ShaderLaneMaskMode::NativeWave,
+      program.bindings.mesh_point_input_dword!=ShaderRecompiler::IR::BindingLayout::NoMeshPointInputs,
+      program.dispatcher_fallback)) return {};
   const auto policy=SelectMeshWave32Policy(context.subgroup_size_control_enabled,
    bool(context.required_subgroup_size_stages & stage),context.min_subgroup_size,
    context.max_subgroup_size,context.subgroup_size);

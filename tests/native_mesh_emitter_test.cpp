@@ -1071,6 +1071,12 @@ int main(int argc,char** argv){
  }
 
  {
+  Require(MeshProgramUsesHostWave32(32,true,false,false));
+  Require(MeshProgramUsesHostWave32(64,true,true,true));
+  for(uint32_t wave:{0u,16u,128u})Require(!MeshProgramUsesHostWave32(wave,true,true,true));
+  Require(!MeshProgramUsesHostWave32(64,true,false,true));
+  Require(!MeshProgramUsesHostWave32(64,true,true,false));
+  Require(!MeshProgramUsesHostWave32(64,false,true,true));
   auto p=SelectMeshWave32Policy(true,true,16,32,32);
   Require(p.supported && p.required_size==32);
   p=SelectMeshWave32Policy(true,true,16,32,16);Require(p.supported && p.required_size==32);
@@ -1221,7 +1227,11 @@ int main(int argc,char** argv){
   Require(Spirv::EmitMergedPointMeshProgram(merged,resources,merged_info,assembly,&words,&error),error);
   auto* f=std::fopen("native_mesh_full_adapter.spv","wb");Require(f!=nullptr);
   Require(std::fwrite(words.data(),4,words.size(),f)==words.size());Require(std::fclose(f)==0);
+  Require(MeshProgramUsesHostWave32(merged.wave_size,merged.lane_mask_mode==ShaderLaneMaskMode::NativeWave,
+   merged.bindings.mesh_point_input_dword!=IR::BindingLayout::NoMeshPointInputs,merged.dispatcher_fallback));
   auto standalone=merged;standalone.mesh_gs_user_data=false;
+  Require(MeshProgramUsesHostWave32(standalone.wave_size,standalone.lane_mask_mode==ShaderLaneMaskMode::NativeWave,
+   standalone.bindings.mesh_point_input_dword!=IR::BindingLayout::NoMeshPointInputs,standalone.dispatcher_fallback));
   Require(!Spirv::EmitMergedPointMeshProgram(standalone,resources,merged_info,assembly,&words,&error));
   Require(!Spirv::EmitStandalonePointMeshProgram(merged,resources,merged_info,assembly,&words,&error));
   Require(Spirv::EmitStandalonePointMeshProgram(standalone,resources,merged_info,assembly,&words,&error),error);
