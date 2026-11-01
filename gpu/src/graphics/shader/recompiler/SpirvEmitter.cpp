@@ -295,6 +295,9 @@ bool ValidateNativeProgram(const IR::Program& program, std::string* error) {
 
 	for (const auto& block: program.blocks) {
 		for (const auto& inst: block.instructions) {
+   if(inst.op==IR::Opcode::WqmB32 && program.lane_mask_mode==ShaderLaneMaskMode::PerInvocation &&
+      inst.src[0].kind==IR::OperandKind::Register && inst.src[0].reg.file==IR::RegisterFile::Scalar)
+    return Fail(error,"per-invocation WQM32 SGPR mask provenance is not supported");
 			if (!ValidateInstructionContract(inst, error)) {
 				return false;
 			}
@@ -413,6 +416,7 @@ bool ProgramRequiresExactSubgroupSize(const IR::Program& program) {
 				return true;
 			}
 			switch (inst.op) {
+				case IR::Opcode::WqmB32:
 				case IR::Opcode::WqmB64:
 					if (inst.dst.kind == IR::OperandKind::Register &&
 					    inst.dst.reg.file != IR::RegisterFile::Scalar) {

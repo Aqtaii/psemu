@@ -1702,6 +1702,7 @@ bool ShaderCompileSpirvPS(const HW::PixelShaderInfo* regs, const HW::ShaderRegis
 	ShaderRecompiler::CompileResult result;
 	std::string                     error;
 	if (!ShaderRecompiler::TryRecompile(code, options, &result, &error)) {
+		DumpShaderRecompilerOriginal("ps_failed", options.shader_hash, code, result.decoded_dump);
 		ExitShaderRecompilerFailure("ShaderRecompiler PS", options.shader_hash, error.c_str());
 	}
 	DumpShaderRecompilerOriginal("ps", options.shader_hash, code, result.decoded_dump);

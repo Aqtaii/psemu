@@ -179,6 +179,7 @@ std::string InstructionToString(const Instruction& inst) {
 		case Opcode::MoveRelDestU32: text += "MoveRelDestU32"; break;
 		case Opcode::MoveRelSourceU32: text += "MoveRelSourceU32"; break;
 		case Opcode::MoveU64: text += "MoveU64"; break;
+		case Opcode::WqmB32: text += "WqmB32"; break;
 		case Opcode::WqmB64: text += "WqmB64"; break;
 		case Opcode::SaveexecB32: text += "SaveexecB32"; break;
 		case Opcode::SaveexecB64: text += "SaveexecB64"; break;

@@ -182,6 +182,54 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
   state.builder.AddFunction({OpIEqual,state.bool_type,equal,actual,expected});
   state.builder.AddFunction({OpLogicalAnd,state.bool_type,both,passed,equal});passed=both;
  };
+ // WQM32: exact word semantics and the same ballot adapter used by Pixel shaders.
+ {
+  const auto saved25=EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,25});
+  const auto saved26=EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,26});
+  const auto saved_scc=EmitRegisterLoad(&state,SccRegister());
+  const auto saved_exec_low=EmitRegisterLoad(&state,{IR::RegisterFile::Exec,0});
+  const auto saved_exec_high=EmitRegisterLoad(&state,{IR::RegisterFile::Exec,1});
+  IR::Instruction wqm;wqm.op=IR::Opcode::WqmB32;wqm.execution=IR::InstructionExecution::Scalar;
+  wqm.src_count=1;wqm.dst2=SccOperand();
+  for(const auto test:std::array<std::array<uint32_t,2>,7>{{{0,0},{1,15},{16,240},{0x80000000,0xf0000000},{0x01010101,0x0f0f0f0f},{0x80000001,0xf000000f},{0xffffffff,0xffffffff}}}) {
+   EmitStoreU32(&state,Reg(IR::RegisterFile::Scalar,25),ConstantU32(&state,test[0]));
+   EmitStoreU32(&state,Reg(IR::RegisterFile::Scalar,26),ConstantU32(&state,0x76543210));
+   wqm.dst=Reg(IR::RegisterFile::Scalar,25);wqm.src[0]=wqm.dst;EmitWqmB32(&state,wqm);
+   check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,25}),test[1]);
+   check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,26}),0x76543210);
+   check(EmitRegisterLoad(&state,SccRegister()),test[1]!=0);
+  }
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,0x12345678));
+  wqm.dst=Reg(IR::RegisterFile::Exec,0);wqm.src[0]=Imm(1);EmitWqmB32(&state,wqm);
+  check(EmitRegisterLoad(&state,{IR::RegisterFile::Exec,0}),15);
+  check(EmitRegisterLoad(&state,{IR::RegisterFile::Exec,1}),0x12345678);
+  wqm.dst=Reg(IR::RegisterFile::Exec,1);wqm.src[0]=Imm(0x80000000);EmitWqmB32(&state,wqm);
+  check(EmitRegisterLoad(&state,{IR::RegisterFile::Exec,0}),15);
+  check(EmitRegisterLoad(&state,{IR::RegisterFile::Exec,1}),0xf0000000);
+  state.per_invocation_masks=true;
+  const auto lane=EmitSubgroupLocalInvocationId(&state);
+  const auto lane8=EmitBinaryU32(&state,OpBitwiseAnd,lane,ConstantU32(&state,7));
+  const auto one_in_quad=state.builder.AllocateId(),expanded=state.builder.AllocateId();
+  state.builder.AddFunction({OpIEqual,state.bool_type,one_in_quad,lane8,ConstantU32(&state,0)});
+  state.builder.AddFunction({OpULessThan,state.bool_type,expanded,lane8,ConstantU32(&state,4)});
+  EmitPerInvocationMask(&state,Reg(IR::RegisterFile::Exec,0),one_in_quad);
+  wqm.dst=wqm.src[0]=Reg(IR::RegisterFile::Exec,0);EmitWqmB32(&state,wqm);
+  abi_check(EmitRegisterLoad(&state,{IR::RegisterFile::Exec,0}),EmitSelectU32Value(&state,expanded,ConstantU32(&state,1),ConstantU32(&state,0)));
+  check(EmitRegisterLoad(&state,SccRegister()),1); // true even in a fully inactive quad
+  wqm.dst=Reg(IR::RegisterFile::Scalar,25);EmitWqmB32(&state,wqm);
+  check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,25}),0x0f0f0f0f);
+  wqm.dst=Reg(IR::RegisterFile::Exec,0);wqm.src[0]=Imm(0);EmitWqmB32(&state,wqm);
+  check(EmitRegisterLoad(&state,{IR::RegisterFile::Exec,0}),0);check(EmitRegisterLoad(&state,SccRegister()),0);
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,1));
+  state.wave_size=32;wqm.dst=Reg(IR::RegisterFile::Exec,1);wqm.src[0]=Imm(0xffffffff);EmitWqmB32(&state,wqm);
+  check(EmitRegisterLoad(&state,{IR::RegisterFile::Exec,0}),1);check(EmitRegisterLoad(&state,SccRegister()),0);
+  state.wave_size=64;state.per_invocation_masks=false;
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),saved_exec_low);
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),saved_exec_high);
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Scalar,25),saved25);
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Scalar,26),saved26);
+  EmitStoreU32(&state,SccOperand(),saved_scc);
+ }
  abi_check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,0}),abi_low_expected);
  abi_check(EmitRegisterLoad(&state,{IR::RegisterFile::Scalar,3}),abi_s3);
  for(uint32_t half=0;half<2;++half) {

@@ -1205,7 +1205,10 @@ bool LowerImplemented(const Decoder::Instruction& decoded, BasicBlock* block, st
 		}
 	}
 
+	// WQM32 derives SCC from the entire word before per-invocation mask projection.
+	if(decoded.opcode==Decoder::Opcode::SWqmB32)inst.dst2=MakeSccOperand();
 	block->instructions.push_back(inst);
+	if(decoded.opcode==Decoder::Opcode::SWqmB32)return true;
 	return AppendScalarResultSccNonZero(decoded, block, error);
 }
 

@@ -65,6 +65,24 @@ int main(int argc,char** argv) {
   std::puts("[STANDALONE-MESH] registered type selection, cleared debug condition and GS-root isolation=passed");
  }
 
+ {
+  Program decoded;std::string diagnostic;
+  const std::array<uint32_t,2> code{0xbefe097eu,0xbf810000u};
+  Require(DecodeProgram(code,&decoded,&diagnostic));
+  Require(decoded.instructions[0].opcode==Opcode::SWqmB32);
+  Require(decoded.instructions[0].dst.kind==OperandKind::ExecLo && decoded.instructions[0].src0.kind==OperandKind::ExecLo);
+  Require(OpcodeToString(decoded.instructions[0].opcode)=="s_wqm_b32");
+  Libs::Graphics::ShaderRecompiler::CFG::Graph graph;
+  Require(Libs::Graphics::ShaderRecompiler::CFG::BuildGraph(decoded,&graph,&diagnostic));
+  Libs::Graphics::ShaderRecompiler::IR::Program ir;
+  Require(Libs::Graphics::ShaderRecompiler::IR::LowerProgram(decoded,graph,Libs::Graphics::ShaderType::Pixel,64,&ir,&diagnostic));
+  const auto& inst=ir.blocks[0].instructions[0];
+  Require(inst.op==Libs::Graphics::ShaderRecompiler::IR::Opcode::WqmB32);
+  Require(inst.execution==Libs::Graphics::ShaderRecompiler::IR::InstructionExecution::Scalar);
+  Require(inst.dst2.reg.file==Libs::Graphics::ShaderRecompiler::IR::RegisterFile::Scc);
+  Require(ir.blocks[0].instructions.size()==1); // no SCC compare of a projected lane predicate
+  std::puts("[WQM32] captured opcode, word result and explicit whole-word SCC=passed");
+ }
  Require(argc==1 || argc==3);
  if(argc==3) {
   const auto es=ReadCapturedCode(argv[1]);

@@ -109,6 +109,36 @@ uint32_t EmitWqmLaneU32(EmitterState* state, uint32_t src) {
 	return ret;
 }
 
+// A word-sized WQM must neither read nor overwrite an adjacent scalar/mask word.
+void EmitWqmB32(EmitterState* state, const IR::Instruction& inst) {
+ const auto mask_operand=[](const IR::Operand& o){return o.kind==IR::OperandKind::Register && IsMaskRegisterFile(o.reg.file);};
+ auto source=EmitValueLoad(state,inst.src[0]);
+ if(state->per_invocation_masks && mask_operand(inst.src[0])) {
+  const auto ballot=state->builder.AllocateId(),word=state->builder.AllocateId();
+  state->builder.AddFunction({OpGroupNonUniformBallot,state->vec4_uint_type,ballot,
+   ConstantU32(state,ScopeSubgroup),EmitMaskActiveBool(state,inst.src[0].reg.file)});
+  state->builder.AddFunction({OpCompositeExtract,state->uint_type,word,ballot,inst.src[0].reg.index});
+  source=word;
+ }
+ auto result=EmitWqmLaneU32(state,source);
+ if(IsInactiveWave32ExecHigh(*state,inst.dst.reg))result=ConstantU32(state,0);
+ if(state->per_invocation_masks && mask_operand(inst.dst)) {
+  const auto lane=EmitSubgroupLocalInvocationId(state);
+  const auto half=EmitBinaryU32(state,OpShiftRightLogical,lane,ConstantU32(state,5));
+  const auto affected=state->builder.AllocateId();
+  state->builder.AddFunction({OpIEqual,state->bool_type,affected,half,ConstantU32(state,inst.dst.reg.index)});
+  const auto bit=EmitBinaryU32(state,OpShiftLeftLogical,ConstantU32(state,1),
+   EmitBinaryU32(state,OpBitwiseAnd,lane,ConstantU32(state,31)));
+  const auto active=EmitNotEqualZeroBool(state,EmitBinaryU32(state,OpBitwiseAnd,result,bit));
+  const auto merged=state->builder.AllocateId();
+  state->builder.AddFunction({OpSelect,state->bool_type,merged,affected,active,EmitMaskActiveBool(state,inst.dst.reg.file)});
+  // Canonical per-invocation masks use low=boolean/high=0, including unaffected lanes.
+  auto canonical=inst.dst;canonical.reg.index=0;EmitPerInvocationMask(state,canonical,merged);
+ } else EmitStoreU32(state,inst.dst,result);
+ const auto nonzero=EmitNotEqualZeroBool(state,result);
+ EmitStoreU32(state,inst.dst2,EmitSelectU32Value(state,nonzero,ConstantU32(state,1),ConstantU32(state,0)));
+}
+
 void EmitWqmB64(EmitterState* state, const IR::Instruction& inst) {
 	if (!state->per_invocation_masks && inst.dst.kind == IR::OperandKind::Register &&
 	    inst.dst.reg.file == IR::RegisterFile::Scalar) {
