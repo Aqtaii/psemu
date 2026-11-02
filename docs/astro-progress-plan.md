@@ -2,12 +2,13 @@
 
 ## Current verified checkpoint - 2 November 2026
 
-Latest update: f349c2e passed native read-only RGBA16F target publication
-and GitHub CI 41469734221. The next native rejection is a sampled depth
-view (image format 124, requested view 70, three layers); final presentation
-is still black. A default-off PSEMU_ASTRO_FAST_TEST=1 intro shortcut now
-passes local AvPlayer lifecycle and audio regressions. Its separate native
-timing run started at 18:54:54; total speedup is not measured yet.
+Latest update: do not use PSEMU_ASTRO_FAST_TEST. Early EOF of the looped
+intro is not a valid integration shortcut; its internal completion marker
+did not establish a real scene transition or a performance improvement.
+The 9f148b5 layered-depth build passes CI 41478423160 and local CPU/Vulkan
+fixtures. A normal full boot with the flag removed started at 21:49:09,
+PID13260, logs tools/data/astro_20261102_depth_array_normal_*. Native layered
+depth binding and progress beyond the prior scene gate remain unverified.
 
 Recognizable final-window Astro output is still unconfirmed. Use this checkpoint for current status; the dated sections below are historical records. Detailed evidence and limitations are in [astro-avplayer.md](astro-avplayer.md).
 

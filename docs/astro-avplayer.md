@@ -419,7 +419,15 @@ The publication entry is renamed PublishImageForBufferRead and additionally acce
 astro_rt_buffer_read_cpu.txt passes the exact source/read addresses, prefix/overlap, malformed format/footprint/layer/mip/range states and a dirty source tail outside the read. The extracted production transaction fixture now covers both image kinds, with/without fragments, retained native image, all-owner rejection before mutation and27 rejected states (astro_rt_buffer_read_transaction_cpu.txt). Native Vulkan extent is two-dimensional; the build caught and removed an invalid extra depth-member check in development; the fixture model was corrected accordingly.
 
 astro_rt_buffer_read_gpu.txt passes all thirteen Vulkan data-path cases with active Khronos callbacks and zero issues. The new case executes a real1920x1080 RGBA16F framebuffer LOAD/STORE on2073600 spatial half-float texels, downloads it, production-retile/detiles the full0xff0000 guest layout, then GPU-reads the captured0xc0000 buffer span containing the0x30000 exterior prefix and0x90000 image overlap. Every result byte matches, all source/padding/suffix/exterior bytes and destination guards remain unchanged. These are controlled shaders/data and do not execute Astro or the complete native cache wrapper. Separate astro-rt-buffer-read-output builds; native passage and recognizable final output remain pending.
-## 2026-11-02: opt-in faster native iterations
+## 2026-11-02: retired fast-intro experiment (do not use)
+
+**Retired by user instruction. Do not set PSEMU_ASTRO_FAST_TEST.**
+The historical API-level tests below do not establish that the game's
+ps_logo state machine can advance after an early EOF of a looping video.
+The observed internal EOF marker must not be treated as a completed intro
+or a measured full-boot speedup. Normal full boots are required.
+
+### Historical implementation and tests
 
 PSEMU_ASTRO_FAST_TEST=1 completes only the exact
 data/prein/video/ps_studio_armadillo.mp4 (or /app0/ equivalent) intro
@@ -473,3 +481,19 @@ guards pass on Arc B580, with zero active Khronos validation warnings/errors.
 This verifies the Vulkan mechanism with controlled inputs, not execution of
 the complete Astro shader. A bounded [DEPTH-SAMPLED-ARRAY] marker distinguishes
 successful native view binding from shader submission or GPU completion.
+
+### 21:49: normal full boot of 9f148b5, fast mode removed from environment
+
+The user requested abandoning the shortcut and validating the layered-depth
+fix with the unmodified intro. The normal runner explicitly removes the
+FAST_TEST variable, asserts its absence before spawning the game, and records
+fast_test_enabled=false. It uses the same tested 9f148b5 executable/map;
+no source rebuild or other gameplay setting changed for this comparison.
+
+Owned PID13260, start21:49:09, prefix
+tools/data/astro_20261102_depth_array_normal. CI41478423160 passed.
+The old fast log shows ps_logo started and title_controller_ship resources
+loaded, but no confirmed title_controller_ship level-start event. This does
+not prove that loading its files completed the state-machine transition.
+Native layered-depth binding, subsequent drawing and final content are
+pending this normal run. The earlier claimed startup gain is withdrawn.
