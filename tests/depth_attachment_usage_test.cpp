@@ -5,6 +5,12 @@
 #include "depth_attachment_usage_fixture.h"
 static void Require(bool ok) {if(!ok) throw std::runtime_error("stencil attachment usage regression");}
 int main() {
+ // Captured 96-shader failure: D32S8, HTile, raw DB_RENDER_CONTROL=0x10.
+ Require(depth_resummarize_compatible(true,true,false,false));
+ for(bool htile:{false,true}) for(bool zclear:{false,true}) for(bool sclear:{false,true}) {
+  Require(depth_resummarize_compatible(true,htile,zclear,sclear)==(htile&&!zclear&&!sclear));
+  Require(depth_resummarize_compatible(false,htile,zclear,sclear));
+ }
  // Captured 81-shader failure: 960x540 D32, no stencil plane, stale enabled
  // front/back stencil tests, ALWAYS comparisons, KEEP ops and 0xff masks.
  Libs::Graphics::HW::DepthStencilInfo s;

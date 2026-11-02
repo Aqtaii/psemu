@@ -167,7 +167,9 @@ void ResolveRenderDepthTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 	}
 	// Prospero defines the compression-disable bits as tile writeback policy. Vulkan attachments
 	// expose the same logical depth/stencil values regardless of the driver's backing compression.
-	if (rc.resummarize_enable || rc.copy_centroid ||
+	if (!depth_resummarize_compatible(rc.resummarize_enable, has_htile,
+	                                  rc.depth_clear_enable, rc.stencil_clear_enable) ||
+	    rc.copy_centroid ||
 	    rc.copy_sample != 0 || z.z_info.expclear_enabled || z.stencil_info.expclear_enabled ||
 	    !z.z_info.HasValidTextureCompatibility() || z.z_info.partially_resident ||
 	    z.stencil_info.partially_resident ||
@@ -184,6 +186,14 @@ void ResolveRenderDepthTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 	    z.z_write_base_addr != z.z_read_base_addr || (z.z_read_base_addr & 0xffffu) != 0 ||
 	    dc.zfunc > static_cast<uint8_t>(vk::CompareOp::eAlways)) {
 		DepthFatalState(hw, "unsupported depth register state");
+	}
+	if (rc.resummarize_enable) {
+		static std::atomic_uint logs {0};
+		if (logs.fetch_add(1, std::memory_order_relaxed) < 8) {
+			LOGF("[DEPTH-RESUMMARIZE] depth=0x%016" PRIx64 " htile=0x%016" PRIx64
+			     " native_hierarchical_metadata=1 logical_depth_stencil_unchanged=1\n",
+			     z.z_read_base_addr, z.htile_data_base_addr);
+		}
 	}
 	if (msaa_compat) {
 		static std::atomic<uint32_t> logged_fragments = 0;

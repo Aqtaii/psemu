@@ -1125,7 +1125,7 @@ static BufferView NativeUpload(CommandBuffer* command_buffer, std::span<const ui
 }
 
 static BufferView NativeGuestAddressFault(CommandBuffer* command, bool mesh_probe,
- uint64_t shader_hash, uint32_t stage, uint64_t gs_root,
+ uint64_t shader_hash, uint32_t stage, size_t blocks, size_t ir_instructions, uint64_t gs_root,
  std::vector<GuestAddressRange> address_ranges, size_t source_range_count) {
  auto* ctx = g_render_ctx->GetGraphicCtx();
  auto backing = std::shared_ptr<VulkanBuffer>(new VulkanBuffer, [ctx](VulkanBuffer* b) {
@@ -1140,7 +1140,7 @@ static BufferView NativeGuestAddressFault(CommandBuffer* command, bool mesh_prob
  VulkanMapMemory(ctx,&backing->memory,&mapped);
  std::memset(mapped,0,bytes);
  VulkanUnmapMemory(ctx,&backing->memory);
- command->OnFenceComplete([ctx,backing,mesh_probe,shader_hash,stage,gs_root,source_range_count,address_ranges=std::move(address_ranges)] {
+ command->OnFenceComplete([ctx,backing,mesh_probe,shader_hash,stage,blocks,ir_instructions,gs_root,source_range_count,address_ranges=std::move(address_ranges)] {
   void* data = nullptr;
   VulkanMapMemory(ctx,&backing->memory,&data);
   GuestAddressFaultRecord fault;
@@ -1155,14 +1155,20 @@ static BufferView NativeGuestAddressFault(CommandBuffer* command, bool mesh_prob
     if(!observed) {observed=true;log_batch=batches.fetch_add(1)<8;}
     if(!log_batch)continue;
     printf("[MESH-OUTPUT-PROBE] magic=%08x allocation=%08x vertices=%u primitives=%u instance=%u first_vertex=%u"
-           " group=%u shader=0x%016" PRIx64 " source=completed-fence\n",
+           " group=%u shader=0x%016" PRIx64 " blocks=%zu ir_instructions=%zu gs_root=0x%016" PRIx64 " source=completed-fence\n",
      probe.magic,probe.allocation,probe.vertices,probe.primitives,probe.instance,
-     probe.first_vertex,group,shader_hash);
+     probe.first_vertex,group,shader_hash,blocks,ir_instructions,gs_root);
     uint32_t reached=0;
     for(uint32_t i=0;i<ShaderRecompiler::MeshOutputProbe::Capacity;++i) {
      const auto& lane=probe.lanes[i];
      if(lane.gate_seen!=1)continue;
-     if(reached++<8) { printf("[MESH-INPUT-GATE] lane=%u pc=0x%x record=%u bits=%08x value=%.9g source=completed-fence\n",
+     if(reached++<8) {
+     if(lane.gate_pc!=0x104) {
+      printf("[MESH-COUNT-PREDICATE] lane=%u pc=0x%x packed_count=%08x threshold=%u le=%u source=completed-fence\n",
+       i,lane.gate_pc,lane.gate_value,lane.gate_record,unsigned(lane.gate_value<=lane.gate_record));
+      continue;
+     }
+     printf("[MESH-INPUT-GATE] lane=%u pc=0x%x record=%u bits=%08x value=%.9g source=completed-fence\n",
       i,lane.gate_pc,lane.gate_record,lane.gate_value,std::bit_cast<float>(lane.gate_value));
      printf("[MESH-INPUT-SHARP] lane=%u raw=%08x %08x %08x %08x record_xyz=%08x %08x %08x\n",
       i,lane.gate_descriptor[0],lane.gate_descriptor[1],lane.gate_descriptor[2],lane.gate_descriptor[3],
@@ -1408,8 +1414,10 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 	}
 	if (ShaderRecompiler::IR::FindBinding(program.bindings,
             ShaderRecompiler::IR::DescriptorBindingKind::GuestAddressFault)) {
-		descriptors.guest_address_fault = NativeGuestAddressFault(buffer, program.bindings.mesh_output_probe,
-            program.shader_hash,static_cast<uint32_t>(program.stage),
+		size_t ir_instructions=0;
+        for(const auto& block:program.blocks)ir_instructions+=block.instructions.size();
+        descriptors.guest_address_fault = NativeGuestAddressFault(buffer, program.bindings.mesh_output_probe,
+            program.shader_hash,static_cast<uint32_t>(program.stage),program.blocks.size(),ir_instructions,
             point ? uint64_t(point->gs_user_data_low) | (uint64_t(point->gs_user_data_high)<<32) : 0,
             std::move(fault_address_ranges),snapshot.guest_reads.size());
 	}

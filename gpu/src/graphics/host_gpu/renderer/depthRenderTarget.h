@@ -21,6 +21,13 @@ inline constexpr bool depth_htile_stencil_acceleration_compatible(bool has_stenc
 	return acceleration_disabled || (has_stencil && has_htile);
 }
 
+// RESUMMARIZE_ENABLE updates HTile summaries alongside the logical draw.
+// Vulkan maintains its own hierarchical metadata; logical depth/stencil ops stay intact.
+[[nodiscard]] inline constexpr bool depth_resummarize_compatible(
+    bool enabled, bool has_htile, bool depth_clear, bool stencil_clear) {
+    return !enabled || (has_htile && !depth_clear && !stencil_clear);
+}
+
 struct StencilAttachmentUsage {
 	bool bound = false;
 	bool test = false;

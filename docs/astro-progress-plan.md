@@ -2,32 +2,38 @@
 
 ## Current verified checkpoint - 3 November 2026
 
-Normal source8290733 exited after94 shaders at the exact metadata guard:
-write-only formatted request0x1888f220000+0x40000 is the middle plane of
-registered HTile0x1888f1e0000+0xc0000, three layers, clear_mask0x6.
-The associated native depth target is D16,2048x2048x3. This is a confirmed
-missing whole-layer clear route, not proof of the ultimate black-screen cause.
+Normal source37bf48f (00:44:23--01:25:24 Istanbul, exit321) passes the
+former middle-plane HTile failure. Actual first/middle/last0x40000-byte
+clears of the three-layer owner are recorded with isolated mask changes.
+The run reaches96 shaders. Final presentation is still black.
 
-The new route accepts only whole32KB-aligned metadata planes of one unique
-registered owner, rejects overlapping HTile/DCC ownership, and revalidates
-under the resource transaction. It marks only the requested tracker range
-and ORs only its layer bits. Full current-target validation and shader
-resource/dispatch guards remain. Local production-function tests pass48
-layer/mask ownership cases,20 compute routing cases and the previous
-depth/storage and image-to-buffer publication regressions.
+Next confirmed blocker is DB_RENDER_CONTROL=0x10 (RESUMMARIZE_ENABLE) on
+a1920x1080 D32+S8 attachment with HTile, no clear/copy flags. The new
+translation accepts this metadata summary request only with HTile and no
+simultaneous depth/stencil clear. All logical depth/stencil draw state,
+load/clear ownership and existing image barriers remain in force. Vulkan
+maintains native hierarchical metadata. The pinned Jetsku resolver leaves
+this summary flag out of its logical depth rejection; AMD register docs
+identify it as HTile summary updating. No draw or guest resource is skipped.
 
-The prior eight native output records sampled the SAME first Mesh group:
-allocation1/1, position(0,0,0,0), indices(0,0,0). This does not establish that
-all scene geometry is empty. Up to eight CPU-partitioned groups can now
-record independently with actual instance/first_vertex and shader identity.
-Default remains one group. CPU/emitter/SPIR-V tests and ten active-validation
-GPU cases pass, including independent four-group records and exterior guards.
-These controlled fixtures are not actual Astro frame evidence.
+49 completed Mesh output records cover distinct selected first_vertex
+values0,20,...140. Every sampled output is dummy1/1 with clip(0,0,0,0).
+This does not prove all103 possible groups are empty. A new count predicate
+trace matches CompareLeU32 s4,65535 semantically, because ES+GS fusion relocates
+the original GS PC. It records the actual PC and count without changing the
+comparison. IR block/instruction counts identify native permutations even
+when their registered shader checksum is zero. The next run should sample
+a different aligned group interval (first_vertex1600, eight groups).
 
-Local combined executable/map builds successfully under D:. Next native
-normal boot must verify the exact metadata blocker is passed and compare
-multiple actual groups before tracing the responsible color target to present.
-FAST_TEST remains removed; no early EOF, intro skip or fake game time is used.
+CI41531023013 caught the old32-byte lane offset assertion after the diagnostic
+header grew to40 bytes. The assertion is corrected and explicit first_vertex
+and instance ABI offsets are checked; the actual sparse-address tests pass.
+Local depth attachment policy and separate executable/map build pass.
+The D16 three-layer GPU regression passes12288 samples with active validation
+and zero issues. Final count-trace GPU checks and next native verification
+must complete before this source is considered integrated.
+
+FAST_TEST remains removed. No early EOF, intro skip or fake game time is used.
 
 Recognizable final-window Astro output is still unconfirmed. Use this checkpoint for current status; the dated sections below are historical records. Detailed evidence and limitations are in [astro-avplayer.md](astro-avplayer.md).
 

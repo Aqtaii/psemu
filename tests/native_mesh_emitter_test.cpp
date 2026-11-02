@@ -1215,6 +1215,25 @@ int main(int argc,char** argv){
    relative.pc=0xd0;relative.execution=IR::InstructionExecution::Vector;
    probe_program.blocks[0].instructions.insert(probe_program.blocks[0].instructions.begin(),relative);
   }
+  if(const char* count_text=std::getenv("PSEMU_TEST_MESH_COUNT")) {
+   const uint32_t count=uint32_t(std::strtoull(count_text,nullptr,0));
+   if(count==UINT32_MAX)for(uint32_t half=0;half<2;++half) {
+    IR::Instruction inactive;inactive.op=IR::Opcode::MoveU32;inactive.pc=0x33d8+half*4;
+    inactive.dst=Reg(IR::RegisterFile::Exec,half);inactive.src_count=1;inactive.src[0]=Imm(0);
+    inactive.execution=IR::InstructionExecution::Scalar;
+    probe_program.blocks[0].instructions.push_back(inactive);
+   }
+   IR::Instruction move;move.op=IR::Opcode::MoveU32;move.pc=0x33e0;
+   move.dst=Reg(IR::RegisterFile::Scalar,4);move.src_count=1;move.src[0]=Imm(count);
+   move.execution=IR::InstructionExecution::Scalar;
+   probe_program.blocks[0].instructions.push_back(move);
+   IR::Instruction compare;compare.op=IR::Opcode::CompareLeU32;
+   compare.pc=count==0 ? 0x33e4 : count==0x00010003 ? 0x3438 : 0x4038;
+   compare.dst=Reg(IR::RegisterFile::Scc,0);compare.src_count=2;
+   compare.src[0]=Reg(IR::RegisterFile::Scalar,4);compare.src[1]=Imm(65535);
+   compare.execution=IR::InstructionExecution::Scalar;
+   probe_program.blocks[0].instructions.push_back(compare);
+  }
   Require(Spirv::EmitMergedPointMeshProgram(probe_program,resources,point_probe_info,point_probe_assembly,&probe_words,&error),error);
   auto* point_probe_file=std::fopen("native_mesh_point_output_probe.spv","wb");Require(point_probe_file!=nullptr);
   Require(std::fwrite(probe_words.data(),4,probe_words.size(),point_probe_file)==probe_words.size());

@@ -693,13 +693,18 @@ uint32_t EmitMeshProbeCaptureBool(EmitterState* state) {
 
 void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
  // Bounded opt-in capture of the actual Astro empty-input gate, before CMPX changes EXEC.
- // The selector includes the captured PC/op/register; it does not change guest operands.
+ // Capture either the old input predicate or the full GS packed output-count test.
+ const bool input_gate = inst.pc==0x104 && inst.op==IR::Opcode::CompareMaskLtF32 &&
+    inst.src_count==2 && inst.src[1].kind==IR::OperandKind::Register &&
+    inst.src[1].reg.file==IR::RegisterFile::Vector && inst.src[1].reg.index==8;
+ // Fusing ES+GS relocates the GS PC; identify the exact operand signature instead.
+ const bool output_count = inst.op==IR::Opcode::CompareLeU32 &&
+    inst.src_count==2 && inst.src[0].kind==IR::OperandKind::Register &&
+    inst.src[0].reg.file==IR::RegisterFile::Scalar && inst.src[0].reg.index==4 &&
+    inst.src[1].kind==IR::OperandKind::ImmediateU32 && inst.src[1].imm==65535;
  if(state->stage==ShaderType::Mesh && state->program->bindings.mesh_output_probe &&
-    state->guest_address_fault_variable!=0 && inst.pc==0x104 &&
-    inst.op==IR::Opcode::CompareMaskLtF32 && inst.src_count==2 &&
-    inst.src[1].kind==IR::OperandKind::Register &&
-    inst.src[1].reg.file==IR::RegisterFile::Vector && inst.src[1].reg.index==8) {
-  EmitGuardedByExec(state,[&] {
+    state->guest_address_fault_variable!=0 && (input_gate || output_count)) {
+  const auto capture_probe=[&] {
    auto& b=state->builder;
    const auto index=EmitMeshGuestLocalInvocationIndex(state);
    const auto bounded=b.AllocateId(),yes=b.AllocateId(),end=b.AllocateId();
@@ -711,12 +716,20 @@ void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
    b.AddFunction({OpLabel,yes});
    const auto base=EmitAddU32(state,EmitAddU32(state,EmitMeshProbeRecordWordOffset(state),ConstantU32(state,MeshOutputProbe::HeaderWords)),
     EmitBinaryU32(state,OpIMul,index,ConstantU32(state,MeshOutputProbe::LaneWords)));
-   const uint32_t values[]={EmitValueLoad(state,inst.src[1]),
-    EmitRegisterLoad(state,{IR::RegisterFile::Vector,9}),ConstantU32(state,1),ConstantU32(state,inst.pc),
-    EmitRegisterLoad(state,{IR::RegisterFile::Scalar,8}),EmitRegisterLoad(state,{IR::RegisterFile::Scalar,9}),
-    EmitRegisterLoad(state,{IR::RegisterFile::Scalar,10}),EmitRegisterLoad(state,{IR::RegisterFile::Scalar,11}),
-    EmitRegisterLoad(state,{IR::RegisterFile::Vector,5}),EmitRegisterLoad(state,{IR::RegisterFile::Vector,6}),
-    EmitRegisterLoad(state,{IR::RegisterFile::Vector,7})};
+   std::array<uint32_t,11> values;
+   if(output_count) {
+    values={EmitValueLoad(state,inst.src[0]),EmitValueLoad(state,inst.src[1]),
+     ConstantU32(state,1),ConstantU32(state,inst.pc),ConstantU32(state,0),
+     ConstantU32(state,0),ConstantU32(state,0),ConstantU32(state,0),
+     ConstantU32(state,0),ConstantU32(state,0),ConstantU32(state,0)};
+   } else {
+    values={EmitValueLoad(state,inst.src[1]),
+     EmitRegisterLoad(state,{IR::RegisterFile::Vector,9}),ConstantU32(state,1),ConstantU32(state,inst.pc),
+     EmitRegisterLoad(state,{IR::RegisterFile::Scalar,8}),EmitRegisterLoad(state,{IR::RegisterFile::Scalar,9}),
+     EmitRegisterLoad(state,{IR::RegisterFile::Scalar,10}),EmitRegisterLoad(state,{IR::RegisterFile::Scalar,11}),
+     EmitRegisterLoad(state,{IR::RegisterFile::Vector,5}),EmitRegisterLoad(state,{IR::RegisterFile::Vector,6}),
+     EmitRegisterLoad(state,{IR::RegisterFile::Vector,7})};
+   }
    for(uint32_t i=0;i<std::size(values);++i) {
     const auto ptr=b.AllocateId();
     b.AddFunction({OpAccessChain,state->ptr_storage_buffer_uint,ptr,state->guest_address_fault_variable,
@@ -724,7 +737,10 @@ void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
     b.AddFunction({OpStore,ptr,values[i]});
    }
    b.AddFunction({OpBranch,end});b.AddFunction({OpLabel,end});
-  });
+  };
+  // Scalar count tests execute even when every vector lane is inactive.
+  if(output_count) capture_probe();
+  else EmitGuardedByExec(state,capture_probe);
  }
 	if (inst.op == IR::Opcode::BufferLoadDword && inst.memory.component_count > 1u &&
 	    inst.memory.component_index == 0u) {

@@ -645,3 +645,46 @@ The bounded multi-point Mesh probe09d576a is independently tested and pushed.
 The next normal run combines that probe with the failure snapshot, selected
 instance0/first_vertex0 and the existing late gate. FAST_TEST stays absent;
 root Sarah and its user launch scripts are preserved.
+
+## 2026-11-03: native HTile plane clears pass; resummarize and empty Mesh counts
+
+Normal37bf48f PID22816 completed00:44:23--01:25:24 Istanbul (exit321).
+The former0x40000-byte middle-plane metadata rejection is passed. Actual
+HTILE-SLICE-CLEAR records show all three planes of owner0x15e84fd0000,
+with first/count0/1,1/1,2/1 and masks updated only for the requested plane.
+The run reaches96 shaders; the final present-source capture is still allRGB0.
+49 completed probe records sample first vertices0,20,...140 and remain
+allocation1/1, positions(0,0,0,0), indices(0,0,0). Other groups are unmeasured.
+
+The next full failure snapshot is1920x1080 D32+S8+HTile and raw render
+control0x10, resummarize only, no clear/copy flags. AMD's documented
+RESUMMARIZE_ENABLE updates HTile surface summaries for touched tiles:
+https://www.amd.com/content/dam/amd/en/documents/radeon-tech-docs/programmer-references/evergreen_3D_registers_v2.pdf
+This is an older architectural register reference; mapping it to Vulkan's
+native summary management is an inference supported by the pinned Jetsku
+depth resolver, which likewise does not reject this flag. The logical
+depth/stencil draw is retained. Support is conservative: HTile must exist
+and simultaneous depth/stencil clears remain rejected.
+
+The output-count diagnostic now uses exact opcode/register/immediate
+signature rather than a hardcoded PC: fused decoding shifts the GS PCs
+(front code is appended before GS). Original GS0x33e4 appears as0x3438 in
+one captured fused IR. A zero native shader checksum was also observed, so
+completed records now include block/instruction counts and GS-root address.
+Scalar count capture must still work with zero vector EXEC; it changes no
+guest operands, exports, allocation counts or raster state.
+
+CI41531023013 stopped at the sparse-address fixture's obsolete lane offset32.
+The actual ABI is40 bytes after two diagnostic header words were added.
+Corrected checks retain original fault/magic offsets and explicitly check
+the new draw identity words. Local sparse-address and depth-attachment
+regressions pass. D16 three-layer shadow sampling passes12288 GPU samples
+with active validation and zero issues; this is not a native Astro frame.
+
+Final local verification: all13 Mesh GPU cases pass with active Khronos
+validation and zero issues. Count captures use0,0x00010003,0xffffffff and
+original/relocated PCs0x33e4/0x3438/0x4038; the last case explicitly sets both
+EXEC halves to zero after its controlled geometry exports. Scalar data still
+records on every32 physical invocation while the rendered triangle and
+fault/exterior guards remain exact. These are controlled shader fixtures.
+Default/multiwave production emitter and SPIR-V regressions pass.

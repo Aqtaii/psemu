@@ -50,8 +50,10 @@ int main() {
  CHECK(!ShaderRecompiler::MeshProbePosition(probe,256,&position));
  probe.vertices=255;CHECK(!ShaderRecompiler::MeshProbePosition(probe,255,&position));
  CHECK(!ShaderRecompiler::MeshProbePosition(probe,0,nullptr));
- CHECK(reinterpret_cast<const char*>(&probe.lanes[0])-reinterpret_cast<const char*>(&probe)==32);
+ CHECK(reinterpret_cast<const char*>(&probe.lanes[0])-reinterpret_cast<const char*>(&probe)==40);
  CHECK(reinterpret_cast<const char*>(&probe.magic)-reinterpret_cast<const char*>(&probe)==16);
+ CHECK(reinterpret_cast<const char*>(&probe.first_vertex)-reinterpret_cast<const char*>(&probe)==32);
+ CHECK(reinterpret_cast<const char*>(&probe.instance)-reinterpret_cast<const char*>(&probe)==36);
  FenceCompletionActions actions;
  int completed=0;
  auto resource=std::make_shared<int>(42);std::weak_ptr<int> weak=resource;
