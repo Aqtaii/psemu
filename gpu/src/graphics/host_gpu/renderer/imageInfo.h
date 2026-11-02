@@ -1248,6 +1248,19 @@ CanPublishStorageForBufferRead(uint64_t address, uint64_t size,
   return IsSupportedDepthStorageBacking(storage) ||
          IsSupportedColorStorageBacking(storage);
 }
+// Captured read crosses the prefix of a GPU-current single-layer RGBA16F target.
+// Reconstruct the full target, preserving guest padding and bytes outside the overlap.
+[[nodiscard]] inline bool CanPublishRenderTargetForBufferRead(
+    uint64_t address, uint64_t size, const RenderTargetInfo& target, bool gpu, bool buffer,
+    bool tracker_gpu, bool cpu, bool same_context, bool page_conflict, bool buffer_conflict) {
+ return address!=0 && size!=0 && size<=UINT64_MAX-address && gpu && !buffer && tracker_gpu &&
+        !cpu && same_context && !page_conflict && !buffer_conflict &&
+        target.address!=0 && target.size!=0 && target.size<=UINT64_MAX-target.address &&
+        target.format==vk::Format::eR16G16B16A16Sfloat && target.bytes_per_element==8 &&
+        target.tile_mode==Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) &&
+        IsSupportedRenderTargetReconstructionFootprint(target) &&
+        ImageRangeOverlaps(address,size,target.address,target.size);
+}
 // Clean D32 views may be replaced by exact 32-bit float/packed-color storage views.
 // Guest-layout backing is already current; retaining the old view requires no readback.
 [[nodiscard]] inline bool CanRetireCleanDepthTargetForStorage(

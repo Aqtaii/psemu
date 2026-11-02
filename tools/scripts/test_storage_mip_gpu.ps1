@@ -81,6 +81,8 @@ try {
  & .\storage_mip_gpu_test.exe storage_rgba16_mip_gpu.spv 0 unorm-linear
  if($LASTEXITCODE){throw 'RGBA16 UNorm linear storage Vulkan test failed'}
 
+ & .\storage_mip_gpu_test.exe storage_rgba16_mip_gpu.spv 0 rgba16-target-read
+ if($LASTEXITCODE -ne 0){throw 'RGBA16F target read-only buffer publication GPU regression failed'}
  & .\storage_mip_gpu_test.exe storage_rgba16_mip_gpu.spv 0 rgba16-crossing
  if($LASTEXITCODE -ne 0){throw 'Crossing tiled RGBA16F storage GPU regression failed'}
 } finally {Pop-Location}

@@ -754,7 +754,7 @@ std::pair<VulkanBuffer*, uint64_t> BufferCache::ObtainBuffer(CommandBuffer*  com
         std::lock_guard transaction(m_resource_mutex);
         if (image_access_drain && is_read && !is_written &&
             m_texture_cache->QueryRegion(vaddr, size).gpu_image_bytes) {
-          (void)m_texture_cache->PublishStorageForBufferRead(ctx, vaddr, size);
+          (void)m_texture_cache->PublishImageForBufferRead(ctx, vaddr, size);
         }
         const auto texture_region = m_texture_cache->QueryRegion(vaddr, size);
         // Use the stream-buffer fast path before image/buffer alias handling.

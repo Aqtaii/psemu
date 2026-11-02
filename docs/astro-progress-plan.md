@@ -28,11 +28,14 @@ Recognizable final-window Astro output is still unconfirmed. Use this checkpoint
 - [x] Current HTile candidates now require a written binding; actual clear guards remain. Thirteen extracted-production routing cases and an old-condition reproducer pass; the separate candidate builds.
 - [x] Native6c1b45e passes the false-clear gate, then rejects a read-only0xc0000 buffer whose newer bytes are in a GPU image. CI41430159231 succeeds; final RGB remains zero.
 - [x] Supported storage owners now have guarded full-layout read publication with retained native image, complete-source preflight and cached-fragment refresh. CPU policy/transaction tests and all twelve existing Vulkan data-path cases pass; the separate candidate builds.
-- [ ] Verify the new storage-to-read-only-buffer seam natively; unsupported image kinds/layouts retain a complete failure snapshot.
+- [x] Native3f83039 identifies the read owner as a GPU-current RGBA16F1920x1080 render target, not a storage image. The captured0xc0000 read overlaps0x90000 target bytes after a0x30000 exterior prefix; all owner/context guards are clean.
+- [x] Read-only publication now also supports the captured RGBA16F target layout. Exact CPU policy/transaction guards and all13 active-validation Vulkan cases pass, including2073600 framebuffer LOAD/STORE pixels and an exact GPU prefix/target buffer read with padding/suffix/exterior preserved.
+- [ ] Verify the render-target-to-read-only-buffer handoff natively and continue to the final presentation path.
 - [x] Work stopped after the1 November23:44:24 exit at the user request; the user explicitly resumed Astro on2 November.
 - [x] Full Astro GS raw0xb704ffff atPC0x33e4 exposes unsigned SOPK immediate sign-extension:0xffff became0xffffffff, corrupting the output-count fallback predicate. AMD ISA and pinned Jetsku agree on zero extension.
 - [x] Unsigned SOPK09..0e zero extension is fixed;72 production decoder/IR boundary cases and signed controls pass. Actual emitted predicate yields1024/1024 expected Vulkan pixels versus old0/1024, with active callbacks and zero validation issues. This is a controlled fixture.
-- [ ] Verify corrected output-count behavior in the native full-Mesh draws and actual final presentation.
+- [x] Native3f83039 full Mesh contains the corrected65535 predicate and validates; sampled2048-point draws produce118 primitives versus the earlier103 minimum. Sampled Mesh coverage remains0 and final RGB remains zero. CI41462909034 succeeds.
+- [ ] Obtain visible native Mesh coverage/content after the remaining resource gates; allocation counts alone are not a game frame.
 - [ ] Resolve any subsequent real shader/resource/post-processing blockers using captured evidence and the Jetsku reference.
 - [ ] Obtain recognizable content in the actual final presentation path and confirm it in the game window.
 - [ ] Repeat startup and check basic input/stability after the first visible frame.

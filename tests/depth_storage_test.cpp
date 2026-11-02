@@ -2,6 +2,40 @@
 static void Require(bool ok,std::source_location where=std::source_location::current()) {if(!ok) {std::fprintf(stderr,"Regression failed at %s:%u\n",where.file_name(),where.line());throw std::runtime_error("regression failed");}}
 int main() {
  {
+  RenderTargetInfo target{};target.address=0x23c416e0000ull;target.size=0xff0000;
+  target.format=vk::Format::eR16G16B16A16Sfloat;target.width=target.pitch=1920;target.height=1080;
+  target.bytes_per_element=8;target.tile_mode=27;
+  const uint64_t read=0x23c416b0000ull,bytes=0xc0000;
+  Require(target.address-read==0x30000 && read+bytes-target.address==0x90000);
+  const auto accepts=[&](uint64_t a,uint64_t n,const RenderTargetInfo& image){
+   return CanPublishRenderTargetForBufferRead(a,n,image,true,false,true,false,true,false,false);};
+  Require(accepts(read,bytes,target));
+  Require(accepts(target.address,target.size,target));
+  Require(accepts(target.address+1,17,target));
+  Require(accepts(target.address+target.size-1,2,target));
+  for(int bad=0;bad<7;bad++)Require(!CanPublishRenderTargetForBufferRead(read,bytes,target,
+    bad!=0,bad==1,bad!=2,bad==3,bad!=4,bad==5,bad==6));
+  for(auto [a,n]:std::array<std::pair<uint64_t,uint64_t>,5>{{{0,4},{read,0},
+      {target.address-4096,4096},{target.address+target.size,1},{UINT64_MAX-15,32}}})
+   Require(!accepts(a,n,target));
+  for(int field=0;field<11;field++){
+   auto bad=target;
+   if(field==0)bad.address++;if(field==1)bad.size--;if(field==2)bad.width=0;
+   if(field==3)bad.pitch--;if(field==4)bad.levels=2;if(field==5)bad.layers=2;
+   if(field==6)bad.bytes_per_element=4;if(field==7)bad.format=vk::Format::eR32Sfloat;
+   if(field==8)bad.tile_mode=24;if(field==9)bad.height=0;if(field==10)bad.address=UINT64_MAX-65535;
+   Require(!accepts(read,bytes,bad));
+  }
+  BufferCache cache;const auto tail=target.address+target.size-1;
+  auto fragment=std::make_unique<BufferCache::CachedBuffer>();fragment->size=4096;
+  cache.m_buffers.emplace(tail&~uint64_t(4095),std::move(fragment));
+  cache.m_memory_tracker.cpu.emplace_back(tail,1);
+  Require(!cache.IsCachedRegionCpuModified(read,bytes));
+  Require(!CanPublishRenderTargetForBufferRead(read,bytes,target,true,false,true,false,true,false,
+      cache.IsCachedRegionCpuModified(target.address,target.size)));
+  std::puts("[RT-BUFFER-READ-POLICY] exact native RGBA16F1920x1080 crossing-prefix read, complete-source dirty tails and shape/owner/range guards=passed");
+ }
+ {
   // Only the native read request is captured; these layouts are controlled supported owners.
   ImageInfo image{};image.address=0x2713fa20000ull;image.size=0xc0000;
   image.width=480;image.height=270;image.pitch=512;image.format=22;image.tile=24;

@@ -23,7 +23,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL ValidationMessage(VkDebugUtilsMessageSever
 // PRODUCTION_STANDARD4KB
 // PRODUCTION_R32_ALIAS
 int main(int argc,char** argv) {try {
- CHECK(argc>=2 && argc<=4);const bool depth_rebuild=argc==4 && std::strcmp(argv[3],"depth-rebuild")==0;const bool standard4kb=argc==4 && std::strcmp(argv[3],"standard4kb")==0;const bool atomic_emitter=argc==4 && std::strcmp(argv[3],"atomic-emitter")==0;const bool atomic_image=atomic_emitter || (argc==4 && std::strcmp(argv[3],"atomic")==0);const bool packed=argc==4 && std::strcmp(argv[3],"packed")==0;const bool unorm=argc==4 && std::strcmp(argv[3],"unorm-linear")==0;const bool full_tail=argc==4 && std::strcmp(argv[3],"rgba16-tail")==0;const bool crossing=argc==4 && std::strcmp(argv[3],"rgba16-crossing")==0;const bool rgba16=crossing || standard4kb || unorm || full_tail || (argc==4 && std::strcmp(argv[3],"rgba16")==0);const uint32_t target=argc>=3?uint32_t(std::strtoul(argv[2],nullptr,10)):0;CHECK(target<8);
+ CHECK(argc>=2 && argc<=4);const bool depth_rebuild=argc==4 && std::strcmp(argv[3],"depth-rebuild")==0;const bool standard4kb=argc==4 && std::strcmp(argv[3],"standard4kb")==0;const bool atomic_emitter=argc==4 && std::strcmp(argv[3],"atomic-emitter")==0;const bool atomic_image=atomic_emitter || (argc==4 && std::strcmp(argv[3],"atomic")==0);const bool packed=argc==4 && std::strcmp(argv[3],"packed")==0;const bool unorm=argc==4 && std::strcmp(argv[3],"unorm-linear")==0;const bool full_tail=argc==4 && std::strcmp(argv[3],"rgba16-tail")==0;const bool target_read=argc==4 && std::strcmp(argv[3],"rgba16-target-read")==0;const bool crossing=argc==4 && std::strcmp(argv[3],"rgba16-crossing")==0;const bool rgba16=target_read || crossing || standard4kb || unorm || full_tail || (argc==4 && std::strcmp(argv[3],"rgba16")==0);const uint32_t target=argc>=3?uint32_t(std::strtoul(argv[2],nullptr,10)):0;CHECK(target<8);
  std::ifstream input(argv[1],std::ios::binary|std::ios::ate);CHECK(input);
  size_t shader_bytes=size_t(input.tellg());CHECK(shader_bytes && shader_bytes%4==0);
  std::vector<uint32_t> code(shader_bytes/4);input.seekg(0);input.read(reinterpret_cast<char*>(code.data()),shader_bytes);CHECK(input);
@@ -49,7 +49,7 @@ int main(int argc,char** argv) {try {
  VkPhysicalDevice physical=physicals[0];VkPhysicalDeviceProperties properties{};vkGetPhysicalDeviceProperties(physical,&properties);
  uint32_t family_count=0;vkGetPhysicalDeviceQueueFamilyProperties(physical,&family_count,nullptr);
  std::vector<VkQueueFamilyProperties> families(family_count);vkGetPhysicalDeviceQueueFamilyProperties(physical,&family_count,families.data());
- uint32_t family=0;while(family<family_count && ((families[family].queueFlags & (VK_QUEUE_COMPUTE_BIT | (depth_rebuild?VK_QUEUE_GRAPHICS_BIT:0))) != (VK_QUEUE_COMPUTE_BIT | (depth_rebuild?VK_QUEUE_GRAPHICS_BIT:0))))++family;CHECK(family<family_count);
+ uint32_t family=0;while(family<family_count && ((families[family].queueFlags & (VK_QUEUE_COMPUTE_BIT | ((depth_rebuild||target_read)?VK_QUEUE_GRAPHICS_BIT:0))) != (VK_QUEUE_COMPUTE_BIT | ((depth_rebuild||target_read)?VK_QUEUE_GRAPHICS_BIT:0))))++family;CHECK(family<family_count);
  float priority=1;VkDeviceQueueCreateInfo qci{VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO};qci.queueFamilyIndex=family;qci.queueCount=1;qci.pQueuePriorities=&priority;
  VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};dci.queueCreateInfoCount=1;dci.pQueueCreateInfos=&qci;
  VkPhysicalDeviceFeatures enabled{};
@@ -67,7 +67,7 @@ int main(int argc,char** argv) {try {
  VkDevice device;VKOK(vkCreateDevice(physical,&dci,nullptr,&device));VkQueue queue;vkGetDeviceQueue(device,family,0,&queue);
  VkPhysicalDeviceMemoryProperties memory_properties{};vkGetPhysicalDeviceMemoryProperties(physical,&memory_properties);
  auto allocate=[&](VkMemoryRequirements requirements,VkMemoryPropertyFlags flags){uint32_t type=0;while(type<memory_properties.memoryTypeCount && (!(requirements.memoryTypeBits&(1u<<type)) || (memory_properties.memoryTypes[type].propertyFlags&flags)!=flags))++type;CHECK(type<memory_properties.memoryTypeCount);VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};ai.allocationSize=requirements.size;ai.memoryTypeIndex=type;VkDeviceMemory result;VKOK(vkAllocateMemory(device,&ai,nullptr,&result));return result;};
- const uint32_t width=crossing?2432:depth_rebuild?960:standard4kb?32:(unorm?960:((packed||rgba16)?1920:480)),height=crossing?1368:depth_rebuild?540:standard4kb?32:(unorm?540:((packed||rgba16)?1080:270)),levels=(crossing||depth_rebuild||standard4kb||packed||unorm||atomic_image)?1:(full_tail?11:(rgba16?7:8)),sampled_levels=full_tail?6:levels,words_per_pixel=rgba16?2:1;VkDeviceSize bytes=packed?0x870000:0x160000;CHECK(target<levels);
+ const uint32_t width=crossing?2432:depth_rebuild?960:standard4kb?32:(unorm?960:((packed||rgba16)?1920:480)),height=crossing?1368:depth_rebuild?540:standard4kb?32:(unorm?540:((packed||rgba16)?1080:270)),levels=(target_read||crossing||depth_rebuild||standard4kb||packed||unorm||atomic_image)?1:(full_tail?11:(rgba16?7:8)),sampled_levels=full_tail?6:levels,words_per_pixel=rgba16?2:1;VkDeviceSize bytes=packed?0x870000:0x160000;CHECK(target<levels);
  const VkFormat format=atomic_image?VK_FORMAT_R32_UINT:packed?VK_FORMAT_B10G11R11_UFLOAT_PACK32:(unorm?VK_FORMAT_R16G16B16A16_UNORM:(rgba16?VK_FORMAT_R16G16B16A16_SFLOAT:VK_FORMAT_R32_SFLOAT));
  VkFormatProperties format_properties{};vkGetPhysicalDeviceFormatProperties(physical,format,&format_properties);CHECK(format_properties.optimalTilingFeatures&VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT);if(atomic_image)CHECK(format_properties.optimalTilingFeatures&VK_FORMAT_FEATURE_STORAGE_IMAGE_ATOMIC_BIT);
  std::array<VkDeviceSize,16> offsets{0,0xc0000,0x100000,0x110000,0x120000,0x130000,0x140000,0x150000};
@@ -75,6 +75,7 @@ int main(int argc,char** argv) {try {
  if(packed)pitches[0]=1920;
  if(depth_rebuild){bytes=0x280000;pitches[0]=1024;}
  if(rgba16){bytes=0;for(uint32_t l=0;l<levels;l++){offsets[l]=bytes;pitches[l]=std::max(width>>l,1u);bytes=(bytes+VkDeviceSize(pitches[l])*std::max(height>>l,1u)*8+255)&~VkDeviceSize(255);}}
+ if(target_read){CHECK(width==1920 && height==1080 && pitches[0]==1920);bytes=0xff0000;CHECK(format_properties.optimalTilingFeatures&VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT);}
  VkBufferCreateInfo bci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};bci.size=bytes;bci.usage=VK_BUFFER_USAGE_TRANSFER_SRC_BIT|VK_BUFFER_USAGE_TRANSFER_DST_BIT;
  VkBuffer buffer;VKOK(vkCreateBuffer(device,&bci,nullptr,&buffer));VkMemoryRequirements requirements{};vkGetBufferMemoryRequirements(device,buffer,&requirements);
  VkDeviceMemory buffer_memory=allocate(requirements,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);VKOK(vkBindBufferMemory(device,buffer,buffer_memory,0));
@@ -82,7 +83,7 @@ int main(int argc,char** argv) {try {
  std::fill(pixels,pixels+bytes/4,0xdeadbeef);std::array<VkBufferImageCopy,16> copies{};
  for(uint32_t l=0;l<levels;++l){auto& c=copies[l];c.bufferOffset=offsets[l];c.bufferRowLength=pitches[l];c.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,l,0,1};c.imageExtent={std::max(width>>l,1u),std::max(height>>l,1u),1};for(uint32_t y=0;y<c.imageExtent.height;++y)for(uint32_t x=0;x<c.imageExtent.width;++x){float value=0.125f+float(l)/16.f+float(x+y)/4096.f;const auto index=offsets[l]/4+(y*pitches[l]+x)*words_per_pixel;if(atomic_image)pixels[index]=0;else if(rgba16){pixels[index]=pixels[index+1]=unorm?0u:0x30003000u;}else std::memcpy(pixels+index,&value,4);}}
  std::vector<uint32_t> expected(pixels,pixels+bytes/4);
- VkImageCreateInfo imci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};imci.imageType=VK_IMAGE_TYPE_2D;imci.format=format;imci.extent={width,height,1};imci.mipLevels=levels;imci.arrayLayers=1;imci.samples=VK_SAMPLE_COUNT_1_BIT;imci.tiling=VK_IMAGE_TILING_OPTIMAL;imci.usage=VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_STORAGE_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+ VkImageCreateInfo imci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};imci.imageType=VK_IMAGE_TYPE_2D;imci.format=format;imci.extent={width,height,1};imci.mipLevels=levels;imci.arrayLayers=1;imci.samples=VK_SAMPLE_COUNT_1_BIT;imci.tiling=VK_IMAGE_TILING_OPTIMAL;imci.usage=(target_read?VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT:0)|VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_STORAGE_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT;
  VkImage image;VKOK(vkCreateImage(device,&imci,nullptr,&image));vkGetImageMemoryRequirements(device,image,&requirements);VkDeviceMemory image_memory=allocate(requirements,VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);VKOK(vkBindImageMemory(device,image,image_memory,0));
  VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};vci.image=image;vci.viewType=VK_IMAGE_VIEW_TYPE_2D;vci.format=format;vci.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,target,1,0,1};
  VkImageView view;VKOK(vkCreateImageView(device,&vci,nullptr,&view));
@@ -191,6 +192,71 @@ int main(int argc,char** argv) {try {
   for(uint32_t i=0;i<1024;++i)CHECK(linear[i]==0x3c003c0038003400ull);
   for(uint32_t i=1024;i<1032;++i)CHECK(tiled[i]==0xdeadbeefcafebabeull && linear[i]==0xdeadbeefcafebabeull);
   std::printf("[STANDARD4KB-STORAGE-GPU] device=%s RGBA16F32x32 stored_pixels=1024 production_retile_detile=bit_exact guards_preserved=1 fixture_shader=GLSL Astro=not-executed\n",properties.deviceName);
+ }
+ if(target_read) {
+  constexpr uint64_t footprint=0xff0000,prefix=0x30000,read_bytes=0xc0000,guard=16;
+  CHECK(levels==1 && format==VK_FORMAT_R16G16B16A16_SFLOAT && bytes==footprint);
+  std::vector<uint64_t> spatial(size_t(width)*height);
+  for(uint32_t y=0;y<height;y++)for(uint32_t x=0;x<width;x++)
+   spatial[size_t(y)*width+x]=0x3c003c0038003400ull ^ uint64_t((x+3*y)&63u);
+  std::memcpy(pixels,spatial.data(),spatial.size()*8);
+  VkAttachmentDescription attachment{};attachment.format=format;attachment.samples=VK_SAMPLE_COUNT_1_BIT;
+  attachment.loadOp=VK_ATTACHMENT_LOAD_OP_LOAD;attachment.storeOp=VK_ATTACHMENT_STORE_OP_STORE;
+  attachment.stencilLoadOp=VK_ATTACHMENT_LOAD_OP_DONT_CARE;attachment.stencilStoreOp=VK_ATTACHMENT_STORE_OP_DONT_CARE;
+  attachment.initialLayout=attachment.finalLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  VkAttachmentReference reference{0,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+  VkSubpassDescription subpass{};subpass.pipelineBindPoint=VK_PIPELINE_BIND_POINT_GRAPHICS;
+  subpass.colorAttachmentCount=1;subpass.pColorAttachments=&reference;
+  VkRenderPassCreateInfo pass_ci{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+  pass_ci.attachmentCount=1;pass_ci.pAttachments=&attachment;pass_ci.subpassCount=1;pass_ci.pSubpasses=&subpass;
+  VkRenderPass pass;VKOK(vkCreateRenderPass(device,&pass_ci,nullptr,&pass));
+  VkFramebufferCreateInfo fb_ci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+  fb_ci.renderPass=pass;fb_ci.attachmentCount=1;fb_ci.pAttachments=&view;fb_ci.width=width;fb_ci.height=height;fb_ci.layers=1;
+  VkFramebuffer framebuffer;VKOK(vkCreateFramebuffer(device,&fb_ci,nullptr,&framebuffer));
+  VKOK(vkResetCommandPool(device,command_pool,0));VKOK(vkBeginCommandBuffer(command,&begin));
+  VkMemoryBarrier upload{VK_STRUCTURE_TYPE_MEMORY_BARRIER};upload.srcAccessMask=VK_ACCESS_HOST_WRITE_BIT;upload.dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT;
+  vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_HOST_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,1,&upload,0,nullptr,0,nullptr);
+  barrier(VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_ACCESS_TRANSFER_READ_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
+  vkCmdCopyBufferToImage(command,buffer,image,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,copies.data());
+  barrier(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+  VkRenderPassBeginInfo rp{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};rp.renderPass=pass;rp.framebuffer=framebuffer;rp.renderArea.extent={width,height};
+  vkCmdBeginRenderPass(command,&rp,VK_SUBPASS_CONTENTS_INLINE);vkCmdEndRenderPass(command);
+  barrier(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_TRANSFER_READ_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
+  vkCmdCopyImageToBuffer(command,image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,buffer,1,copies.data());
+  vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&host,0,nullptr,0,nullptr);
+  VKOK(vkEndCommandBuffer(command));VKOK(vkQueueSubmit(queue,1,&submit,VK_NULL_HANDLE));VKOK(vkQueueWaitIdle(queue));
+  for(size_t i=0;i<spatial.size();i++){uint64_t actual;std::memcpy(&actual,pixels+i*2,8);CHECK(actual==spatial[i]);}
+  std::vector<uint8_t> guest(guard+prefix+footprint+guard,0x5a);
+  TileConvertLinearToTiledRenderTarget64PreservePadding(guest.data()+guard+prefix,pixels,width,height,width,footprint);
+  std::vector<uint64_t> mask(footprint/8),ones(mask.size(),1),decoded(mask.size());
+  TileConvertLinearToTiledRenderTarget64PreservePadding(mask.data(),ones.data(),width,height,width,footprint);
+  for(size_t i=0;i<mask.size();i++)if(!mask[i])for(size_t byte=0;byte<8;byte++)CHECK(guest[guard+prefix+i*8+byte]==0x5a);
+  ConvertRenderTargetTyped<uint64_t,true>(width,height,width,decoded.data(),reinterpret_cast<const uint64_t*>(guest.data()+guard+prefix),footprint);
+  for(size_t i=0;i<spatial.size();i++)CHECK(decoded[i]==spatial[i]);
+  for(size_t i=0;i<guard+prefix;i++)CHECK(guest[i]==0x5a);
+  for(size_t i=guard+prefix+footprint;i<guest.size();i++)CHECK(guest[i]==0x5a);
+  VkBufferCreateInfo raw_ci{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};raw_ci.size=guest.size();raw_ci.usage=VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+  VkBuffer raw;VKOK(vkCreateBuffer(device,&raw_ci,nullptr,&raw));VkMemoryRequirements raw_req{};vkGetBufferMemoryRequirements(device,raw,&raw_req);
+  VkDeviceMemory raw_memory=allocate(raw_req,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+  VKOK(vkBindBufferMemory(device,raw,raw_memory,0));void* raw_data=nullptr;VKOK(vkMapMemory(device,raw_memory,0,guest.size(),0,&raw_data));
+  std::memcpy(raw_data,guest.data(),guest.size());
+  raw_ci.size=read_bytes+2*guard;raw_ci.usage=VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+  VkBuffer result;VKOK(vkCreateBuffer(device,&raw_ci,nullptr,&result));vkGetBufferMemoryRequirements(device,result,&raw_req);
+  VkDeviceMemory result_memory=allocate(raw_req,VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT|VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+  VKOK(vkBindBufferMemory(device,result,result_memory,0));void* result_data=nullptr;VKOK(vkMapMemory(device,result_memory,0,raw_ci.size,0,&result_data));std::memset(result_data,0xcc,size_t(raw_ci.size));
+  VKOK(vkResetCommandPool(device,command_pool,0));VKOK(vkBeginCommandBuffer(command,&begin));
+  upload.dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT|VK_ACCESS_TRANSFER_WRITE_BIT;
+  vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_HOST_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,1,&upload,0,nullptr,0,nullptr);
+  const VkBufferCopy read{guard,guard,read_bytes};vkCmdCopyBuffer(command,raw,result,1,&read);
+  vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&host,0,nullptr,0,nullptr);
+  VKOK(vkEndCommandBuffer(command));VKOK(vkQueueSubmit(queue,1,&submit,VK_NULL_HANDLE));VKOK(vkQueueWaitIdle(queue));
+  CHECK(std::memcmp(static_cast<uint8_t*>(result_data)+guard,guest.data()+guard,read_bytes)==0);
+  CHECK(std::memcmp(raw_data,guest.data(),guest.size())==0);
+  for(size_t i=0;i<guard;i++){CHECK(static_cast<uint8_t*>(result_data)[i]==0xcc);CHECK(static_cast<uint8_t*>(result_data)[guard+read_bytes+i]==0xcc);}
+  std::printf("[RT-BUFFER-READ-GPU] device=%s RGBA16F1920x1080 pixels=2073600 framebuffer_LOAD_STORE=bit_exact production_retile_detile=bit_exact read=0xc0000 prefix=0x30000 overlap=0x90000 GPU_readonly_buffer_copy=bit_exact full_suffix_padding_exterior=preserved fixture=synthetic Astro=not-executed\n",properties.deviceName);
+  vkUnmapMemory(device,result_memory);vkDestroyBuffer(device,result,nullptr);vkFreeMemory(device,result_memory,nullptr);
+  vkUnmapMemory(device,raw_memory);vkDestroyBuffer(device,raw,nullptr);vkFreeMemory(device,raw_memory,nullptr);
+  vkDestroyFramebuffer(device,framebuffer,nullptr);vkDestroyRenderPass(device,pass,nullptr);
  }
  if(crossing) {
   constexpr size_t prefix=0x5b0000,footprint=0x1a20000,write_size=0x870000,guard=16;

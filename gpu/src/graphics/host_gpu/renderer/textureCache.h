@@ -77,7 +77,7 @@ public:
                                 bool formatted_buffer_write = false);
         // Caller has drained recording producers and owns the resource
         // transaction.
-        [[nodiscard]] bool PublishStorageForBufferRead(GraphicContext *ctx,
+        [[nodiscard]] bool PublishImageForBufferRead(GraphicContext *ctx,
                                                        uint64_t address,
                                                        uint64_t size);
         [[nodiscard]] RenderTextureVulkanImage *

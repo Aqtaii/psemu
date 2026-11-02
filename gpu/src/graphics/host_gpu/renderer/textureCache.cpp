@@ -3632,93 +3632,79 @@ void TextureCache::SynchronizeDepthImageToBufferLocked(CachedImage& cached, uint
 	cached.buffer_modified = true;
 }
 
-bool TextureCache::PublishStorageForBufferRead(GraphicContext *ctx,
-                                               uint64_t address,
-                                               uint64_t size) {
-  EXIT_IF(!m_resource_mutex.IsOwnedByCurrentThread() || ctx == nullptr ||
-          address == 0 || size == 0 || size > UINT64_MAX - address);
-  FaultSafeTextureLock lock(this, m_lock);
-  if (HasMetaOverlapLocked(address, size))
-    return false;
-  std::vector<CachedImage *> owners;
-  for (auto *cached : FindImagesInRegionLocked(address, size, false)) {
-    if (!cached->gpu_modified)
-      continue;
-    const auto a = cached->Address(), n = cached->Size();
-    const bool tracker = m_memory_tracker.IsRegionGpuModified(a, n);
-    const bool cpu =
-        m_memory_tracker.IsRegionCpuModified(a, n) || cached->info.IsCpuDirty();
-    const bool pages =
-        HasOtherImagePageOwnerLocked(*cached) || HasMetaOverlapLocked(a, n);
-    const bool buffers = m_buffer_cache.IsRegionGpuModified(a, n) ||
-                         m_buffer_cache.IsCachedRegionCpuModified(a, n);
-    const bool native =
-        cached->kind == CachedImage::Kind::StorageTexture && cached->image &&
-        cached->image->format == VulkanFormat(cached->info.format) &&
-        cached->image->extent.width == cached->info.width &&
-        cached->image->extent.height == cached->info.height &&
-        cached->image->layers == 1 &&
-        cached->image->mip_levels == cached->info.levels &&
-        cached->image->layout != vk::ImageLayout::eUndefined &&
-        cached->image->layout != vk::ImageLayout::ePreinitialized;
-    if (!native || !CanPublishStorageForBufferRead(
-                       address, size, cached->info, cached->gpu_modified,
-                       cached->buffer_modified, tracker, cpu,
-                       cached->ctx == ctx, pages, buffers)) {
-      printf(
-          "[BUFFER-IMAGE-READ-REJECT] read=0x%016" PRIx64 "+0x%016" PRIx64
+bool TextureCache::PublishImageForBufferRead(GraphicContext* ctx, uint64_t address, uint64_t size) {
+ EXIT_IF(!m_resource_mutex.IsOwnedByCurrentThread() || ctx==nullptr || address==0 ||
+         size==0 || size>UINT64_MAX-address);
+ FaultSafeTextureLock lock(this,m_lock);
+ if(HasMetaOverlapLocked(address,size)) return false;
+ std::vector<CachedImage*> owners;
+ for(auto* cached:FindImagesInRegionLocked(address,size,false)) {
+  if(!cached->gpu_modified) continue;
+  const auto a=cached->Address(),n=cached->Size();
+  const bool storage=cached->kind==CachedImage::Kind::StorageTexture;
+  const bool target=cached->kind==CachedImage::Kind::RenderTarget;
+  const bool tracker=m_memory_tracker.IsRegionGpuModified(a,n);
+  const bool cpu=m_memory_tracker.IsRegionCpuModified(a,n) || (storage && cached->info.IsCpuDirty());
+  const bool pages=HasOtherImagePageOwnerLocked(*cached) || HasMetaOverlapLocked(a,n);
+  const bool buffers=m_buffer_cache.IsRegionGpuModified(a,n) ||
+                     m_buffer_cache.IsCachedRegionCpuModified(a,n);
+  const bool shape=storage
+      ? cached->image && cached->image->format==VulkanFormat(cached->info.format) &&
+        cached->image->extent.width==cached->info.width && cached->image->extent.height==cached->info.height &&
+        cached->image->layers==1 && cached->image->mip_levels==cached->info.levels
+      : target && cached->image && cached->image->format==cached->target.format &&
+        cached->image->extent.width==cached->target.width && cached->image->extent.height==cached->target.height &&
+        cached->image->layers==cached->target.layers && cached->image->mip_levels==cached->target.levels;
+  const bool native=shape &&
+      cached->image->layout!=vk::ImageLayout::eUndefined &&
+      cached->image->layout!=vk::ImageLayout::ePreinitialized;
+  const bool allowed=storage
+      ? CanPublishStorageForBufferRead(address,size,cached->info,cached->gpu_modified,
+          cached->buffer_modified,tracker,cpu,cached->ctx==ctx,pages,buffers)
+      : target && CanPublishRenderTargetForBufferRead(address,size,cached->target,cached->gpu_modified,
+          cached->buffer_modified,tracker,cpu,cached->ctx==ctx,pages,buffers);
+  if(!native || !allowed) {
+   printf("[BUFFER-IMAGE-READ-REJECT] read=0x%016" PRIx64 "+0x%016" PRIx64
           " kind=%u image=0x%016" PRIx64 "+0x%016" PRIx64
-          " gpu=%u buffer=%u tracker_gpu=%u cpu=%u same_context=%u "
-          "page_conflict=%u buffer_conflict=%u"
-          " native_valid=%u storage={fmt=%u tile=%u extent=%ux%u pitch=%u "
-          "levels=%u view=%u base=%u type=%u depth=%u}"
-          " target={fmt=%u tile=%u extent=%ux%u pitch=%u bpe=%u levels=%u "
-          "layers=%u}"
-          " depth={fmt=%u tile=%u extent=%ux%u pitch=%u stencil=0x%016" PRIx64
-          "+0x%016" PRIx64 " htile=0x%016" PRIx64 "+0x%016" PRIx64 "}\n",
-          address, size, unsigned(cached->kind), a, n,
-          unsigned(cached->gpu_modified), unsigned(cached->buffer_modified),
-          unsigned(tracker), unsigned(cpu), unsigned(cached->ctx == ctx),
-          unsigned(pages), unsigned(buffers), unsigned(native),
-          cached->info.format, cached->info.tile, cached->info.width,
-          cached->info.height, cached->info.pitch, cached->info.levels,
-          cached->info.view_levels, cached->info.base_level, cached->info.type,
-          cached->info.depth, unsigned(cached->target.format),
-          cached->target.tile_mode, cached->target.width, cached->target.height,
-          cached->target.pitch, cached->target.bytes_per_element,
-          cached->target.levels, cached->target.layers,
-          unsigned(cached->depth.format), cached->depth.tile_mode,
-          cached->depth.width, cached->depth.height, cached->depth.pitch,
-          cached->depth.stencil_address, cached->depth.stencil_size,
-          cached->depth.htile_address, cached->depth.htile_size);
-      fflush(stdout);
-      return false;
-    }
-    owners.push_back(cached);
+          " gpu=%u buffer=%u tracker_gpu=%u cpu=%u same_context=%u page_conflict=%u buffer_conflict=%u"
+          " native_valid=%u storage={fmt=%u tile=%u extent=%ux%u pitch=%u levels=%u view=%u base=%u type=%u depth=%u}"
+          " target={fmt=%u tile=%u extent=%ux%u pitch=%u bpe=%u levels=%u layers=%u}"
+          " depth={fmt=%u tile=%u extent=%ux%u pitch=%u stencil=0x%016" PRIx64 "+0x%016" PRIx64
+          " htile=0x%016" PRIx64 "+0x%016" PRIx64 "}\n",
+          address,size,unsigned(cached->kind),a,n,unsigned(cached->gpu_modified),
+          unsigned(cached->buffer_modified),unsigned(tracker),unsigned(cpu),unsigned(cached->ctx==ctx),
+          unsigned(pages),unsigned(buffers),unsigned(native),cached->info.format,cached->info.tile,
+          cached->info.width,cached->info.height,cached->info.pitch,cached->info.levels,
+          cached->info.view_levels,cached->info.base_level,cached->info.type,cached->info.depth,
+          unsigned(cached->target.format),cached->target.tile_mode,cached->target.width,
+          cached->target.height,cached->target.pitch,cached->target.bytes_per_element,
+          cached->target.levels,cached->target.layers,unsigned(cached->depth.format),
+          cached->depth.tile_mode,cached->depth.width,cached->depth.height,cached->depth.pitch,
+          cached->depth.stencil_address,cached->depth.stencil_size,cached->depth.htile_address,
+          cached->depth.htile_size);
+   if(cached->image)printf("[BUFFER-IMAGE-READ-NATIVE] format=%u extent=%ux%u layers=%u levels=%u layout=%u\n",
+       unsigned(cached->image->format),cached->image->extent.width,cached->image->extent.height,
+       cached->image->layers,cached->image->mip_levels,unsigned(cached->image->layout));
+   fflush(stdout);return false;
   }
-  // Validate every owner, including complete-source dirty tails, before
-  // changing backing.
-  for (auto *cached : owners) {
-    const bool buffers =
-        m_buffer_cache.HasPageOverlap(cached->Address(), cached->Size());
-    const auto published = m_readback->DownloadColorImage(*cached, true);
-    if (!buffers)
-      m_buffer_cache.PublishReconstructedImageBacking(published.address,
-                                                      published.size);
-    m_memory_tracker.ForEachDownloadRange<true>(
-        published.address, published.size, [](uint64_t, uint64_t) noexcept {});
-    cached->gpu_modified = false;
-    // A read does not yield to a writer or invalidate the native image.
-    static std::atomic_uint logs{0};
-    if (logs.fetch_add(1, std::memory_order_relaxed) < 8)
-      printf("[STORAGE-BUFFER-READ] read=0x%016" PRIx64 "+0x%016" PRIx64
-             " image=0x%016" PRIx64 "+0x%016" PRIx64
-             " format=%u extent=%ux%u full_backing=1 padding_preserved=1 "
-             "native_retained=1\n",
-             address, size, published.address, published.size,
-             cached->info.format, cached->info.width, cached->info.height);
-  }
-  return !owners.empty();
+  owners.push_back(cached);
+ }
+ // Validate every complete owner before any backing bytes or tracker state change.
+ for(auto* cached:owners) {
+  const bool buffers=m_buffer_cache.HasPageOverlap(cached->Address(),cached->Size());
+  const auto published=m_readback->DownloadColorImage(*cached,true);
+  if(!buffers)m_buffer_cache.PublishReconstructedImageBacking(published.address,published.size);
+  m_memory_tracker.ForEachDownloadRange<true>(published.address,published.size,
+      [](uint64_t,uint64_t) noexcept {});
+  cached->gpu_modified=false;
+  static std::atomic_uint logs{0};
+  if(logs.fetch_add(1,std::memory_order_relaxed)<8)
+   printf("[IMAGE-BUFFER-READ] read=0x%016" PRIx64 "+0x%016" PRIx64
+          " image=0x%016" PRIx64 "+0x%016" PRIx64
+          " kind=%u full_backing=1 padding_preserved=1 native_retained=1\n",
+          address,size,published.address,published.size,unsigned(cached->kind));
+ }
+ return !owners.empty();
 }
 bool TextureCache::InvalidateMemoryFromGPU(uint64_t vaddr, uint64_t size,
                                            bool formatted_buffer_write) {
