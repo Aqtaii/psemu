@@ -278,6 +278,7 @@ struct InputBinding {
 	uint32_t           component_count = 1;
 	uint32_t           variable_id     = 0;
 	std::string        debug_name;
+	bool               per_vertex = false;
 };
 
 struct OutputBinding {

@@ -733,7 +733,8 @@ void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
    if(state->stage==ShaderType::Mesh) {EmitNativeMeshAllocate(state,inst);break;}
 		case IR::Opcode::TtraceData:
 		case IR::Opcode::InstPrefetch: EmitControlNop(state, inst); break;
-		case IR::Opcode::LoadInputF32: EmitLoadInputF32(state, inst); break;
+		case IR::Opcode::LoadInputF32:
+		case IR::Opcode::LoadInterpolationParameterF32: EmitLoadInputF32(state, inst); break;
 		case IR::Opcode::MoveU32: EmitMoveU32(state, inst); break;
 		case IR::Opcode::MoveF32Bits: EmitMoveF32Bits(state, inst); break;
 		case IR::Opcode::MoveRelDestU32: EmitMoveRelDestU32(state, inst); break;

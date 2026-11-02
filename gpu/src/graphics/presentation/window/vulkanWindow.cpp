@@ -616,7 +616,17 @@ static vk::Device VulkanCreateDevice(vk::PhysicalDevice physical_device, vk::Sur
 	supported_features2.sType = vk::StructureType::ePhysicalDeviceFeatures2;
 	supported_features2.pNext = mesh_extension ? static_cast<void*>(&supported_mesh)
 	                                          : static_cast<void*>(&supported_features13);
+	const bool bary_ext = HasExtension(device_extensions, VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME);
+	vk::PhysicalDeviceFragmentShaderBarycentricFeaturesKHR supported_bary {};
+	supported_bary.sType = vk::StructureType::ePhysicalDeviceFragmentShaderBarycentricFeaturesKHR;
+	if (bary_ext) {
+		supported_bary.pNext = supported_features2.pNext;
+		supported_features2.pNext = &supported_bary;
+	}
 	physical_device.getFeatures2(&supported_features2);
+	ctx->fragment_barycentric_enabled = bary_ext && supported_bary.fragmentShaderBarycentric == VK_TRUE;
+	::printf("[VK-BARYCENTRIC] supported=%u enabled=%u\n", unsigned(supported_bary.fragmentShaderBarycentric),
+	         unsigned(ctx->fragment_barycentric_enabled));
 	ctx->mesh_shader_enabled = mesh_extension && supported_mesh.meshShader == VK_TRUE;
 	const char* coverage_probe = std::getenv("PSEMU_ASTRO_COVERAGE_PROBE");
 	ctx->mesh_queries_enabled = ctx->mesh_shader_enabled &&
@@ -700,6 +710,13 @@ static vk::Device VulkanCreateDevice(vk::PhysicalDevice physical_device, vk::Sur
 	create_info.sType                = vk::StructureType::eDeviceCreateInfo;
 	create_info.pNext                = ctx->mesh_shader_enabled ? static_cast<void*>(&mesh_features)
 	                                                          : static_cast<void*>(&features13);
+	vk::PhysicalDeviceFragmentShaderBarycentricFeaturesKHR bary_features {};
+	bary_features.sType = vk::StructureType::ePhysicalDeviceFragmentShaderBarycentricFeaturesKHR;
+	bary_features.fragmentShaderBarycentric = ctx->fragment_barycentric_enabled ? VK_TRUE : VK_FALSE;
+	if (ctx->fragment_barycentric_enabled) {
+		bary_features.pNext = const_cast<void*>(create_info.pNext);
+		create_info.pNext = &bary_features;
+	}
 	create_info.flags                = {};
 	create_info.pQueueCreateInfos    = queue_create_info.data();
 	create_info.queueCreateInfoCount = queue_create_info_num;
@@ -1128,6 +1145,9 @@ void VulkanCreate(WindowContext* ctx) {
 		}
 		if (HasExtension(available_extensions, VK_EXT_ROBUSTNESS_2_EXTENSION_NAME)) {
 			device_extensions.push_back(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME);
+		}
+		if (HasExtension(available_extensions, VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME)) {
+			device_extensions.push_back(VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME);
 		}
 		if (HasExtension(available_extensions, VK_EXT_MESH_SHADER_EXTENSION_NAME)) {
 			device_extensions.push_back(VK_EXT_MESH_SHADER_EXTENSION_NAME);

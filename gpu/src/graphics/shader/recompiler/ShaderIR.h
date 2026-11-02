@@ -354,6 +354,7 @@ enum class Opcode {
 	ImageSample,
 	ImageGather4,
 	LoadInputF32,
+	LoadInterpolationParameterF32,
 	Export,
 };
 
@@ -464,6 +465,7 @@ struct ExportInfo {
 struct InputInfo {
 	uint32_t attr = 0;
 	uint32_t chan = 0;
+	uint32_t parameter_mode = 2;
 
 	bool operator==(const InputInfo& other) const = default;
 };
@@ -687,15 +689,19 @@ enum class StageInputKind {
 	LocalInvocationIndex,
 	GlobalInvocationId,
 	Parameter,
+	BaryCoord,
+	BaryCoordNoPerspective,
 };
 
 enum class StageOutputKind { Position, Parameter, Mrt, Depth, SampleMask };
 
 struct StageInput {
+	// Fragment parameter array, decorated PerVertexKHR.
 	StageInputKind kind            = StageInputKind::VertexIndex;
 	uint32_t       location        = 0;
 	uint32_t       component_count = 1;
 	std::string    debug_name;
+	bool           per_vertex = false;
 
 	bool operator==(const StageInput& other) const = default;
 };

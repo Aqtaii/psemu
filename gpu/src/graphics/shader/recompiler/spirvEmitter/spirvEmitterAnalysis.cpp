@@ -51,7 +51,8 @@ bool PixelParameterIsFlat(const EmitterState& state, uint32_t attr) {
 	if (state.stage != ShaderType::Pixel || ps == nullptr || attr >= ps->input_num) {
 		return false;
 	}
-	return (ps->interpolator_settings[attr] & PsInputFlatShade) != 0;
+	return (ps->interpolator_settings[attr] & PsInputFlatShade) != 0 &&
+	       (ps->custom_interpolation_mask & (1u << attr)) == 0;
 }
 
 void SetError(std::string* error, const char* message) {
@@ -295,7 +296,7 @@ bool HasOutput(const std::vector<OutputBinding>& outputs, IR::StageOutputKind ki
 void CopyProgramInputsAndOutputs(EmitterState* state, const IR::Program& program) {
 	for (const auto& input: program.info.inputs) {
 		state->inputs.push_back(
-		    {input.kind, input.location, input.component_count, 0, input.debug_name});
+		    {input.kind, input.location, input.component_count, 0, input.debug_name, input.per_vertex});
 	}
 	for (const auto& output: program.info.outputs) {
 		if (HasOutput(state->outputs, output.kind, output.index)) {

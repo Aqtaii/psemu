@@ -133,7 +133,7 @@ std::string ExportInfoToString(const ExportInfo& exp) {
 }
 
 std::string InputInfoToString(Opcode op, const InputInfo& input) {
-	if (op != Opcode::LoadInputF32) {
+	if (op != Opcode::LoadInputF32 && op != Opcode::LoadInterpolationParameterF32) {
 		return "";
 	}
 	return fmt::format(" ; input_attr={} input_chan={}", input.attr, input.chan);
@@ -509,6 +509,7 @@ std::string InstructionToString(const Instruction& inst) {
 		case Opcode::ImageSample: text += "ImageSample"; break;
 		case Opcode::ImageGather4: text += "ImageGather4"; break;
 		case Opcode::LoadInputF32: text += "LoadInputF32"; break;
+		case Opcode::LoadInterpolationParameterF32: text += "LoadInterpolationParameterF32"; break;
 		case Opcode::Export: text += "Export"; break;
 	}
 	text += " ";

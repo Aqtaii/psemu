@@ -2,13 +2,14 @@
 
 ## Current verified checkpoint - 2 November 2026
 
-Latest update: do not use PSEMU_ASTRO_FAST_TEST. Early EOF of the looped
-intro is not a valid integration shortcut; its internal completion marker
-did not establish a real scene transition or a performance improvement.
-The 9f148b5 layered-depth build passes CI 41478423160 and local CPU/Vulkan
-fixtures. A normal full boot with the flag removed started at 21:49:09,
-PID13260, logs tools/data/astro_20261102_depth_array_normal_*. Native layered
-depth binding and progress beyond the prior scene gate remain unverified.
+Latest update: the normal9f148b5 run confirmed eight real three-layer D16
+sampled-view bindings after read-only RGBA16F backing publication. It exited321
+at22:30:10 on a new Pixel compiler error: hash8d5b48ad, V_INTERP_MOV_F32 mode0
+at PC0x150. No recognizable final-window content is confirmed.
+The invalid fast-intro implementation is removed entirely in a470f93 (CI41505603126
+passed). New P10/P20/P0/custom per-vertex interpolation support passes five
+controlled Vulkan pixel cases, full captured wave64 IR lowering and existing
+Mesh/Pixel regressions. Its normal native verification remains pending.
 
 Recognizable final-window Astro output is still unconfirmed. Use this checkpoint for current status; the dated sections below are historical records. Detailed evidence and limitations are in [astro-avplayer.md](astro-avplayer.md).
 

@@ -107,6 +107,7 @@ struct ShaderComputeInputInfo {
 [[nodiscard]] inline constexpr uint32_t PixelShaderInputCount(uint32_t control){return control&0x3fu;}
 
 struct ShaderPixelInputInfo {
+ uint32_t custom_interpolation_mask = 0;
  uint32_t wave_size = 64;
 	uint32_t                                       interpolator_settings[32]    = {0};
 	uint32_t                                       input_num                    = 0;

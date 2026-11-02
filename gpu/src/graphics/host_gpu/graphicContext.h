@@ -47,6 +47,7 @@ struct GraphicContext: public VulkanInstance {
 	bool                                  bvh_device_address_enabled = false;
 	bool                                  mesh_shader_enabled = false;
 	bool                                  mesh_queries_enabled = false;
+	bool                                  fragment_barycentric_enabled = false;
 	vk::PhysicalDeviceMeshShaderPropertiesEXT mesh_shader_properties {};
 	uint32_t                              screen_width  = 0;
 	uint32_t                              screen_height = 0;

@@ -510,3 +510,65 @@ source's silence). These checks are not guest scene progression tests.
 
 The running comparison remains the original9f148b5 executable with the variable
 absent, started21:49:09. It is not replaced or restarted for the source cleanup.
+
+## 2026-11-02: native layered-depth passage and interpolation blocker
+
+The normal9f148b5 run (PID13260,21:49:09--22:30:10,exit321) passed the
+intro and logged Level has started: title_controller_ship atT1710.26.
+At the next scene gate it published the captured read-only RGBA16F backing
+and bound the actual D16 three-layer sampled view eight times (format124,
+requested view70,base0,count3; comparison and ordinary samples). This
+confirms native view creation/binding, not completed GPU sampling: the
+command buffer subsequently hit a Pixel compilation failure and no late
+query/readback completion was observed. The user confirmed the window was
+black during the intro; the last captured present source also remains black.
+
+The next actual error is Pixel hash8d5b48ad, PC0x150 raw0xc83e0800:
+V_INTERP_MOV_F32 v15,mode0,attr2.x. The private2736-byte code capture is
+_Shaders/original/1708_0088_new_shader_ps_failed_000000008d5b48ad.bin.
+No game binary or dump is included in source control.
+
+### Implemented per-vertex parameter path
+
+The IR now preserves the distinct interpolation-parameter operation and
+mode0/1/2; mode3 stays rejected. Pixel interface planning requests PerVertexKHR
+arrays only where needed and adds perspective/nonperspective barycentric
+weights for a mixed ordinary/raw input. The SPIR-V backend reads P10/P20 as
+vertex1/vertex2 minus vertex0 for ordinary parameters, P0 as vertex0, and
+raw selected vertices for AGC custom parameters. The AGC semantic custom
+mask is read into Pixel metadata and included in the shader cache key.
+The old flat P0 path requests no barycentric capability.
+
+The device optionally enables VK_KHR_fragment_shader_barycentric after
+querying support; a native draw requiring it fails explicitly if unavailable.
+All native runs remain normal full boots with the retired fast variable
+removed. The source early-EOF shortcut and special test CLI were removed
+in a470f93, whose CI41505603126 passed.
+
+References: [AMD RDNA2 ISA](https://www.amd.com/content/dam/amd/en/documents/radeon-tech-docs/instruction-set-architectures/rdna2-shader-instruction-set-architecture.pdf),
+[Khronos fragment shader barycentric](https://docs.vulkan.org/features/latest/features/proposals/VK_KHR_fragment_shader_barycentric.html).
+The pinned Jetsku f9e19582 frontend Attribute.cpp, ShaderInfoCollection and
+SPIR-V EmitInterpolationParameter were used to check mode/custom semantics.
+
+### Validation and limits
+
+The decoder/IR/emitter test checks the exact captured instruction, modes0..2,
+reserved3 rejection and required-versus-absent SPIR-V capability. All34 blocks
+of the actual captured Pixel shader lower at the real wave64 setting, with12
+interpolation parameter reads. Five generated Fragment modules validate for
+Vulkan1.2. This is full captured IR lowering, not full resource-backed native
+Pixel execution.
+
+The GPU test executes those real production-emitter Fragment modules with
+controlled triangle inputs and unequal W:1280 RGBA32F pixels match expected
+deltas, custom vertices, mixed perspective/linear interpolation and flat P0.
+All values must be finite and exterior guards are preserved. Arc B580 has the
+required feature; all five cases pass with active Khronos validation and zero
+issues. Existing default/multiwave Mesh emitter/SPIR-V regressions pass; three
+fresh Pixel WQM GPU cases each pass1024/1024 pixels and zero validation issues.
+Local logs: astro_interpolation_build_tests.txt,
+astro_interpolation_cpu_wave64_test.txt,
+astro_interpolation_existing_emitter_tests.txt and
+astro_interpolation_wqm_gpu_regressions.txt under tools/data.
+A separate astro-interpolation-output candidate is built; its game-level
+integration and final-window result remain to be verified.

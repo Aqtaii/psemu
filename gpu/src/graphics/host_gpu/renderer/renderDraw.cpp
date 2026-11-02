@@ -847,6 +847,12 @@ static void RefreshShaders(HW::Context* ctx, HW::Shader* sh_ctx, const DrawCallI
 	                         &state->ps_shader)) {
 		EXIT("ShaderCompileInfoPS failed for draw %s\n", draw.name);
 	}
+	const auto& ps_program = state->ps_input_info.stage.program;
+	if (ps_program && !g_render_ctx->GetGraphicCtx()->fragment_barycentric_enabled &&
+	    std::any_of(ps_program->info.inputs.begin(), ps_program->info.inputs.end(),
+	                [](const auto& i){return i.per_vertex;})) {
+		EXIT("Pixel interpolation parameters require enabled fragmentShaderBarycentric\n");
+	}
 }
 
 static void BindDrawVertexBuffers(uint64_t submit_id, CommandBuffer* buffer,

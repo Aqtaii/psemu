@@ -494,6 +494,51 @@ void EmitLoadInputF32(EmitterState* state, const IR::Instruction& inst) {
 		return;
 	}
 
+	if (input->per_vertex) {
+		auto vertex = [&](uint32_t v) {
+			const auto ptr=state->builder.AllocateId(), value=state->builder.AllocateId();
+			state->builder.AddFunction({OpAccessChain,state->ptr_input_float,ptr,input->variable_id,
+			                           ConstantU32(state,v),ConstantU32(state,inst.input_info.chan & 3u)});
+			state->builder.AddFunction({OpLoad,state->float_type,value,ptr});
+			return value;
+		};
+		uint32_t value = 0;
+		if (inst.op == IR::Opcode::LoadInterpolationParameterF32) {
+			const auto mode = inst.input_info.parameter_mode;
+			EXIT_IF(mode > 2);
+			value = vertex((mode+1)%3);
+			const bool custom = state->pixel_input_info &&
+			    (state->pixel_input_info->custom_interpolation_mask & (1u << inst.input_info.attr));
+			if (!custom && mode < 2) {
+				const auto delta=state->builder.AllocateId();
+				state->builder.AddFunction({OpFSub,state->float_type,delta,value,vertex(0)});
+				value=delta;
+			}
+		} else {
+			const bool flat = PixelParameterIsFlat(*state,inst.input_info.attr);
+			if (flat) value=vertex(0);
+			else {
+				const auto kind=state->pixel_input_info && state->pixel_input_info->ps_no_perspective ?
+				    IR::StageInputKind::BaryCoordNoPerspective : IR::StageInputKind::BaryCoord;
+				const auto variable=InputVariableForKind(*state,kind);
+				EXIT_IF(variable==0);
+				const auto weights=state->builder.AllocateId();
+				state->builder.AddFunction({OpLoad,state->vec3_float_type,weights,variable});
+				for(uint32_t v=0;v<3;v++) {
+					const auto weight=state->builder.AllocateId(), product=state->builder.AllocateId();
+					state->builder.AddFunction({OpCompositeExtract,state->float_type,weight,weights,v});
+					state->builder.AddFunction({OpFMul,state->float_type,product,weight,vertex(v)});
+					if(v==0)value=product;else {
+						const auto sum=state->builder.AllocateId();
+						state->builder.AddFunction({OpFAdd,state->float_type,sum,value,product});value=sum;
+					}
+				}
+			}
+		}
+		const auto bits=state->builder.AllocateId();
+		state->builder.AddFunction({OpBitcast,state->uint_type,bits,value});
+		EmitStoreU32(state,inst.dst,bits);return;
+	}
 	const auto input_value = state->builder.AllocateId();
 	const auto component   = state->builder.AllocateId();
 	const auto bits        = state->builder.AllocateId();

@@ -233,6 +233,8 @@ uint32_t BuiltInForInput(IR::StageInputKind kind) {
 		case IR::StageInputKind::InstanceIndex: return BuiltInInstanceIndex;
 		case IR::StageInputKind::FragCoord: return BuiltInFragCoord;
 		case IR::StageInputKind::FrontFacing: return BuiltInFrontFacing;
+		case IR::StageInputKind::BaryCoord: return static_cast<uint32_t>(spv::BuiltInBaryCoordKHR);
+		case IR::StageInputKind::BaryCoordNoPerspective: return static_cast<uint32_t>(spv::BuiltInBaryCoordNoPerspKHR);
 		case IR::StageInputKind::WorkgroupId: return BuiltInWorkgroupId;
 		case IR::StageInputKind::LocalInvocationId: return BuiltInLocalInvocationId;
 		case IR::StageInputKind::LocalInvocationIndex: return BuiltInLocalInvocationIndex;
@@ -256,11 +258,13 @@ void AddInputAnnotationsAndNames(EmitterState* state) {
 		state->builder.AddName(input.variable_id, input.debug_name.c_str());
 		if (input.kind == IR::StageInputKind::Parameter) {
 			const auto flat = PixelParameterIsFlat(*state, input.location);
-			if (flat) {
+			if (input.per_vertex) {
+				state->builder.AddAnnotation({OpDecorate, input.variable_id, static_cast<uint32_t>(spv::DecorationPerVertexKHR)});
+			} else if (flat) {
 				state->builder.AddAnnotation({OpDecorate, input.variable_id, DecorationFlat});
 			}
 			if (state->stage == ShaderType::Pixel && state->pixel_input_info != nullptr &&
-			    state->pixel_input_info->ps_no_perspective && !flat) {
+			    state->pixel_input_info->ps_no_perspective && !flat && !input.per_vertex) {
 				state->builder.AddAnnotation(
 				    {OpDecorate, input.variable_id, DecorationNoPerspective});
 			}
@@ -506,6 +510,10 @@ void EmitHeaderAndTypes(EmitterState* state) {
 	state->glsl_std450                                   = state->builder.AllocateId();
 
 	state->builder.AddCapability({CapabilityShader});
+	if (std::any_of(state->inputs.begin(), state->inputs.end(), [](const auto& i){return i.per_vertex;})) {
+		state->builder.AddCapability({static_cast<uint32_t>(spv::CapabilityFragmentBarycentricKHR)});
+		state->builder.AddExtension("SPV_KHR_fragment_shader_barycentric");
+	}
 	state->builder.AddCapability({CapabilityImageQuery});
 	if (state->needs_image_gather_extended) {
 		state->builder.AddCapability({CapabilityImageGatherExtended});
@@ -637,7 +645,7 @@ void EmitHeaderAndTypes(EmitterState* state) {
 		state->builder.AddType({OpVariable, state->ptr_input_uint,
 		                        state->subgroup_local_invocation_id_variable, StorageClassInput});
 	}
-	for (const auto& input: state->inputs) {
+	for (auto& input: state->inputs) {
 		uint32_t ptr_type = state->ptr_input_uint;
 		switch (input.kind) {
 			case IR::StageInputKind::VertexIndex:
@@ -648,12 +656,19 @@ void EmitHeaderAndTypes(EmitterState* state) {
 				ptr_type = state->ptr_input_vec3_uint;
 				break;
 			case IR::StageInputKind::FragCoord: ptr_type = state->ptr_input_vec4_float; break;
+			case IR::StageInputKind::BaryCoord:
+			case IR::StageInputKind::BaryCoordNoPerspective: ptr_type = state->ptr_input_vec3_float; break;
 			case IR::StageInputKind::FrontFacing: ptr_type = state->ptr_input_bool; break;
 			case IR::StageInputKind::Parameter:
 				if (state->stage == ShaderType::Vertex) {
 					const auto kind       = VertexParameterScalarKind(*state, input.location);
 					const auto components = VertexParameterComponentCount(*state, input);
 					ptr_type = VertexParameterInputPointerType(*state, kind, components);
+				} else if (input.per_vertex) {
+					const auto array = state->builder.AllocateId();
+					ptr_type = state->builder.AllocateId();
+					state->builder.AddType({OpTypeArray, array, state->vec4_float_type, ConstantU32(state, 3)});
+					state->builder.AddType({OpTypePointer, ptr_type, StorageClassInput, array});
 				} else {
 					ptr_type = state->ptr_input_vec4_float;
 				}

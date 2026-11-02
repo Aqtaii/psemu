@@ -865,6 +865,15 @@ static void ShaderGetStaticInputInfoPS(
 		ps_info->interpolator_settings[i] = sh->ps_interpolator_settings[i];
 	}
 
+	ShaderMappedData ps_metadata;
+	if (ShaderGetMappedData(regs->ps_regs.data_addr, &ps_metadata)) {
+		EXIT_IF(ps_metadata.num_input_semantics && ps_metadata.input_semantics == nullptr);
+		for (uint32_t i = 0; i < std::min({ps_metadata.num_input_semantics, ps_info->input_num, 32u}); ++i) {
+			const auto& semantic = ps_metadata.input_semantics[i];
+			if (semantic.is_custom && semantic.is_f16 == 0)
+				ps_info->custom_interpolation_mask |= 1u << i;
+		}
+	}
 	ps_info->descriptor_set =
 	    vs_info->stage.program != nullptr && !vs_info->stage.program->bindings.descriptors.empty()
 	        ? 1
@@ -1703,8 +1712,10 @@ bool ShaderCompileSpirvPS(const HW::PixelShaderInfo* regs, const HW::ShaderRegis
  const auto* capture_ps=std::getenv("PSEMU_ASTRO_MESH_CAPTURE_FAILURE");
  if(capture_ps && capture_ps[0]=='1') {
   static std::atomic_uint captures{0};if(captures.fetch_add(1)<128)
-   printf("[PS-COMPILE-STATE] hash=0x%016" PRIx64 " ps_in_control=0x%08x wave=%u lane_mode=%u user_count=%u GPU=not-submitted\n",
-    shader_hash,sh->ps_in_control,options.wave_size,unsigned(lane_mask_mode),options.user_data_count);
+   printf("[PS-COMPILE-STATE] hash=0x%016" PRIx64 " ps_in_control=0x%08x wave=%u lane_mode=%u user_count=%u custom_mask=0x%08x interp0=0x%08x interp1=0x%08x interp2=0x%08x GPU=not-submitted\n",
+    shader_hash,sh->ps_in_control,options.wave_size,unsigned(lane_mask_mode),options.user_data_count,
+    input_info->custom_interpolation_mask,input_info->interpolator_settings[0],
+    input_info->interpolator_settings[1],input_info->interpolator_settings[2]);
  }
 
 	ShaderRecompiler::CompileResult result;
@@ -1883,6 +1894,7 @@ ShaderId ShaderGetIdPS(const HW::PixelShaderInfo* regs, const ShaderPixelInputIn
 	ret.ids.push_back(input_info->descriptor_set);
 	ret.ids.push_back(input_info->input_num);
 	ret.ids.push_back(input_info->ps_system_input_base);
+	ret.ids.push_back(input_info->custom_interpolation_mask);
  ret.ids.push_back(input_info->wave_size);
 	ret.ids.push_back(static_cast<uint32_t>(input_info->ps_pos_x));
 	ret.ids.push_back(static_cast<uint32_t>(input_info->ps_pos_y));

@@ -291,6 +291,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_depth_sampled_array.ps1
 
+      - name: Test interpolation parameter decoder and SPIR-V
+        shell: pwsh
+        run: ./tools/scripts/test_interpolation_parameters.ps1
+
       - name: Test signed and unsigned SOPK immediate decoding
         shell: pwsh
         run: ./tools/scripts/test_sopk_immediates.ps1

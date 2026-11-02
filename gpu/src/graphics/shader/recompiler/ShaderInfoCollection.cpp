@@ -77,6 +77,12 @@ bool ValidateOptions(const Program& program, const ShaderInfoOptions& options, s
 			if (options.pixel == nullptr) {
 				return Fail("pixel shader info requires pixel metadata");
 			}
+			for (const auto& block: program.blocks) for (const auto& inst: block.instructions) {
+				if (inst.op == Opcode::LoadInterpolationParameterF32 &&
+				    (inst.input_info.attr >= options.pixel->input_num || inst.input_info.chan >= 4 ||
+				     inst.input_info.parameter_mode > 2))
+					return Fail("pixel interpolation parameter is out of range");
+			}
 			return options.pixel->input_num <= std::size(options.pixel->interpolator_settings) ||
 			       Fail("pixel input count is out of range");
 		case ShaderType::Compute:
@@ -117,7 +123,7 @@ void CollectVertexInputs(const Program& program, const ShaderVertexInputInfo* ve
 	}
 }
 
-void CollectPixelInputs(const ShaderPixelInputInfo* pixel, ShaderInfo* info) {
+void CollectPixelInputs(const Program& program, const ShaderPixelInputInfo* pixel, ShaderInfo* info) {
 	if (pixel == nullptr) {
 		return;
 	}
@@ -127,9 +133,25 @@ void CollectPixelInputs(const ShaderPixelInputInfo* pixel, ShaderInfo* info) {
 	if (pixel->ps_front_face) {
 		AddInput(info, StageInputKind::FrontFacing, 0, 1, "gl_FrontFacing");
 	}
+	std::array<bool, 32> raw{}, interpolated{};
+	for (const auto& block: program.blocks) for (const auto& inst: block.instructions) {
+		const auto attr = inst.input_info.attr;
+		if (attr >= pixel->input_num) continue;
+		if (inst.op == Opcode::LoadInterpolationParameterF32) {
+			const bool flat = (pixel->interpolator_settings[attr] & 0x400u) != 0 &&
+			                  !(pixel->custom_interpolation_mask & (1u << attr));
+			raw[attr] = raw[attr] || inst.input_info.parameter_mode < 2 || !flat;
+		}
+		if (inst.op == Opcode::LoadInputF32) interpolated[attr] = true;
+	}
+	bool bary = false;
 	for (uint32_t input = 0; input < pixel->input_num; input++) {
 		AddInput(info, StageInputKind::Parameter, input, 4, fmt::format("in_param_{}", input));
+		info->inputs.back().per_vertex = raw[input];
+		bary = bary || (raw[input] && interpolated[input]);
 	}
+	if (bary) AddInput(info, pixel->ps_no_perspective ? StageInputKind::BaryCoordNoPerspective :
+	                  StageInputKind::BaryCoord, 0, 3, "gl_BaryCoord");
 }
 
 void CollectComputeInputs(const Program& program, const ShaderComputeInputInfo* compute,
@@ -216,7 +238,7 @@ bool CollectShaderInfo(Program* program, const ShaderInfoOptions& options, std::
 	switch (program->stage) {
 		case ShaderType::Mesh: AddInput(&next, StageInputKind::LocalInvocationIndex, 0, 1, "gl_LocalInvocationIndex"); break;
 		case ShaderType::Vertex: CollectVertexInputs(*program, options.vertex, &next); break;
-		case ShaderType::Pixel: CollectPixelInputs(options.pixel, &next); break;
+		case ShaderType::Pixel: CollectPixelInputs(*program, options.pixel, &next); break;
 		case ShaderType::Compute: CollectComputeInputs(*program, options.compute, &next); break;
 		default: return false;
 	}
