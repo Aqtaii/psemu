@@ -202,7 +202,7 @@ static void LogRejectedHtileClear(const ShaderComputeInputInfo& input,const HW::
  const auto& program=*input.stage.program;
  const auto& resources=*input.stage.resources;
  printf("[HTILE-CLEAR-TARGET-REJECT] shader=0x%016" PRIx64
-        " descriptor_size=0x%016" PRIx64 " references=%u registered=%u groups=%u,%u,%u mode=0x%x"
+        " descriptor_size=0x%016" PRIx64 " current_writes=%u registered=%u groups=%u,%u,%u mode=0x%x"
         " buffers=%zu images=%zu samplers=%zu addresses=%zu users=%zu\n",
         program.shader_hash,bytes,references,registered,x,y,zz,mode,program.info.buffers.size(),
         program.info.images.size(),program.info.samplers.size(),program.info.addresses.size(),resources.user_data.size());
@@ -257,7 +257,7 @@ static bool TryConsumeComputeMetaClear(const ShaderComputeInputInfo& input, cons
 	const auto&      z                   = ctx.GetDepthRenderTarget();
 	const uint64_t   meta_addr           = z.htile_data_base_addr;
 	auto*            cache               = g_render_ctx->GetTextureCache();
-	uint32_t         current_references  = 0;
+	uint32_t         current_writes      = 0;
 	uint32_t         registered_writes   = 0;
 	uint64_t         described_meta_size = 0;
 	HtileClearTarget registered_target {};
@@ -265,8 +265,10 @@ static bool TryConsumeComputeMetaClear(const ShaderComputeInputInfo& input, cons
 		const auto& resource   = program.info.buffers[i];
 		const auto  descriptor = DecodeNativeDescriptor<ShaderBufferResource>(resources.buffers[i]);
 		const auto  descriptor_size = BufferDescriptorSize(descriptor);
-		if (meta_addr != 0 && descriptor.Base48() == meta_addr) {
-			current_references++;
+		// Reading an address left in depth state is not a metadata clear. Ordinary
+		// compute passes can reuse that allocation and must follow normal dispatch.
+		if (resource.written && meta_addr != 0 && descriptor.Base48() == meta_addr) {
+			current_writes++;
 			described_meta_size = descriptor_size;
 		}
 		// An exact registered metadata range remains
@@ -276,17 +278,17 @@ static bool TryConsumeComputeMetaClear(const ShaderComputeInputInfo& input, cons
 			registered_target = {.address = descriptor.Base48(), .size = descriptor_size};
 		}
 	}
-	if (current_references == 0 && registered_writes == 0) {
+	if (current_writes == 0 && registered_writes == 0) {
 		return false;
 	}
-	if (current_references > 1 || (current_references == 0 && registered_writes > 1)) {
+	if (current_writes > 1 || (current_writes == 0 && registered_writes > 1)) {
 		EXIT("HTile clear has ambiguous metadata descriptors: current=%u registered=%u\n",
-		     current_references, registered_writes);
+		     current_writes, registered_writes);
 	}
 	HtileClearTarget target {};
-	if (current_references != 0) {
+	if (current_writes != 0) {
 		if (!ResolveHtileClearTarget(z, described_meta_size, &target)) {
-			LogRejectedHtileClear(input,z,described_meta_size,current_references,registered_writes,group_x,group_y,group_z,mode);
+			LogRejectedHtileClear(input,z,described_meta_size,current_writes,registered_writes,group_x,group_y,group_z,mode);
 			EXIT("unsupported HTile compute-clear target state\n");
 		}
 		cache->RegisterMeta(target.address, target.size);

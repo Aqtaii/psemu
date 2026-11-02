@@ -139,6 +139,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_depth_storage.ps1
 
+      - name: Test read-only compute versus HTile clear routing
+        shell: pwsh
+        run: ./tools/scripts/test_htile_clear_routing.ps1
+
       - name: Test captured D32 unbound stencil state
         shell: pwsh
         run: ./tools/scripts/test_depth_attachment_usage.ps1
