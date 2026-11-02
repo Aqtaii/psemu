@@ -26,7 +26,9 @@ Recognizable final-window Astro output is still unconfirmed. Use this checkpoint
 - [x] Optional file-gated late draw/readback measurements and a failure-only HTile state report are implemented and build successfully.
 - [x] Two late measurement epochs each record48 coverage/primitive/readback results: Mesh primitives are nonzero but sampled Mesh coverage is0; some intermediate targets contain nonzero RGB. Final presentation remains black.
 - [x] Current HTile candidates now require a written binding; actual clear guards remain. Thirteen extracted-production routing cases and an old-condition reproducer pass; the separate candidate builds.
-- [ ] Verify native passage through the read-only false-clear gate and inspect the subsequent ordinary compute/image operation.
+- [x] Native6c1b45e passes the false-clear gate, then rejects a read-only0xc0000 buffer whose newer bytes are in a GPU image. CI41430159231 succeeds; final RGB remains zero.
+- [x] Supported storage owners now have guarded full-layout read publication with retained native image, complete-source preflight and cached-fragment refresh. CPU policy/transaction tests and all twelve existing Vulkan data-path cases pass; the separate candidate builds.
+- [ ] Verify the new storage-to-read-only-buffer seam natively; unsupported image kinds/layouts retain a complete failure snapshot.
 - [x] Work stopped after the1 November23:44:24 exit at the user request; the user explicitly resumed Astro on2 November.
 - [ ] Resolve any subsequent real shader/resource/post-processing blockers using captured evidence and the Jetsku reference.
 - [ ] Obtain recognizable content in the actual final presentation path and confirm it in the game window.

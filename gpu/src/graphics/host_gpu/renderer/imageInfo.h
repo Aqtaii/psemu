@@ -1229,6 +1229,25 @@ CanReconstructStorageForRenderTarget(const ImageInfo& storage, bool gpu_modified
         IsSupportedRenderTargetReconstructionFootprint(backing);
 }
 
+// A read-only buffer needs the original guest layout, including every padding
+// byte. Publish the whole isolated storage owner; keep its native image valid
+// and clean.
+[[nodiscard]] inline bool
+CanPublishStorageForBufferRead(uint64_t address, uint64_t size,
+                               const ImageInfo &storage, bool gpu, bool buffer,
+                               bool tracker_gpu, bool cpu, bool same_context,
+                               bool page_conflict, bool buffer_conflict) {
+  if (address == 0 || size == 0 || size > UINT64_MAX - address || !gpu ||
+      buffer || !tracker_gpu || cpu || !same_context || page_conflict ||
+      buffer_conflict || storage.address == 0 || storage.size == 0 ||
+      storage.size > UINT64_MAX - storage.address ||
+      storage.address % TRACKER_PAGE_SIZE != 0 ||
+      storage.size % TRACKER_PAGE_SIZE != 0 ||
+      !ImageRangeOverlaps(address, size, storage.address, storage.size))
+    return false;
+  return IsSupportedDepthStorageBacking(storage) ||
+         IsSupportedColorStorageBacking(storage);
+}
 // Clean D32 views may be replaced by exact 32-bit float/packed-color storage views.
 // Guest-layout backing is already current; retaining the old view requires no readback.
 [[nodiscard]] inline bool CanRetireCleanDepthTargetForStorage(

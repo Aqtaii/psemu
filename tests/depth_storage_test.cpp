@@ -2,6 +2,42 @@
 static void Require(bool ok,std::source_location where=std::source_location::current()) {if(!ok) {std::fprintf(stderr,"Regression failed at %s:%u\n",where.file_name(),where.line());throw std::runtime_error("regression failed");}}
 int main() {
  {
+  // Only the native read request is captured; these layouts are controlled supported owners.
+  ImageInfo image{};image.address=0x2713fa20000ull;image.size=0xc0000;
+  image.width=480;image.height=270;image.pitch=512;image.format=22;image.tile=24;
+  image.type=9;image.depth=image.levels=image.view_levels=1;
+  Require(IsSupportedDepthStorageBacking(image));
+  const auto accepts=[&](uint64_t address,uint64_t bytes,const ImageInfo& i){
+   return CanPublishStorageForBufferRead(address,bytes,i,true,false,true,false,true,false,false);};
+  Require(accepts(image.address,image.size,image));
+  Require(accepts(image.address+1,17,image));
+  Require(accepts(image.address-4096,image.size+8192,image));
+  Require(accepts(image.address+image.size-1,2,image));
+  for(int bad=0;bad<7;bad++)
+   Require(!CanPublishStorageForBufferRead(image.address,image.size,image,
+      bad!=0,bad==1,bad!=2,bad==3,bad!=4,bad==5,bad==6));
+  for(auto [a,n]:std::array<std::pair<uint64_t,uint64_t>,5>{{{0,4},{image.address,0},
+       {image.address-4096,4096},{image.address+image.size,1},{UINT64_MAX-15,32}}})
+   Require(!accepts(a,n,image));
+  for(int field=0;field<8;field++) {
+   auto bad=image;if(field==0)bad.address++;if(field==1)bad.size--;
+   if(field==2)bad.levels=2;if(field==3)bad.base_level=1;if(field==4)bad.depth=2;
+   if(field==5)bad.format=Prospero::GpuEnumValue(Prospero::BufferFormat::k16Float);if(field==6)bad.pitch--;if(field==7)bad.tile=0;
+   Require(!accepts(image.address,image.size,bad));
+  }
+  image.format=71;image.tile=27;image.width=image.pitch=2432;image.height=1368;image.size=0x1a20000;
+  Require(accepts(image.address+0x1000,0xc0000,image));
+  // Full-source conflicts outside the read must reject before publication.
+  BufferCache cache;const auto tail=image.address+image.size-1;
+  auto fragment=std::make_unique<BufferCache::CachedBuffer>();fragment->size=4096;
+  cache.m_buffers.emplace(tail&~uint64_t(4095),std::move(fragment));
+  cache.m_memory_tracker.cpu.emplace_back(tail,1);
+  Require(!cache.IsCachedRegionCpuModified(image.address+0x1000,0xc0000));
+  Require(!CanPublishStorageForBufferRead(image.address+0x1000,0xc0000,image,true,false,true,false,true,false,
+       cache.IsCachedRegionCpuModified(image.address,image.size)));
+  std::puts("[STORAGE-BUFFER-READ-POLICY] captured read extent with controlled depth/color owners, full-source dirty tails and layout/ownership/range guards=passed");
+ }
+ {
   ImageInfo old{};old.address=0x1ebe6ed0000ull;old.size=0x1a20000;old.format=71;
   old.width=old.pitch=2432;old.height=1368;old.tile=27;old.type=9;old.depth=old.levels=old.view_levels=1;
   RenderTargetInfo target{};target.address=0x1ebe6920000ull;target.size=0x870000;

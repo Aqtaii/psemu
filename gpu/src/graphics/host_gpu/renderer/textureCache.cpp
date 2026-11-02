@@ -3632,147 +3632,280 @@ void TextureCache::SynchronizeDepthImageToBufferLocked(CachedImage& cached, uint
 	cached.buffer_modified = true;
 }
 
+bool TextureCache::PublishStorageForBufferRead(GraphicContext *ctx,
+                                               uint64_t address,
+                                               uint64_t size) {
+  EXIT_IF(!m_resource_mutex.IsOwnedByCurrentThread() || ctx == nullptr ||
+          address == 0 || size == 0 || size > UINT64_MAX - address);
+  FaultSafeTextureLock lock(this, m_lock);
+  if (HasMetaOverlapLocked(address, size))
+    return false;
+  std::vector<CachedImage *> owners;
+  for (auto *cached : FindImagesInRegionLocked(address, size, false)) {
+    if (!cached->gpu_modified)
+      continue;
+    const auto a = cached->Address(), n = cached->Size();
+    const bool tracker = m_memory_tracker.IsRegionGpuModified(a, n);
+    const bool cpu =
+        m_memory_tracker.IsRegionCpuModified(a, n) || cached->info.IsCpuDirty();
+    const bool pages =
+        HasOtherImagePageOwnerLocked(*cached) || HasMetaOverlapLocked(a, n);
+    const bool buffers = m_buffer_cache.IsRegionGpuModified(a, n) ||
+                         m_buffer_cache.IsCachedRegionCpuModified(a, n);
+    const bool native =
+        cached->kind == CachedImage::Kind::StorageTexture && cached->image &&
+        cached->image->format == VulkanFormat(cached->info.format) &&
+        cached->image->extent.width == cached->info.width &&
+        cached->image->extent.height == cached->info.height &&
+        cached->image->layers == 1 &&
+        cached->image->mip_levels == cached->info.levels &&
+        cached->image->layout != vk::ImageLayout::eUndefined &&
+        cached->image->layout != vk::ImageLayout::ePreinitialized;
+    if (!native || !CanPublishStorageForBufferRead(
+                       address, size, cached->info, cached->gpu_modified,
+                       cached->buffer_modified, tracker, cpu,
+                       cached->ctx == ctx, pages, buffers)) {
+      printf(
+          "[BUFFER-IMAGE-READ-REJECT] read=0x%016" PRIx64 "+0x%016" PRIx64
+          " kind=%u image=0x%016" PRIx64 "+0x%016" PRIx64
+          " gpu=%u buffer=%u tracker_gpu=%u cpu=%u same_context=%u "
+          "page_conflict=%u buffer_conflict=%u"
+          " native_valid=%u storage={fmt=%u tile=%u extent=%ux%u pitch=%u "
+          "levels=%u view=%u base=%u type=%u depth=%u}"
+          " target={fmt=%u tile=%u extent=%ux%u pitch=%u bpe=%u levels=%u "
+          "layers=%u}"
+          " depth={fmt=%u tile=%u extent=%ux%u pitch=%u stencil=0x%016" PRIx64
+          "+0x%016" PRIx64 " htile=0x%016" PRIx64 "+0x%016" PRIx64 "}\n",
+          address, size, unsigned(cached->kind), a, n,
+          unsigned(cached->gpu_modified), unsigned(cached->buffer_modified),
+          unsigned(tracker), unsigned(cpu), unsigned(cached->ctx == ctx),
+          unsigned(pages), unsigned(buffers), unsigned(native),
+          cached->info.format, cached->info.tile, cached->info.width,
+          cached->info.height, cached->info.pitch, cached->info.levels,
+          cached->info.view_levels, cached->info.base_level, cached->info.type,
+          cached->info.depth, unsigned(cached->target.format),
+          cached->target.tile_mode, cached->target.width, cached->target.height,
+          cached->target.pitch, cached->target.bytes_per_element,
+          cached->target.levels, cached->target.layers,
+          unsigned(cached->depth.format), cached->depth.tile_mode,
+          cached->depth.width, cached->depth.height, cached->depth.pitch,
+          cached->depth.stencil_address, cached->depth.stencil_size,
+          cached->depth.htile_address, cached->depth.htile_size);
+      fflush(stdout);
+      return false;
+    }
+    owners.push_back(cached);
+  }
+  // Validate every owner, including complete-source dirty tails, before
+  // changing backing.
+  for (auto *cached : owners) {
+    const bool buffers =
+        m_buffer_cache.HasPageOverlap(cached->Address(), cached->Size());
+    const auto published = m_readback->DownloadColorImage(*cached, true);
+    if (!buffers)
+      m_buffer_cache.PublishReconstructedImageBacking(published.address,
+                                                      published.size);
+    m_memory_tracker.ForEachDownloadRange<true>(
+        published.address, published.size, [](uint64_t, uint64_t) noexcept {});
+    cached->gpu_modified = false;
+    // A read does not yield to a writer or invalidate the native image.
+    static std::atomic_uint logs{0};
+    if (logs.fetch_add(1, std::memory_order_relaxed) < 8)
+      printf("[STORAGE-BUFFER-READ] read=0x%016" PRIx64 "+0x%016" PRIx64
+             " image=0x%016" PRIx64 "+0x%016" PRIx64
+             " format=%u extent=%ux%u full_backing=1 padding_preserved=1 "
+             "native_retained=1\n",
+             address, size, published.address, published.size,
+             cached->info.format, cached->info.width, cached->info.height);
+  }
+  return !owners.empty();
+}
 bool TextureCache::InvalidateMemoryFromGPU(uint64_t vaddr, uint64_t size,
                                            bool formatted_buffer_write) {
-	if (vaddr == 0 || size == 0 || vaddr >= TRACKER_ADDRESS_SIZE ||
-	    size > TRACKER_ADDRESS_SIZE - vaddr) {
-		EXIT("TextureCache: invalid GPU invalidation range, addr=0x%016" PRIx64
-		     " size=0x%016" PRIx64 "\n",
-		     vaddr, size);
-	}
-	FaultSafeTextureLock lock(this, m_lock);
-	for (auto it = m_surface_metas.begin(); it != m_surface_metas.end();) {
-		switch (ClassifyImageRangeOverlap(vaddr, size, it->first, it->second.size)) {
-			case ImageRangeOverlap::None:
-			case ImageRangeOverlap::PageOnly: ++it; continue;
-			case ImageRangeOverlap::Bytes: break;
-		}
-		LOGF("TextureCache: discarding overwritten virtual metadata, write=0x%016" PRIx64
-		     "+0x%016" PRIx64 " metadata=0x%016" PRIx64 "+0x%016" PRIx64 "\n",
-		     vaddr, size, it->first, it->second.size);
-		if (it->second.gpu_modified) {
-			m_metadata_tracker.ForEachDownloadRange<true>(it->first, it->second.size,
-			                                              [](uint64_t, uint64_t) noexcept {});
-		}
-		m_metadata_tracker.UntrackMemory(it->first, it->second.size);
-		it = m_surface_metas.erase(it);
-	}
-	std::vector<std::pair<std::shared_ptr<CachedImage>, BufferImageWrite>> matches;
-	for (auto it = m_images.begin(); it != m_images.end(); ++it) {
-		auto& cached = **it;
-		if (!cached.OverlapsRange(vaddr, size, false)) {
-			continue;
-		}
-		uint32_t plane = 0;
-		if (cached.kind == CachedImage::Kind::DepthTarget && cached.RangeCount() == 2 &&
-		    vaddr == cached.Address(1) && size == cached.Size(1)) {
-			plane = 1;
-		}
-		auto next = ClassifyBufferImageWrite(vaddr, size, cached.Address(plane), cached.Size(plane),
-		                                           cached.BufferBinding(), cached.gpu_modified,
-		                                           formatted_buffer_write, cached.buffer_modified);
-		bool linear_page_conflict = false, linear_buffer_conflict = false;
-		if (cached.kind == CachedImage::Kind::StorageTexture && IsSupportedLinearStorageBacking(cached.info)) {
-			const auto page_begin = cached.info.address & ~(TRACKER_PAGE_SIZE - 1u);
-			const auto page_end = (cached.info.address + cached.info.size + TRACKER_PAGE_SIZE - 1u) & ~(TRACKER_PAGE_SIZE - 1u);
-			linear_page_conflict = HasOtherImagePageOwnerLocked(cached) || HasMetaOverlapLocked(cached.info.address, cached.info.size);
-			linear_buffer_conflict = m_buffer_cache.IsRegionGpuModified(page_begin, page_end - page_begin) ||
-			                         m_buffer_cache.IsCachedRegionCpuModified(page_begin, page_end - page_begin);
-			next = ClassifyLinearStorageBufferWrite(vaddr, size, cached.info, cached.gpu_modified,
-			    cached.buffer_modified, m_memory_tracker.IsRegionGpuModified(cached.info.address, cached.info.size),
-			    cached.info.IsCpuDirty() || m_memory_tracker.IsRegionCpuModified(cached.info.address, cached.info.size),
-			    formatted_buffer_write, linear_page_conflict, linear_buffer_conflict);
-		}
-		if (next==BufferImageWrite::Unsupported && cached.kind==CachedImage::Kind::StorageTexture &&
-		    IsSupportedColorStorageBacking(cached.info) &&
-		    cached.info.tile==Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget)) {
-			next=ClassifyTiledColorStorageBufferWrite(vaddr,size,cached.info,cached.gpu_modified,cached.buffer_modified,
-			    m_memory_tracker.IsRegionGpuModified(cached.Address(),cached.Size()),
-			    cached.info.IsCpuDirty() || m_memory_tracker.IsRegionCpuModified(cached.Address(),cached.Size()),
-			    formatted_buffer_write,HasOtherImagePageOwnerLocked(cached) || HasMetaOverlapLocked(cached.Address(),cached.Size()),
-			    m_buffer_cache.IsRegionGpuModified(cached.Address(),cached.Size()) ||
-			    m_buffer_cache.IsCachedRegionCpuModified(cached.Address(),cached.Size()));
-		}
-		bool owner_pages_overlap = false;
-		for (const auto& match: matches) {
-			const auto& previous = match.first;
-			for (uint32_t x = 0; x < cached.RangeCount(); ++x)
-				for (uint32_t y = 0; y < previous->RangeCount(); ++y)
-					owner_pages_overlap |= !CanCombineImageWriteOwners(
-					    cached.Address(x), cached.Size(x), previous->Address(y), previous->Size(y));
-		}
-		if (owner_pages_overlap || next == BufferImageWrite::None ||
-		    next == BufferImageWrite::Unsupported) {
-			EXIT("TextureCache: unsupported GPU invalidation alias, addr=0x%016" PRIx64
-			     " size=0x%016" PRIx64 " cached_kind=%u cached=0x%016" PRIx64 "+0x%016" PRIx64
-			     " gpu_modified=%d buffer_modified=%d formatted=%d ambiguous=%d"
-			     " shape={fmt=%u tile=%u extent=%ux%u pitch=%u levels=%u} linear_page_conflict=%d linear_buffer_conflict=%d"
-			     " tracker_gpu=%d tracker_cpu=%d page_owner_conflict=%d buffer_gpu=%d buffer_cpu=%d\n",
-			     vaddr, size, static_cast<uint32_t>(cached.kind), cached.Address(), cached.Size(),
-			     cached.gpu_modified, cached.buffer_modified, formatted_buffer_write,
-			     owner_pages_overlap, cached.info.format, cached.info.tile, cached.info.width,
-			     cached.info.height, cached.info.pitch, cached.info.levels, linear_page_conflict, linear_buffer_conflict,
-			     m_memory_tracker.IsRegionGpuModified(cached.Address(),cached.Size()),
-			     cached.info.IsCpuDirty() || m_memory_tracker.IsRegionCpuModified(cached.Address(),cached.Size()),
-			     HasOtherImagePageOwnerLocked(cached) || HasMetaOverlapLocked(cached.Address(),cached.Size()),
-			     m_buffer_cache.IsRegionGpuModified(cached.Address(),cached.Size()),
-			     m_buffer_cache.IsCachedRegionCpuModified(cached.Address(),cached.Size()));
-		}
-		matches.emplace_back(*it, next);
-	}
-	if (matches.empty()) return false;
-	if (matches.size() > 1) {
-		static std::atomic_uint multi_logs{0};
-		if (multi_logs.fetch_add(1) < 8)
-			printf("[MULTI-IMAGE-BUFFER-WRITE] write=0x%016" PRIx64 "+0x%016" PRIx64
-			       " owners=%zu disjoint_pages=1 selection_validated=1\n", vaddr, size, matches.size());
-	}
-	// Retain every selected owner. Validate the complete disjoint set before applying
-	// existing per-image transitions; a retired owner cannot invalidate later pointers.
-	for (const auto& [owner, action]: matches) {
-		auto& cached = *owner;
-		const auto apply = [&]() -> bool {
-			switch (action) {
-				case BufferImageWrite::InvalidateTexture:
-				case BufferImageWrite::InvalidateVideoOut:
-				case BufferImageWrite::InvalidateStorageTexture:
-				case BufferImageWrite::InvalidateDepthTarget:
-				case BufferImageWrite::InvalidateRenderTarget:
-					if (cached.kind == CachedImage::Kind::DepthTarget && cached.RangeCount() == 2) {
-						RequireRetirementIsolation({&cached}, "clean depth/stencil buffer rebind", vaddr, size);
-						RetireImages({&cached});
-						return true;
-					}
-					if (cached.kind == CachedImage::Kind::Texture && cached.buffer_modified &&
-					    (vaddr < cached.Address() || size > cached.Size() ||
-					     vaddr - cached.Address() > cached.Size() - size)) {
-						static std::atomic_uint crossing_logs{0};
-						if(crossing_logs.fetch_add(1)<8)printf("[BUFFER-OWNED-TEXTURE-WRITE] write=0x%016" PRIx64
-						    "+0x%016" PRIx64 " image=0x%016" PRIx64 "+0x%016" PRIx64 " native_image_owner=0 buffer_owner=1\n",
-						    vaddr,size,cached.Address(),cached.Size());
-					}
-					cached.buffer_modified = true;
-					return true;
-				case BufferImageWrite::SynchronizeRenderTarget:
-				case BufferImageWrite::SynchronizeStorageTexture:
-					SynchronizeColorImageToBufferLocked(cached, vaddr, size);
-					return true;
-				case BufferImageWrite::SynchronizeDepthTarget:
-					SynchronizeDepthImageToBufferLocked(cached, vaddr, size);
-					return true;
-				case BufferImageWrite::SynchronizeVideoOut:
-					SynchronizeColorImageToBufferLocked(cached, vaddr, size);
-					return true;
-				case BufferImageWrite::None:
-				case BufferImageWrite::Unsupported:
-					EXIT("TextureCache: invalid GPU invalidation action %u\n",
-					     static_cast<uint32_t>(action));
-			}
-			return false;
-		};
-		if (!apply()) EXIT("TextureCache: image write transition was not applied\n");
-	}
-	return true;
+  if (vaddr == 0 || size == 0 || vaddr >= TRACKER_ADDRESS_SIZE ||
+      size > TRACKER_ADDRESS_SIZE - vaddr) {
+    EXIT("TextureCache: invalid GPU invalidation range, addr=0x%016" PRIx64
+         " size=0x%016" PRIx64 "\n",
+         vaddr, size);
+  }
+  FaultSafeTextureLock lock(this, m_lock);
+  for (auto it = m_surface_metas.begin(); it != m_surface_metas.end();) {
+    switch (
+        ClassifyImageRangeOverlap(vaddr, size, it->first, it->second.size)) {
+    case ImageRangeOverlap::None:
+    case ImageRangeOverlap::PageOnly:
+      ++it;
+      continue;
+    case ImageRangeOverlap::Bytes:
+      break;
+    }
+    LOGF("TextureCache: discarding overwritten virtual metadata, "
+         "write=0x%016" PRIx64 "+0x%016" PRIx64 " metadata=0x%016" PRIx64
+         "+0x%016" PRIx64 "\n",
+         vaddr, size, it->first, it->second.size);
+    if (it->second.gpu_modified) {
+      m_metadata_tracker.ForEachDownloadRange<true>(
+          it->first, it->second.size, [](uint64_t, uint64_t) noexcept {});
+    }
+    m_metadata_tracker.UntrackMemory(it->first, it->second.size);
+    it = m_surface_metas.erase(it);
+  }
+  std::vector<std::pair<std::shared_ptr<CachedImage>, BufferImageWrite>>
+      matches;
+  for (auto it = m_images.begin(); it != m_images.end(); ++it) {
+    auto &cached = **it;
+    if (!cached.OverlapsRange(vaddr, size, false)) {
+      continue;
+    }
+    uint32_t plane = 0;
+    if (cached.kind == CachedImage::Kind::DepthTarget &&
+        cached.RangeCount() == 2 && vaddr == cached.Address(1) &&
+        size == cached.Size(1)) {
+      plane = 1;
+    }
+    auto next = ClassifyBufferImageWrite(
+        vaddr, size, cached.Address(plane), cached.Size(plane),
+        cached.BufferBinding(), cached.gpu_modified, formatted_buffer_write,
+        cached.buffer_modified);
+    bool linear_page_conflict = false, linear_buffer_conflict = false;
+    if (cached.kind == CachedImage::Kind::StorageTexture &&
+        IsSupportedLinearStorageBacking(cached.info)) {
+      const auto page_begin = cached.info.address & ~(TRACKER_PAGE_SIZE - 1u);
+      const auto page_end =
+          (cached.info.address + cached.info.size + TRACKER_PAGE_SIZE - 1u) &
+          ~(TRACKER_PAGE_SIZE - 1u);
+      linear_page_conflict =
+          HasOtherImagePageOwnerLocked(cached) ||
+          HasMetaOverlapLocked(cached.info.address, cached.info.size);
+      linear_buffer_conflict = m_buffer_cache.IsRegionGpuModified(
+                                   page_begin, page_end - page_begin) ||
+                               m_buffer_cache.IsCachedRegionCpuModified(
+                                   page_begin, page_end - page_begin);
+      next = ClassifyLinearStorageBufferWrite(
+          vaddr, size, cached.info, cached.gpu_modified, cached.buffer_modified,
+          m_memory_tracker.IsRegionGpuModified(cached.info.address,
+                                               cached.info.size),
+          cached.info.IsCpuDirty() ||
+              m_memory_tracker.IsRegionCpuModified(cached.info.address,
+                                                   cached.info.size),
+          formatted_buffer_write, linear_page_conflict, linear_buffer_conflict);
+    }
+    if (next == BufferImageWrite::Unsupported &&
+        cached.kind == CachedImage::Kind::StorageTexture &&
+        IsSupportedColorStorageBacking(cached.info) &&
+        cached.info.tile ==
+            Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget)) {
+      next = ClassifyTiledColorStorageBufferWrite(
+          vaddr, size, cached.info, cached.gpu_modified, cached.buffer_modified,
+          m_memory_tracker.IsRegionGpuModified(cached.Address(), cached.Size()),
+          cached.info.IsCpuDirty() || m_memory_tracker.IsRegionCpuModified(
+                                          cached.Address(), cached.Size()),
+          formatted_buffer_write,
+          HasOtherImagePageOwnerLocked(cached) ||
+              HasMetaOverlapLocked(cached.Address(), cached.Size()),
+          m_buffer_cache.IsRegionGpuModified(cached.Address(), cached.Size()) ||
+              m_buffer_cache.IsCachedRegionCpuModified(cached.Address(),
+                                                       cached.Size()));
+    }
+    bool owner_pages_overlap = false;
+    for (const auto &match : matches) {
+      const auto &previous = match.first;
+      for (uint32_t x = 0; x < cached.RangeCount(); ++x)
+        for (uint32_t y = 0; y < previous->RangeCount(); ++y)
+          owner_pages_overlap |= !CanCombineImageWriteOwners(
+              cached.Address(x), cached.Size(x), previous->Address(y),
+              previous->Size(y));
+    }
+    if (owner_pages_overlap || next == BufferImageWrite::None ||
+        next == BufferImageWrite::Unsupported) {
+      EXIT(
+          "TextureCache: unsupported GPU invalidation alias, addr=0x%016" PRIx64
+          " size=0x%016" PRIx64 " cached_kind=%u cached=0x%016" PRIx64
+          "+0x%016" PRIx64
+          " gpu_modified=%d buffer_modified=%d formatted=%d ambiguous=%d"
+          " shape={fmt=%u tile=%u extent=%ux%u pitch=%u levels=%u} "
+          "linear_page_conflict=%d linear_buffer_conflict=%d"
+          " tracker_gpu=%d tracker_cpu=%d page_owner_conflict=%d buffer_gpu=%d "
+          "buffer_cpu=%d\n",
+          vaddr, size, static_cast<uint32_t>(cached.kind), cached.Address(),
+          cached.Size(), cached.gpu_modified, cached.buffer_modified,
+          formatted_buffer_write, owner_pages_overlap, cached.info.format,
+          cached.info.tile, cached.info.width, cached.info.height,
+          cached.info.pitch, cached.info.levels, linear_page_conflict,
+          linear_buffer_conflict,
+          m_memory_tracker.IsRegionGpuModified(cached.Address(), cached.Size()),
+          cached.info.IsCpuDirty() || m_memory_tracker.IsRegionCpuModified(
+                                          cached.Address(), cached.Size()),
+          HasOtherImagePageOwnerLocked(cached) ||
+              HasMetaOverlapLocked(cached.Address(), cached.Size()),
+          m_buffer_cache.IsRegionGpuModified(cached.Address(), cached.Size()),
+          m_buffer_cache.IsCachedRegionCpuModified(cached.Address(),
+                                                   cached.Size()));
+    }
+    matches.emplace_back(*it, next);
+  }
+  if (matches.empty())
+    return false;
+  if (matches.size() > 1) {
+    static std::atomic_uint multi_logs{0};
+    if (multi_logs.fetch_add(1) < 8)
+      printf("[MULTI-IMAGE-BUFFER-WRITE] write=0x%016" PRIx64 "+0x%016" PRIx64
+             " owners=%zu disjoint_pages=1 selection_validated=1\n",
+             vaddr, size, matches.size());
+  }
+  // Retain every selected owner. Validate the complete disjoint set before
+  // applying existing per-image transitions; a retired owner cannot invalidate
+  // later pointers.
+  for (const auto &[owner, action] : matches) {
+    auto &cached = *owner;
+    const auto apply = [&]() -> bool {
+      switch (action) {
+      case BufferImageWrite::InvalidateTexture:
+      case BufferImageWrite::InvalidateVideoOut:
+      case BufferImageWrite::InvalidateStorageTexture:
+      case BufferImageWrite::InvalidateDepthTarget:
+      case BufferImageWrite::InvalidateRenderTarget:
+        if (cached.kind == CachedImage::Kind::DepthTarget &&
+            cached.RangeCount() == 2) {
+          RequireRetirementIsolation(
+              {&cached}, "clean depth/stencil buffer rebind", vaddr, size);
+          RetireImages({&cached});
+          return true;
+        }
+        if (cached.kind == CachedImage::Kind::Texture &&
+            cached.buffer_modified &&
+            (vaddr < cached.Address() || size > cached.Size() ||
+             vaddr - cached.Address() > cached.Size() - size)) {
+          static std::atomic_uint crossing_logs{0};
+          if (crossing_logs.fetch_add(1) < 8)
+            printf("[BUFFER-OWNED-TEXTURE-WRITE] write=0x%016" PRIx64
+                   "+0x%016" PRIx64 " image=0x%016" PRIx64 "+0x%016" PRIx64
+                   " native_image_owner=0 buffer_owner=1\n",
+                   vaddr, size, cached.Address(), cached.Size());
+        }
+        cached.buffer_modified = true;
+        return true;
+      case BufferImageWrite::SynchronizeRenderTarget:
+      case BufferImageWrite::SynchronizeStorageTexture:
+        SynchronizeColorImageToBufferLocked(cached, vaddr, size);
+        return true;
+      case BufferImageWrite::SynchronizeDepthTarget:
+        SynchronizeDepthImageToBufferLocked(cached, vaddr, size);
+        return true;
+      case BufferImageWrite::SynchronizeVideoOut:
+        SynchronizeColorImageToBufferLocked(cached, vaddr, size);
+        return true;
+      case BufferImageWrite::None:
+      case BufferImageWrite::Unsupported:
+        EXIT("TextureCache: invalid GPU invalidation action %u\n",
+             static_cast<uint32_t>(action));
+      }
+      return false;
+    };
+    if (!apply())
+      EXIT("TextureCache: image write transition was not applied\n");
+  }
+  return true;
 }
 
 DepthStencilVulkanImage* TextureCache::FindDepthTargetByRange(CommandBuffer* command,

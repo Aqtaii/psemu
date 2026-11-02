@@ -72,11 +72,18 @@ public:
 	void               MarkGpuWritten(VulkanImage* image);
 	[[nodiscard]] bool IsGpuWritten(VulkanImage* image);
 	void               PrepareHostWrite(uint64_t vaddr, uint64_t size);
-	[[nodiscard]] bool InvalidateMemoryFromGPU(uint64_t vaddr, uint64_t size,
-	                                           bool formatted_buffer_write = false);
-	[[nodiscard]] RenderTextureVulkanImage* FindRenderTargetByRange(CommandBuffer* command,
-	                                                                uint64_t vaddr, uint64_t size);
-	[[nodiscard]] vk::ImageView GetRenderTargetAttachmentView(GraphicContext*           ctx,
+        [[nodiscard]] bool
+        InvalidateMemoryFromGPU(uint64_t vaddr, uint64_t size,
+                                bool formatted_buffer_write = false);
+        // Caller has drained recording producers and owns the resource
+        // transaction.
+        [[nodiscard]] bool PublishStorageForBufferRead(GraphicContext *ctx,
+                                                       uint64_t address,
+                                                       uint64_t size);
+        [[nodiscard]] RenderTextureVulkanImage *
+        FindRenderTargetByRange(CommandBuffer *command, uint64_t vaddr,
+                                uint64_t size);
+        [[nodiscard]] vk::ImageView GetRenderTargetAttachmentView(GraphicContext*           ctx,
 	                                                          RenderTextureVulkanImage* image,
 	                                                          vk::Format format, uint32_t level,
 	                                                          uint32_t base_layer,
