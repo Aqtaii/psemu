@@ -352,7 +352,7 @@ extern "C" int PsemuAvPlayerFastIntroSelfTest(const char *media_path) {
             else CHECK(Call("sceAvPlayerResume", h) == 0);
         }
         if (test == 6) CHECK(Call("sceAvPlayerSetLooping", h, 1) == 0);
-        const bool skip = test == 2 || test == 5;
+        const bool skip = test == 2 || test == 4 || test == 5 || test == 6;
         CHECK(Call("sceAvPlayerGetVideoDataEx", h, reinterpret_cast<uint64_t>(&frame.info)) == (skip ? 0 : 1));
         CHECK(frame.pre == 0x123456789abcdef0 && frame.post == 0xfedcba9876543210);
         if (skip) {

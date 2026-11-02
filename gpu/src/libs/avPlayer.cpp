@@ -374,11 +374,11 @@ public:
 		const char* fast_test = std::getenv("PSEMU_ASTRO_FAST_TEST");
 		fast_test_intro_pending =
 		    fast_test != nullptr && std::strcmp(fast_test, "1") == 0 && ms == 0 &&
-		    !loop && video_id.has_value() &&
+		    video_id.has_value() &&
 		    (path == "data/prein/video/ps_studio_armadillo.mp4" ||
 		     path == "/app0/data/prein/video/ps_studio_armadillo.mp4");
 		if (fast_test_intro_pending) {
-			::printf("[ASTRO-FAST-TEST] Intro completion pending on first unpaused video poll\n");
+			::printf("[ASTRO-FAST-TEST] Intro completion pending on first unpaused video poll (loop=%d)\n", loop);
 		}
 		if (video_id) {
 			::printf("AvPlayer video started playing\n");
@@ -468,15 +468,13 @@ public:
 		// seeking; finish at EOF without manufacturing a video frame.
 		if (fast_test_intro_pending) {
 			fast_test_intro_pending = false;
-			if (!loop) {
-				eof = true;
-				start_time_ms = Duration(fmt->streams[video_id.value()]);
-				clock_start = std::chrono::steady_clock::now();
-				paused_extra = {};
-				::printf("[ASTRO-FAST-TEST] Intro completed at %llu ms\n",
-				         static_cast<unsigned long long>(start_time_ms));
-				return false;
-			}
+			eof = true;
+			start_time_ms = Duration(fmt->streams[video_id.value()]);
+			clock_start = std::chrono::steady_clock::now();
+			paused_extra = {};
+			::printf("[ASTRO-FAST-TEST] Intro completed at %llu ms\n",
+			         static_cast<unsigned long long>(start_time_ms));
+			return false;
 		}
 		if (current_video != nullptr) {
 			video_buffers.push_back(std::move(current_video));
