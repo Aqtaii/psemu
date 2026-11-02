@@ -497,3 +497,16 @@ loaded, but no confirmed title_controller_ship level-start event. This does
 not prove that loading its files completed the state-machine transition.
 Native layered-depth binding, subsequent drawing and final content are
 pending this normal run. The earlier claimed startup gain is withdrawn.
+
+### Source cleanup: remove the early-EOF implementation entirely
+
+The retired shortcut and its special CLI/self-test have now been removed from
+source. Future builds cannot activate it via the obsolete environment variable.
+This removes only the experimental code and callback-path alias used by its
+fixture; the layered-depth correction remains. A separate normal-only build
+passes generated PCM regression and the real3840x2160 MP4 decode/ABI/ownership
+test (402 allocations and402 frees; the tested movie audio matches the raw
+source's silence). These checks are not guest scene progression tests.
+
+The running comparison remains the original9f148b5 executable with the variable
+absent, started21:49:09. It is not replaced or restarted for the source cleanup.

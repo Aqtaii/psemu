@@ -12,7 +12,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
-#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <memory>
@@ -368,18 +367,8 @@ public:
 			}
 		}
 		SeekNoLock(ms);
-		fast_test_intro_pending = false;
 		start_time_ms = ms;
 		clock_start   = std::chrono::steady_clock::now();
-		const char* fast_test = std::getenv("PSEMU_ASTRO_FAST_TEST");
-		fast_test_intro_pending =
-		    fast_test != nullptr && std::strcmp(fast_test, "1") == 0 && ms == 0 &&
-		    video_id.has_value() &&
-		    (path == "data/prein/video/ps_studio_armadillo.mp4" ||
-		     path == "/app0/data/prein/video/ps_studio_armadillo.mp4");
-		if (fast_test_intro_pending) {
-			::printf("[ASTRO-FAST-TEST] Intro completion pending on first unpaused video poll (loop=%d)\n", loop);
-		}
 		if (video_id) {
 			::printf("AvPlayer video started playing\n");
 		}
@@ -422,7 +411,6 @@ public:
 	int Jump(uint64_t ms) {
 		std::lock_guard lock(mutex);
 		SeekNoLock(ms);
-		fast_test_intro_pending = false;
 		start_time_ms = ms;
 		clock_start   = std::chrono::steady_clock::now();
 		paused_extra  = {};
@@ -462,18 +450,6 @@ public:
 		std::lock_guard lock(mutex);
 		const bool      deliver_seek_frame = paused && seek_video_frame_pending;
 		if (paused && !deliver_seek_frame) {
-			return false;
-		}
-		// Test-only shortcut for this exact intro. Preserve Start/PLAY and paused
-		// seeking; finish at EOF without manufacturing a video frame.
-		if (fast_test_intro_pending) {
-			fast_test_intro_pending = false;
-			eof = true;
-			start_time_ms = Duration(fmt->streams[video_id.value()]);
-			clock_start = std::chrono::steady_clock::now();
-			paused_extra = {};
-			::printf("[ASTRO-FAST-TEST] Intro completed at %llu ms\n",
-			         static_cast<unsigned long long>(start_time_ms));
 			return false;
 		}
 		if (current_video != nullptr) {
@@ -550,7 +526,6 @@ private:
 		if (audio_ctx != nullptr) {
 			avcodec_free_context(&audio_ctx);
 		}
-		fast_test_intro_pending = false;
 		eof                      = true;
 		seek_video_frame_pending = false;
 		if (mark) {
@@ -959,7 +934,6 @@ private:
 	bool                                     paused                   = false;
 	bool                                     eof                      = true;
 	bool                                     seek_video_frame_pending = false;
-	bool                                     fast_test_intro_pending  = false;
 	bool                                     loop                     = false;
 	int32_t                                  trick_speed              = AVPLAYER_TRICK_SPEED_NORMAL;
 	uint32_t                                 sync_mode                = 0;

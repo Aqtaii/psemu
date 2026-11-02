@@ -13,7 +13,6 @@ using namespace Libs::Audio::AvPlayer;
 namespace {
 struct Fixture {
     FILE *file = nullptr;
-    const char *alias_path = nullptr, *real_path = nullptr;
     size_t opens = 0, closes = 0, reads = 0, allocs = 0, frees = 0, ready = 0, play = 0;
     std::unordered_map<void *, size_t> live;
 };
@@ -36,7 +35,7 @@ void KYTY_SYSV_ABI Free(void *object, void *p) {
 }
 int KYTY_SYSV_ABI Open(void *object, const char *path) {
     auto &f = *static_cast<Fixture *>(object);
-    f.file = fopen(f.alias_path && std::strcmp(path, f.alias_path) == 0 ? f.real_path : path, "rb");
+    f.file = fopen(path, "rb");
     if (f.file)
         f.opens++;
     return f.file ? 0 : -1;
@@ -301,73 +300,5 @@ extern "C" int PsemuAvPlayerSelfTest(const char *path, const char *scratch_direc
            "freed=%zu. Astro guest=not-executed, playback=not-executed\n",
            frame.info.details.video.width, frame.info.details.video.height, blocks, pcm_bytes, nonzero,
            f.allocs, f.frees);
-    return 0;
-}
-extern "C" int PsemuAvPlayerFastIntroSelfTest(const char *media_path) {
-    const char *previous = std::getenv("PSEMU_ASTRO_FAST_TEST");
-    struct RestoreFlag {
-        bool present;
-        std::string value;
-        ~RestoreFlag() { _putenv_s("PSEMU_ASTRO_FAST_TEST", present ? value.c_str() : ""); }
-    } restore{previous != nullptr, previous ? previous : ""};
-    const char *intro = "/app0/data/prein/video/ps_studio_armadillo.mp4";
-    for (int test = 0; test < 7; ++test) {
-        _putenv_s("PSEMU_ASTRO_FAST_TEST", test == 0 ? "0" : "1");
-        Fixture f{};
-        f.alias_path = test == 1 ? "/app0/data/prein/video/other.mp4" : intro;
-        f.real_path = media_path;
-        AvPlayerInitData init{};
-        init.memory_replacement = {&f, Alloc, Free, Alloc, Free};
-        init.file_replacement = {&f, Open, Close, ReadFile, FileSize};
-        init.event_replacement = {&f, Event};
-        init.num_output_video_framebuffers = 2;
-        auto h = Call("sceAvPlayerInit", reinterpret_cast<uint64_t>(&init));
-        CHECK(h != 0);
-        struct Cleanup {
-            uint64_t h;
-            ~Cleanup() { if (h) Call("sceAvPlayerClose", h); }
-        } cleanup{h};
-        CHECK(Call("sceAvPlayerAddSource", h, reinterpret_cast<uint64_t>(f.alias_path)) == 0);
-        uint64_t duration = 0;
-        for (uint32_t i = 0; i < Call("sceAvPlayerStreamCount", h); ++i) {
-            AvPlayerStreamInfo info{};
-            CHECK(Call("sceAvPlayerGetStreamInfo", h, i, reinterpret_cast<uint64_t>(&info)) == 0);
-            if (info.type == AvPlayerStreamVideo) duration = info.duration;
-        }
-        CHECK(duration != 0);
-        if (test == 4) CHECK(Call("sceAvPlayerSetLooping", h, 1) == 0);
-        CHECK(Call("sceAvPlayerStart", h) == 0);
-        CHECK(f.play == 1 && Call("sceAvPlayerIsActive", h) == 1);
-        CHECK(Call("sceAvPlayerGetVideoDataEx", h, 1) == 0);
-        struct {
-            uint64_t pre = 0x123456789abcdef0;
-            AvPlayerFrameInfoEx info{};
-            uint64_t post = 0xfedcba9876543210;
-        } frame;
-        if (test == 2 || test == 3) {
-            CHECK(Call("sceAvPlayerPause", h) == 0);
-            CHECK(Call("sceAvPlayerGetVideoDataEx", h, reinterpret_cast<uint64_t>(&frame.info)) == 0);
-            CHECK(Call("sceAvPlayerIsActive", h) == 1);
-            if (test == 3) CHECK(Call("sceAvPlayerJumpToTime", h, 0) == 0);
-            else CHECK(Call("sceAvPlayerResume", h) == 0);
-        }
-        if (test == 6) CHECK(Call("sceAvPlayerSetLooping", h, 1) == 0);
-        const bool skip = test == 2 || test == 4 || test == 5 || test == 6;
-        CHECK(Call("sceAvPlayerGetVideoDataEx", h, reinterpret_cast<uint64_t>(&frame.info)) == (skip ? 0 : 1));
-        CHECK(frame.pre == 0x123456789abcdef0 && frame.post == 0xfedcba9876543210);
-        if (skip) {
-            CHECK(frame.info.data == nullptr);
-            CHECK(Call("sceAvPlayerIsActive", h) == 0);
-            CHECK(Call("sceAvPlayerCurrentTime", h) >= duration);
-            AvPlayerFrameInfo audio{};
-            CHECK(Call("sceAvPlayerGetAudioData", h, reinterpret_cast<uint64_t>(&audio)) == 0);
-        } else {
-            CHECK(frame.info.data && frame.info.details.video.width && frame.info.details.video.height);
-        }
-        CHECK(Call("sceAvPlayerClose", h) == 0);
-        cleanup.h = 0;
-        CHECK(f.live.empty() && f.allocs == f.frees && f.opens == f.closes);
-    }
-    printf("PASS Astro fast intro: default/off-scope, pause/resume, paused seek, looping, EOF and cleanup\n");
     return 0;
 }
