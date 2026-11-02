@@ -1149,9 +1149,10 @@ static BufferView NativeGuestAddressFault(CommandBuffer* command, bool mesh_prob
    ShaderRecompiler::MeshOutputProbe probe;
    std::memcpy(&probe,data,sizeof(probe));
    static std::atomic_uint logs{0};
-   if(logs.fetch_add(1)<8) {
-    printf("[MESH-OUTPUT-PROBE] magic=%08x allocation=%08x vertices=%u primitives=%u instance=%u source=completed-fence\n",
-     probe.magic,probe.allocation,probe.vertices,probe.primitives,ShaderRecompiler::MeshOutputProbeInstance());
+   if(probe.magic==ShaderRecompiler::MeshOutputProbe::Magic && logs.fetch_add(1)<8) {
+    printf("[MESH-OUTPUT-PROBE] magic=%08x allocation=%08x vertices=%u primitives=%u instance=%u first_vertex=%u source=completed-fence\n",
+     probe.magic,probe.allocation,probe.vertices,probe.primitives,ShaderRecompiler::MeshOutputProbeInstance(),
+     ShaderRecompiler::MeshOutputProbeFirstVertex());
     uint32_t reached=0;
     for(uint32_t i=0;i<ShaderRecompiler::MeshOutputProbe::Capacity;++i) {
      const auto& lane=probe.lanes[i];

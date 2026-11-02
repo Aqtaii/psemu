@@ -572,3 +572,38 @@ astro_interpolation_existing_emitter_tests.txt and
 astro_interpolation_wqm_gpu_regressions.txt under tools/data.
 A separate astro-interpolation-output candidate is built; its game-level
 integration and final-window result remain to be verified.
+
+## 2026-11-02: bounded multi-point Mesh output diagnostics
+
+The previous output probe accepted only single-point draws. Late native
+2048-point draws emitted primitives but had zero measured coverage, leaving
+their actual clip coordinates unknown. The optional probe now selects both
+an instance and a CPU-partitioned group by the actual first_vertex push word.
+Each host dispatch uses drawMeshTasksEXT(1,1,1), so WorkgroupId cannot identify
+these groups. All guest operands, exported geometry, depth and culling remain
+unchanged by the trace. PSEMU_ASTRO_MESH_PROBE_FIRST_VERTEX defaults to0.
+
+Shader capture reads the original five-word payload (first_vertex atword1,
+instance atword2). Only the selected pair writes diagnostic fields; the
+original guest-fault header remains intact. Host selection logging handles
+partial final groups and wrapped u32 IDs. Absent groups produce no trace
+and do not consume the eight completed-output log slots. The existing file
+gate defers instrumentation/cache variants until the late measurement epoch.
+
+CPU boundary/selection checks and default/multiwave production Mesh emitter
+regressions pass; generated diagnostic modules validate for Vulkan1.2.
+The active-validation Arc B580 GPU regression checks selected output,
+instance/group misses, and five adjacent dispatches for first_vertex0 and32:
+eight cases,1024 expected framebuffer pixels each, exact positions/indices/
+input-gate records, untouched trace lanes/fault header,zero validation issues.
+Nonzero-index controlled triangles use local relative IDs; this normalization
+exists only in the fixture. No actual Astro shader data is normalized.
+An initial local test lacked the portable validation-layer path, and its
+nonzero-index triangle assumed zero-based IDs; both harness issues were fixed.
+
+This is diagnostic readiness, not a black-screen fix or an Astro frame.
+The ef221ca normal native run remains untouched while these tests execute;
+it has passed the intro and started title_controller_ship atT1631.63.
+CI41514985396 passed. No recognizable final-window output is confirmed.
+Local logs are astro_mesh_group_probe_emitter_tests.txt,
+astro_mesh_group_probe_gpu_tests.txt and astro_mesh_group_probe_final_build.txt.

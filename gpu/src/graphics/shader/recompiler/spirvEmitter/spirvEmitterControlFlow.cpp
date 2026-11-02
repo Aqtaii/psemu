@@ -661,16 +661,22 @@ bool EmitGuestInstruction(EmitterState* state, const IR::Instruction& inst) {
 // Emit this in each calling SPIR-V function; function-local IDs cannot cross calls.
 uint32_t EmitMeshProbeCaptureBool(EmitterState* state) {
  const auto& binding=state->program->bindings;
- uint32_t instance=ConstantU32(state,0);
+ uint32_t instance=ConstantU32(state,0),first_vertex=ConstantU32(state,0);
  if(binding.mesh_point_input_dword!=IR::BindingLayout::NoMeshPointInputs && state->push_constant_variable!=0) {
-  const uint32_t word=binding.mesh_point_input_dword+2;
-  const auto pointer=state->builder.AllocateId();instance=state->builder.AllocateId();
-  state->builder.AddFunction({OpAccessChain,state->ptr_push_constant_uint,pointer,
-   state->push_constant_variable,ConstantU32(state,0),ConstantU32(state,word/4),ConstantU32(state,word%4)});
-  state->builder.AddFunction({OpLoad,state->uint_type,instance,pointer});
+  const auto load=[&](uint32_t field) {
+   const uint32_t word=binding.mesh_point_input_dword+field;
+   const auto pointer=state->builder.AllocateId(),value=state->builder.AllocateId();
+   state->builder.AddFunction({OpAccessChain,state->ptr_push_constant_uint,pointer,
+    state->push_constant_variable,ConstantU32(state,0),ConstantU32(state,word/4),ConstantU32(state,word%4)});
+   state->builder.AddFunction({OpLoad,state->uint_type,value,pointer});return value;
+  };
+  first_vertex=load(1);instance=load(2);
  }
+ const auto selected_instance=state->builder.AllocateId(),selected_vertex=state->builder.AllocateId();
  const auto selected=state->builder.AllocateId();
- state->builder.AddFunction({OpIEqual,state->bool_type,selected,instance,ConstantU32(state,MeshOutputProbeInstance())});
+ state->builder.AddFunction({OpIEqual,state->bool_type,selected_instance,instance,ConstantU32(state,MeshOutputProbeInstance())});
+ state->builder.AddFunction({OpIEqual,state->bool_type,selected_vertex,first_vertex,ConstantU32(state,MeshOutputProbeFirstVertex())});
+ state->builder.AddFunction({OpLogicalAnd,state->bool_type,selected,selected_instance,selected_vertex});
  return selected;
 }
 

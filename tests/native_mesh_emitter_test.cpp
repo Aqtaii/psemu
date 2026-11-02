@@ -1205,6 +1205,16 @@ int main(int argc,char** argv){
    (i.dst.kind==IR::OperandKind::Register && i.dst.reg.file==IR::RegisterFile::M0)) ? IR::InstructionExecution::Scalar : IR::InstructionExecution::Vector;
   auto point_probe_info=info;point_probe_info.mesh.invocations=32;
   MeshAssemblyPlan point_probe_assembly;Require(PlanPointMeshAssembly(1,1,3,3,64,&point_probe_assembly));
+  // Controlled triangle/gate use group-relative IDs even when the selected
+  // push payload starts at a nonzero vertex. The capture selector still reads
+  // the unmodified payload, so adjacent groups cannot pass this predicate.
+  if(MeshOutputProbeFirstVertex()!=0) {
+   IR::Instruction relative;relative.op=IR::Opcode::ISubU32;
+   relative.dst=vector(5);relative.src_count=2;
+   relative.src[0]=vector(5);relative.src[1]=Imm(MeshOutputProbeFirstVertex());
+   relative.pc=0xd0;relative.execution=IR::InstructionExecution::Vector;
+   probe_program.blocks[0].instructions.insert(probe_program.blocks[0].instructions.begin(),relative);
+  }
   Require(Spirv::EmitMergedPointMeshProgram(probe_program,resources,point_probe_info,point_probe_assembly,&probe_words,&error),error);
   auto* point_probe_file=std::fopen("native_mesh_point_output_probe.spv","wb");Require(point_probe_file!=nullptr);
   Require(std::fwrite(probe_words.data(),4,probe_words.size(),point_probe_file)==probe_words.size());

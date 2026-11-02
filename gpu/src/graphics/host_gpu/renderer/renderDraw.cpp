@@ -821,8 +821,8 @@ static void RefreshShaders(HW::Context* ctx, HW::Shader* sh_ctx, const DrawCallI
    uint32_t(vertex_shader_info.gs_regs.rsrc2.lds_size)*128};
   if(!ShaderCompileInfoMesh(vertex_shader_info,mesh,state->mesh_primitive_group,
       state->mesh_vertex_group,ge.m_vgtGsMaxVertOut,&state->vs_input_info,&state->vs_shader,&error,
-      ShaderRecompiler::MeshOutputProbeEnabled() &&
-      ShaderRecompiler::MeshOutputProbeIncludesDraw(draw.index_count,draw.instance_count,draw.first_instance,
+      ShaderRecompiler::MeshOutputProbeEnabled() && AstroFrameProbeGateOpen() &&
+      ShaderRecompiler::MeshOutputProbeIncludesInstance(draw.index_count,draw.instance_count,draw.first_instance,
           ShaderRecompiler::MeshOutputProbeInstance()))) {
    std::fprintf(stderr,"[MESH-FAULT-STATE] draw=%s count=%u instances=%u stages=0x%08x color_mode=%u color_mask=0x%08x\n",
     draw.name,draw.index_count,draw.instance_count,ctx->GetShaderStages(),
@@ -1272,12 +1272,19 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
   }
  }
 
-	// Diagnostic control only: preserve real shaders/resources, but isolate fragment-test
-	// rejection. Never treat output from this altered state as a correct game frame.
- if(state->merged_mesh && state->vs_input_info.stage.program->bindings.mesh_output_probe &&
-    !ShaderRecompiler::MeshOutputProbeIncludesDraw(draw.index_count,draw.instance_count,draw.first_instance,
-        ShaderRecompiler::MeshOutputProbeInstance()))
-  EXIT("Mesh output probe requires a selected instance in a single-point draw\n");
+ if(state->merged_mesh && state->vs_input_info.stage.program->bindings.mesh_output_probe) {
+  static std::atomic_uint selection_logs{0};
+  if(selection_logs.fetch_add(1)<16)
+   printf("[MESH-PROBE-SELECTION] points=%u instances=%u first_vertex=%u first_instance=%u group_size=%u "
+          "selected_vertex=%u selected_instance=%u includes=%u\n",draw.index_count,draw.instance_count,
+          emit.first_vertex,draw.first_instance,state->mesh_assembly.vertices_per_group,
+          ShaderRecompiler::MeshOutputProbeFirstVertex(),ShaderRecompiler::MeshOutputProbeInstance(),
+          unsigned(ShaderRecompiler::MeshOutputProbeIncludesDraw(draw.index_count,draw.instance_count,
+           draw.first_instance,ShaderRecompiler::MeshOutputProbeInstance(),emit.first_vertex,
+           state->mesh_assembly.vertices_per_group,ShaderRecompiler::MeshOutputProbeFirstVertex())));
+ }
+	// Diagnostic control only: isolate fragment-test rejection; altered depth state
+	// is never evidence of a correct game frame.
 	RenderDepthInfo pipeline_depth = state->depth_info;
 	const char* depth_probe_flag = std::getenv("PSEMU_ASTRO_DEPTH_PROBE");
 	const bool depth_probe = state->merged_mesh && depth_probe_flag &&

@@ -19,10 +19,29 @@ inline uint32_t MeshOutputProbeInstance() {
  }();
  return selected;
 }
+inline uint32_t MeshOutputProbeFirstVertex() {
+ static const uint32_t selected=[] {
+  const char* value=std::getenv("PSEMU_ASTRO_MESH_PROBE_FIRST_VERTEX");
+  if(!value || !value[0])return uint32_t(0);
+  char* end=nullptr;const auto parsed=std::strtoull(value,&end,0);
+  return end && *end==0 && parsed<=UINT32_MAX ? uint32_t(parsed) : uint32_t(0);
+ }();
+ return selected;
+}
+inline bool MeshOutputProbeIncludesInstance(uint32_t points,uint32_t instances,
+                                           uint32_t first_instance,uint32_t selected) {
+ return points!=0 && instances!=0 && uint32_t(selected-first_instance)<instances;
+}
 inline bool MeshOutputProbeIncludesDraw(uint32_t points,uint32_t instances,
-                                       uint32_t first_instance,uint32_t selected) {
- // Instance IDs wrap in the same u32 arithmetic as the actual draw loop.
- return points==1 && instances!=0 && uint32_t(selected-first_instance)<instances;
+                                       uint32_t first_instance,uint32_t selected,
+                                       uint32_t first_vertex,uint32_t vertices_per_group,
+                                       uint32_t selected_vertex) {
+ // Both IDs wrap exactly as the host draw loop. Only one CPU-partitioned group
+ // may write the shared trace; Vulkan WorkgroupId is zero in every dispatch.
+ const uint32_t offset=selected_vertex-first_vertex;
+ return MeshOutputProbeIncludesInstance(points,instances,first_instance,selected) &&
+        vertices_per_group!=0 && offset<points &&
+        offset%vertices_per_group==0;
 }
 // First four words retain GuestAddressFaultRecord. Trailing words are diagnostic only.
 struct MeshOutputProbe {

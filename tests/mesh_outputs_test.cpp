@@ -6,14 +6,25 @@
 using namespace Libs::Graphics::ShaderRecompiler::Spirv;
 int main() {
  using Libs::Graphics::ShaderRecompiler::MeshOutputProbeIncludesDraw;
- assert(MeshOutputProbeIncludesDraw(1,512,0,1));
- assert(MeshOutputProbeIncludesDraw(1,512,0,511));
- assert(!MeshOutputProbeIncludesDraw(1,512,0,512));
- assert(!MeshOutputProbeIncludesDraw(1,1,0,1));
- assert(MeshOutputProbeIncludesDraw(1,1,7,7));
- assert(MeshOutputProbeIncludesDraw(1,2,UINT32_MAX,0));
- assert(!MeshOutputProbeIncludesDraw(2,512,0,1));
- assert(!MeshOutputProbeIncludesDraw(1,0,0,0));
+ using Libs::Graphics::ShaderRecompiler::MeshOutputProbeIncludesInstance;
+ assert(MeshOutputProbeIncludesDraw(1,512,0,1,0,1,0));
+ assert(MeshOutputProbeIncludesDraw(1,512,0,511,0,1,0));
+ assert(!MeshOutputProbeIncludesDraw(1,512,0,512,0,1,0));
+ assert(!MeshOutputProbeIncludesDraw(1,1,0,1,0,1,0));
+ assert(MeshOutputProbeIncludesDraw(1,1,7,7,0,1,0));
+ assert(MeshOutputProbeIncludesDraw(1,2,UINT32_MAX,0,0,1,0));
+ assert(!MeshOutputProbeIncludesDraw(1,0,0,0,0,1,0));
+ assert(MeshOutputProbeIncludesDraw(2048,512,0,1,0,20,2040)); // final partial group
+ assert(!MeshOutputProbeIncludesDraw(2048,512,0,1,0,20,2047)); // not a group boundary
+ assert(!MeshOutputProbeIncludesDraw(2048,512,0,1,0,20,2060)); // outside draw
+ assert(!MeshOutputProbeIncludesDraw(2048,512,0,1,0,0,0)); // no division by zero
+ assert(!MeshOutputProbeIncludesDraw(0,512,0,1,0,20,0));
+ assert(MeshOutputProbeIncludesDraw(41,2,7,8,25,20,45));
+ assert(!MeshOutputProbeIncludesDraw(41,2,7,8,25,20,44));
+ assert(MeshOutputProbeIncludesDraw(41,1,0,0,UINT32_MAX-9,20,10));
+ assert(!MeshOutputProbeIncludesDraw(41,1,0,0,UINT32_MAX-9,20,11));
+ assert(MeshOutputProbeIncludesInstance(2048,512,0,511));
+ assert(!MeshOutputProbeIncludesInstance(2048,512,0,512));
  Builder b(0x00010400u);
  const auto v=b.AllocateId(), boolean=b.AllocateId(), u=b.AllocateId(), f=b.AllocateId();
  const auto vec4=b.AllocateId(), vec3=b.AllocateId(), ft=b.AllocateId(), main=b.AllocateId();

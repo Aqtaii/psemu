@@ -9,7 +9,11 @@ at PC0x150. No recognizable final-window content is confirmed.
 The invalid fast-intro implementation is removed entirely in a470f93 (CI41505603126
 passed). New P10/P20/P0/custom per-vertex interpolation support passes five
 controlled Vulkan pixel cases, full captured wave64 IR lowering and existing
-Mesh/Pixel regressions. Its normal native verification remains pending.
+Mesh/Pixel regressions. CI41514985396 passed; normal native verification is
+running and has started title_controller_ship atT1631.63.
+Bounded multi-point Mesh output diagnostics now pass CPU/SPIR-V regressions
+and eight active-validation GPU cases (zero issues), selecting the actual
+first_vertex/instance payload rather than WorkgroupId. Native use is pending.
 
 Recognizable final-window Astro output is still unconfirmed. Use this checkpoint for current status; the dated sections below are historical records. Detailed evidence and limitations are in [astro-avplayer.md](astro-avplayer.md).
 

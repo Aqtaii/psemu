@@ -79,7 +79,12 @@ int main(int argc,char** argv){try{
  const bool point_adapter=argc==4 && std::string(argv[3])=="point-adapter";
  const bool point_output_probe=argc==4 && std::string(argv[3])=="point-output-probe";
  const bool point_output_miss=argc==4 && std::string(argv[3])=="point-output-miss";
- const bool output_probe=point_output_probe || point_output_miss || (argc==4 && std::string(argv[3])=="output-probe");
+ const bool point_output_multigroup=argc==4 && std::string(argv[3])=="point-output-multigroup";
+ const bool point_output_group_miss=argc==4 && std::string(argv[3])=="point-output-group-miss";
+ const bool output_probe=point_output_probe || point_output_miss || point_output_multigroup ||
+  point_output_group_miss || (argc==4 && std::string(argv[3])=="output-probe");
+ if((point_output_multigroup || point_output_group_miss) && (!ici.enabledLayerCount || !messenger))
+  throw std::runtime_error("Group-selection GPU regressions require active validation and a debug callback");
  const bool primitive_probe=argc==4 && std::string(argv[3])=="primitive-probe";
  VkPhysicalDeviceMeshShaderFeaturesEXT supported_mesh{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
  VkPhysicalDeviceSubgroupSizeControlFeatures supported_control{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_SIZE_CONTROL_FEATURES};
@@ -109,7 +114,8 @@ int main(int argc,char** argv){try{
  const bool buffer_reads=argc==4 && std::string(argv[3])=="buffer-reads";
  const bool sampled_reads=argc==4 && std::string(argv[3])=="sampled-reads";
  const VkDeviceSize input_bytes=output_probe ? sizeof(Libs::Graphics::ShaderRecompiler::MeshOutputProbe) : 4096;
- const bool point_push=point_adapter || point_output_probe || point_output_miss || buffer_reads || (argc==4 && std::string(argv[3])=="point-push");
+ const bool point_push=point_adapter || point_output_probe || point_output_miss || point_output_multigroup ||
+  point_output_group_miss || buffer_reads || (argc==4 && std::string(argv[3])=="point-push");
  if(argc==4 && !point_push && !vertex_probe && !primitive_probe && !output_probe && !sampled_reads) throw std::runtime_error("Unknown Mesh GPU test mode");
  auto draw=reinterpret_cast<PFN_vkCmdDrawMeshTasksEXT>(vkGetDeviceProcAddr(device,"vkCmdDrawMeshTasksEXT"));if(!draw)throw std::runtime_error("Mesh draw entry unavailable");
  constexpr uint32_t width=32,height=32,bytes=width*height*4;
@@ -236,12 +242,24 @@ int main(int argc,char** argv){try{
  if(point_push) {
   const uint32_t payload[6]={0x87654321u,point_case?2u:1u,point_case?41u:25u,point_case?43u:27u,point_case?0xabcdef11u:0xabcdef01u,0x12345678u};
   if(output_probe || point_adapter) {
-   const uint32_t point_payload[5]={point_adapter?3u:1u,0,point_output_miss ? 1u : 0u,0,0};
+   const uint32_t selected_vertex=output_probe ? Libs::Graphics::ShaderRecompiler::MeshOutputProbeFirstVertex() : 0u;
+   const uint32_t point_payload[5]={point_adapter?3u:1u,point_output_group_miss ? selected_vertex+1 : selected_vertex,
+    point_output_miss ? 1u : 0u,0,0};
    vkCmdPushConstants(cmd,layout,VK_SHADER_STAGE_MESH_BIT_EXT,0,sizeof(point_payload),point_payload);
   } else vkCmdPushConstants(cmd,layout,VK_SHADER_STAGE_MESH_BIT_EXT,0,sizeof(payload),payload);
  }
  if(primitive_probe)vkCmdBeginQuery(cmd,primitive_pool,0,0);
- if(vertex_probe) vkCmdDraw(cmd,3,1,0,0);else draw(cmd,1,1,1);
+ if(point_output_multigroup) {
+  // The renderer dispatches one Vulkan workgroup per CPU-partitioned group.
+  // Unselected groups before/after the chosen group must never overwrite its trace.
+  const uint32_t selected=Libs::Graphics::ShaderRecompiler::MeshOutputProbeFirstVertex();
+  for(const auto& ids:std::array<std::array<uint32_t,2>,5>{{{selected+1,0},{selected,0},
+    {selected+2,0},{selected,1},{selected+3,0}}}) {
+   const uint32_t point_payload[5]={1,ids[0],ids[1],0,0};
+   vkCmdPushConstants(cmd,layout,VK_SHADER_STAGE_MESH_BIT_EXT,0,sizeof(point_payload),point_payload);
+   draw(cmd,1,1,1);
+  }
+ } else if(vertex_probe) vkCmdDraw(cmd,3,1,0,0);else draw(cmd,1,1,1);
  if(primitive_probe)vkCmdEndQuery(cmd,primitive_pool,0);
  vkCmdEndRenderPass(cmd);
  VkImageMemoryBarrier ib{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};ib.srcAccessMask=VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;ib.dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT;ib.oldLayout=ib.newLayout=VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
@@ -260,7 +278,7 @@ int main(int argc,char** argv){try{
   void* raw;VK_CHECK(vkMapMemory(device,input_memory,0,input_bytes,0,&raw));
   MeshOutputProbe probe;std::memcpy(&probe,raw,sizeof(probe));vkUnmapMemory(device,input_memory);
   bool valid=false;
-  if(!point_output_miss) {
+  if(!point_output_miss && !point_output_group_miss) {
   valid=probe.magic==MeshOutputProbe::Magic && probe.vertices==3 && probe.primitives==1 &&
    probe.lanes[0].primitive==((1u<<10)|(2u<<20));
   const std::array<std::array<float,4>,3> expected{{{-1,-1,0,1},{3,-1,0,1},{-1,3,0,1}}};
@@ -278,7 +296,8 @@ int main(int argc,char** argv){try{
   } else {
    const MeshOutputProbe untouched{};
    valid=std::memcmp(&probe,&untouched,sizeof(probe))==0;
-   std::printf("[MESH-SELECTION-GPU] nonselected_instance=1 trace_untouched=%u game_frame=0\n",unsigned(valid));
+   std::printf("[MESH-SELECTION-GPU] nonselected_instance=%u nonselected_group=%u trace_untouched=%u game_frame=0\n",
+    unsigned(point_output_miss),unsigned(point_output_group_miss),unsigned(valid));
   }
   readbacks_passed=readbacks_passed && valid;
  }
