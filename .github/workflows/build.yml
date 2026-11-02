@@ -287,6 +287,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_native_mesh_emitter.ps1
 
+      - name: Test captured layered depth descriptors
+        shell: pwsh
+        run: ./tools/scripts/test_depth_sampled_array.ps1
+
       - name: Test signed and unsigned SOPK immediate decoding
         shell: pwsh
         run: ./tools/scripts/test_sopk_immediates.ps1

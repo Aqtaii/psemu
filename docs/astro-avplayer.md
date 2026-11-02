@@ -424,8 +424,8 @@ astro_rt_buffer_read_gpu.txt passes all thirteen Vulkan data-path cases with act
 PSEMU_ASTRO_FAST_TEST=1 completes only the exact
 data/prein/video/ps_studio_armadillo.mp4 (or /app0/ equivalent) intro
 on its first valid unpaused video poll. Default behavior is unchanged.
-The shortcut applies only to initial playback from zero with video and no
-looping; explicit seek cancels it. Start/PLAY is preserved, then the player
+The shortcut applies only to initial playback from zero with video, including
+looped playback of this exact intro; explicit seek cancels it. Start/PLAY is preserved, then the player
 reports EOF/inactive and the movie duration without producing a frame.
 This is a diagnostic boot shortcut, not a fix for missing rendered content.
 
@@ -448,3 +448,28 @@ image format 124, requested view 70, three image layers, compare read,
 guest dimension 3, descriptor type 13. Final recognizable game content
 remains unconfirmed. A separate fast-intro candidate is running to measure
 startup and whether it reaches the same next gate.
+### Follow-up: looped intro and layered depth views
+
+The first native fast-mode attempt did not activate the shortcut: the game
+called SetLooping before Start and continued decoding video frames. It was
+stopped deliberately after the non-activation was observed; it is not a
+speedup measurement. Fast mode now completes this exact intro even when
+looping is requested. Other assets and default playback remain unchanged.
+Updated real-MP4 lifecycle tests (including loop before/after Start) and
+generated PCM regression pass.
+
+The sampled-depth rejection is now reproduced with the exact eight captured
+descriptor dwords, D16 image, 2048x2048 extent and three layers. The production
+descriptor policy accepts matching full array backing and bounded base layers;
+it still rejects mismatched layer count/shape/pitch, mip/MSAA and reserved or
+metadata bits. Array depth/base fields are validated explicitly rather than
+requiring the complete word to be zero. Existing depth/storage regressions pass.
+The pinned Jetsku reference also explicitly reconstructs these depth/base fields;
+its broader mip/metadata support was not imported.
+
+A standalone Vulkan test checks D16 depth-comparison sampling of all three
+layers and base-layer subviews 0/1/2: 12,288 expected samples and input/exterior
+guards pass on Arc B580, with zero active Khronos validation warnings/errors.
+This verifies the Vulkan mechanism with controlled inputs, not execution of
+the complete Astro shader. A bounded [DEPTH-SAMPLED-ARRAY] marker distinguishes
+successful native view binding from shader submission or GPU completion.
