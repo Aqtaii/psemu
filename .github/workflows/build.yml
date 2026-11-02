@@ -131,6 +131,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_ff1_u64_emitter.ps1
 
+      - name: Test signed and unsigned SOPK immediate decoding
+        shell: pwsh
+        run: ./tools/scripts/test_sopk_immediates.ps1
+
       - name: Test unsigned 64-bit shader comparison emission
         shell: pwsh
         run: ./tools/scripts/test_u64_compare_emitter.ps1

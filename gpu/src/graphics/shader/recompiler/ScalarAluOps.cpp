@@ -175,7 +175,9 @@ bool DecodeSopk(uint32_t pc, std::span<const uint32_t> code, uint32_t word_index
 	const uint32_t word   = code[word_index];
 	const uint32_t opcode = (word >> 23u) & 0x1fu;
 	const uint32_t sdst   = (word >> 16u) & 0x7fu;
-	const auto     imm    = static_cast<int16_t>(word & 0xffffu);
+	const auto     imm    = opcode >= 0x09u && opcode <= 0x0eu
+	                           ? static_cast<int32_t>(word & 0xffffu)
+	                           : static_cast<int32_t>(static_cast<int16_t>(word & 0xffffu));
 
 	(void)error;
 

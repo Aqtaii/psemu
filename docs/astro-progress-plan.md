@@ -30,6 +30,9 @@ Recognizable final-window Astro output is still unconfirmed. Use this checkpoint
 - [x] Supported storage owners now have guarded full-layout read publication with retained native image, complete-source preflight and cached-fragment refresh. CPU policy/transaction tests and all twelve existing Vulkan data-path cases pass; the separate candidate builds.
 - [ ] Verify the new storage-to-read-only-buffer seam natively; unsupported image kinds/layouts retain a complete failure snapshot.
 - [x] Work stopped after the1 November23:44:24 exit at the user request; the user explicitly resumed Astro on2 November.
+- [x] Full Astro GS raw0xb704ffff atPC0x33e4 exposes unsigned SOPK immediate sign-extension:0xffff became0xffffffff, corrupting the output-count fallback predicate. AMD ISA and pinned Jetsku agree on zero extension.
+- [x] Unsigned SOPK09..0e zero extension is fixed;72 production decoder/IR boundary cases and signed controls pass. Actual emitted predicate yields1024/1024 expected Vulkan pixels versus old0/1024, with active callbacks and zero validation issues. This is a controlled fixture.
+- [ ] Verify corrected output-count behavior in the native full-Mesh draws and actual final presentation.
 - [ ] Resolve any subsequent real shader/resource/post-processing blockers using captured evidence and the Jetsku reference.
 - [ ] Obtain recognizable content in the actual final presentation path and confirm it in the game window.
 - [ ] Repeat startup and check basic input/stability after the first visible frame.
