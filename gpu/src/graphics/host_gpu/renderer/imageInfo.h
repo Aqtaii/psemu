@@ -1430,6 +1430,21 @@ CanRetireCleanRenderTargetForRenderTarget(const RenderTargetInfo& cached,bool gp
            ImageRangeOverlaps(storage.address,storage.size,target.address,target.size);
 }
 
+// A tiled storage view that already yielded every byte to clean buffer/backing
+// has no native-only contents to download when a transient target reuses its edge.
+[[nodiscard]] inline bool CanRetireBufferOwnedTiledStorageForRenderTarget(
+    const ImageInfo& storage, bool gpu, bool buffer, bool tracker_gpu, bool cpu_dirty,
+    bool same_context, bool coherent_target, bool isolated_pages, bool buffers_dirty,
+    const RenderTargetInfo& target) {
+ return !gpu && buffer && !tracker_gpu && !cpu_dirty && same_context && coherent_target &&
+        isolated_pages && !buffers_dirty && IsSupportedColorStorageBacking(storage) &&
+        storage.tile==Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) &&
+        IsSupportedRenderTargetReconstructionFootprint(target) &&
+        storage.size<=UINT64_MAX-storage.address && target.size<=UINT64_MAX-target.address &&
+        ((storage.address|storage.size|target.address|target.size)&(TRACKER_PAGE_SIZE-1))==0 &&
+        ImageRangeOverlaps(storage.address,storage.size,target.address,target.size);
+}
+
 [[nodiscard]] inline bool
 CanRetireBufferOwnedRenderTarget(const RenderTargetInfo& cached, bool gpu_modified,
                                  bool buffer_modified, bool same_context,

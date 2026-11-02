@@ -2,6 +2,45 @@
 static void Require(bool ok,std::source_location where=std::source_location::current()) {if(!ok) {std::fprintf(stderr,"Regression failed at %s:%u\n",where.file_name(),where.line());throw std::runtime_error("regression failed");}}
 int main() {
  {
+  ImageInfo old{};old.address=0x1ebe6ed0000ull;old.size=0x1a20000;old.format=71;
+  old.width=old.pitch=2432;old.height=1368;old.tile=27;old.type=9;old.depth=old.levels=old.view_levels=1;
+  RenderTargetInfo target{};target.address=0x1ebe6920000ull;target.size=0x870000;
+  target.format=vk::Format::eR8G8B8A8Unorm;target.width=target.pitch=1920;target.height=1080;
+  target.bytes_per_element=4;target.tile_mode=27;
+  Require(old.format==Prospero::GpuEnumValue(Prospero::BufferFormat::k16_16_16_16Float));
+  Require(old.address-target.address==0x5b0000 && target.address+target.size-old.address==0x2c0000);
+  Require(IsSupportedColorStorageBacking(old) && IsSupportedRenderTargetReconstructionFootprint(target));
+  Require(!CanRetireBufferOwnedLinearStorageForRenderTarget(old,false,true,false,false,true,true,true,target));
+  const auto retire=[&](const ImageInfo& image,const RenderTargetInfo& requested){
+   return CanRetireBufferOwnedTiledStorageForRenderTarget(image,false,true,false,false,true,true,true,false,requested);};
+  Require(retire(old,target));
+  for(int bad=0;bad<8;bad++)Require(!CanRetireBufferOwnedTiledStorageForRenderTarget(old,
+   bad==0,bad!=1,bad==2,bad==3,bad!=4,bad!=5,bad!=6,bad==7,target));
+  for(int field=0;field<11;field++) {
+   auto t=target;if(field==0)t.address++;if(field==1)t.size--;if(field==2)t.width=0;
+   if(field==3)t.pitch--;if(field==4)t.levels=2;if(field==5)t.layers=2;if(field==6)t.bytes_per_element=16;
+   if(field==7)t.tile_mode=0;if(field==8)t.address=UINT64_MAX-65535;
+   if(field==9)t.address=old.address+old.size;if(field==10)t.address=old.address-t.size;
+   Require(!retire(old,t));
+  }
+  for(int field=0;field<11;field++) {
+   auto image=old;if(field==0)image.tile=0;if(field==1)image.format=65;if(field==2)image.levels=2;
+   if(field==3)image.base_level=1;if(field==4)image.view_levels=0;if(field==5)image.base_array=1;
+   if(field==6)image.depth=2;if(field==7)image.type=10;if(field==8)image.pitch--;
+   if(field==9)image.size--;if(field==10)image.address=UINT64_MAX-65535;
+   Require(!retire(image,target));
+  }
+  // The independently tracked source tail survives outside the replacement target.
+  BufferCache cache;const auto tail=old.address+old.size-1;
+  auto fragment=std::make_unique<BufferCache::CachedBuffer>();fragment->size=4096;
+  cache.m_buffers.emplace(tail&~uint64_t(4095),std::move(fragment));cache.m_memory_tracker.cpu.emplace_back(tail,1);
+  Require(!cache.IsCachedRegionCpuModified(target.address,target.size));
+  Require(cache.IsCachedRegionCpuModified(old.address,old.size));
+  Require(!CanRetireBufferOwnedTiledStorageForRenderTarget(old,false,true,false,false,true,true,true,
+   cache.IsCachedRegionCpuModified(old.address,old.size),target));
+  std::puts("[BUFFER-OWNED-TILED-RT-POLICY] captured raw71 tiled2432x1368 to RGBA8_1920x1080, clean yielded owner accepted; dirty/context/coherence/layout/page negatives=passed");
+ }
+ {
   ImageInfo old{};old.address=0x1dee87c0000ull;old.size=0x1a20000;old.format=71;
   old.width=old.pitch=2432;old.height=1368;old.tile=27;old.type=9;old.depth=old.levels=old.view_levels=1;
   const uint64_t write=0x1dee8210000ull,bytes=0x870000;

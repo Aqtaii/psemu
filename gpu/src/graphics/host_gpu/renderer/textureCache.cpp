@@ -2004,6 +2004,7 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 	}
 	std::vector<CachedImage*>    retire;
 	std::vector<CachedImage*>    buffer_owned_target_retire;
+	std::vector<ImageInfo>       buffer_owned_tiled_retired;
 	std::vector<CachedImage*>    reconstructed_storage_retire;
 	std::vector<CachedImage*>    reconstructed_target_retire;
 	std::shared_ptr<CachedImage> native_image_source;
@@ -2045,19 +2046,28 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 					reconstructed_storage_retire.push_back(&cached);
 					command->RetainResourceUntilFence(entry);
 				}
-				if (overlap == RenderTargetOverlap::Unsupported &&
-					CanRetireBufferOwnedLinearStorageForRenderTarget(
-						cached.info, cached.gpu_modified, cached.buffer_modified,
-						m_memory_tracker.IsRegionGpuModified(cached.Address(), cached.Size()),
-						cached.info.IsCpuDirty() ||
-							m_memory_tracker.IsRegionCpuModified(cached.Address(), cached.Size()),
-						cached.ctx == ctx, IsCoherentGuestImageSource(target_source, info.address, info.size),
-						!HasOtherImagePageOwnerLocked(cached) &&
-							!HasMetaOverlapLocked(cached.Address(), cached.Size()),
-						info)) {
-					overlap = RenderTargetOverlap::RetireTarget;
-					buffer_owned_target_retire.push_back(&cached);
-					command->RetainResourceUntilFence(entry);
+				if (overlap==RenderTargetOverlap::Unsupported) {
+					const bool tracker_gpu=m_memory_tracker.IsRegionGpuModified(cached.Address(),cached.Size());
+					const bool cpu_dirty=cached.info.IsCpuDirty() ||
+					                     m_memory_tracker.IsRegionCpuModified(cached.Address(),cached.Size());
+					const bool coherent=IsCoherentGuestImageSource(target_source,info.address,info.size);
+					const bool isolated=!HasOtherImagePageOwnerLocked(cached) &&
+					                    !HasMetaOverlapLocked(cached.Address(),cached.Size());
+					const bool tiled_retire=CanRetireBufferOwnedTiledStorageForRenderTarget(
+						cached.info,cached.gpu_modified,cached.buffer_modified,tracker_gpu,cpu_dirty,
+						cached.ctx==ctx,coherent,isolated,
+						m_buffer_cache.IsRegionGpuModified(cached.Address(),cached.Size()) ||
+						m_buffer_cache.IsCachedRegionCpuModified(cached.Address(),cached.Size()) ||
+						m_buffer_cache.IsRegionGpuModified(info.address,info.size) ||
+						m_buffer_cache.IsCachedRegionCpuModified(info.address,info.size),info);
+					if (tiled_retire || CanRetireBufferOwnedLinearStorageForRenderTarget(
+					        cached.info,cached.gpu_modified,cached.buffer_modified,tracker_gpu,cpu_dirty,
+					        cached.ctx==ctx,coherent,isolated,info)) {
+						overlap=RenderTargetOverlap::RetireTarget;
+						buffer_owned_target_retire.push_back(&cached);
+						if (tiled_retire) buffer_owned_tiled_retired.push_back(cached.info);
+						command->RetainResourceUntilFence(entry);
+					}
 				}
 				break;
 			case CachedImage::Kind::RenderTarget:
@@ -2150,7 +2160,7 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 			EXIT("TextureCache: unsupported render-target alias, requested=0x%016" PRIx64
 			     "+0x%016" PRIx64 " existing_kind=%u existing=0x%016" PRIx64 "+0x%016" PRIx64
 			     " requested_info={format=%u extent=%ux%u pitch=%u bpe=%u tile=%u levels=%u layers=%u coherent=%u buffer_gpu=%u buffer_cpu=%u}"
-			     " gpu_modified=%d same_context=%d"
+			     " gpu_modified=%d buffer_modified=%d page_owner_conflict=%d same_context=%d"
 			     " sampled_format=%u extent=%ux%ux%u pitch=%u levels=%u base_level=%u"
 			     " tile=%u type=%u base_array=%u old_target=%ux%u pitch=%u tile=%u bpe=%u tracker_gpu=%d cpu=%d buffers=%d buffer_gpu=%d buffer_cpu=%d\n",
 			     info.address, info.size, static_cast<uint32_t>(cached.kind), cached.Address(),
@@ -2158,7 +2168,7 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
                  info.tile_mode,info.levels,info.layers,unsigned(IsCoherentGuestImageSource(target_source,info.address,info.size)),
                  unsigned(m_buffer_cache.IsRegionGpuModified(info.address,info.size)),
                  unsigned(m_buffer_cache.IsCachedRegionCpuModified(info.address,info.size)),
-                 cached.gpu_modified, cached.ctx == ctx, cached.info.format,
+                 cached.gpu_modified, cached.buffer_modified, HasOtherImagePageOwnerLocked(cached), cached.ctx == ctx, cached.info.format,
 			     cached.info.width, cached.info.height, cached.info.depth, cached.info.pitch,
 			     cached.info.levels, cached.info.base_level, cached.info.tile, cached.info.type,
 			     cached.info.base_array,cached.target.width,cached.target.height,cached.target.pitch,cached.target.tile_mode,
@@ -2245,7 +2255,7 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 	for (auto* cached: buffer_owned_target_retire) {
 		// The coherent buffer backing owns the current bytes. Clear the stale-image marker only
 		// after coherence validation so normal retirement can remove the obsolete Vulkan shape.
-		if (cached->kind == CachedImage::Kind::StorageTexture) {
+		if (cached->kind==CachedImage::Kind::StorageTexture && IsSupportedLinearStorageBacking(cached->info)) {
 			static std::atomic_uint linear_retire_logs{0};
 			if (linear_retire_logs.fetch_add(1) < 8)
 				printf("[BUFFER-OWNED-LINEAR-RT] storage=0x%016" PRIx64 "+0x%016" PRIx64
@@ -2295,7 +2305,16 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 		    });
 	}
 	cached->gpu_modified = preserve_native;
-	return static_cast<RenderTextureVulkanImage*>(PublishImage(command, std::move(cached)));
+	auto* published=static_cast<RenderTextureVulkanImage*>(PublishImage(command,std::move(cached)));
+	for (const auto& old:buffer_owned_tiled_retired) {
+		static std::atomic_uint tiled_retire_logs{0};
+		if (tiled_retire_logs.fetch_add(1,std::memory_order_relaxed)<8)
+			printf("[BUFFER-OWNED-TILED-RT] storage=0x%016" PRIx64 "+0x%016" PRIx64
+			       " source_format=%u target=0x%016" PRIx64 "+0x%016" PRIx64
+			       " extent=%ux%u target_format=%u backing_current=1 no_readback=1 native_retained=1 target_published=1\n",
+			       old.address,old.size,old.format,info.address,info.size,info.width,info.height,uint32_t(info.format));
+	}
+	return published;
 }
 
 DepthStencilVulkanImage* TextureCache::FindDepthTarget(CommandBuffer* command, GraphicContext* ctx,

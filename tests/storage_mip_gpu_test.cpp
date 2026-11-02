@@ -213,6 +213,64 @@ int main(int argc,char** argv) {try {
   VKOK(vkEndCommandBuffer(command));VKOK(vkQueueSubmit(queue,1,&submit,VK_NULL_HANDLE));VKOK(vkQueueWaitIdle(queue));
   const auto* actual=static_cast<const uint8_t*>(raw_mapped);
   for(size_t i=0;i<guest.size();i++)CHECK(actual[i]==(i>=guard && i<guard+write_size?0xa5:guest[i]));
+  // Reuse the written prefix as the captured RGBA8 render target. Publish a
+  // spatial tiled pattern with a real GPU buffer copy, then use the production
+  // detiler and an actual color framebuffer LOAD/STORE round trip.
+  CHECK(VK_FORMAT_R8G8B8A8_UNORM==37);
+  constexpr uint32_t rw=1920,rh=1080;
+  std::vector<uint32_t> rgba8(write_size/4,0xa5a5a5a5u);
+  for(uint32_t y=0;y<rh;y++)for(uint32_t x=0;x<rw;x++)
+   rgba8[y*rw+x]=0xff000000u | ((x*13u)&255u) | (((y*7u)&255u)<<8) | (((x+y)&255u)<<16);
+  std::vector<uint8_t> rgba8_tiled(write_size,0xa5);
+  TileConvertLinearToTiledRenderTarget32PreservePadding(rgba8_tiled.data(),rgba8.data(),rw,rh,rw,write_size);
+  std::memcpy(pixels,rgba8_tiled.data(),write_size);
+  VKOK(vkResetCommandPool(device,command_pool,0));VKOK(vkBeginCommandBuffer(command,&begin));
+  VkBufferCopy raw_copy{0,guard,write_size};vkCmdCopyBuffer(command,buffer,raw,1,&raw_copy);
+  vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&host,0,nullptr,0,nullptr);
+  VKOK(vkEndCommandBuffer(command));VKOK(vkQueueSubmit(queue,1,&submit,VK_NULL_HANDLE));VKOK(vkQueueWaitIdle(queue));
+  for(size_t i=0;i<guest.size();i++)CHECK(actual[i]==(i>=guard && i<guard+write_size?rgba8_tiled[i-guard]:guest[i]));
+  std::vector<uint32_t> decoded(write_size/4,0xa5a5a5a5u);
+  ConvertRenderTargetTyped<uint32_t,true>(rw,rh,rw,decoded.data(),reinterpret_cast<const uint32_t*>(actual+guard),write_size);
+  for(size_t i=0;i<size_t(rw)*rh;i++)CHECK(decoded[i]==rgba8[i]);
+  std::memcpy(pixels,decoded.data(),write_size);
+  VkImageCreateInfo color_ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};color_ci.imageType=VK_IMAGE_TYPE_2D;
+  color_ci.format=VK_FORMAT_R8G8B8A8_UNORM;color_ci.extent={rw,rh,1};color_ci.mipLevels=color_ci.arrayLayers=1;
+  color_ci.samples=VK_SAMPLE_COUNT_1_BIT;color_ci.tiling=VK_IMAGE_TILING_OPTIMAL;
+  color_ci.usage=VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+  VkImage color;VKOK(vkCreateImage(device,&color_ci,nullptr,&color));VkMemoryRequirements color_requirements{};vkGetImageMemoryRequirements(device,color,&color_requirements);
+  VkDeviceMemory color_memory=allocate(color_requirements,VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);VKOK(vkBindImageMemory(device,color,color_memory,0));
+  VkImageViewCreateInfo color_view_ci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};color_view_ci.image=color;color_view_ci.viewType=VK_IMAGE_VIEW_TYPE_2D;color_view_ci.format=color_ci.format;
+  color_view_ci.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};VkImageView color_view;VKOK(vkCreateImageView(device,&color_view_ci,nullptr,&color_view));
+  VkAttachmentDescription color_attachment{};color_attachment.format=color_ci.format;color_attachment.samples=VK_SAMPLE_COUNT_1_BIT;
+  color_attachment.loadOp=VK_ATTACHMENT_LOAD_OP_LOAD;color_attachment.storeOp=VK_ATTACHMENT_STORE_OP_STORE;
+  color_attachment.stencilLoadOp=VK_ATTACHMENT_LOAD_OP_DONT_CARE;color_attachment.stencilStoreOp=VK_ATTACHMENT_STORE_OP_DONT_CARE;
+  color_attachment.initialLayout=color_attachment.finalLayout=VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  VkAttachmentReference color_ref{0,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};VkSubpassDescription color_subpass{};
+  color_subpass.pipelineBindPoint=VK_PIPELINE_BIND_POINT_GRAPHICS;color_subpass.colorAttachmentCount=1;color_subpass.pColorAttachments=&color_ref;
+  VkRenderPassCreateInfo color_rp_ci{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};color_rp_ci.attachmentCount=1;color_rp_ci.pAttachments=&color_attachment;color_rp_ci.subpassCount=1;color_rp_ci.pSubpasses=&color_subpass;
+  VkRenderPass color_pass;VKOK(vkCreateRenderPass(device,&color_rp_ci,nullptr,&color_pass));
+  VkFramebufferCreateInfo color_fb_ci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};color_fb_ci.renderPass=color_pass;color_fb_ci.attachmentCount=1;color_fb_ci.pAttachments=&color_view;color_fb_ci.width=rw;color_fb_ci.height=rh;color_fb_ci.layers=1;
+  VkFramebuffer color_fb;VKOK(vkCreateFramebuffer(device,&color_fb_ci,nullptr,&color_fb));
+  VKOK(vkResetCommandPool(device,command_pool,0));VKOK(vkBeginCommandBuffer(command,&begin));
+  auto color_barrier=[&](VkImageLayout before,VkImageLayout after,VkAccessFlags src,VkAccessFlags dst,VkPipelineStageFlags src_stage,VkPipelineStageFlags dst_stage){
+   VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};b.oldLayout=before;b.newLayout=after;b.srcAccessMask=src;b.dstAccessMask=dst;
+   b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;b.image=color;b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+   vkCmdPipelineBarrier(command,src_stage,dst_stage,0,0,nullptr,0,nullptr,1,&b);
+  };
+  VkBufferImageCopy color_copy{};color_copy.bufferRowLength=rw;color_copy.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};color_copy.imageExtent={rw,rh,1};
+  color_barrier(VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,0,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
+  vkCmdCopyBufferToImage(command,buffer,color,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&color_copy);
+  color_barrier(VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_COLOR_ATTACHMENT_READ_BIT|VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT);
+  VkRenderPassBeginInfo color_begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};color_begin.renderPass=color_pass;color_begin.framebuffer=color_fb;color_begin.renderArea.extent={rw,rh};
+  vkCmdBeginRenderPass(command,&color_begin,VK_SUBPASS_CONTENTS_INLINE);vkCmdEndRenderPass(command);
+  color_barrier(VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,VK_ACCESS_TRANSFER_READ_BIT,VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
+  vkCmdCopyImageToBuffer(command,color,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,buffer,1,&color_copy);
+  vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&host,0,nullptr,0,nullptr);
+  VKOK(vkEndCommandBuffer(command));VKOK(vkQueueSubmit(queue,1,&submit,VK_NULL_HANDLE));VKOK(vkQueueWaitIdle(queue));
+  for(size_t i=0;i<size_t(rw)*rh;i++)CHECK(pixels[i]==rgba8[i]);
+  for(size_t i=0;i<guest.size();i++)if(i<guard || i>=guard+write_size)CHECK(actual[i]==guest[i]);
+  vkDestroyFramebuffer(device,color_fb,nullptr);vkDestroyRenderPass(device,color_pass,nullptr);vkDestroyImageView(device,color_view,nullptr);vkDestroyImage(device,color,nullptr);vkFreeMemory(device,color_memory,nullptr);
+  std::printf("[BUFFER-OWNED-TILED-RT-GPU] device=%s source_raw71 target_native37 RGBA8_1920x1080 pixels=2073600 spatial_pattern=bit_exact framebuffer_LOAD_STORE=bit_exact old_suffix_padding_guards=preserved fixture=synthetic Astro=not-executed\n",properties.deviceName);
   vkUnmapMemory(device,raw_memory);vkDestroyBuffer(device,raw,nullptr);vkFreeMemory(device,raw_memory,nullptr);
   std::printf("[TILED-STORAGE-CROSSING-GPU] device=%s RGBA16F2432x1368 texels=%u production_retile=1 GPU_prefix_write=0x870000 overlap=0x2c0000 untouched_suffix_padding_guards=preserved fixture=synthetic Astro=not-executed\n",properties.deviceName,width*height);
  }

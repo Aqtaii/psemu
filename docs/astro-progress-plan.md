@@ -19,7 +19,10 @@ Recognizable final-window Astro output is still unconfirmed. Use this checkpoint
 - [x] Storage-to-target reconstruction now permits clean buffer fragments while rejecting dirty owners across the complete target, and refreshes fragments after full backing publication. Captured-range CPU publication/padding/dirty-owner regressions and all eleven existing Vulkan storage/depth fixtures pass; separate executable/map builds. Actual requested target geometry was absent from the old capture and is now logged.
 - [x] Native4bafee1 passes the clean-buffer storage-to-target handoff: three storage sources, actual1920x1080/eight-byte RGBA16F target, coherent refreshed backing. CI41342563515 passes. Final RGB remains zero.
 - [x] The next formatted buffer write crosses a raw71 tiled RGBA16F2432x1368/0x1a20000 owner by0x2c0000 bytes. Complete original-layout publication and buffer-ownership fallback are implemented; captured CPU guards and all twelve Vulkan cases pass, including3326976 pixels and actual GPU prefix fill with every untouched byte preserved. Separate executable/map builds.
-- [ ] Verify the crossing tiled-storage handoff in the native run and inspect subsequent GPU work.
+- [x] Native a7d97fc passes the actual crossing RGBA16F-to-buffer handoff with complete original backing/padding. CI41345861341 passes; count84 and final RGB still zero.
+- [x] Clean buffer-owned tiled storage retirement is implemented for the captured2432x1368 raw71 owner to crossing1920x1080 native37 RGBA8 target. Full ownership/coherence/page/range guards and fence retention remain. CPU regressions and all twelve Vulkan cases pass, including2073600 spatial RGBA8 framebuffer LOAD/STORE pixels and unchanged exterior bytes.
+- [ ] Verify the buffer-owned tiled-storage retirement and replacement target publication in the native run.
+- [x] Work stopped after the1 November23:44:24 exit at the user request; the user explicitly resumed Astro on2 November.
 - [ ] Resolve any subsequent real shader/resource/post-processing blockers using captured evidence and the Jetsku reference.
 - [ ] Obtain recognizable content in the actual final presentation path and confirm it in the game window.
 - [ ] Repeat startup and check basic input/stability after the first visible frame.
