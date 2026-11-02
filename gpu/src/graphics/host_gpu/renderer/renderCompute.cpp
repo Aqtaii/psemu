@@ -195,6 +195,57 @@ static void ValidateFullHtileClearDispatch(const ShaderComputeInputInfo& input,
 	}
 }
 
+// Preserve the exact rejected state before changing any HTile ownership policy.
+static void LogRejectedHtileClear(const ShaderComputeInputInfo& input,const HW::DepthRenderTarget& z,
+                                 uint64_t bytes,uint32_t references,uint32_t registered,
+                                 uint32_t x,uint32_t y,uint32_t zz,uint32_t mode) {
+ const auto& program=*input.stage.program;
+ const auto& resources=*input.stage.resources;
+ printf("[HTILE-CLEAR-TARGET-REJECT] shader=0x%016" PRIx64
+        " descriptor_size=0x%016" PRIx64 " references=%u registered=%u groups=%u,%u,%u mode=0x%x"
+        " buffers=%zu images=%zu samplers=%zu addresses=%zu users=%zu\n",
+        program.shader_hash,bytes,references,registered,x,y,zz,mode,program.info.buffers.size(),
+        program.info.images.size(),program.info.samplers.size(),program.info.addresses.size(),resources.user_data.size());
+ printf("[HTILE-CLEAR-Z] format=%u samples=%u zrange=%u tile_surface=%u expclear=%u partially_resident=%u mips=%u"
+        " tile_index=%u embedded_samples=%u plane=%u texture_compatible=%u\n",
+        z.z_info.format,z.z_info.num_samples,z.z_info.zrange_precision,unsigned(z.z_info.tile_surface_enable),
+        unsigned(z.z_info.expclear_enabled),unsigned(z.z_info.partially_resident),unsigned(z.z_info.num_mip_levels),
+        z.z_info.tile_mode_index,unsigned(z.z_info.embedded_sample_locations),unsigned(z.z_info.plane_compression),
+        unsigned(z.z_info.HasValidTextureCompatibility()));
+ printf("[HTILE-CLEAR-STENCIL] format=%u tile_index=%u split=%u expclear=%u disabled=%u texture=%u partially_resident=%u"
+        " compatible=%u\n",z.stencil_info.format,z.stencil_info.tile_mode_index,z.stencil_info.tile_split,
+        unsigned(z.stencil_info.expclear_enabled),unsigned(z.stencil_info.tile_stencil_disable),
+        unsigned(z.stencil_info.texture_compatible_stencil),unsigned(z.stencil_info.partially_resident),
+        unsigned(z.stencil_info.HasValidTextureCompatibility()));
+ printf("[HTILE-CLEAR-VIEW] slice=%u..%u mip=%u depth_write_disable=%u stencil_write_disable=%u"
+        " size_valid=%u xy_max=%u,%u wh_valid=%u wh=%u,%u pitch_valid=%u pitch_div8_minus1=%u"
+        " height_div8_minus1=%u slice_div64_minus1=%u\n",z.depth_view.slice_start,z.depth_view.slice_max,
+        unsigned(z.depth_view.current_mip_level),unsigned(z.depth_view.depth_write_disable),
+        unsigned(z.depth_view.stencil_write_disable),unsigned(z.size.valid),unsigned(z.size.x_max),unsigned(z.size.y_max),
+        unsigned(z.width_height_valid),z.width,z.height,unsigned(z.pitch_height_valid),z.pitch_div8_minus1,
+        z.height_div8_minus1,z.slice_div64_minus1);
+ printf("[HTILE-CLEAR-ADDRESS] z_read=0x%016" PRIx64 " z_write=0x%016" PRIx64
+        " stencil_read=0x%016" PRIx64 " stencil_write=0x%016" PRIx64 " metadata=0x%016" PRIx64 "\n",
+        z.z_read_base_addr,z.z_write_base_addr,z.stencil_read_base_addr,z.stencil_write_base_addr,z.htile_data_base_addr);
+ printf("[HTILE-CLEAR-LAYOUT] addr5=%u array=%u pipe=%u bank_width=%u bank_height=%u aspect=%u banks=%u"
+        " linear=%u full_cache=%u preload_window=%u preload=%u prefetch=%u,%u outside_zero_one=%u\n",
+        z.depth_info.addr5_swizzle_mask,z.depth_info.array_mode,z.depth_info.pipe_config,z.depth_info.bank_width,
+        z.depth_info.bank_height,z.depth_info.macro_tile_aspect,z.depth_info.num_banks,z.htile_surface.linear,
+        z.htile_surface.full_cache,z.htile_surface.htile_uses_preload_win,z.htile_surface.preload,
+        z.htile_surface.prefetch_width,z.htile_surface.prefetch_height,z.htile_surface.dst_outside_zero_to_one);
+ for(size_t i=0;i<resources.buffers.size() && i<16;i++) {
+  const auto descriptor=DecodeNativeDescriptor<ShaderBufferResource>(resources.buffers[i]);
+  const auto& binding=program.info.buffers[i];
+  printf("[HTILE-CLEAR-BUFFER] slot=%zu address=0x%016" PRIx64 " bytes=0x%016" PRIx64
+         " stride=%u records=%u format=%u read=%u write=%u atomic=%u formatted=%u scalar=%u"
+         " swizzle=%u index_stride=%u add_tid=%u packed_stride=%u\n",i,descriptor.Base48(),
+         BufferDescriptorSize(descriptor),descriptor.Stride(),descriptor.NumRecords(),descriptor.Format(),
+         unsigned(binding.read),unsigned(binding.written),unsigned(binding.atomic),unsigned(binding.formatted),
+         unsigned(binding.scalar),unsigned(descriptor.SwizzleEnabled()),descriptor.IndexStride(),unsigned(descriptor.AddTid()),descriptor.PackedStride());
+ }
+ fflush(stdout);
+}
+
 static bool TryConsumeComputeMetaClear(const ShaderComputeInputInfo& input, const HW::Context& ctx,
                                        uint32_t group_x, uint32_t group_y, uint32_t group_z,
                                        uint32_t mode) {
@@ -235,6 +286,7 @@ static bool TryConsumeComputeMetaClear(const ShaderComputeInputInfo& input, cons
 	HtileClearTarget target {};
 	if (current_references != 0) {
 		if (!ResolveHtileClearTarget(z, described_meta_size, &target)) {
+			LogRejectedHtileClear(input,z,described_meta_size,current_references,registered_writes,group_x,group_y,group_z,mode);
 			EXIT("unsupported HTile compute-clear target state\n");
 		}
 		cache->RegisterMeta(target.address, target.size);

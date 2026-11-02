@@ -5,6 +5,7 @@
 #include "common/profiler.h"
 #include "common/threads.h"
 #include "graphics/host_gpu/graphicContext.h"
+#include "graphics/host_gpu/diagnosticProbeControl.h"
 #include "graphics/host_gpu/renderer/imageView.h"
 #include "graphics/host_gpu/renderer/render.h"
 #include "graphics/host_gpu/renderer/videoGraphProbe.h"
@@ -945,7 +946,7 @@ static void LogColorReadbackPixels(const void* data, uint64_t size,
 		const char* value = std::getenv("PSEMU_ASTRO_PIXEL_PROBE");
 		return value != nullptr && value[0] == '1';
 	}();
-	if (!enabled || data == nullptr || image == nullptr || regions.size() != 1 ||
+	if (!enabled || !AstroFrameProbeGateOpen() || data == nullptr || image == nullptr || regions.size() != 1 ||
 	    regions[0].aspect != vk::ImageAspectFlagBits::eColor) return;
 	uint32_t element = 0, color = 0, component = 1;
 	bool floating = false;
@@ -961,6 +962,8 @@ static void LogColorReadbackPixels(const void* data, uint64_t size,
 			element = 8; color = 6; component = 2; break;
 		case vk::Format::eR32G32B32A32Sfloat:
 			element = 16; color = 12; component = 4; floating = true; break;
+		case vk::Format::eB10G11R11UfloatPack32:
+			element = color = component = 4; break; // Three unsigned float channels, no alpha/sign bits.
 		case vk::Format::eR32Sfloat:
 			element = color = component = 4; floating = true; break;
 		case vk::Format::eR16Sfloat:

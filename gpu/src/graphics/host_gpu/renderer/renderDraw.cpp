@@ -16,6 +16,7 @@
 #include "graphics/guest_gpu/hardwareContext.h"
 #include "graphics/guest_gpu/tile.h"
 #include "graphics/host_gpu/graphicContext.h"
+#include "graphics/host_gpu/diagnosticProbeControl.h"
 #include "graphics/host_gpu/objects/label.h"
 #include "graphics/host_gpu/renderer/colorRenderTarget.h"
 #include "graphics/host_gpu/renderer/debug.h"
@@ -1057,6 +1058,7 @@ static std::shared_ptr<vk::QueryPool> PrepareDrawCoverageProbe(
         state.ps_input_info.stage.program->shader_hash : 0;
     const bool video=video_enabled && ps_hash==0x7313c4a5u;
     if ((!flag || std::strcmp(flag, "1") != 0) && !video) return {};
+    if (!video && !AstroFrameProbeGateOpen()) return {};
     if (primitives && (!state.merged_mesh ||
         !g_render_ctx->GetGraphicCtx()->mesh_queries_enabled)) return {};
     static std::atomic_uint probe_count{0}, primitive_probe_count{0},video_count{0};

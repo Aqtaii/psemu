@@ -1,6 +1,6 @@
 # Astro Bot ilerleme planı
 
-## Current verified checkpoint - 1 November 2026
+## Current verified checkpoint - 2 November 2026
 
 Recognizable final-window Astro output is still unconfirmed. Use this checkpoint for current status; the dated sections below are historical records. Detailed evidence and limitations are in [astro-avplayer.md](astro-avplayer.md).
 
@@ -21,7 +21,10 @@ Recognizable final-window Astro output is still unconfirmed. Use this checkpoint
 - [x] The next formatted buffer write crosses a raw71 tiled RGBA16F2432x1368/0x1a20000 owner by0x2c0000 bytes. Complete original-layout publication and buffer-ownership fallback are implemented; captured CPU guards and all twelve Vulkan cases pass, including3326976 pixels and actual GPU prefix fill with every untouched byte preserved. Separate executable/map builds.
 - [x] Native a7d97fc passes the actual crossing RGBA16F-to-buffer handoff with complete original backing/padding. CI41345861341 passes; count84 and final RGB still zero.
 - [x] Clean buffer-owned tiled storage retirement is implemented for the captured2432x1368 raw71 owner to crossing1920x1080 native37 RGBA8 target. Full ownership/coherence/page/range guards and fence retention remain. CPU regressions and all twelve Vulkan cases pass, including2073600 spatial RGBA8 framebuffer LOAD/STORE pixels and unchanged exterior bytes.
-- [ ] Verify the buffer-owned tiled-storage retirement and replacement target publication in the native run.
+- [x] Native a15261b passes buffer-owned tiled storage retirement and RGBA8 target publication repeatedly, reaches the worldmap document and86 shaders; CI41416752513 succeeds. The user and final saved RGB still confirm black output. New Pixel55db270b/Compute2625-word modules independently validate.
+- [ ] Capture the exact rejected HTile compute-clear state at the next gate; its current terminal error lacks register/descriptor detail. Acceptance policy remains unchanged.
+- [x] Optional file-gated late draw/readback measurements and a failure-only HTile state report are implemented and build successfully.
+- [ ] Use the next run to distinguish main-scene raster coverage, color contents and final presentation, and reproduce the HTile state with complete diagnostics.
 - [x] Work stopped after the1 November23:44:24 exit at the user request; the user explicitly resumed Astro on2 November.
 - [ ] Resolve any subsequent real shader/resource/post-processing blockers using captured evidence and the Jetsku reference.
 - [ ] Obtain recognizable content in the actual final presentation path and confirm it in the game window.
