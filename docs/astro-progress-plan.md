@@ -2,18 +2,16 @@
 
 ## Current verified checkpoint - 2 November 2026
 
-Latest update: the normal9f148b5 run confirmed eight real three-layer D16
-sampled-view bindings after read-only RGBA16F backing publication. It exited321
-at22:30:10 on a new Pixel compiler error: hash8d5b48ad, V_INTERP_MOV_F32 mode0
-at PC0x150. No recognizable final-window content is confirmed.
-The invalid fast-intro implementation is removed entirely in a470f93 (CI41505603126
-passed). New P10/P20/P0/custom per-vertex interpolation support passes five
-controlled Vulkan pixel cases, full captured wave64 IR lowering and existing
-Mesh/Pixel regressions. CI41514985396 passed; normal native verification is
-running and has started title_controller_ship atT1631.63.
-Bounded multi-point Mesh output diagnostics now pass CPU/SPIR-V regressions
-and eight active-validation GPU cases (zero issues), selecting the actual
-first_vertex/instance payload rather than WorkgroupId. Native use is pending.
+Latest update: normal ef221ca passed actual Pixel8d5b48ad and reached94
+shaders. Its26923-word real-resource module validates for Vulkan1.2; a
+completed GPU query reports607 covered samples. The user still confirms
+a completely black window, with audio progressing farther.
+All31 sampled Mesh coverage queries remain0 despite nonzero primitives.
+Next blocker: metadata-page buffer alias at0x2880f980000+0x40000; exact
+access/ownership is not yet captured. Failure-only diagnostics are added,
+with no guard relaxation. Bounded multi-point Mesh probes pass CPU/SPIR-V
+and eight active-validation GPU cases (zero issues); native use is next.
+FAST_TEST is entirely removed (a470f93); no early EOF is used.
 
 Recognizable final-window Astro output is still unconfirmed. Use this checkpoint for current status; the dated sections below are historical records. Detailed evidence and limitations are in [astro-avplayer.md](astro-avplayer.md).
 

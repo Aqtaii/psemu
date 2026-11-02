@@ -607,3 +607,41 @@ it has passed the intro and started title_controller_ship atT1631.63.
 CI41514985396 passed. No recognizable final-window output is confirmed.
 Local logs are astro_mesh_group_probe_emitter_tests.txt,
 astro_mesh_group_probe_gpu_tests.txt and astro_mesh_group_probe_final_build.txt.
+
+## 2026-11-02 23:38: native interpolation passes; next metadata alias rejection
+
+The untouched normal ef221ca run (PID16752,22:59:07--23:38:31,exit321)
+passed the actual Pixel8d5b48ad gate and reached94 shaders. Its native state
+has wave64,lane mode1,custom_mask4,interp0/1/2=0/2/0x423.
+The real resource-backed module (private1619_0091_new_shader_ps_8d5b48ad.spv,
+26923 words) independently validates for Vulkan1.2. A completed-fence query
+for submit8085 reports607 covered samples for that shader, not merely
+successful compilation. The depth-array bindings also pass this epoch.
+No correctness claim is made for every sample or conditional depth access.
+
+The late epoch completed48 scene coverage queries,48 Mesh primitive queries,
+and11 target readbacks. All31 sampled Mesh coverage queries are0 despite
+nonzero generated primitives. Four ordinary graphics queries have coverage;
+some intermediate targets have nonzero RGB. These are not final Astro content.
+The last saved final-present RGB is0; the user explicitly confirms a completely
+black window and reports audio progressing farther than before.
+
+The next rejection is BufferCache: buffer aliases metadata pages at aligned
+0x2880f980000+0x40000. The original log omits the exact unrounded request,
+read/write/formatted/resident access and metadata ownership. The same range
+appears in earlier ordinary write-only Compute bindings; that does not prove
+the rejected access has the same role. Do not bypass the metadata guard or
+substitute fabricated HTile contents from this incomplete evidence.
+
+Failure-only diagnostics now report exact versus page-aligned request flags,
+CPU/GPU ownership, byte versus page overlap, matching virtual metadata records
+and linked depth targets (bounded16 each). This leaves rejection/coherence
+semantics unchanged. The pinned Jetsku cache/bufferCache.cpp::ObtainBufferNow
+and cache/textureCache.cpp::FindDepthTarget,ClearMeta,TouchMeta are reviewed:
+its physical buffer and clear-mask model differs from our virtual metadata
+tracker, so copying its lack of a metadata-page rejection would be unsafe.
+
+The bounded multi-point Mesh probe09d576a is independently tested and pushed.
+The next normal run combines that probe with the failure snapshot, selected
+instance0/first_vertex0 and the existing late gate. FAST_TEST stays absent;
+root Sarah and its user launch scripts are preserved.

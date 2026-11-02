@@ -4023,6 +4023,41 @@ TextureCache::RegionInfo TextureCache::QueryRegion(uint64_t vaddr, uint64_t size
 	return result;
 }
 
+void TextureCache::LogBufferMetadataOverlap(uint64_t vaddr, uint64_t size) {
+ FaultSafeTextureLock lock(this,m_lock);
+ uint32_t records=0,owners=0;
+ for(const auto& [address,meta]:m_surface_metas) {
+  if(!ImagePageRangesOverlap(vaddr,size,address,meta.size))continue;
+  ++records;
+  if(records>16)continue;
+  printf("[BUFFER-METADATA-OWNER] metadata=0x%016" PRIx64 "+0x%016" PRIx64
+         " byte_overlap=%u layers=%u clear_mask=0x%08x gpu_modified=%u tracker_gpu=%u tracker_cpu=%u\n",
+         address,meta.size,unsigned(ImageRangeOverlaps(vaddr,size,address,meta.size)),
+         meta.layers,meta.clear_mask,unsigned(meta.gpu_modified),
+         unsigned(m_metadata_tracker.IsRegionGpuModified(address,meta.size)),
+         unsigned(m_metadata_tracker.IsRegionCpuModified(address,meta.size)));
+ }
+ for(const auto& cached:m_images) {
+  if(cached->kind!=CachedImage::Kind::DepthTarget ||
+     !cached->depth.htile_address || !cached->depth.htile_size ||
+     !ImagePageRangesOverlap(vaddr,size,cached->depth.htile_address,cached->depth.htile_size))continue;
+  ++owners;
+  if(owners>16)continue;
+  const auto& d=cached->depth;
+  printf("[BUFFER-METADATA-DEPTH] image=0x%016" PRIx64 "+0x%016" PRIx64
+         " metadata=0x%016" PRIx64 "+0x%016" PRIx64
+         " extent=%ux%u pitch=%u layers=%u guest_format=%u native_format=%u tile=%u"
+         " gpu_modified=%u buffer_modified=%u load_clear=%u stencil=%u compressed=%u\n",
+         d.address,d.size,d.htile_address,d.htile_size,d.width,d.height,d.pitch,d.layers,
+         d.guest_format,unsigned(d.format),d.tile_mode,unsigned(cached->gpu_modified),
+         unsigned(cached->buffer_modified),unsigned(d.depth_load_clear),unsigned(d.stencil_access),
+         unsigned(d.stencil_htile_compressed));
+ }
+ printf("[BUFFER-METADATA-SUMMARY] records=%u depth_owners=%u truncated=%u diagnostic_only=1\n",
+        records,owners,unsigned(records>16 || owners>16));
+ fflush(stdout);
+}
+
 std::vector<GpuWrittenBytes> TextureCache::GetGpuOwnedAddressExclusions(uint64_t vaddr,
                                                                         uint64_t size) {
 	EXIT_IF(!m_resource_mutex.IsOwnedByCurrentThread());

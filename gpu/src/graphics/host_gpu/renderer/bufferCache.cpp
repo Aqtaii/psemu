@@ -782,6 +782,18 @@ std::pair<VulkanBuffer*, uint64_t> BufferCache::ObtainBuffer(CommandBuffer*  com
 	                               ? texture_region
 	                               : m_texture_cache->QueryRegion(begin, end - begin);
 	if (texture_pages.metadata_pages) {
+  printf("[BUFFER-METADATA-REJECT] request=0x%016" PRIx64 "+0x%016" PRIx64
+         " pages=0x%016" PRIx64 "+0x%016" PRIx64
+         " read=%u write=%u formatted=%u force_resident=%u queue=%u"
+         " buffer_gpu=%u buffer_cpu=%u image_bytes=%u image_gpu=%u"
+         " metadata_bytes=%u metadata_gpu=%u page_metadata_bytes=%u page_metadata_gpu=%u\n",
+         vaddr,size,begin,end-begin,unsigned(is_read),unsigned(is_written),unsigned(is_formatted),
+         unsigned(force_resident),queue,unsigned(m_memory_tracker.IsRegionGpuModified(vaddr,size)),
+         unsigned(m_memory_tracker.IsRegionCpuModified(vaddr,size)),unsigned(texture_region.image_bytes),
+         unsigned(texture_region.gpu_image_bytes),unsigned(texture_region.metadata_bytes),
+         unsigned(texture_region.gpu_metadata_bytes),unsigned(texture_pages.metadata_bytes),
+         unsigned(texture_pages.gpu_metadata_bytes));
+  m_texture_cache->LogBufferMetadataOverlap(begin,end-begin);
 		EXIT("BufferCache: buffer aliases metadata pages, addr=0x%016" PRIx64 " size=0x%016" PRIx64
 		     "\n",
 		     begin, end - begin);

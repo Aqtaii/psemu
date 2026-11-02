@@ -116,6 +116,8 @@ public:
 	FindDepthTargetByRange(CommandBuffer* command, uint64_t vaddr, uint64_t size,
 	                       bool allow_containing_sampled = false);
 	[[nodiscard]] RegionInfo QueryRegion(uint64_t vaddr, uint64_t size);
+	// Failure-only snapshot; never changes metadata ownership or physical bytes.
+	void LogBufferMetadataOverlap(uint64_t vaddr, uint64_t size);
 	[[nodiscard]] std::vector<GpuWrittenBytes> GetGpuOwnedAddressExclusions(uint64_t vaddr,
 	                                                                       uint64_t size);
 	// Caller owns the resource transaction; exact dirty bytes distinguish shared edge pages.
