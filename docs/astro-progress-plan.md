@@ -2,6 +2,13 @@
 
 ## Current verified checkpoint - 2 November 2026
 
+Latest update: f349c2e passed native read-only RGBA16F target publication
+and GitHub CI 41469734221. The next native rejection is a sampled depth
+view (image format 124, requested view 70, three layers); final presentation
+is still black. A default-off PSEMU_ASTRO_FAST_TEST=1 intro shortcut now
+passes local AvPlayer lifecycle and audio regressions. Its separate native
+timing run started at 18:54:54; total speedup is not measured yet.
+
 Recognizable final-window Astro output is still unconfirmed. Use this checkpoint for current status; the dated sections below are historical records. Detailed evidence and limitations are in [astro-avplayer.md](astro-avplayer.md).
 
 - [x] Portable Windows build/test tools and separate Astro candidates run under D:. The installed Sarah loader and user launch scripts are preserved.

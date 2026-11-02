@@ -419,3 +419,32 @@ The publication entry is renamed PublishImageForBufferRead and additionally acce
 astro_rt_buffer_read_cpu.txt passes the exact source/read addresses, prefix/overlap, malformed format/footprint/layer/mip/range states and a dirty source tail outside the read. The extracted production transaction fixture now covers both image kinds, with/without fragments, retained native image, all-owner rejection before mutation and27 rejected states (astro_rt_buffer_read_transaction_cpu.txt). Native Vulkan extent is two-dimensional; the build caught and removed an invalid extra depth-member check in development; the fixture model was corrected accordingly.
 
 astro_rt_buffer_read_gpu.txt passes all thirteen Vulkan data-path cases with active Khronos callbacks and zero issues. The new case executes a real1920x1080 RGBA16F framebuffer LOAD/STORE on2073600 spatial half-float texels, downloads it, production-retile/detiles the full0xff0000 guest layout, then GPU-reads the captured0xc0000 buffer span containing the0x30000 exterior prefix and0x90000 image overlap. Every result byte matches, all source/padding/suffix/exterior bytes and destination guards remain unchanged. These are controlled shaders/data and do not execute Astro or the complete native cache wrapper. Separate astro-rt-buffer-read-output builds; native passage and recognizable final output remain pending.
+## 2026-11-02: opt-in faster native iterations
+
+PSEMU_ASTRO_FAST_TEST=1 completes only the exact
+data/prein/video/ps_studio_armadillo.mp4 (or /app0/ equivalent) intro
+on its first valid unpaused video poll. Default behavior is unchanged.
+The shortcut applies only to initial playback from zero with video and no
+looping; explicit seek cancels it. Start/PLAY is preserved, then the player
+reports EOF/inactive and the movie duration without producing a frame.
+This is a diagnostic boot shortcut, not a fix for missing rendered content.
+
+Local lifecycle tests using the real intro passed: flag disabled, unrelated
+asset, paused/resumed playback, paused seek, looping before/after Start,
+output guards, EOF/audio and allocation/file cleanup. Generated PCM audio
+regression also passed. Reproduce with test_avplayer_fast_intro.ps1,
+explicit absolute loader/media/scratch paths; no game asset is checked in.
+
+Use short decoder/emitter/Vulkan regressions for individual changes and
+reserve a normal complete boot for integration verification. Intro skipping
+changes allocation/cache history, so matching the old failure is required
+before treating the fast run as an equivalent reproducer. No total startup
+speedup is claimed until measured.
+
+Normal f349c2e run (PID 7260, 18:16:03--18:53:24, exit 321) confirmed
+[IMAGE-BUFFER-READ] publication with full backing/padding/native retention.
+The next failure is an unsupported sampled depth target:
+image format 124, requested view 70, three image layers, compare read,
+guest dimension 3, descriptor type 13. Final recognizable game content
+remains unconfirmed. A separate fast-intro candidate is running to measure
+startup and whether it reaches the same next gate.

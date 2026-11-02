@@ -1017,6 +1017,7 @@ extern "C" int PsemuClockSelfTest();
 
 #ifdef PSEMU_HAS_AVPLAYER
 extern "C" int PsemuAvPlayerSelfTest(const char* path,const char* scratch_directory);
+extern "C" int PsemuAvPlayerFastIntroSelfTest(const char* path);
 #endif
 
 int main(int argc, char** argv) {
@@ -1024,6 +1025,7 @@ int main(int argc, char** argv) {
     setvbuf(stderr, NULL, _IONBF, 0);
     Logger::Init();
 #ifdef PSEMU_HAS_AVPLAYER
+    if (argc==3 && std::strcmp(argv[1],"--avplayer-fast-intro-self-test")==0) return PsemuAvPlayerFastIntroSelfTest(argv[2]);
     if (argc==4 && std::strcmp(argv[1],"--avplayer-self-test")==0) return PsemuAvPlayerSelfTest(argv[2],argv[3]);
 #endif
     if (argc==2 && std::strcmp(argv[1],"--fiber-self-test")==0) return PsemuFiberSelfTest();
