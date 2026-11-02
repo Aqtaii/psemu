@@ -1134,7 +1134,7 @@ static BufferView NativeGuestAddressFault(CommandBuffer* command, bool mesh_prob
  backing->usage = vk::BufferUsageFlagBits::eStorageBuffer;
  backing->memory.property = vk::MemoryPropertyFlagBits::eHostVisible |
                             vk::MemoryPropertyFlagBits::eHostCoherent;
- const size_t bytes=mesh_probe ? sizeof(ShaderRecompiler::MeshOutputProbe) : sizeof(GuestAddressFaultRecord);
+ const size_t bytes=mesh_probe ? sizeof(ShaderRecompiler::MeshOutputProbe)*ShaderRecompiler::MeshOutputProbeGroupCount() : sizeof(GuestAddressFaultRecord);
  VulkanCreateBuffer(ctx,bytes,backing.get());
  void* mapped = nullptr;
  VulkanMapMemory(ctx,&backing->memory,&mapped);
@@ -1146,13 +1146,18 @@ static BufferView NativeGuestAddressFault(CommandBuffer* command, bool mesh_prob
   GuestAddressFaultRecord fault;
   std::memcpy(&fault,data,sizeof(fault));
   if(mesh_probe) {
-   ShaderRecompiler::MeshOutputProbe probe;
-   std::memcpy(&probe,data,sizeof(probe));
-   static std::atomic_uint logs{0};
-   if(probe.magic==ShaderRecompiler::MeshOutputProbe::Magic && logs.fetch_add(1)<8) {
-    printf("[MESH-OUTPUT-PROBE] magic=%08x allocation=%08x vertices=%u primitives=%u instance=%u first_vertex=%u source=completed-fence\n",
-     probe.magic,probe.allocation,probe.vertices,probe.primitives,ShaderRecompiler::MeshOutputProbeInstance(),
-     ShaderRecompiler::MeshOutputProbeFirstVertex());
+   static std::atomic_uint batches{0};
+   bool observed=false,log_batch=false;
+   for(uint32_t group=0;group<ShaderRecompiler::MeshOutputProbeGroupCount();++group) {
+    ShaderRecompiler::MeshOutputProbe probe;
+    std::memcpy(&probe,static_cast<const uint8_t*>(data)+group*sizeof(probe),sizeof(probe));
+    if(probe.magic!=ShaderRecompiler::MeshOutputProbe::Magic)continue;
+    if(!observed) {observed=true;log_batch=batches.fetch_add(1)<8;}
+    if(!log_batch)continue;
+    printf("[MESH-OUTPUT-PROBE] magic=%08x allocation=%08x vertices=%u primitives=%u instance=%u first_vertex=%u"
+           " group=%u shader=0x%016" PRIx64 " source=completed-fence\n",
+     probe.magic,probe.allocation,probe.vertices,probe.primitives,probe.instance,
+     probe.first_vertex,group,shader_hash);
     uint32_t reached=0;
     for(uint32_t i=0;i<ShaderRecompiler::MeshOutputProbe::Capacity;++i) {
      const auto& lane=probe.lanes[i];

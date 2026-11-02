@@ -311,6 +311,7 @@ struct EmitterState {
 	Builder                                builder;
  MeshOutputLayout mesh_outputs;
  uint32_t mesh_guest_func=0, mesh_local_index=0, mesh_allocation=0;
+ uint32_t mesh_probe_group_size=1;
  std::array<uint32_t,2> mesh_primitive_data {};
  uint32_t mesh_ptr_private_uint=0, mesh_ptr_private_vec4=0;
 	const IR::Program*                     program                        = nullptr;
@@ -699,6 +700,8 @@ void AllocateInputVariables(EmitterState* state);
 void AllocateOutputVariables(EmitterState* state);
 uint32_t EmitMeshGuestLocalInvocationIndex(EmitterState* state);
 uint32_t EmitMeshProbeCaptureBool(EmitterState* state);
+uint32_t EmitMeshProbePayloadValue(EmitterState* state,uint32_t field);
+uint32_t EmitMeshProbeRecordWordOffset(EmitterState* state);
 void DefineNativeMeshVariables(EmitterState* state);
 void EmitNativeMeshEntryPoint(EmitterState* state);
 void EmitNativeMeshAllocate(EmitterState* state,const IR::Instruction& inst);

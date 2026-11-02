@@ -106,7 +106,9 @@ void EmitNativeMeshEntryPoint(EmitterState* state) {
  const auto primitives=MeshCount(state,allocation,12,11,mesh.max_primitives);
  b.AddFunction({spv::OpSetMeshOutputsEXT,vertices,primitives});
  const bool probe=state->program->bindings.mesh_output_probe && state->guest_address_fault_variable!=0;
+ const auto record_offset=probe ? EmitMeshProbeRecordWordOffset(state) : uint32_t(0);
  const auto probe_store=[&](uint32_t offset,uint32_t value) {
+  offset=EmitAddU32(state,record_offset,offset);
   const auto ptr=b.AllocateId();
   b.AddFunction({spv::OpAccessChain,state->ptr_storage_buffer_uint,ptr,
    state->guest_address_fault_variable,ConstantU32(state,0),offset});
@@ -121,6 +123,8 @@ void EmitNativeMeshEntryPoint(EmitterState* state) {
   probe_store(ConstantU32(state,5),allocation);
   probe_store(ConstantU32(state,6),vertices);
   probe_store(ConstantU32(state,7),primitives);
+  probe_store(ConstantU32(state,8),EmitMeshProbePayloadValue(state,1));
+  probe_store(ConstantU32(state,9),EmitMeshProbePayloadValue(state,2));
   });
  }
  const auto saved_half=state->lane_half;

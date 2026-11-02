@@ -2,6 +2,7 @@ $ErrorActionPreference='Stop'
 $root=(Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $out=Join-Path $root 'build\native-atomic-tests\htile-routing'
 New-Item -ItemType Directory -Path $out -Force | Out-Null
+[IO.File]::WriteAllText((Join-Path $out 'cmake_config.h'),("#pragma once"+[Environment]::NewLine+"#define KYTY_COMPILER 2"+[Environment]::NewLine))
 $source=[IO.File]::ReadAllText("$root\gpu\src\graphics\host_gpu\renderer\renderCompute.cpp")
 function ExtractBetween([string]$startText,[string]$endText) {
  $start=$source.IndexOf($startText)
@@ -22,7 +23,7 @@ try {
   $body=if($old){$production.Replace($condition,'meta_addr != 0 && descriptor.Base48() == meta_addr')}else{$production}
   [IO.File]::WriteAllText($include,$body)
   $exe=Join-Path $out "$variant.exe"
-  $options=@('/nologo','/std:c++20','/EHsc','/O2','/MT',"/I$out","$root\tests\htile_clear_routing_test.cpp","/Fe$exe","/Fo$out\$variant.obj")
+  $options=@('/nologo','/std:c++20','/EHsc','/O2','/MT',"/I$out","/I$root\gpu\src","$root\tests\htile_clear_routing_test.cpp","/Fe$exe","/Fo$out\$variant.obj")
   if($old){$options+='/DEXPECT_OLD_ROUTING'}
   & clang-cl @options
   if($LASTEXITCODE -ne 0){throw "HTile routing compilation failed: $variant"}

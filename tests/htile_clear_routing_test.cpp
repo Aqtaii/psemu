@@ -2,6 +2,8 @@
 #include <cstdio>
 #include <stdexcept>
 #include <vector>
+#include "graphics/host_gpu/renderer/metadataClearRange.h"
+using namespace Libs::Graphics;
 #define EXIT(...) throw std::runtime_error("production guard")
 #define CHECK(x) do {if(!(x)) throw std::runtime_error(#x);} while(0)
 struct ShaderBufferResource {
@@ -28,19 +30,26 @@ namespace HW {
  struct DepthRenderTarget {uint64_t htile_data_base_addr=0;};
  struct Context {DepthRenderTarget depth;const auto& GetDepthRenderTarget() const{return depth;}};
 }
-struct HtileClearTarget {uint64_t address=0,size=0;};
+struct HtileClearTarget {uint64_t address=0,size=0;uint32_t layers=1;};
 struct Cache {
  std::vector<HtileClearTarget> ranges;
  int register_calls=0,clear_calls=0;
  bool IsMetaRange(uint64_t a,uint64_t n) const {
   for(auto r:ranges)if(r.address==a && r.size==n)return true;return false;
  }
+ bool IsMetaClearRange(uint64_t a,uint64_t n) const {
+  MetadataClearRange plan;bool found=false;
+  for(auto r:ranges)if(a<r.address+r.size && r.address<a+n){
+   if(found || !PlanMetadataClearRange(r.address,r.size,r.layers,a,n,&plan))return false;found=true;
+  }
+  return found;
+ }
  struct Region {bool metadata_pages=false;};
  Region QueryRegion(uint64_t a,uint64_t n) const {
   for(auto r:ranges)if(a<r.address+r.size && r.address<a+n)return {true};return {};
  }
  void RegisterMeta(uint64_t a,uint64_t n){++register_calls;ranges.push_back({a,n});}
- bool ClearMeta(uint64_t a){++clear_calls;for(auto r:ranges)if(r.address==a)return true;return false;}
+ bool ClearMetaRange(uint64_t a,uint64_t n){if(!IsMetaClearRange(a,n))return false;++clear_calls;return true;}
 };
 struct BufferCache {
  struct Access {uint64_t address,size;bool read,write;};
@@ -110,6 +119,25 @@ int main() {
  {Fixture f;f.MakeClear();resolve_allowed=false;f.Reject([&]{f.Dispatch(3072,1);});
   CHECK(rejection_logs==1 && f.render.cache.register_calls==0 && f.render.buffers.accesses.empty());}
  {Fixture f;f.resources.buffers.pop_back();f.Reject([&]{f.Dispatch();});f.NoEffects();}
- puts("HTile routing: 13 production-function read-only, clear, ownership and rejection cases PASS");
+ // Captured three-plane metadata: first/middle/last/full ranges.
+ for(uint32_t first=0;first<3;++first) {
+  Fixture f;f.MakeClear();resolve_allowed=false;
+  f.render.cache.ranges.push_back({Fixture::meta,0xc0000,3});
+  f.resources.buffers[1].address+=first*0x40000;f.resources.buffers[1].records=0x40000/4;
+  CHECK(f.Dispatch(1024,1));CHECK(resolve_calls==0 && f.render.cache.register_calls==0);
+  CHECK(f.render.cache.clear_calls==1 && f.render.buffers.accesses[0].size==0x40000);
+ }
+ {Fixture f;f.MakeClear();f.ctx.depth.htile_data_base_addr=0;
+  f.render.cache.ranges.push_back({Fixture::meta,0xc0000,3});CHECK(f.Dispatch(3072,1));}
+ {Fixture f;f.MakeClear();f.resources.buffers[1].address+=0x40000;
+  f.resources.buffers[1].records=0x20000/4;f.render.cache.ranges.push_back({Fixture::meta,0xc0000,3});
+  CHECK(!f.Dispatch(512,1));f.NoEffects();}
+ {Fixture f;f.MakeClear();f.resources.buffers[1].address+=0x40000;
+  f.resources.buffers[1].records=0x40000/4;f.render.cache.ranges.push_back({Fixture::meta,0xc0000,3});
+  f.program.info.buffers[1].read=true;f.Reject([&]{f.Dispatch(1024,1);});}
+ {Fixture f;f.MakeClear();f.resources.buffers[1].address+=0x40000;
+  f.resources.buffers[1].records=0x40000/4;f.render.cache.ranges.push_back({Fixture::meta,0xc0000,3});
+  f.Reject([&]{f.Dispatch(1023,1);});}
+ puts("HTile routing: 20 production-function read-only, whole-layer, ownership and rejection cases PASS");
 #endif
 }

@@ -564,6 +564,7 @@ static bool EmitProgramImpl(const MeshAssemblyPlan* merged_point, const IR::Prog
 	state.wave_size            = program.wave_size;
  state.lanes_per_invocation = merged_point ? 2u : 1u;
  state.mesh_emit_error=error;
+ state.mesh_probe_group_size=merged_point ? merged_point->vertices_per_group : 1u;
 	state.per_invocation_masks = program.lane_mask_mode == ShaderLaneMaskMode::PerInvocation;
 	state.exact_subgroup_operations =
 	    !state.per_invocation_masks && ProgramRequiresExactSubgroupSize(program);
@@ -625,7 +626,7 @@ static bool EmitPointMeshProgram(bool gs_root, const IR::Program& program, const
  std::vector<uint32_t>* spirv, std::string* error) {
  if(program.stage!=ShaderType::Mesh || program.wave_size!=64 || program.mesh_gs_user_data!=gs_root ||
     !program.dispatcher_fallback || program.lane_mask_mode!=ShaderLaneMaskMode::NativeWave ||
-    !assembly.primitives_per_group || assembly.logical_invocations!=vertex.mesh.invocations*2 ||
+    !assembly.primitives_per_group || !assembly.vertices_per_group || assembly.logical_invocations!=vertex.mesh.invocations*2 ||
     assembly.max_vertices!=vertex.mesh.max_vertices || assembly.max_primitives!=vertex.mesh.max_primitives ||
     program.bindings.mesh_point_input_dword==IR::BindingLayout::NoMeshPointInputs) {
   return Fail(error,"invalid merged point Mesh runtime contract");

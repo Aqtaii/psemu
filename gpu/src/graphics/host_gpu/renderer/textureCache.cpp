@@ -4221,6 +4221,69 @@ bool TextureCache::IsMetaRange(uint64_t vaddr, uint64_t size) {
 	return it != m_surface_metas.end() && it->second.size == size;
 }
 
+bool TextureCache::ResolveMetaClearRangeLocked(uint64_t vaddr, uint64_t size,
+                                               MetadataClearRange* out) const {
+    if (out == nullptr || vaddr == 0 || size == 0 || vaddr >= TRACKER_ADDRESS_SIZE ||
+        size > TRACKER_ADDRESS_SIZE - vaddr) {
+        return false;
+    }
+    // DCC and overlapping HTile views cannot share a virtual clear transaction.
+    for (const auto& cached: m_images) {
+        if (cached->dcc.address != 0 &&
+            ImagePageRangesOverlap(vaddr, size, cached->dcc.address, cached->dcc.layout.total_bytes)) {
+            return false;
+        }
+    }
+    MetadataClearRange selected {};
+    bool found = false;
+    for (const auto& [address, meta]: m_surface_metas) {
+        if (!ImagePageRangesOverlap(vaddr, size, address, meta.size)) {
+            continue;
+        }
+        MetadataClearRange candidate {};
+        if (found || !PlanMetadataClearRange(address, meta.size, meta.layers, vaddr, size, &candidate)) {
+            return false;
+        }
+        selected = candidate;
+        found = true;
+    }
+    if (found) {
+        *out = selected;
+    }
+    return found;
+}
+
+bool TextureCache::IsMetaClearRange(uint64_t vaddr, uint64_t size) {
+    FaultSafeTextureLock lock(this, m_lock);
+    MetadataClearRange range {};
+    return ResolveMetaClearRangeLocked(vaddr, size, &range);
+}
+
+bool TextureCache::ClearMetaRange(uint64_t vaddr, uint64_t size) {
+    std::lock_guard transaction(m_resource_mutex);
+    FaultSafeTextureLock lock(this, m_lock);
+    MetadataClearRange range {};
+    if (!ResolveMetaClearRangeLocked(vaddr, size, &range)) {
+        return false;
+    }
+    auto& meta = m_surface_metas.at(range.owner_address);
+    const auto previous_mask = meta.clear_mask;
+    // Consume CPU dirtiness and publish GPU ownership only for the selected planes.
+    m_metadata_tracker.ForEachUploadRange(
+        vaddr, size, true, [](uint64_t, uint64_t) noexcept {}, []() noexcept {});
+    meta.gpu_modified = true;
+    meta.clear_mask |= range.clear_mask;
+    static uint32_t slice_logs = 0;
+    if (range.layer_count != meta.layers && slice_logs++ < 32) {
+        printf("[HTILE-SLICE-CLEAR] owner=0x%016" PRIx64 " request=0x%016" PRIx64
+               "+0x%016" PRIx64 " first=%u count=%u layers=%u mask=0x%x->0x%x\n",
+               range.owner_address, vaddr, size, range.first_layer, range.layer_count,
+               meta.layers, previous_mask, meta.clear_mask);
+        fflush(stdout);
+    }
+    return true;
+}
+
 bool TextureCache::HasMetaOverlapLocked(uint64_t vaddr, uint64_t size) const {
 	for (const auto& cached: m_images) {
 		if (cached->dcc.address != 0 &&

@@ -271,9 +271,9 @@ static bool TryConsumeComputeMetaClear(const ShaderComputeInputInfo& input, cons
 			current_writes++;
 			described_meta_size = descriptor_size;
 		}
-		// An exact registered metadata range remains
-		// identifiable even when it is no longer the currently bound depth target.
-		if (resource.written && cache->IsMetaRange(descriptor.Base48(), descriptor_size)) {
+		// Registered metadata can be cleared as one or more complete array layers,
+		// including when a different depth target is currently bound.
+		if (resource.written && cache->IsMetaClearRange(descriptor.Base48(), descriptor_size)) {
 			registered_writes++;
 			registered_target = {.address = descriptor.Base48(), .size = descriptor_size};
 		}
@@ -281,12 +281,14 @@ static bool TryConsumeComputeMetaClear(const ShaderComputeInputInfo& input, cons
 	if (current_writes == 0 && registered_writes == 0) {
 		return false;
 	}
-	if (current_writes > 1 || (current_writes == 0 && registered_writes > 1)) {
+	if (current_writes > 1 || registered_writes > 1) {
 		EXIT("HTile clear has ambiguous metadata descriptors: current=%u registered=%u\n",
 		     current_writes, registered_writes);
 	}
 	HtileClearTarget target {};
-	if (current_writes != 0) {
+	const bool registered_slice = registered_writes == 1 &&
+	    !cache->IsMetaRange(registered_target.address, registered_target.size);
+	if (current_writes != 0 && !registered_slice) {
 		if (!ResolveHtileClearTarget(z, described_meta_size, &target)) {
 			LogRejectedHtileClear(input,z,described_meta_size,current_writes,registered_writes,group_x,group_y,group_z,mode);
 			EXIT("unsupported HTile compute-clear target state\n");
@@ -334,7 +336,7 @@ static bool TryConsumeComputeMetaClear(const ShaderComputeInputInfo& input, cons
 		     metadata_writes);
 	}
 	ValidateFullHtileClearDispatch(input, metadata_descriptor, group_x, group_y, group_z, mode);
-	if (!cache->ClearMeta(target.address)) {
+	if (!cache->ClearMetaRange(target.address, target.size)) {
 		EXIT("failed to record HTile compute clear\n");
 	}
 	return true;

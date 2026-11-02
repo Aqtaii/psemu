@@ -143,6 +143,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_htile_clear_routing.ps1
 
+      - name: Test partial-layer HTile clear ownership
+        shell: pwsh
+        run: ./tools/scripts/test_metadata_slice_clear.ps1
+
       - name: Test image backing publication for read-only buffers
         shell: pwsh
         run: ./tools/scripts/test_storage_buffer_read.ps1

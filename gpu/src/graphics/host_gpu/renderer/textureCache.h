@@ -9,6 +9,7 @@
 #include "graphics/host_gpu/renderer/dccMetadata.h"
 #include "graphics/host_gpu/renderer/bufferImageReadRanges.h"
 #include "graphics/host_gpu/renderer/multiLevelPageTable.h"
+#include "graphics/host_gpu/renderer/metadataClearRange.h"
 #include "graphics/host_gpu/renderer/tiler.h"
 #include "graphics/host_gpu/vulkanCommon.h"
 
@@ -130,6 +131,8 @@ public:
 	void                     RegisterMeta(uint64_t vaddr, uint64_t size, uint32_t layers = 1);
 	[[nodiscard]] bool       IsMeta(uint64_t vaddr);
 	[[nodiscard]] bool       IsMetaRange(uint64_t vaddr, uint64_t size);
+	[[nodiscard]] bool       IsMetaClearRange(uint64_t vaddr, uint64_t size);
+	[[nodiscard]] bool       ClearMetaRange(uint64_t vaddr, uint64_t size);
 	[[nodiscard]] bool       IsMetaCleared(uint64_t vaddr, uint32_t slice);
 	[[nodiscard]] bool       ClearMeta(uint64_t vaddr);
 	[[nodiscard]] bool       TouchMeta(uint64_t vaddr, uint32_t slice, bool is_clear);
@@ -141,6 +144,8 @@ public:
 	VulkanImage* GetDummyStorageTexture(bool uint_format, bool image_3d);
 
 private:
+	[[nodiscard]] bool ResolveMetaClearRangeLocked(uint64_t vaddr, uint64_t size,
+	                                              MetadataClearRange* out) const;
 	struct CachedImage;
 	using ImageOwnerIndex = MultiRangePageOwnerIndex<CachedImage*>;
 	struct ReadbackWorker;

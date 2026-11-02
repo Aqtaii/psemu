@@ -1,17 +1,33 @@
 # Astro Bot ilerleme planı
 
-## Current verified checkpoint - 2 November 2026
+## Current verified checkpoint - 3 November 2026
 
-Latest update: normal ef221ca passed actual Pixel8d5b48ad and reached94
-shaders. Its26923-word real-resource module validates for Vulkan1.2; a
-completed GPU query reports607 covered samples. The user still confirms
-a completely black window, with audio progressing farther.
-All31 sampled Mesh coverage queries remain0 despite nonzero primitives.
-Next blocker: metadata-page buffer alias at0x2880f980000+0x40000; exact
-access/ownership is not yet captured. Failure-only diagnostics are added,
-with no guard relaxation. Bounded multi-point Mesh probes pass CPU/SPIR-V
-and eight active-validation GPU cases (zero issues); native use is next.
-FAST_TEST is entirely removed (a470f93); no early EOF is used.
+Normal source8290733 exited after94 shaders at the exact metadata guard:
+write-only formatted request0x1888f220000+0x40000 is the middle plane of
+registered HTile0x1888f1e0000+0xc0000, three layers, clear_mask0x6.
+The associated native depth target is D16,2048x2048x3. This is a confirmed
+missing whole-layer clear route, not proof of the ultimate black-screen cause.
+
+The new route accepts only whole32KB-aligned metadata planes of one unique
+registered owner, rejects overlapping HTile/DCC ownership, and revalidates
+under the resource transaction. It marks only the requested tracker range
+and ORs only its layer bits. Full current-target validation and shader
+resource/dispatch guards remain. Local production-function tests pass48
+layer/mask ownership cases,20 compute routing cases and the previous
+depth/storage and image-to-buffer publication regressions.
+
+The prior eight native output records sampled the SAME first Mesh group:
+allocation1/1, position(0,0,0,0), indices(0,0,0). This does not establish that
+all scene geometry is empty. Up to eight CPU-partitioned groups can now
+record independently with actual instance/first_vertex and shader identity.
+Default remains one group. CPU/emitter/SPIR-V tests and ten active-validation
+GPU cases pass, including independent four-group records and exterior guards.
+These controlled fixtures are not actual Astro frame evidence.
+
+Local combined executable/map builds successfully under D:. Next native
+normal boot must verify the exact metadata blocker is passed and compare
+multiple actual groups before tracing the responsible color target to present.
+FAST_TEST remains removed; no early EOF, intro skip or fake game time is used.
 
 Recognizable final-window Astro output is still unconfirmed. Use this checkpoint for current status; the dated sections below are historical records. Detailed evidence and limitations are in [astro-avplayer.md](astro-avplayer.md).
 
