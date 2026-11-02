@@ -402,6 +402,7 @@ static void VulkanRecreateSwapchain() {
 	VulkanRefreshSurfaceSize();
 	VulkanDeleteSwapchain(&g_window_ctx->graphic_ctx, g_window_ctx->swapchain);
 	g_window_ctx->swapchain = VulkanCreateSwapchain(&g_window_ctx->graphic_ctx, 2);
+	g_window_ctx->swapchain_resize_pending=false;
 }
 
 static void ValidatePreparedCommand(CommandBuffer* buffer) {
@@ -472,6 +473,11 @@ void WindowPresentFrame(PreparedFrame* frame) {
 		g_window_ctx->window_hidden = false;
 		VulkanRecreateSwapchain();
 	}
+
+	// Resize presentation on its owning thread, after the Win32 size events have
+	// coalesced. Do not recreate a Vulkan surface with a minimized zero extent.
+	if (IsIconic(g_window_ctx->window)) return;
+	if (g_window_ctx->swapchain_resize_pending) VulkanRecreateSwapchain();
 
 	auto* swapchain = g_window_ctx->swapchain;
 

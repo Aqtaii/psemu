@@ -27,6 +27,7 @@ struct WindowContext {
 	VulkanSwapchain*     swapchain            = nullptr;
 	HWND                 window               = nullptr;  // psemu: SDL_Window* -> HWND
 	bool                 window_hidden        = true;
+	bool                 swapchain_resize_pending = false; // Owned by the window/present thread.
 	vk::SurfaceKHR       surface              = nullptr;
 	SurfaceCapabilities* surface_capabilities = nullptr;
 	WindowGame*          game                 = nullptr;

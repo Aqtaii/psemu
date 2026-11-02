@@ -1,4 +1,4 @@
-﻿// ============================================================================
+// ============================================================================
 // psemu: Kyty graphics/presentation/window/window.cpp'nin SDL'siz Win32
 // karsiligi. Orijinal window.cpp'de 175 SDL referansi vardi ve cogu INPUT +
 // SDL game-loop icindi (render icin gereksiz). Burada yalnizca renderer/videoOut
@@ -87,8 +87,94 @@ void WindowUpdateTitle() {
 	}
 }
 
+struct FullscreenState {
+ bool enabled=false;
+ LONG_PTR windowed_style=0;
+ WINDOWPLACEMENT windowed_placement{sizeof(WINDOWPLACEMENT)};
+};
+static FullscreenState g_fullscreen;
+
+static bool SetFullscreenWindowStyle(HWND hwnd, LONG_PTR style) {
+ SetLastError(ERROR_SUCCESS);
+ if (SetWindowLongPtrW(hwnd,GWL_STYLE,style)==0 && GetLastError()!=ERROR_SUCCESS) {
+  std::fprintf(stderr,"[WINDOW] fullscreen style change failed: %lu\n",GetLastError());
+  return false;
+ }
+ return true;
+}
+
+static void ToggleFullscreen(HWND hwnd) {
+ if (!g_fullscreen.enabled) {
+  MONITORINFO monitor{sizeof(MONITORINFO)};
+  WINDOWPLACEMENT placement{sizeof(WINDOWPLACEMENT)};
+  if (!GetWindowPlacement(hwnd,&placement) ||
+      !GetMonitorInfoW(MonitorFromWindow(hwnd,MONITOR_DEFAULTTONEAREST),&monitor)) {
+   std::fprintf(stderr,"[WINDOW] fullscreen monitor/placement query failed: %lu\n",GetLastError());
+   return;
+  }
+  const LONG_PTR style=GetWindowLongPtrW(hwnd,GWL_STYLE) & ~LONG_PTR(WS_MAXIMIZE|WS_MINIMIZE);
+  if (IsZoomed(hwnd)) ShowWindow(hwnd,SW_RESTORE);
+  if (!SetFullscreenWindowStyle(hwnd,style & ~LONG_PTR(WS_OVERLAPPEDWINDOW))) {
+   SetWindowPlacement(hwnd,&placement);
+   return;
+  }
+  const auto& bounds=monitor.rcMonitor;
+  if (!SetWindowPos(hwnd,HWND_TOP,bounds.left,bounds.top,bounds.right-bounds.left,bounds.bottom-bounds.top,
+                    SWP_FRAMECHANGED|SWP_NOOWNERZORDER)) {
+   std::fprintf(stderr,"[WINDOW] fullscreen positioning failed: %lu\n",GetLastError());
+   SetFullscreenWindowStyle(hwnd,style);
+   SetWindowPlacement(hwnd,&placement);
+   SetWindowPos(hwnd,nullptr,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_FRAMECHANGED);
+   return;
+  }
+  g_fullscreen.windowed_style=style;
+  g_fullscreen.windowed_placement=placement;
+  g_fullscreen.enabled=true;
+ } else {
+  if (!SetFullscreenWindowStyle(hwnd,g_fullscreen.windowed_style)) return;
+  if (!SetWindowPlacement(hwnd,&g_fullscreen.windowed_placement) ||
+      !SetWindowPos(hwnd,nullptr,0,0,0,0,SWP_NOMOVE|SWP_NOSIZE|SWP_NOZORDER|SWP_NOOWNERZORDER|SWP_FRAMECHANGED)) {
+   std::fprintf(stderr,"[WINDOW] windowed placement restore failed: %lu\n",GetLastError());
+   return;
+  }
+  g_fullscreen.enabled=false;
+ }
+ std::printf("[WINDOW] fullscreen=%s shortcut=F11/Alt+Enter\n",g_fullscreen.enabled?"on":"off");
+ std::fflush(stdout);
+}
+
 static LRESULT CALLBACK PsemuWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+	// Consume host shortcuts, including their releases, before controller mapping.
+	static bool fullscreen_enter_down=false;
+	const bool key_down=msg==WM_KEYDOWN || msg==WM_SYSKEYDOWN;
+	const bool key_up=msg==WM_KEYUP || msg==WM_SYSKEYUP;
+	const bool repeat=(static_cast<uintptr_t>(lp)&(uintptr_t{1}<<30))!=0;
+	if ((key_down || key_up) && wp==VK_F11) {
+		if (key_down && !repeat) ToggleFullscreen(hwnd);
+		return 0;
+	}
+	if ((key_down || key_up) && wp==VK_RETURN) {
+		if (key_down && !repeat && (static_cast<uintptr_t>(lp)&(uintptr_t{1}<<29))!=0) {
+			fullscreen_enter_down=true;
+			ToggleFullscreen(hwnd);
+			return 0;
+		}
+		if (fullscreen_enter_down) {
+			if (key_up) fullscreen_enter_down=false;
+			return 0;
+		}
+	}
 	switch (msg) {
+		case WM_SIZE:
+			if (g_window_ctx!=nullptr && g_window_ctx->window==hwnd && wp!=SIZE_MINIMIZED &&
+			    LOWORD(lp)!=0 && HIWORD(lp)!=0) g_window_ctx->swapchain_resize_pending=true;
+			break;
+		case WM_SYSCHAR:
+			if (wp==VK_RETURN) return 0; // Alt+Enter is a host shortcut; suppress the system beep.
+			break;
+		case WM_SYSKEYUP:
+			if (wp!=VK_RETURN) break;
+			[[fallthrough]]; // Release an ordinary Enter press even if Alt was pressed later.
 		case WM_KEYDOWN:
 		case WM_KEYUP: {
 			bool down = (msg == WM_KEYDOWN);
