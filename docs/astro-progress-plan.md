@@ -47,7 +47,8 @@ instruction identities are25ea92806a8f33d1/659 words and
 New opt-in PSEMU_ASTRO_PRODUCER_BUFFER_PROBE=1 snapshots the exact successfully
 bound, epoch-validated GPU views immediately before and after dispatch.
 Only linear128-byte/12288-record views and those eight in-range records qualify.
-Each shader captures its first8dispatches and powers of2 through512 (15pairs);
+Each shader captures its first8dispatches, powers of2 and every64th through8192
+(139pairs). The first sampled dispatches are still finite; coverage must include late title setup;
 default operation allocates no snapshot. Copies retain host staging until the
 existing command fence completes and log raw128-byte records in one fwrite.
 No guest input/output, shader math, producer writes or cache ownership changes.
@@ -56,7 +57,7 @@ The new test executes the actual production Vulkan copy/barrier helper around
 a real compute writer at indices0,12158,12222. It checks exact NaN payload bits
 before,32exact output words after, and all source/destination guard bytes.
 Validation reports0issues. Descriptor/allocation/overflow guards and the
-15-dispatch limit pass; existing12CPU+12Vulkan preparation-loop cases also pass.
+139-dispatch limit pass; existing12CPU+12Vulkan preparation-loop cases also pass.
 The standalone candidate builds. Native producer-capture confirmation is next;
 currently20988 still runs the prior2755 readback fix, without the new probe.
 

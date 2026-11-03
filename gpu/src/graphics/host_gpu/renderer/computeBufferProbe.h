@@ -10,7 +10,8 @@ inline int AstroProducerProbeKind(uint64_t hash, uint32_t words) {
     return -1;
 }
 inline bool AstroProducerProbeOrdinal(uint32_t ordinal) {
-    return ordinal < 8 || (ordinal <= 512 && (ordinal & (ordinal - 1)) == 0);
+    return ordinal < 8 || (ordinal <= 8192 &&
+        ((ordinal & (ordinal - 1)) == 0 || ordinal % 64 == 0));
 }
 // Check both the descriptor window and its owning allocation, without overflowing.
 inline bool AstroProducerProbeOffset(uint64_t view_offset, uint64_t view_bytes,

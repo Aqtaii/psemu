@@ -25,9 +25,9 @@ static void Bounds() {
     CHECK(AstroProducerProbeKind(0x25ea92806a8f33d1ull,660)==-1);
     CHECK(AstroProducerProbeKind(0,659)==-1);
     uint32_t samples=0;
-    for(uint32_t i=0;i<2048;++i)samples+=AstroProducerProbeOrdinal(i);
-    CHECK(samples==15);
-    std::printf("PASS producer probe descriptor/allocation bounds, overflow, shader identity and15-dispatch budget\n");
+    for(uint32_t i=0;i<16384;++i)samples+=AstroProducerProbeOrdinal(i);
+    CHECK(samples==139);
+    std::printf("PASS producer probe descriptor/allocation bounds, overflow, shader identity and139-dispatch budget\n");
 }
 static void Gpu(const char* shader,uint32_t index) {
     Device device(true,shader,true);
