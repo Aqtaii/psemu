@@ -8,6 +8,7 @@
 #include "graphics/host_gpu/rangeSet.h"
 #include "graphics/host_gpu/renderer/guestAddressTable.h"
 
+#include <atomic>
 #include <functional>
 #include <map>
 #include <memory>
@@ -92,6 +93,12 @@ public:
 	                             const std::function<void()>& reconstruct, uint64_t pending_fault_page = 0);
 	void ValidateGpuAccess(uint64_t vaddr, uint64_t size, bool is_read, bool is_written) const;
 	void SetTextureCache(TextureCache& texture_cache);
+	// A later lookup can replace an owner after an earlier descriptor or vertex/index
+	// binding was prepared. The renderer retries the whole packet before executing it.
+	[[nodiscard]] uint64_t GetBindingEpoch() const noexcept {
+		return m_binding_epoch.load(std::memory_order_acquire);
+	}
+
 
 	// Snapshot cache ownership under the same lock order as ObtainBuffer.
 	// Does not populate missing guest pages or implicitly upload CPU-dirty bytes.
@@ -106,6 +113,9 @@ public:
 
 private:
 	void RefreshCpuImageFragmentsLocked(uint64_t vaddr, uint64_t size);
+	void AdvanceBindingEpoch() noexcept;
+	std::atomic<uint64_t> m_binding_epoch {1};
+
 	struct CachedBuffer;
 	struct ReadbackWorker;
 

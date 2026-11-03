@@ -1314,6 +1314,7 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 	}
 	for (;;) {
 		const auto recording_generation = buffer->GetRecordingGeneration();
+		const auto binding_epoch = g_render_ctx->GetBufferCache()->GetBindingEpoch();
 		if (log_pipeline_phase) {
 			LogDrawPhase(draw.name, "CreatePipeline");
 		}
@@ -1366,6 +1367,18 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 		// fault-capable bindings, and rebuild it whenever a fault reset changes the generation.
 		BindDrawIndexBuffer(buffer, state->vk_buffer, index_source);
 		if (buffer->GetRecordingGeneration() != recording_generation) {
+			continue;
+		}
+
+		// A same-recording buffer join can retire a descriptor's owner without
+		// changing CommandBuffer generation. Retry every stage and vertex/index
+		// binding before any draw/dispatch writes can escape into a retired buffer.
+		if (g_render_ctx->GetBufferCache()->GetBindingEpoch() != binding_epoch) {
+			static std::atomic_uint rebind_logs {0};
+			if (rebind_logs.fetch_add(1, std::memory_order_relaxed) < 16) {
+				printf("[BUFFER-BINDING-RETRY] kind=draw before=%" PRIu64 " after=%" PRIu64 "\n",
+				       binding_epoch, g_render_ctx->GetBufferCache()->GetBindingEpoch());
+			}
 			continue;
 		}
 

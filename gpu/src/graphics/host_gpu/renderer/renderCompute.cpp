@@ -638,6 +638,7 @@ void RenderDispatchDirect(uint64_t submit_id, CommandBuffer* buffer, HW::Context
 
 	for (;;) {
 		const auto recording_generation = buffer->GetRecordingGeneration();
+		const auto binding_epoch = g_render_ctx->GetBufferCache()->GetBindingEpoch();
 		auto       vk_buffer            = buffer->Handle();
 		auto*      pipeline             = g_render_ctx->GetPipelineCache()->CreateComputePipeline(
 		    &input_info, &sh_ctx->GetCs(), cs_shader);
@@ -650,6 +651,18 @@ void RenderDispatchDirect(uint64_t submit_id, CommandBuffer* buffer, HW::Context
 		                vk::ShaderStageFlagBits::eCompute, DescriptorCache::Stage::Compute,
                         nullptr, has_htile_input ? &htile_input : nullptr);
 		if (buffer->GetRecordingGeneration() != recording_generation) {
+			continue;
+		}
+
+		// A same-recording buffer join can retire a descriptor's owner without
+		// changing CommandBuffer generation. Retry every stage and vertex/index
+		// binding before any draw/dispatch writes can escape into a retired buffer.
+		if (g_render_ctx->GetBufferCache()->GetBindingEpoch() != binding_epoch) {
+			static std::atomic_uint rebind_logs {0};
+			if (rebind_logs.fetch_add(1, std::memory_order_relaxed) < 16) {
+				printf("[BUFFER-BINDING-RETRY] kind=compute before=%" PRIu64 " after=%" PRIu64 "\n",
+				       binding_epoch, g_render_ctx->GetBufferCache()->GetBindingEpoch());
+			}
 			continue;
 		}
 

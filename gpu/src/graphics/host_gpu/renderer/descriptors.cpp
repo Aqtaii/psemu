@@ -1330,8 +1330,13 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 			return false;
 		}
 		static std::atomic_uint reset_logs {0};
-		if (reset_logs.fetch_add(1, std::memory_order_relaxed) < 16) {
-			std::fprintf(stderr, "[DESCRIPTOR-RETRY] recording reset during resource preparation\n");
+		const auto count = reset_logs.fetch_add(1, std::memory_order_relaxed) + 1u;
+		if (count <= 16 || (count & (count - 1u)) == 0) {
+			std::fprintf(stderr, "[DESCRIPTOR-RETRY] count=%u shader=0x%016" PRIx64
+			             " code=0x%016" PRIx64 " stage=%u before=%" PRIu64 " after=%" PRIu64
+			             " recording reset during resource preparation\n",
+			             count, program.shader_hash, program.instruction_code_hash, unsigned(program.stage),
+			             recording_generation, buffer->GetRecordingGeneration());
 		}
 		return true;
 	};

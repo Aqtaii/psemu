@@ -595,6 +595,12 @@ BufferCache::~BufferCache() {
 	m_buffers.clear();
 }
 
+void BufferCache::AdvanceBindingEpoch() noexcept {
+	if (m_binding_epoch.fetch_add(1, std::memory_order_release) == UINT64_MAX) {
+		EXIT("BufferCache: binding epoch overflow\n");
+	}
+}
+
 bool BufferCache::InvalidateMemory(PageFaultAccess access, uint64_t vaddr, uint64_t size,
                                    PageFaultPhase phase) noexcept {
 	const auto page = vaddr & ~(TRACKER_PAGE_SIZE - 1);
@@ -680,6 +686,7 @@ void BufferCache::UnmapMemory(uint64_t vaddr, uint64_t size) {
 		const auto offset = (it->first >= vaddr ? it->first - vaddr : UINT64_MAX);
 		if (offset <= size && it->second->size <= size - offset) {
 			it = m_buffers.erase(it);
+			AdvanceBindingEpoch();
 		} else {
 			++it;
 		}
@@ -745,10 +752,12 @@ std::pair<VulkanBuffer*, uint64_t> BufferCache::ObtainBuffer(CommandBuffer*  com
 		GraphicsRunSynchronizeCommandProcessors();
 		Transfer::WaitForGraphicsIdle(ctx);
 		static std::atomic_uint drain_logs {0};
-		if (drain_logs.fetch_add(1, std::memory_order_relaxed) < 8) {
-			printf("[BUFFER-QUEUE-DRAIN] addr=0x%016" PRIx64 " size=0x%016" PRIx64
-			       " owners=%zu queue=%u image_access=%u\n", vaddr, size, drained_owners.size(), queue,
-			       static_cast<unsigned>(image_access_drain));
+		const auto count = drain_logs.fetch_add(1, std::memory_order_relaxed) + 1u;
+		if (count <= 8 || (count & (count - 1u)) == 0) {
+			printf("[BUFFER-QUEUE-DRAIN] count=%u addr=0x%016" PRIx64 " size=0x%016" PRIx64
+			       " owners=%zu queue=%u image_access=%u recording=%" PRIu64 "\n",
+			       count, vaddr, size, drained_owners.size(), queue,
+			       static_cast<unsigned>(image_access_drain), command->GetRecordingGeneration());
 		}
 	}
         std::lock_guard transaction(m_resource_mutex);
@@ -995,6 +1004,9 @@ std::pair<VulkanBuffer*, uint64_t> BufferCache::ObtainBuffer(CommandBuffer*  com
 			}
 		}
 		it = m_buffers.emplace(cached->vaddr, std::move(cached)).first;
+		// Includes new owners: a physical-address table prepared by another stage
+		// must see the complete owner registry as well as replacement allocations.
+		AdvanceBindingEpoch();
 	}
 
 	auto&                                      cached = *it->second;

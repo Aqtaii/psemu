@@ -1,48 +1,59 @@
 # Astro Bot ilerleme planı
 
-## Current verified checkpoint - 3 November 2026, 15:06 Istanbul
+## Current verified checkpoint - 3 November 2026, 16:01 Istanbul
 
-Normal aa205f2 (owned PID14832, started11:54) passed both real-game guards:
-nine native-depth HTile Z-range snapshots and sixteen exact initialized S8
-sampled bindings were observed. HTile/lds/stencil CI runs41598825171,
-41605085286 and41607786203 are fully successful. The window remained responsive
-but its0.5FPS/66draws title stayed unchanged, stderr stopped at12:35:38 and
-timestamped file logs stopped atT2512.94. Audio alone continued. A read-only
-sample placed the hot graphics worker inside BufferCache::ObtainBuffer's
-tracker upload path; external faults waited for that worker. This is evidence
-of a graphics stall, not proof of a resource-lock deadlock. The exact upload
-range still needs a repeated context/stack sample if it recurs.
+Normal79d48e3 (owned PID8608, started15:06:37) produced all four requested
+completed-fence register checkpoints in eight real full Mesh records. The
+camera matrix s40..55 is entirely finite: s50=-1.0000667572021484, with the
+expected perspective matrix. Local geometry v1,v8,v13,v14,v25,v28,v29 is
+already NaN before fusedPC27d4/original2780, before camera-matrix reciprocal
+and projection. All final positions remain NaN. This narrows the sampled
+shader problem to upstream local geometry; it is not a bad camera matrix.
+The empty1/1 fallback has zero matrix registers because its math path was
+inactive and is not evidence of failed matrix reads.
 
-Real full2467-instruction Mesh output includes12vertices/6primitives, and later
-4vertices/2primitives. After the wide LDS address repair all four captured
-position components are NaN. The former zero trailing words were an independent
-address-overlap defect, but upstream nonfinite position production remains.
-The last completed present-source capture is black. No recognizable final-window
-Astro frame is confirmed.
+The current run again produced recognizable opening-video content in the
+completed intermediate Vulkan attachment (native_video_target_17937085317642626.bmp,
+3840x2160, visual check). Direct Computer Use inspection of the actual game
+window around15:31 still showed only the dark diagonal pattern. Final-window
+Astro content remains unachieved. The diagnostic gate was closed15:43:47 after
+all eight real records, removing extra probes without skipping game logic.
+Late file logs then stopped after T2519.79/storage-array expansion while audio
+continued. Repeated read-only thread samples place the graphics worker in
+command-processor synchronization/WaitForGraphicsIdle, rather than proving a
+single stuck bitmap instruction or a resource-lock deadlock.
 
-A bounded opt-in register probe now records four explicitly selected PCs, one
-lane per guest wave, with raw s32..63, a selectable32-VGPR window, EXEC and valid
-register masks. It uses only the existing completed-fence diagnostic SSBO and
-does not modify register values, guest memory, allocation counts or culling.
-Unconfigured checkpoints emit no additional shader instructions.
+Reference freshness matters: local f9e1958 is7October, while the current Jetsku
+default head744705ee1df4b0acb1af382ff5c32ca4a20aa5f7 is24October. Its
+renderDraw.cpp4085+ and pipeline/descriptors.cpp2343+ document and fix writes
+lost when a later buffer lookup joins and retires a previously bound owner.
+Our source has that same gap: command recording generation changes are checked,
+but same-recording owner replacement is not. Earlier bindings can write a
+retained but retired buffer while later readers use its replacement.
 
-Local ArcB580 GPU controls pass native32/merged64 capture, exact raw NaN payload,
-shared scalar and separate virtual vector banks, sparse EXEC, absent-register
-masks, untouched nonselected instances/groups, unchanged positions/indices and
-fault header. Four framebuffer cases each1024/1024 pixels; active validation0.
-The actual full2467/164block Astro ES/GS replay emits631179 words with all four
-transform checkpoints and passes spirv-val Vulkan1.2; replay inputs are synthetic,
-so this is shader translation validation, not a native game-frame result.
+The fix adds an atomic owner-registry epoch, advanced after insertion/merge
+and unmapping. Graphics retries all vertex, VS/Mesh, PS and index preparation;
+Compute retries all bindings before dispatch. New owners also invalidate a
+previously prepared physical-address table. Existing command-reset retries,
+retention and GPU/CPU ownership rules remain. Bounded late retry logs retain
+shader/code identities and the actual repeatedly drained ranges.
 
-New owned PID8608 / observer20488 started15:06:37 from the separate
-astro-register-checkpoint-output candidate (SHA25662C129BD689F73952747E4EF9F5140F8ECBBBC6DCE8486BD663888806FEFDF3B).
-The old owned run was closed for this measured replacement after exhausting
-its eight real Mesh records. The new normal full boot measures fused PCs27d4,2890,2980,2a20:
-before camera-matrix reciprocal, first transform multiply-add, first position
-output multiply-add, and after position construction. Last checkpoint reads
-v95..126; the others v0..31. All capture s32..63, including matrix and root words.
-This separates invalid matrix/resource inputs from invalid local geometry.
-Root Sarah fullscreen binary and user launchers remain unchanged.
+An extracted-production-loop transaction fixture reproduces the old lost write
+on real Vulkan and on an ordered CPU command backend. The fixed loops preserve
+32 exact output words in the live owner after within-stage, cross-stage,
+repeated and late-index joins; vertex/index bindings refresh too. Mesh
+preparation and existing recording-reset controls pass. All allocated bytes,
+padding and exterior guards match, with active Vulkan validation0. This verifies
+preparation and native writes with synthetic resources, not full cache/guest
+integration or a game frame. The separate native buffer-binding-epoch candidate
+builds; actual Astro epoch retries and visible output are the next check.
+
+Next normal full boot uses earlier fused PCs234,2724,27d4,2a20 and VGPR windows
+0,24,32,95 to inspect the original record, local orientation before scaling,
+orientation/matrix inputs and final positions. No first-active-lane probe change
+was needed: lane0 reached every selected real checkpoint in this run.
+CI41633318967 for79d48e3 succeeded completely. Root Sarah fullscreen binary and
+the user's two launchers remain unchanged.
 
 FAST_TEST remains removed. No early EOF, intro skip or fake game time is used.
 
