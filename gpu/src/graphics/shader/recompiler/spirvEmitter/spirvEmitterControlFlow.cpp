@@ -747,6 +747,13 @@ void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
 		state->buffer_address_group_values.Capture(
 		    inst, state->lane_half, [&](const IR::Operand& source) { return EmitValueLoad(state, source); });
 	}
+    if (inst.op == IR::Opcode::DsReadB32 && inst.memory.kind == IR::ResourceKind::Lds &&
+        inst.memory.component_count > 1u && inst.memory.component_index == 0u) {
+        // LowerDsRead splits B64/B96/B128 into scalar accesses with the same PC.
+        // Capture each virtual bank before any destination can replace ADDR.
+        state->lds_read_address_group_values.Capture(
+            inst, state->lane_half, [&](const IR::Operand& source) { return EmitValueLoad(state, source); });
+    }
 	if (state->program->uses_guest_address_table && inst.scalar_memory_group.valid &&
 	    inst.scalar_memory_group.component_index == 0) {
 		if(inst.scalar_memory_group.descriptor_dwords==4) {

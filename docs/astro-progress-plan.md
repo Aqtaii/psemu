@@ -1,43 +1,50 @@
 # Astro Bot ilerleme planı
 
-## Current verified checkpoint - 3 November 2026, 10:39 Istanbul
+## Current verified checkpoint - 3 November 2026, 11:28 Istanbul
 
-Normal source9a410d0 passed the former depth resummarize rejection and reached98
-shaders. It then stopped on a read-only0xc0000 SSBO spanning a GPU-current
-0x30000 HTile owner. The linked native depth is1920x1080 D32S8 with Z-only HTile.
-Final saved RGB is still zero; recognizable Astro output is NOT achieved.
+Normal ef56e5c (10:39:37--11:28:37, owned PID17632, exit321) uses the new
+native-depth HTile bridge successfully. The actual record is:
+metadata0x1bd38c70000+0x30000, view0xc0000, depth0x1bd38180000,
+1920x1080 nativeD32S8, pitch_blocks2,32400 actual8x8 Z ranges.
+The bounded DEPTH-RESUMMARIZE marker also appears. The former metadata read
+guard is passed; this does not independently prove every subsequent dispatch
+completed. CI41598825171 / job125792453578 is fully successful.
 
-A narrow native-depth bridge is implemented and locally built. It recognizes
-the actual39-instruction ZMin/ZMax reader by stable instruction identity
-(63 words, FNV1a64 5fd60ef3de600325), validates ownership/pitch/layout, drains
-producers once, downloads actual depth and supplies conservative8x8 Z bounds
-in a temporary read-only SSBO. Guest metadata backing, image layout, depth/
-stencil contents and ownership trackers remain unchanged. The original compute
-shader executes normally. Other metadata readers keep the existing guard.
+The next fatal is a sampled stencil-plane view, not the prior HTile read:
+guest k8UInt(raw5), R8Uint view13, ImageUint resource9, Dim2D read-only,
+swizzle0x924(RRRR), descriptor1920x1080/pitch2048, nativeD32S8 pitch1920,
+stencil address0x1bd389f0000+0x280000. The current depth-only descriptor/view
+validation rejects it. Add an explicitly owned initialized stencil aspect;
+do not reinterpret depth floats or upload stale guest bytes.
 
-CPU swizzle/range tests and extracted-production lock/ownership/rejection tests
-pass. Both the reference reader and the private original10500-byte consumer
-SPIR-V pass on Arc B580:32640 output pairs,2073600 depth/stencil samples
-preserved, exterior/padding/input guards intact, active validation0 issues.
-Actual IR lowering independently confirms the private reader identity above.
-These controlled GPU results are not a visible game-frame milestone.
+The128-group diagnostic now found real non-dummy Mesh output:12 vertices,
+6 primitives, packed count0x0006000c, indices(0,1,2). Recorded positions are
+(NaN,0,0,0). Thus not all draws are empty. Empty40/50-group sweeps were also
+recorded, but the103-group draw was not observed before expensive diagnostics
+were disabled11:25 to finish the normal run. Zero counts can be legitimate
+inactive effects; never force culling/allocation success.
 
-Normal combined candidate started10:39:37 (owned PID17632), separate
-D:/Tools/psemu-build/astro-htile-zrange-output/loader.exe. SHA256:
-4D733824542727E8FD19DCC504EE0E339FE8034899990800B8035B85033F78F4.
-Runtime bridge acceptance/completion and final presentation are still pending.
-The measurement gate opens after the full2467-instruction title Mesh compile.
+A concrete shader translation bug is fixed locally: LowerDsRead expands one
+B64/B96/B128 into multiple same-PC IR loads, but a destination can replace its
+own address after component0. The original Astro position load is
+DS_READ_B128 v[0:3],v0,offset304 at originalGS PC34ac. The emitter now captures
+the original address independently for both virtual banks and reuses it
+through all components. It never substitutes finite coordinates for NaNs.
 
-The last64 completed Mesh records sampled first_vertex1600..1740 and all had
-dummy1/1 output. Actual packed scalar counts at fusedPC0x3438 were zero. Earlier
-samples covered0..140; neither set establishes all geometry is empty. The new
-bounded128-group sweep covers every group of the observed2048-point draw at
-instance0 without allowing early empty UI records to consume the real-output
-logging budget. Fifteen group/count GPU controls passed before this run.
-Related IR, default/multiwave emitter, all15 group/count Vulkan controls,
-HTile clear routing, metadata slices and existing buffer-publication regressions
-all pass on the final source. No additional production change followed the
-separately built native candidate.
+Corrected controlled GPU tests prove the address dependency: old-address/
+no-overlap1024/1024 pixels, old-address/overlap0/1024, fixed1024/1024; active
+validation0 issues. Initial sparse test initialization was itself predicated
+and was corrected before this controlled comparison. B64/B96/B128, every
+address/destination overlap, sparse EXEC, repeated PC and32/64/128 physical
+invocations now pass the public Vulkan runner (four framebuffer cases).
+Actual B128 decoder/IR PC/address/component metadata and all existing ES/GS
+resource regressions pass. Separate astro-lds-address-output builds.
+
+The LDS source is not yet verified in a native boot. Combine it with the
+guarded sampled-stencil view support for the next normal run. Root Sarah
+fullscreen binary and user launch scripts remain unchanged. Recognizable
+final-window Astro output is NOT achieved. See later dated records for
+controlled HTile details and historical milestones.
 
 FAST_TEST remains removed. No early EOF, intro skip or fake game time is used.
 
@@ -562,3 +569,13 @@ started 2026-11-03 10:39:37+03 (PID17632), with 128 groups selected from input
 vertex0 and no FAST_TEST, no opening skip and no depth-test override. Runtime
 HTile bridge use and the first recognizable final-window frame are still
 UNVERIFIED. Root Sarah loader SHA256 F5DDE8C9073563A2C1B26BD761DAD2691B007675F6A1A774FF60D5F8F9AB5533 is unchanged.
+
+### 2026-11-03: Wide LDS address lifetime
+
+Actual ef56e5c output includes non-dummy12/6 allocations but invalid clip
+coordinates. DS_READ_B128 v[0:3],v0,offset304 reloads its overwritten source
+through four scalarized IR operations. The fixed emitter retains the original
+address by original PC and virtual bank; single-word LDS and GDS paths retain
+their existing behavior. Vulkan control cases and exact decoder/IR regression
+are summarized in the current checkpoint. Local candidate builds; native
+coordinate repair is pending the sampled-stencil gate.

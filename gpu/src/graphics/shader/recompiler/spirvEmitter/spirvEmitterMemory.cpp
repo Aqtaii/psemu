@@ -139,9 +139,17 @@ uint32_t EmitSelectU32Value(EmitterState* state, uint32_t condition, uint32_t tr
 
 uint32_t EmitByteAddress(EmitterState* state, const IR::Instruction& inst, uint32_t first_src,
                          uint32_t src_count) {
+    const std::array<uint32_t, 4>* captured = nullptr;
+    if (inst.op == IR::Opcode::DsReadB32 && inst.memory.kind == IR::ResourceKind::Lds &&
+        inst.memory.component_count > 1u) {
+        captured = state->lds_read_address_group_values.Find(inst.pc, state->lane_half);
+        if (!captured) {
+            EXIT("LDS read address group was not captured at pc 0x%08x\n", inst.pc);
+        }
+    }
 	uint32_t address = ConstantU32(state, inst.memory.offset);
 	for (uint32_t i = 0; i < src_count; i++) {
-		address = EmitAddU32(state, address, EmitValueLoad(state, inst.src[first_src + i]));
+		address = EmitAddU32(state, address, (captured ? (*captured)[first_src + i] : EmitValueLoad(state, inst.src[first_src + i])));
 	}
 	return address;
 }

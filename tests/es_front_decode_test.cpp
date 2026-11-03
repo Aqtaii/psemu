@@ -41,6 +41,28 @@ std::vector<uint32_t> ReadCapturedCode(const char* path) {
 int main(int argc,char** argv) {
  {
   using namespace Libs::Graphics::ShaderRecompiler;
+  // Actual aliasing form at Astro's position-export load; only this instruction.
+  const std::array<uint32_t,3> words{0xdbfc0130u,0u,0xbf810000u};
+  Decoder::Program decoded;CFG::Graph graph;IR::Program ir;std::string error;
+  Require(Decoder::DecodeProgram(words,&decoded,&error));
+  Require(decoded.instructions[0].opcode==Decoder::Opcode::DsReadB128);
+  Require(CFG::BuildGraph(decoded,&graph,&error));
+  Require(IR::LowerProgram(decoded,graph,Libs::Graphics::ShaderType::Mesh,64,&ir,&error));
+  uint32_t components=0;
+  for(const auto& block:ir.blocks)for(const auto& inst:block.instructions)
+   if(inst.op==IR::Opcode::DsReadB32) {
+    Require(inst.pc==0 && inst.src_count==1 && inst.memory.kind==IR::ResourceKind::Lds);
+    Require(inst.src[0].reg.file==IR::RegisterFile::Vector && inst.src[0].reg.index==0);
+    Require(inst.dst.reg.file==IR::RegisterFile::Vector && inst.dst.reg.index==components);
+    Require(inst.memory.data_dwords==1 && inst.memory.component_count==4);
+    Require(inst.memory.component_index==components && inst.memory.offset==304+4*components);
+    ++components;
+   }
+  Require(components==4);
+  std::puts("[WIDE-LDS] aliasing B128 decode and original-PC/component/address metadata=passed");
+ }
+ {
+  using namespace Libs::Graphics::ShaderRecompiler;
   // Address relocation and noninstruction data must not change the code identity.
   std::array<uint32_t,4> words{0xbf800000u,0xbf810000u,0xdeadbeefu,0x12345678u};
   auto lower=[](std::span<const uint32_t> code) {

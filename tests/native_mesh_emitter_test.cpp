@@ -868,6 +868,57 @@ void WriteLaneBackingFixture(const IR::Program& program, const ShaderVertexInput
   dynamic_check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,16}),EmitBinaryU32(&state,OpIAdd,EmitMeshGuestLocalInvocationIndex(&state),bias));
  }
  state.lane_half=0;
+ // A single DS_READ_B128 samples its address before any overlapping VGPR write.
+ // The actual Astro position export uses DS_READ_B128 v[0:3],v0,offset304.
+ EmitBarrier(&state,barrier);
+ init_lds_registers(0x3f800000u);Require(EmitGuestInstruction(&state,ds_write));
+ EmitBarrier(&state,barrier);
+ const uint32_t wide_offset=logical_count>=128 ? 304u : 32u;
+ for(uint32_t width:{2u,3u,4u})for(bool sparse:{false,true})
+ for(uint32_t alias=0;alias<5;++alias)for(uint32_t repeat=0;repeat<2;++repeat) {
+  const uint32_t address_reg=alias<4 ? 13+alias : 17;
+  // Initialize every lane before testing sparse destination preservation.
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,0xffffffff));
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,0xffffffff));
+  for(uint32_t half=0;half<2;++half) {
+   state.lane_half=half;
+   for(uint32_t c=0;c<4;++c)EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,13+c),ConstantU32(&state,0xabcdef01u));
+   const auto slot=EmitBinaryU32(&state,OpBitwiseAnd,
+    EmitBinaryU32(&state,OpIAdd,EmitMeshGuestLocalInvocationIndex(&state),ConstantU32(&state,repeat)),ConstantU32(&state,3));
+   EmitStoreU32(&state,Reg(IR::RegisterFile::Vector,address_reg),
+    EmitBinaryU32(&state,OpShiftLeftLogical,slot,ConstantU32(&state,4)));
+  }
+  state.lane_half=0;
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,sparse ? 0x55555555u : 0xffffffffu));
+  EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,sparse ? 0xaaaaaaaau : 0xffffffffu));
+  for(uint32_t c=0;c<width;++c) {
+   auto load=ds_read;load.pc=0x34ac;load.dst=Reg(IR::RegisterFile::Vector,13+c);
+   load.src[0]=Reg(IR::RegisterFile::Vector,address_reg);
+   load.memory.offset=wide_offset+c*4;load.memory.data_dwords=1;
+   load.memory.component_index=c;load.memory.component_count=width;
+   Require(EmitGuestInstruction(&state,load));
+  }
+  for(uint32_t half=0;half<2;++half) {
+   state.lane_half=half;
+   const auto slot=EmitBinaryU32(&state,OpBitwiseAnd,
+    EmitBinaryU32(&state,OpIAdd,EmitMeshGuestLocalInvocationIndex(&state),ConstantU32(&state,repeat)),ConstantU32(&state,3));
+   const auto address=EmitBinaryU32(&state,OpShiftLeftLogical,slot,ConstantU32(&state,4));
+   const auto first=EmitBinaryU32(&state,OpIAdd,
+    EmitBinaryU32(&state,OpShiftLeftLogical,slot,ConstantU32(&state,2)),ConstantU32(&state,wide_offset/4));
+   const auto bit=EmitBinaryU32(&state,OpBitwiseAnd,
+    EmitBinaryU32(&state,OpShiftRightLogical,ConstantU32(&state,sparse ? (half?0xaaaaaaaau:0x55555555u):0xffffffffu),
+     EmitSubgroupLocalInvocationId(&state)),ConstantU32(&state,1));
+   for(uint32_t c=0;c<width;++c) {
+    const auto expected=EmitBinaryU32(&state,OpIAdd,first,ConstantU32(&state,0x3f800000u+c));
+    const auto untouched=c==alias ? address : ConstantU32(&state,0xabcdef01u);
+    dynamic_check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,13+c}),
+     EmitSelectU32Value(&state,EmitNotEqualZeroBool(&state,bit),expected,untouched));
+   }
+  }
+  state.lane_half=0;
+ }
+ EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,0),ConstantU32(&state,0xffffffff));
+ EmitStoreU32(&state,Reg(IR::RegisterFile::Exec,1),ConstantU32(&state,0xffffffff));
  // Out-of-range loads return zero; writes cannot corrupt the live allocation or outputs.
  ds_read.src[0]=Imm(logical_count*4);Require(EmitGuestInstruction(&state,ds_read));
  check(EmitRegisterLoad(&state,{IR::RegisterFile::Vector,16}),0);
