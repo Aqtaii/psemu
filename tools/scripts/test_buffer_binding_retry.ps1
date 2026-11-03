@@ -59,10 +59,10 @@ try{
  if($LASTEXITCODE){throw 'Buffer binding fixture shader compilation failed'}
  & "$env:VULKAN_SDK\Bin\spirv-val.exe" --target-env vulkan1.2 buffer_binding_retry_test.spv
  if($LASTEXITCODE){throw 'Buffer binding fixture SPIR-V invalid'}
- & clang-cl /nologo /std:c++20 /O2 /EHsc /MD "/I$out" "/I$env:VULKAN_SDK\Include" "$root\tests\buffer_binding_retry_test.cpp" /Fe:buffer_binding_retry_test.exe /Fo:buffer_binding_retry_test.obj /link "/LIBPATH:$env:VULKAN_SDK\Lib" vulkan-1.lib
+ & clang-cl /nologo /std:c++20 /O2 /EHsc /MD "/I$out" "/I$env:VULKAN_SDK\Include" "$root\tests\buffer_binding_retry_test.cpp" /Fe:buffer_binding_retry_test.exe /Fo:buffer_binding_retry_test.obj /link "/LIBPATH:$env:VULKAN_SDK\Lib" vulkan-1.lib /delayload:vulkan-1.dll delayimp.lib
  if($LASTEXITCODE){throw 'Production buffer binding loop fixture compilation failed'}
  & .\buffer_binding_retry_test.exe --cpu buffer_binding_retry_test.spv
- if($LASTEXITCODE){throw 'Production buffer binding CPU transaction regression failed'}
+ if($LASTEXITCODE){throw ('Production buffer binding CPU transaction regression failed; exit='+$LASTEXITCODE)}
  if($RunGpu){
   $saved=$env:VK_LAYER_PATH
   try{

@@ -55,6 +55,8 @@ was needed: lane0 reached every selected real checkpoint in this run.
 CI41633318967 for79d48e3 succeeded completely. Root Sarah fullscreen binary and
 the user's two launchers remain unchanged.
 
+CI41641183875 stopped before the new CPU fixture printed any case output. The fixture linked Vulkan as an unconditional DLL dependency even in CPU mode, although the runner only installs SDK tools and may have no Vulkan runtime. The fixture now delay-loads vulkan-1.dll: CPU mode performs no Vulkan calls; GPU mode retains the same real Vulkan backend and active validation. Production emulator and current normal run are unchanged. Local CPU/Vulkan cases pass with zero active validation issues, and PE inspection confirms Vulkan is a delay import. A fresh CI run will verify the runner diagnosis.
+
 FAST_TEST remains removed. No early EOF, intro skip or fake game time is used.
 
 Recognizable final-window Astro output is still unconfirmed. Use this checkpoint for current status; the dated sections below are historical records. Detailed evidence and limitations are in [astro-avplayer.md](astro-avplayer.md).
