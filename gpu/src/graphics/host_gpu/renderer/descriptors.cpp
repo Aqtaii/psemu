@@ -1309,7 +1309,8 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
                      vk::PipelineBindPoint pipeline_bind_point, vk::PipelineLayout layout,
                      const ShaderStageRuntime& runtime, vk::ShaderStageFlags vk_stage,
                      DescriptorCache::Stage stage, const ShaderRecompiler::IR::MeshPointGroupPayload* point,
-                     const ShaderBufferDataOverride* data_override) {
+                     const ShaderBufferDataOverride* data_override,
+                     std::vector<BufferView>* bound_buffers) {
 	KYTY_PROFILER_FUNCTION();
 	EXIT_IF(buffer == nullptr || !runtime);
 	const auto& program  = *runtime.program;
@@ -1635,6 +1636,9 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 		vk_buffer.pushConstants(layout, vk_stage, program.bindings.push_constant_offset,
 		                        program.bindings.push_constant_size, payload.data());
 	}
+    // Return only the views actually bound by this completed preparation pass.
+    // Callers must still validate recording generation and buffer-owner epoch.
+    if (bound_buffers) *bound_buffers = descriptors.buffers;
 }
 
 } // namespace Libs::Graphics

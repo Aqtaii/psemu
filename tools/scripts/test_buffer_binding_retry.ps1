@@ -34,6 +34,7 @@ $common=@'
  uint32_t thread_group_x=32,thread_group_y=1,thread_group_z=1;
  std::span<const uint32_t> cs_shader;
  ShaderBufferDataOverride htile_input;const bool has_htile_input=false;
+ const bool capture_producer=false;const uint32_t producer_ordinal=0;
 '@
 $draw_common=@'
  CommandBuffer* buffer=&active->command;

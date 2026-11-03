@@ -311,6 +311,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_buffer_binding_retry.ps1
 
+      - name: Test bounded compute producer buffer snapshots
+        shell: pwsh
+        run: ./tools/scripts/test_compute_buffer_probe.ps1
+
       - name: Validate bounded Mesh register checkpoint SPIR-V
         shell: pwsh
         run: ./tools/scripts/test_mesh_register_checkpoints_gpu.ps1 -ValidateOnly

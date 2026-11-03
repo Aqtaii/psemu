@@ -1,47 +1,92 @@
 # Astro Bot ilerleme planı
 
-## Current verified checkpoint - 3 November 2026, 21:12 Istanbul
+## Current verified checkpoint - 3 November 2026, 22:02 Istanbul
 
-Normal17944 passed the prior fragment-preparation stall in this trial: no
-446e217b735d37a4 retry storm, further resource loads throughT2652/fd9948,
-and completed flip selections1792/1793 rather than the old1536/1537 plateau.
-Its latest saved final presentation source, frame00008 at present1304, is
-still black. At20:57:54 it exited321 with a new exact failure:
-BufferCache readback worker received state3 (Claimed), source line465.
+First recognizable Astro content in the final game window remains unconfirmed.
+The last inspected final-presentation source was entirely black.
 
-Both buffer and image workers waited only for idle states, then treated the
-requester's intermediate Claimed state as unsupported. The writer claims the
-slot before filling payload and release-storing Requested/InitRequested; the
-worker must keep waiting during that interval. A shared production wait helper
-now includes Claimed in each worker's exact pending-state list. Unexpected-state
-validation, payload release/acquire ordering, ownership, copy/fence work and
-fault-transaction serialization remain. See C++ draft atomics.wait:
+The user-directed early checkpoints completed in normal run17944, source
+a028c35. All eight real records reached original02ac/0398/0a8c/13d4
+(fused0300/03ec/0ae0/1428). Selected life/color inputs at02ac/0398 were
+finite; v14/v15/v16 were already NaN at0a8c in every record. Raw s63 was
+04020201 (high-byte mode4). The actual view matrix s40..55 at13d4 was entirely
+finite. Thus1470 normalization is downstream of the first observed bad values.
+The bounded search is0398..0a8c; no specific bad producer is yet proved.
+
+Current normal run20988 started21:16:38 with source2755ba8 and SHA256
+7A14BEA77995BA5758AE474E1BCF6859C8D9249101D4507FFD8A9286B2018E92.
+FAST_TEST is absent. Its selectors distinguish the raw particle load from the
+optional local transform:
+
+| Original PC | Fused PC | Vector bank | Meaning before instruction |
+| --- | --- | --- | --- |
+| 04f8 | 054c | 0..31 | v14 record index before flag/particle loads |
+| 0518 | 056c | 0..31 | v14..17 after0500 raw wide load |
+| 0540 | 0594 | 96..127 | local transform inputs v100..103, v117..120, if reached |
+| 0720 | 0774 | 0..31 | position after local transform and EXEC restoration |
+
+Completed native20988 now gives the next actual data boundary in all eight
+real records (12/6 or4/2 geometry allocations). At0518, raw particle positions
+v14..16 are finite; examples(28.3447,-35.8146,1.14420) and
+(-33.8117,-6.07863,-14.9604). At0540, local transform inputs v100..102 and
+v117..120 are already NaN, while v103=0. At0720, v14..16 have become NaN.
+Thus the raw0500 overlapping load is not the observed first bad input.
+The local transform consumes preexisting bad data from the0508/0510 loads.
+These are completed-fence GPU register records, not CPU-shadow guesses.
+
+The eight transform indices are12223,12159,12095,12222,12158,12094,12221,12157.
+Actual root descriptors identify a128-byte-stride/12288-record ping-pong
+transform buffer, distinct from the64-byte-stride raw particle buffer.
+A later read-only CPU shared-backing sample is zero and does not establish
+the GPU contents or draw-time lifetime. Do not use it to contradict the
+captured GPU NaN values. The diagnostic gate closed after8real records.
+
+Native binding logs identify the two relevant compute writers. Their captured
+instruction identities are25ea92806a8f33d1/659 words and
+1cbf799b3cec5a07/5798 words, independent of ASLR/trailing binary data.
+New opt-in PSEMU_ASTRO_PRODUCER_BUFFER_PROBE=1 snapshots the exact successfully
+bound, epoch-validated GPU views immediately before and after dispatch.
+Only linear128-byte/12288-record views and those eight in-range records qualify.
+Each shader captures its first8dispatches and powers of2 through512 (15pairs);
+default operation allocates no snapshot. Copies retain host staging until the
+existing command fence completes and log raw128-byte records in one fwrite.
+No guest input/output, shader math, producer writes or cache ownership changes.
+
+The new test executes the actual production Vulkan copy/barrier helper around
+a real compute writer at indices0,12158,12222. It checks exact NaN payload bits
+before,32exact output words after, and all source/destination guard bytes.
+Validation reports0issues. Descriptor/allocation/overflow guards and the
+15-dispatch limit pass; existing12CPU+12Vulkan preparation-loop cases also pass.
+The standalone candidate builds. Native producer-capture confirmation is next;
+currently20988 still runs the prior2755 readback fix, without the new probe.
+
+04f8 deliberately samples before both flag and particle loads. Existing emitter
+logic already captures only component0 of a scalarized wide instruction, so
+later components do not overwrite that instruction's checkpoint. The full
+2467-instruction/164-block replay validates as Vulkan1.2 SPIR-V (631203 words).
+This replay uses synthetic resources and is not native frame evidence.
+
+The prior run17944 passed the earlier192-byte fragment-preparation retry
+livelock: resources advanced throughT2652/fd9948, flip selections1792/1793,
+without the former446e217b735d37a4 retry storm. Its saved frame00008 at
+present1304 remained black. It then exited321 at20:57:54 because BufferCache's
+readback worker received state3 (Claimed).
+
+Source2755ba8 fixes that actual host publication race in both buffer and image
+workers. A writer claims a slot, fills its payload, then release-stores the
+request. Workers now continue waiting through Claimed using a shared production
+helper. Unexpected-state validation, release/acquire ordering, ownership,
+copy/fence work, and fault-transaction serialization remain. Reference:
 https://eel.is/c++draft/atomics.wait .
 
-The regression compiles actual state enums and wait-call arguments extracted
-from both production workers against that helper. Old controls deterministically
-return the unsupported claim (buffer3, image1). Fixed cases hold claims, force
-early wakes before payload publication, verify complete payload/canaries after
-publication, initialize and stop correctly, and still return unexpected states
-to caller validation. Two stress cases verify20000 exact payload handoffs.
-These are host-protocol tests, not a native GPU/guest readback result. The separate candidate builds, and the existing real PageManager/shared-backing protection regression also passes. Native confirmation of this next fix remains pending.
-
-User-directed earlier checkpoints are now verified in normal17944 (a028c35,
-started20:09:11). All eight real records reached original02ac,0398,0a8c,13d4
-(fused0300,03ec,0ae0,1428). The selected life/color values at02ac/0398 are
-finite; v14/v15/v16 are already NaN at0a8c in every record. Raw s63 is04020201,
-mode high byte4. The actual view matrix s40..55 at13d4 is entirely finite.
-This confirms that original1470 normalization is downstream of the first
-observed bad inputs. The current search region is0398..0a8c, including the
-0500 overlapping raw vector load and the optional local-position transform
-ending with06c4/06cc/06d4 writes. No specific producer has yet been proved wrong.
-
-The new early selection passes full2467/164-block SPIR-V validation629767 words.
-Complete CI41649290703 for a028c35 succeeds. The preceding23120 run exited
-with control-C/close status0xc000013a atT211 before title; it does not validate
-the stream-drain fix. Current17944 continues beyondT2009 with its diagnostic
-gate closed after eight records. Passage of the late192-byte retry loop and
-recognizable final-window content remain unverified. Earlier evidence follows.
+The regression extracts actual worker enums and pending-state arguments.
+Old controls deterministically return the unsupported claim (buffer3/image1);
+fixed cases verify held claims, early wakes, published payload/canaries,
+initialization, stop, unexpected states, and20000 exact handoffs. These are
+host protocol tests. The separate native candidate builds and the existing
+real PageManager/shared-backing protection regression passes. Complete
+CI41692236824 passes. Native confirmation beyond the prior crash remains
+pending in20988. Earlier evidence follows.
 
 Source34b7a28 normal boot9256 reached title_controller_ship atT1627.05 and
 executed the full2467-instruction Mesh program. The same-recording buffer-owner
@@ -111,10 +156,11 @@ selection above. The next existing selector uses original04f8/0518/0540/0720
 (fused054c/056c/0594/0774; VGPR bases0/0/96/0). It observes the record index
 before the overlapping0500 vector load, the loaded v14..17 after it, the
 local-transform parameters v100..103/v117..120 when that branch executes, and
-the position after EXEC is restored. Selecting04f8 avoids a pre-load trace
-being overwritten by the later lowered components sharing PC0500. Selecting
-0720 guarantees active EXEC after0714, including records that skip the local
-transform. No speculative math workaround or forced finite coordinates is used.
+the position after EXEC is restored. Selecting04f8 separates the record-index snapshot from the flag and particle
+loads. The existing emitter already records only component0 of a lowered
+wide instruction, so PC0500 itself would also preserve the initial bank.
+Selecting0720 guarantees active EXEC after0714, including records that skip
+the local transform. No speculative math workaround or forced finite coordinates is used.
 
 Root Sarah fullscreen binary and the user's two launchers remain unchanged.
 

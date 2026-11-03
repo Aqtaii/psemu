@@ -15,6 +15,8 @@
 #include "graphics/host_gpu/renderer/depthRenderTarget.h"
 #include "graphics/host_gpu/renderer/descriptorCache.h"
 #include "graphics/host_gpu/renderer/descriptors.h"
+#include "graphics/host_gpu/renderer/computeBufferProbe.h"
+#include "graphics/host_gpu/vma.h"
 #include "graphics/host_gpu/renderer/framebufferCache.h"
 #include "graphics/host_gpu/renderer/imageInfo.h"
 #include "graphics/host_gpu/renderer/htileZRange.h"
@@ -34,15 +36,74 @@
 #include "libs/errno.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <memory>
+#include <cstdio>
+#include <cstdlib>
+#include <fmt/format.h>
 #include <span>
 #include <unordered_map>
 #include <vector>
 
 namespace Libs::Graphics {
+// Diagnostic copies from the exact bound GPU views, never from CPU guest shadows.
+static void CaptureAstroProducerBuffers(CommandBuffer* command, const ShaderStageRuntime& runtime,
+    std::span<const BufferView> views, uint64_t submit, uint32_t ordinal, bool after) {
+    constexpr uint32_t indices[] = {12223,12159,12095,12222,12158,12094,12221,12157};
+    struct Copy {
+        vk::Buffer source;
+        uint64_t source_offset, destination_offset, guest;
+        uint32_t slot, record;
+        bool read, written;
+    };
+    std::vector<Copy> copies;
+    const auto& program = *runtime.program;
+    const auto& resources = *runtime.resources;
+    for (uint32_t slot = 0; slot < views.size(); ++slot) {
+        const auto& view = views[slot];
+        if (!view.buffer || !(view.buffer->usage & vk::BufferUsageFlagBits::eTransferSrc)) continue;
+        const auto descriptor = DecodeNativeDescriptor<ShaderBufferResource>(resources.buffers[slot]);
+        if (descriptor.SwizzleEnabled()) continue;
+        for (const auto index : indices) {
+            uint64_t source_offset = 0;
+            if (!AstroProducerProbeOffset(view.offset, view.range, view.buffer->buffer_size,
+                    descriptor.Stride(), descriptor.NumRecords(), index, &source_offset)) continue;
+            copies.push_back({view.buffer->buffer,source_offset,copies.size()*128ull,
+                descriptor.Base48(),slot,index,program.info.buffers[slot].read,program.info.buffers[slot].written});
+        }
+    }
+    if (copies.empty()) return;
+    auto* ctx = g_render_ctx->GetGraphicCtx();
+    auto staging = std::shared_ptr<VulkanBuffer>(new VulkanBuffer,[ctx](VulkanBuffer* value) {
+        VulkanDeleteBuffer(ctx,value);delete value;
+    });
+    staging->usage = vk::BufferUsageFlagBits::eTransferDst;
+    staging->memory.property = vk::MemoryPropertyFlagBits::eHostVisible |
+                               vk::MemoryPropertyFlagBits::eHostCoherent;
+    VulkanCreateBuffer(ctx,copies.size()*128,staging.get());
+    std::vector<AstroProducerBufferCopy> recording;
+    for (const auto& copy : copies)
+        recording.push_back({copy.source,copy.source_offset,copy.destination_offset});
+    RecordAstroProducerBufferCopies(command->Handle(),staging->buffer,copies.size()*128,recording,VULKAN_HPP_DEFAULT_DISPATCHER);
+    const auto hash = program.instruction_code_hash;
+    command->OnFenceComplete([ctx,staging,copies=std::move(copies),submit,ordinal,after,hash] {
+        void* mapped=nullptr;VulkanMapMemory(ctx,&staging->memory,&mapped);
+        for (const auto& copy : copies) {
+            std::array<uint32_t,32> words{};
+            std::memcpy(words.data(),static_cast<const uint8_t*>(mapped)+copy.destination_offset,128);
+            auto line=fmt::format("[ASTRO-PRODUCER-BUFFER] submit={} code=0x{:016x} ordinal={} phase={} slot={} guest=0x{:016x} record={} read={} write={} source=completed-fence raw=",
+                submit,hash,ordinal,after ? "after" : "before",copy.slot,copy.guest,copy.record,copy.read,copy.written);
+            for (const auto word : words) line+=fmt::format(" {:08x}",word);
+            line+='\n';std::fwrite(line.data(),1,line.size(),stdout);
+        }
+        VulkanUnmapMemory(ctx,&staging->memory);
+    });
+}
+
 static uint64_t BufferDescriptorSize(const ShaderBufferResource& descriptor) {
 	const uint64_t records = descriptor.NumRecords();
 	const uint64_t stride  = descriptor.Stride();
@@ -636,6 +697,17 @@ void RenderDispatchDirect(uint64_t submit_id, CommandBuffer* buffer, HW::Context
     const bool has_htile_input = PrepareHtileZRangeRead(
         input_info, thread_group_x, thread_group_y, thread_group_z, &htile_input);
 
+    static const bool producer_probe = [] {
+        const auto* flag=std::getenv("PSEMU_ASTRO_PRODUCER_BUFFER_PROBE");
+        return flag && std::strcmp(flag,"1")==0;
+    }();
+    const int producer_kind = producer_probe ?
+        AstroProducerProbeKind(program.instruction_code_hash,program.instruction_code_words) : -1;
+    static std::array<std::atomic_uint,2> producer_ordinals{};
+    const uint32_t producer_ordinal = producer_kind >= 0 ?
+        producer_ordinals[producer_kind].fetch_add(1,std::memory_order_relaxed) : 0;
+    const bool capture_producer = producer_kind >= 0 && AstroProducerProbeOrdinal(producer_ordinal);
+
 	for (;;) {
 		const auto recording_generation = buffer->GetRecordingGeneration();
 		const auto binding_epoch = g_render_ctx->GetBufferCache()->GetBindingEpoch();
@@ -645,11 +717,13 @@ void RenderDispatchDirect(uint64_t submit_id, CommandBuffer* buffer, HW::Context
 
 		vk_buffer.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->pipeline);
 
+		std::vector<BufferView> bound_buffers;
 		ClearBounceCopies();
 		BindDescriptors(submit_id, buffer, vk::PipelineBindPoint::eCompute,
 		                pipeline->pipeline_layout, input_info.stage,
 		                vk::ShaderStageFlagBits::eCompute, DescriptorCache::Stage::Compute,
-                        nullptr, has_htile_input ? &htile_input : nullptr);
+                        nullptr, has_htile_input ? &htile_input : nullptr,
+                        capture_producer ? &bound_buffers : nullptr);
 		if (buffer->GetRecordingGeneration() != recording_generation) {
 			continue;
 		}
@@ -667,7 +741,11 @@ void RenderDispatchDirect(uint64_t submit_id, CommandBuffer* buffer, HW::Context
 		}
 
 		FlushBounceCopies(vk_buffer, false);
+        if (capture_producer)
+            CaptureAstroProducerBuffers(buffer,input_info.stage,bound_buffers,submit_id,producer_ordinal,false);
 		vk_buffer.dispatch(thread_group_x, thread_group_y, thread_group_z);
+        if (capture_producer)
+            CaptureAstroProducerBuffers(buffer,input_info.stage,bound_buffers,submit_id,producer_ordinal,true);
 		FlushBounceCopies(vk_buffer, true);
 
 		bool has_storage_writes = HasShaderBufferWrites(input_info.stage);

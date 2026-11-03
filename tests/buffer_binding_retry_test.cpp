@@ -35,7 +35,7 @@ struct Device {
  VkShaderModule shader{};VkPipeline pipeline{};
  std::vector<std::shared_ptr<Allocation>> allocations;
  std::vector<std::function<void()>> pending;
- explicit Device(bool enabled,const char* shader_path):gpu(enabled) {
+ explicit Device(bool enabled,const char* shader_path,bool sync_validation=false):gpu(enabled) {
   if(!gpu)return;
   uint32_t n=0;VKOK(vkEnumerateInstanceLayerProperties(&n,nullptr));
   std::vector<VkLayerProperties> layers(n);VKOK(vkEnumerateInstanceLayerProperties(&n,layers.data()));
@@ -48,6 +48,11 @@ struct Device {
   VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};app.apiVersion=VK_API_VERSION_1_2;
   VkInstanceCreateInfo ic{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};ic.pApplicationInfo=&app;ic.pNext=&debug;
   ic.enabledLayerCount=1;ic.ppEnabledLayerNames=&layer;ic.enabledExtensionCount=1;ic.ppEnabledExtensionNames=&ext;
+  const VkValidationFeatureEnableEXT sync=VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT;
+  VkValidationFeaturesEXT features{VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT};
+  features.enabledValidationFeatureCount=1;features.pEnabledValidationFeatures=&sync;features.pNext=&debug;
+  const char* sync_extensions[]={VK_EXT_DEBUG_UTILS_EXTENSION_NAME,VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME};
+  if(sync_validation){ic.pNext=&features;ic.enabledExtensionCount=2;ic.ppEnabledExtensionNames=sync_extensions;}
   VKOK(vkCreateInstance(&ic,nullptr,&instance));
   auto create=reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(vkGetInstanceProcAddr(instance,"vkCreateDebugUtilsMessengerEXT"));
   CHECK(create);VKOK(create(instance,&debug,nullptr,&messenger));
@@ -157,6 +162,7 @@ namespace ShaderRecompiler::IR {
 }
 struct Resource{bool written=false;ShaderRecompiler::IR::ResourceKind kind{};};
 struct Program{struct{std::vector<Resource> images;}info;};
+struct BufferView{};
 struct Runtime{};struct InputInfo{Runtime stage;};struct ShaderBufferDataOverride{};
 struct Scenario;static Scenario* active=nullptr;
 struct BufferCache{uint64_t epoch=1;uint64_t GetBindingEpoch()const{return epoch;}};
@@ -188,6 +194,7 @@ struct Scenario{
 template<class... T>Pipeline* PipelineCache::CreateComputePipeline(T&&...){++active->pass;return &pipeline;}
 template<class... T>Pipeline* PipelineCache::CreateGraphicsPipeline(T&&...){++active->pass;return &pipeline;}
 void Handle::dispatch(uint32_t,uint32_t,uint32_t){active->device.Write(active->bound);}
+template<class... T>static void CaptureAstroProducerBuffers(T&&...){CHECK(false);}
 static void ClearBounceCopies(){}
 template<class... T>static void FlushBounceCopies(T&&...){}
 static bool HasShaderBufferWrites(const Runtime&){return true;}
@@ -200,7 +207,7 @@ template<class... T>static void BindDrawVertexBuffers(T&&...){active->vertex=act
 template<class... T>static void BindDrawIndexBuffer(T&&...){active->index=active->current;active->Maybe("index");}
 static void BindDescriptors(uint64_t,CommandBuffer*,vk::PipelineBindPoint,int,const Runtime&,
  vk::ShaderStageFlagBits,DescriptorCache::Stage stage,const ShaderRecompiler::IR::MeshPointGroupPayload* =nullptr,
- const ShaderBufferDataOverride* =nullptr){
+ const ShaderBufferDataOverride* =nullptr,std::vector<BufferView>* =nullptr){
  if(stage==DescriptorCache::Stage::Pixel){active->Maybe("pixel");return;}
  active->bound=active->current;active->Maybe(stage==DescriptorCache::Stage::Compute?"compute":"vertex");
 }
