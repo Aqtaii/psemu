@@ -2,6 +2,7 @@
 #include "graphics/shader/meshProgramKind.h"
 #include "graphics/shader/recompiler/ShaderCFG.h"
 #include "graphics/shader/recompiler/ShaderIR.h"
+#include "graphics/shader/recompiler/InstructionCodeHash.h"
 #include "graphics/shader/recompiler/MergedMeshResources.h"
 #include "graphics/shader/recompiler/ResourceMaterialization.h"
 #include "graphics/shader/recompiler/ScalarProvenance.h"
@@ -38,6 +39,40 @@ std::vector<uint32_t> ReadCapturedCode(const char* path) {
  return words;
 }
 int main(int argc,char** argv) {
+ {
+  using namespace Libs::Graphics::ShaderRecompiler;
+  // Address relocation and noninstruction data must not change the code identity.
+  std::array<uint32_t,4> words{0xbf800000u,0xbf810000u,0xdeadbeefu,0x12345678u};
+  auto lower=[](std::span<const uint32_t> code) {
+   Decoder::Program decoded;CFG::Graph graph;IR::Program ir;std::string error;
+   Require(Decoder::DecodeProgram(code,&decoded,&error));
+   Require(CFG::BuildGraph(decoded,&graph,&error));
+   Require(IR::LowerProgram(decoded,graph,Libs::Graphics::ShaderType::Compute,32,&ir,&error));
+   return ir;
+  };
+  const auto base=lower(words);
+  Require(base.instruction_code_words==2 && base.instruction_code_hash==InstructionCodeHash(std::span(words).first(2)));
+  words[2]^=0xffffffffu;words[3]=0;
+  const auto relocated=std::vector<uint32_t>(words.begin(),words.end());
+  Require(lower(relocated).instruction_code_hash==base.instruction_code_hash);
+  words[0]=0xbf800001u;
+  Require(lower(words).instruction_code_hash!=base.instruction_code_hash);
+  Decoder::Program decoded;CFG::Graph graph;IR::Program ir;std::string error;
+  Require(Decoder::DecodeProgram(words,&decoded,&error) && CFG::BuildGraph(decoded,&graph,&error));
+  decoded.code={};ir.instruction_code_words=19;ir.instruction_code_hash=123;
+  Require(IR::LowerProgram(decoded,graph,Libs::Graphics::ShaderType::Compute,32,&ir,&error));
+  Require(ir.instruction_code_words==0 && ir.instruction_code_hash==0);
+  std::puts("[INSTRUCTION-IDENTITY] lowering/code change/relocation/data tail/no-source guards=passed");
+ }
+ if(argc==3 && std::string(argv[1])=="--compute-id") {
+  using namespace Libs::Graphics::ShaderRecompiler;
+  const auto code=ReadCapturedCode(argv[2]);Decoder::Program decoded;CFG::Graph graph;IR::Program ir;std::string error;
+  Require(Decoder::DecodeProgram(code,&decoded,&error) && CFG::BuildGraph(decoded,&graph,&error));
+  Require(IR::LowerProgram(decoded,graph,Libs::Graphics::ShaderType::Compute,32,&ir,&error));
+  std::printf("[COMPUTE-INSTRUCTION-IDENTITY] words=%u hash=0x%016llx instructions=%zu\n",
+   ir.instruction_code_words,static_cast<unsigned long long>(ir.instruction_code_hash),decoded.instructions.size());
+  argc=1;
+ }
  {
   using namespace Libs::Graphics;
   Require(SelectMeshProgramKind(2)==MeshProgramKind::Standalone);

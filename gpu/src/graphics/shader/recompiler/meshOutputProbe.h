@@ -33,7 +33,7 @@ inline uint32_t MeshOutputProbeGroupCount() {
   const char* value=std::getenv("PSEMU_ASTRO_MESH_PROBE_GROUPS");
   if(!value || !value[0])return uint32_t(1);
   char* end=nullptr;const auto parsed=std::strtoull(value,&end,0);
-  return end && *end==0 && parsed>=1 && parsed<=8 ? uint32_t(parsed) : uint32_t(1);
+  return end && *end==0 && parsed>=1 && parsed<=128 ? uint32_t(parsed) : uint32_t(1);
  }();
  return count;
 }

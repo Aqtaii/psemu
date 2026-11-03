@@ -801,6 +801,8 @@ struct Program {
 	bool                    shader_info_complete       = false;
 	BindingLayout           bindings;
 	bool                    binding_layout_complete = false;
+	uint64_t                instruction_code_hash = 0;
+	uint32_t                instruction_code_words = 0;
 };
 
 bool LowerProgram(const Decoder::Program& decoded, const CFG::Graph& cfg, ShaderType stage,

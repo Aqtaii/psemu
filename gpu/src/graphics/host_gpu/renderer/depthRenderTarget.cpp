@@ -190,9 +190,10 @@ void ResolveRenderDepthTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 	if (rc.resummarize_enable) {
 		static std::atomic_uint logs {0};
 		if (logs.fetch_add(1, std::memory_order_relaxed) < 8) {
-			LOGF("[DEPTH-RESUMMARIZE] depth=0x%016" PRIx64 " htile=0x%016" PRIx64
+			printf("[DEPTH-RESUMMARIZE] depth=0x%016" PRIx64 " htile=0x%016" PRIx64
 			     " native_hierarchical_metadata=1 logical_depth_stencil_unchanged=1\n",
 			     z.z_read_base_addr, z.htile_data_base_addr);
+            fflush(stdout);
 		}
 	}
 	if (msaa_compat) {

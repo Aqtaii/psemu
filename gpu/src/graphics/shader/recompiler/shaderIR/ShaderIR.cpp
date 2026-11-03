@@ -1,4 +1,5 @@
 #include "graphics/shader/recompiler/ShaderIR.h"
+#include "graphics/shader/recompiler/InstructionCodeHash.h"
 
 #include "common/assert.h"
 #include "graphics/shader/recompiler/BufferFormat.h"
@@ -1230,6 +1231,17 @@ bool LowerProgram(const Decoder::Program& decoded, const CFG::Graph& cfg, Shader
 	}
 
 	*program                     = {};
+	uint64_t instruction_words = 0;
+	for (const auto& inst: decoded.instructions) {
+		instruction_words = (std::max)(instruction_words,
+		    uint64_t(inst.pc) / 4u + inst.word_count);
+	}
+	if (instruction_words != 0 && instruction_words <= decoded.code.size() &&
+	    instruction_words <= UINT32_MAX) {
+		program->instruction_code_words = static_cast<uint32_t>(instruction_words);
+		program->instruction_code_hash =
+		    InstructionCodeHash(decoded.code.first(static_cast<size_t>(instruction_words)));
+	}
 	program->stage               = stage;
 	program->wave_size           = wave_size;
 	program->dispatcher_fallback = cfg.irreducible;

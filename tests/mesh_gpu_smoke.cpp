@@ -82,9 +82,10 @@ int main(int argc,char** argv){try{
  const bool point_output_multigroup=argc==4 && std::string(argv[3])=="point-output-multigroup";
  const bool point_output_group_miss=argc==4 && std::string(argv[3])=="point-output-group-miss";
  const bool point_output_batch=argc==4 && std::string(argv[3])=="point-output-batch";
- const bool output_probe=point_output_batch || point_output_probe || point_output_miss || point_output_multigroup ||
+ const bool point_output_sweep=argc==4 && std::string(argv[3])=="point-output-sweep";
+ const bool output_probe=point_output_sweep || point_output_batch || point_output_probe || point_output_miss || point_output_multigroup ||
   point_output_group_miss || (argc==4 && std::string(argv[3])=="output-probe");
- if((point_output_batch || point_output_multigroup || point_output_group_miss) && (!ici.enabledLayerCount || !messenger))
+ if((point_output_sweep || point_output_batch || point_output_multigroup || point_output_group_miss) && (!ici.enabledLayerCount || !messenger))
   throw std::runtime_error("Group-selection GPU regressions require active validation and a debug callback");
  const bool primitive_probe=argc==4 && std::string(argv[3])=="primitive-probe";
  VkPhysicalDeviceMeshShaderFeaturesEXT supported_mesh{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT};
@@ -116,9 +117,9 @@ int main(int argc,char** argv){try{
  const bool sampled_reads=argc==4 && std::string(argv[3])=="sampled-reads";
  const auto probe_groups=Libs::Graphics::ShaderRecompiler::MeshOutputProbeGroupCount();
  const VkDeviceSize probe_bytes=sizeof(Libs::Graphics::ShaderRecompiler::MeshOutputProbe)*probe_groups;
- const VkDeviceSize input_bytes=output_probe ? probe_bytes+(point_output_batch?64:0) : 4096;
+ const VkDeviceSize input_bytes=output_probe ? probe_bytes+((point_output_batch || point_output_sweep)?64:0) : 4096;
  const bool point_push=point_adapter || point_output_probe || point_output_miss || point_output_multigroup ||
-  point_output_group_miss || point_output_batch || buffer_reads || (argc==4 && std::string(argv[3])=="point-push");
+  point_output_group_miss || point_output_batch || point_output_sweep || buffer_reads || (argc==4 && std::string(argv[3])=="point-push");
  if(argc==4 && !point_push && !vertex_probe && !primitive_probe && !output_probe && !sampled_reads) throw std::runtime_error("Unknown Mesh GPU test mode");
  auto draw=reinterpret_cast<PFN_vkCmdDrawMeshTasksEXT>(vkGetDeviceProcAddr(device,"vkCmdDrawMeshTasksEXT"));if(!draw)throw std::runtime_error("Mesh draw entry unavailable");
  constexpr uint32_t width=32,height=32,bytes=width*height*4;
@@ -171,7 +172,7 @@ int main(int argc,char** argv){try{
   void* mapped;VK_CHECK(vkMapMemory(device,input_memory,0,input_bytes,0,&mapped));
   if(output_probe) {
    std::memset(mapped,0,size_t(input_bytes));
-   if(point_output_batch)std::memset(static_cast<uint8_t*>(mapped)+probe_bytes,0xcd,64);
+   if(point_output_batch || point_output_sweep)std::memset(static_cast<uint8_t*>(mapped)+probe_bytes,0xcd,64);
   }
   else for(uint32_t i=0;i<1024;++i) static_cast<uint32_t*>(mapped)[i]=0x2000+i;
   vkUnmapMemory(device,input_memory);
@@ -255,7 +256,15 @@ int main(int argc,char** argv){try{
   } else vkCmdPushConstants(cmd,layout,VK_SHADER_STAGE_MESH_BIT_EXT,0,sizeof(payload),payload);
  }
  if(primitive_probe)vkCmdBeginQuery(cmd,primitive_pool,0,0);
- if(point_output_batch) {
+ if(point_output_sweep) {
+  if(probe_groups!=128)throw std::runtime_error("Sweep fixture requires 128 independent groups");
+  const auto selected=Libs::Graphics::ShaderRecompiler::MeshOutputProbeFirstVertex();
+  for(uint32_t group=0;group<130;++group) {
+   const uint32_t point_payload[5]={1,selected+group,0,0,0};
+   vkCmdPushConstants(cmd,layout,VK_SHADER_STAGE_MESH_BIT_EXT,0,sizeof(point_payload),point_payload);
+   draw(cmd,1,1,1);
+  }
+ } else if(point_output_batch) {
   if(probe_groups!=4)throw std::runtime_error("Batch fixture requires exactly four groups");
   const uint32_t selected=Libs::Graphics::ShaderRecompiler::MeshOutputProbeFirstVertex();
   for(const auto& ids:std::array<std::array<uint32_t,2>,7>{{{selected+5,0},{selected,0},{selected+2,0},
@@ -314,6 +323,33 @@ int main(int argc,char** argv){try{
    }
    bool guards=true;for(uint32_t i=0;i<64;++i)guards=guards && static_cast<const uint8_t*>(raw)[probe_bytes+i]==0xcd;
    std::printf("[MESH-BATCH-GPU] exterior_guard=%u\n",unsigned(guards));batch_valid=batch_valid && guards;
+  }
+  if(point_output_sweep) {
+   const auto selected=MeshOutputProbeFirstVertex();
+   for(uint32_t group=0;group<128;++group) {
+    MeshOutputProbe item;std::memcpy(&item,static_cast<const uint8_t*>(raw)+group*sizeof(item),sizeof(item));
+    bool match=item.magic==MeshOutputProbe::Magic && item.vertices==3 && item.primitives==1 &&
+     item.first_vertex==selected+group && item.instance==0 && item.fault==std::array<uint32_t,4>{} &&
+     item.lanes[0].primitive==(group<30 ? ((1u<<10)|(2u<<20)) : 0x80000000u);
+    for(uint32_t i=0;i<3;++i) {
+     const std::array<float,4> expected=group+i<30 ?
+      std::array<float,4>{(i+group==1?3.f:-1.f),(i+group==2?3.f:-1.f),0,1} :
+      std::array<float,4>{};
+     std::array<float,4> actual{};match=MeshProbePosition(item,i,&actual) && actual==expected && match;
+    }
+    for(uint32_t i=0;i<MeshOutputProbe::Capacity;++i) {
+     const bool reached=i+group<31;
+     match=match && item.lanes[i].gate_seen==unsigned(reached);
+     if(reached)match=match && item.lanes[i].gate_xyz[0]==i+group &&
+      item.lanes[i].gate_pc==0x104 && item.lanes[i].gate_record==7 &&
+      item.lanes[i].gate_value==(i+group==30?0u:0x3f800000u);
+    }
+    if(!match)std::printf("[MESH-SWEEP-GPU] failed_group=%u\n",group);
+    batch_valid=batch_valid && match;
+   }
+   bool guards=true;for(uint32_t i=0;i<64;++i)guards=guards && static_cast<const uint8_t*>(raw)[probe_bytes+i]==0xcd;
+   std::printf("[MESH-SWEEP-GPU] groups=128 exact=%u outside_groups=128,129 exterior_guard=%u\n",
+    unsigned(batch_valid),unsigned(guards));batch_valid=batch_valid && guards;
   }
   MeshOutputProbe probe;std::memcpy(&probe,raw,sizeof(probe));vkUnmapMemory(device,input_memory);
   bool valid=false;

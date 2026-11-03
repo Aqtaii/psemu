@@ -1,37 +1,43 @@
 # Astro Bot ilerleme planı
 
-## Current verified checkpoint - 3 November 2026
+## Current verified checkpoint - 3 November 2026, 10:39 Istanbul
 
-Normal source37bf48f (00:44:23--01:25:24 Istanbul, exit321) passes the
-former middle-plane HTile failure. Actual first/middle/last0x40000-byte
-clears of the three-layer owner are recorded with isolated mask changes.
-The run reaches96 shaders. Final presentation is still black.
+Normal source9a410d0 passed the former depth resummarize rejection and reached98
+shaders. It then stopped on a read-only0xc0000 SSBO spanning a GPU-current
+0x30000 HTile owner. The linked native depth is1920x1080 D32S8 with Z-only HTile.
+Final saved RGB is still zero; recognizable Astro output is NOT achieved.
 
-Next confirmed blocker is DB_RENDER_CONTROL=0x10 (RESUMMARIZE_ENABLE) on
-a1920x1080 D32+S8 attachment with HTile, no clear/copy flags. The new
-translation accepts this metadata summary request only with HTile and no
-simultaneous depth/stencil clear. All logical depth/stencil draw state,
-load/clear ownership and existing image barriers remain in force. Vulkan
-maintains native hierarchical metadata. The pinned Jetsku resolver leaves
-this summary flag out of its logical depth rejection; AMD register docs
-identify it as HTile summary updating. No draw or guest resource is skipped.
+A narrow native-depth bridge is implemented and locally built. It recognizes
+the actual39-instruction ZMin/ZMax reader by stable instruction identity
+(63 words, FNV1a64 5fd60ef3de600325), validates ownership/pitch/layout, drains
+producers once, downloads actual depth and supplies conservative8x8 Z bounds
+in a temporary read-only SSBO. Guest metadata backing, image layout, depth/
+stencil contents and ownership trackers remain unchanged. The original compute
+shader executes normally. Other metadata readers keep the existing guard.
 
-49 completed Mesh output records cover distinct selected first_vertex
-values0,20,...140. Every sampled output is dummy1/1 with clip(0,0,0,0).
-This does not prove all103 possible groups are empty. A new count predicate
-trace matches CompareLeU32 s4,65535 semantically, because ES+GS fusion relocates
-the original GS PC. It records the actual PC and count without changing the
-comparison. IR block/instruction counts identify native permutations even
-when their registered shader checksum is zero. The next run should sample
-a different aligned group interval (first_vertex1600, eight groups).
+CPU swizzle/range tests and extracted-production lock/ownership/rejection tests
+pass. Both the reference reader and the private original10500-byte consumer
+SPIR-V pass on Arc B580:32640 output pairs,2073600 depth/stencil samples
+preserved, exterior/padding/input guards intact, active validation0 issues.
+Actual IR lowering independently confirms the private reader identity above.
+These controlled GPU results are not a visible game-frame milestone.
 
-CI41531023013 caught the old32-byte lane offset assertion after the diagnostic
-header grew to40 bytes. The assertion is corrected and explicit first_vertex
-and instance ABI offsets are checked; the actual sparse-address tests pass.
-Local depth attachment policy and separate executable/map build pass.
-The D16 three-layer GPU regression passes12288 samples with active validation
-and zero issues. Final count-trace GPU checks and next native verification
-must complete before this source is considered integrated.
+Normal combined candidate started10:39:37 (owned PID17632), separate
+D:/Tools/psemu-build/astro-htile-zrange-output/loader.exe. SHA256:
+4D733824542727E8FD19DCC504EE0E339FE8034899990800B8035B85033F78F4.
+Runtime bridge acceptance/completion and final presentation are still pending.
+The measurement gate opens after the full2467-instruction title Mesh compile.
+
+The last64 completed Mesh records sampled first_vertex1600..1740 and all had
+dummy1/1 output. Actual packed scalar counts at fusedPC0x3438 were zero. Earlier
+samples covered0..140; neither set establishes all geometry is empty. The new
+bounded128-group sweep covers every group of the observed2048-point draw at
+instance0 without allowing early empty UI records to consume the real-output
+logging budget. Fifteen group/count GPU controls passed before this run.
+Related IR, default/multiwave emitter, all15 group/count Vulkan controls,
+HTile clear routing, metadata slices and existing buffer-publication regressions
+all pass on the final source. No additional production change followed the
+separately built native candidate.
 
 FAST_TEST remains removed. No early EOF, intro skip or fake game time is used.
 
@@ -515,3 +521,44 @@ All installation payloads, extraction, caches and temporary paths under D:/Tools
 
 
 Local run verification (2026-10-14): owned PID 14504 used D:/Tools/psemu-build/output/loader.exe with native Fiber enabled. Actual strncpy_s writes 256-byte effect-path prefixes (data/prein/effects/, count19) successfully; prior 0x292e52 empty-path crash did not recur. Real Mesh 1/512 draw calls executed and presentation produced images/run_20261014_024055/frame_00000.bmp; file is 960x540 and all 518400 RGB pixels are zero. Some uploaded texture dumps now contain nonzero RGB, but that is not a visible game frame. Process subsequently exited on guest access violation RVA 0x37f34c, reading a nested pointer from the resource object at 0x90. Caller chain includes 0xfa657c and 0x50fd39; exact producer/root cause remains unverified. No owned game process remains. Local toolchain installation/build request is complete; Astro visible-frame goal remains open.
+
+### 2026-11-03: Native depth to the real Z-range utility shader
+
+The 9a410d0 normal boot completed title shader emission and later stopped on a
+read-only SSBO at 0x200be600000+0xc0000. Its prefix is a GPU-current 0x30000 HTile
+owner linked to a native 1920x1080 D32S8 depth target. None of the 64 sampled Mesh
+records from input vertices 1600..1740 had non-dummy output; every observed packed
+scalar count at fused PC0x3438 was zero. This does not cover every draw/group.
+
+A private original compute capture decodes to a 39-instruction ZMin/ZMax utility
+reader: 63 instruction words, stable instruction-only FNV1a64 5fd60ef3de600325.
+It reads 8x8 depth-tile bounds from swizzled Z-only HTile and writes RG floats.
+The corresponding shader's identity as the fatal dispatch remains a runtime
+check, not an assumption. Other readers retain the existing metadata guard.
+
+The new path drains producers once before the dispatch retry loop, reads the
+actual native depth aspect, and builds conservative 14-bit 8x8 min/max bounds in
+an immutable temporary SSBO. Padding is the legal expanded full range fffc000f.
+It requires unique, GPU-current, single-layer D32/D32S8 ownership, Z-only HTile,
+an exact metadata layout and actual pitch-constant match, read-only buffers and
+the exact instruction identity. It preserves guest backing, ownership/tracker
+flags, depth/stencil contents and image layout. The original compute SPIR-V
+executes unchanged. This is a narrow native-image representation bridge, not
+arbitrary physical HTile compression emulation. See AMD PAL gfx9MaskRam.cpp,
+Gfx9Htile::GetClearValue / GetInitialValue for the Z-only bit fields.
+
+Validation: pure address-bijection/golden-offset/range/nonfinite tests passed
+for all 2073600 depth samples. Extracted production transaction tests passed
+both native formats and 33 rejection cases, including nonrecursive lock/drain
+ordering and unchanged output on failure. On Intel Arc B580, both the public
+reference and private 10500-byte original consumer SPIR-V produced all 32640
+expected RG pairs under active Vulkan validation (0 warnings/errors). Depth and
+stencil sentinel data, input SSBOs and exterior guards survived unchanged.
+
+Mesh diagnostics now support a 128-group sweep, with independent records and
+bounded non-dummy logging. Earlier 15 Vulkan group/count/guard cases and normal/
+multiwave emitter regressions passed. A fresh normal boot of the combined build
+started 2026-11-03 10:39:37+03 (PID17632), with 128 groups selected from input
+vertex0 and no FAST_TEST, no opening skip and no depth-test override. Runtime
+HTile bridge use and the first recognizable final-window frame are still
+UNVERIFIED. Root Sarah loader SHA256 F5DDE8C9073563A2C1B26BD761DAD2691B007675F6A1A774FF60D5F8F9AB5533 is unchanged.

@@ -99,10 +99,17 @@ private:
 	std::map<std::vector<uint32_t>, vk::DescriptorSetLayout> m_descriptor_set_layouts;
 };
 
+// Immutable CPU snapshot prepared once before a dispatch's recording retry loop.
+struct ShaderBufferDataOverride {
+    uint32_t index = UINT32_MAX;
+    std::vector<uint32_t> words;
+};
+
 void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
                      vk::PipelineBindPoint pipeline_bind_point, vk::PipelineLayout layout,
                      const ShaderStageRuntime& runtime, vk::ShaderStageFlags vk_stage,
-                     DescriptorCache::Stage stage, const ShaderRecompiler::IR::MeshPointGroupPayload* point=nullptr);
+                     DescriptorCache::Stage stage, const ShaderRecompiler::IR::MeshPointGroupPayload* point=nullptr,
+                     const ShaderBufferDataOverride* data_override=nullptr);
 
 } // namespace Libs::Graphics
 

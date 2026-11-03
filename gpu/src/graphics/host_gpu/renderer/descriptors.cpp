@@ -2,6 +2,7 @@
 #include "graphics/host_gpu/renderer/guestAddressFaultRecord.h"
 #include "graphics/host_gpu/renderer/bufferCache.h"
 #include "graphics/host_gpu/renderer/textureCache.h"
+#include "graphics/host_gpu/renderer/htileZRange.h"
 #include "graphics/host_gpu/renderer/descriptors.h"
 #include "graphics/host_gpu/renderer/videoGraphProbe.h"
 
@@ -41,6 +42,8 @@
 #include <algorithm>
 #include <atomic>
 #include <fmt/format.h>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 #include <span>
 
@@ -1147,13 +1150,35 @@ static BufferView NativeGuestAddressFault(CommandBuffer* command, bool mesh_prob
   std::memcpy(&fault,data,sizeof(fault));
   if(mesh_probe) {
    static std::atomic_uint batches{0};
-   bool observed=false,log_batch=false;
+   static std::atomic_bool empty_logged{false};
+   uint32_t observed=0,non_dummy=0;
    for(uint32_t group=0;group<ShaderRecompiler::MeshOutputProbeGroupCount();++group) {
     ShaderRecompiler::MeshOutputProbe probe;
     std::memcpy(&probe,static_cast<const uint8_t*>(data)+group*sizeof(probe),sizeof(probe));
     if(probe.magic!=ShaderRecompiler::MeshOutputProbe::Magic)continue;
-    if(!observed) {observed=true;log_batch=batches.fetch_add(1)<8;}
-    if(!log_batch)continue;
+    ++observed;
+    non_dummy+=probe.vertices>1 || probe.primitives>1;
+   }
+   // Empty early UI batches must not exhaust the budget before real geometry.
+   // Still report each empty group-count shape once, including the full large draw.
+   static std::array<std::atomic_uint64_t,2> empty_shapes{};
+   bool new_empty_shape=false;
+   if(observed && observed<=128 && !non_dummy) {
+    const auto index=observed-1;const uint64_t bit=uint64_t{1}<<(index%64);
+    new_empty_shape=(empty_shapes[index/64].fetch_or(bit)&bit)==0;
+   }
+   const bool log_batch=non_dummy ? batches.fetch_add(1)<8 :
+    observed && !empty_logged.exchange(true);
+   uint32_t logged=0;
+   if(log_batch || new_empty_shape)printf("[MESH-SWEEP-SUMMARY] capacity=%u observed=%u non_dummy=%u source=completed-fence\n",
+    ShaderRecompiler::MeshOutputProbeGroupCount(),observed,non_dummy);
+   for(uint32_t group=0;group<ShaderRecompiler::MeshOutputProbeGroupCount();++group) {
+    ShaderRecompiler::MeshOutputProbe probe;
+    std::memcpy(&probe,static_cast<const uint8_t*>(data)+group*sizeof(probe),sizeof(probe));
+    if(probe.magic!=ShaderRecompiler::MeshOutputProbe::Magic)continue;
+    if(!log_batch || logged>=(non_dummy ? 8u : 1u))continue;
+    if(non_dummy && probe.vertices<=1 && probe.primitives<=1)continue;
+    ++logged;
     printf("[MESH-OUTPUT-PROBE] magic=%08x allocation=%08x vertices=%u primitives=%u instance=%u first_vertex=%u"
            " group=%u shader=0x%016" PRIx64 " blocks=%zu ir_instructions=%zu gs_root=0x%016" PRIx64 " source=completed-fence\n",
      probe.magic,probe.allocation,probe.vertices,probe.primitives,probe.instance,
@@ -1228,7 +1253,8 @@ static BufferView NativeGuestAddressFault(CommandBuffer* command, bool mesh_prob
 void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
                      vk::PipelineBindPoint pipeline_bind_point, vk::PipelineLayout layout,
                      const ShaderStageRuntime& runtime, vk::ShaderStageFlags vk_stage,
-                     DescriptorCache::Stage stage, const ShaderRecompiler::IR::MeshPointGroupPayload* point) {
+                     DescriptorCache::Stage stage, const ShaderRecompiler::IR::MeshPointGroupPayload* point,
+                     const ShaderBufferDataOverride* data_override) {
 	KYTY_PROFILER_FUNCTION();
 	EXIT_IF(buffer == nullptr || !runtime);
 	const auto& program  = *runtime.program;
@@ -1316,8 +1342,64 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
 	for (uint32_t i = 0; i < program.info.buffers.size(); i++) {
 		ShaderBufferResource descriptor;
 		CopyNativeDescriptor(snapshot.buffers[i], descriptor.fields);
-		descriptors.buffers.push_back(
-		    NativeStorageBuffer(submit_id, buffer, descriptor, program.info.buffers[i]));
+        if (data_override && data_override->index == i) {
+            const auto& resource = program.info.buffers[i];
+            const uint64_t bytes = uint64_t(descriptor.Stride() ? descriptor.Stride() : 1) *
+                                   descriptor.NumRecords();
+            if (pipeline_bind_point != vk::PipelineBindPoint::eCompute ||
+                program.stage != ShaderType::Compute ||
+                program.instruction_code_hash != HtileZRangeReaderHash ||
+                program.instruction_code_words != HtileZRangeReaderWords ||
+                !resource.read || resource.written || resource.atomic ||
+                data_override->words.size() * sizeof(uint32_t) != bytes) {
+                EXIT("invalid read-only HTile utility snapshot binding\n");
+            }
+            auto view = NativeUpload(buffer, data_override->words);
+            view.range = bytes; // Preserve OpArrayLength, excluding stream allocation padding.
+            descriptors.buffers.push_back(view);
+        } else {
+            static const bool capture_metadata_failure = [] {
+                const auto* flag = std::getenv("PSEMU_ASTRO_MESH_CAPTURE_FAILURE");
+                return flag && std::strcmp(flag, "1") == 0;
+            }();
+            if (capture_metadata_failure && descriptor.Base48() && descriptor.NumRecords()) {
+                const uint64_t bytes = uint64_t(descriptor.Stride() ? descriptor.Stride() : 1) *
+                                       descriptor.NumRecords();
+                const auto state = g_render_ctx->GetTextureCache()->QueryRegion(descriptor.Base48(), bytes);
+                if (state.metadata_bytes && state.gpu_metadata_bytes) {
+                    static std::atomic_uint captures {0};
+                    const auto capture = captures.fetch_add(1, std::memory_order_relaxed);
+                    if (capture < 8) {
+                        const auto name = fmt::format("tools/dumps/metadata_reader_{:016x}_{}.ir",
+                                                      program.instruction_code_hash, capture);
+                        std::error_code ec;
+                        std::filesystem::create_directories("tools/dumps", ec);
+                        std::ofstream dump(name, std::ios::binary);
+                        if (dump) dump << ShaderRecompiler::IR::ProgramToString(program);
+                        printf("[METADATA-READER-CAPTURE] hash=0x%016" PRIx64
+                               " words=%u stage=%u slot=%u address=0x%016" PRIx64
+                               " bytes=0x%" PRIx64 " buffers=%zu images=%zu ir=%s saved=%u\n",
+                               program.instruction_code_hash, program.instruction_code_words,
+                               unsigned(program.stage), i, descriptor.Base48(), bytes,
+                               snapshot.buffers.size(), snapshot.images.size(), name.c_str(),
+                               unsigned(bool(dump)));
+                        for (size_t j = 0; j < snapshot.buffers.size(); ++j) {
+                            const auto& d = snapshot.buffers[j].dwords;
+                            printf("[METADATA-READER-BUFFER] slot=%zu raw=%08x,%08x,%08x,%08x\n",
+                                   j, d[0], d[1], d[2], d[3]);
+                        }
+                        for (size_t j = 0; j < snapshot.images.size(); ++j) {
+                            const auto& d = snapshot.images[j].dwords;
+                            printf("[METADATA-READER-IMAGE] slot=%zu raw=%08x,%08x,%08x,%08x,%08x,%08x,%08x,%08x\n",
+                                   j, d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
+                        }
+                        fflush(stdout);
+                    }
+                }
+            }
+            descriptors.buffers.push_back(
+                NativeStorageBuffer(submit_id, buffer, descriptor, program.info.buffers[i]));
+        }
 		if (recording_changed()) {
 			return;
 		}

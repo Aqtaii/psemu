@@ -17,6 +17,7 @@
 #include "graphics/host_gpu/renderer/descriptors.h"
 #include "graphics/host_gpu/renderer/framebufferCache.h"
 #include "graphics/host_gpu/renderer/imageInfo.h"
+#include "graphics/host_gpu/renderer/htileZRange.h"
 #include "graphics/host_gpu/renderer/pipelineCache.h"
 #include "graphics/host_gpu/renderer/render.h"
 #include "graphics/host_gpu/renderer/renderContext.h"
@@ -419,6 +420,52 @@ static bool TryConsumeComputeImageClear(const ShaderComputeInputInfo& input, Com
 	return true;
 }
 
+// The original compute shader still executes. Only its read-only Z metadata input
+// is supplied from the actual completed native depth image.
+static bool PrepareHtileZRangeRead(
+    const ShaderComputeInputInfo& input, uint32_t x, uint32_t y, uint32_t z,
+    ShaderBufferDataOverride* prepared) {
+    const auto& program = *input.stage.program;
+    const auto& resources = *input.stage.resources;
+    if (!prepared || program.stage != ShaderType::Compute ||
+        program.instruction_code_hash != HtileZRangeReaderHash ||
+        program.instruction_code_words != HtileZRangeReaderWords ||
+        program.info.buffers.size() != 2 || resources.buffers.size() != 2 ||
+        program.info.images.size() != 1 || resources.images.size() != 1 ||
+        !program.info.samplers.empty() || !program.info.addresses.empty() ||
+        input.threads_num[0] != 8 || input.threads_num[1] != 8 ||
+        input.threads_num[2] != 1 || z != 1 ||
+        !program.info.images[0].written || program.info.images[0].read ||
+        program.info.images[0].atomic ||
+        program.info.images[0].kind != ShaderRecompiler::IR::ResourceKind::StorageImage) {
+        return false;
+    }
+    for (const auto& binding: program.info.buffers) {
+        if (!binding.read || binding.written || binding.atomic) {
+            return false;
+        }
+    }
+    const auto pitch = DecodeNativeDescriptor<ShaderBufferResource>(resources.buffers[0]);
+    const auto metadata = DecodeNativeDescriptor<ShaderBufferResource>(resources.buffers[1]);
+    if (BufferDescriptorSize(pitch) != 16 || pitch.SwizzleEnabled() ||
+        pitch.IndexStride() || pitch.AddTid() || metadata.Stride() != 4 ||
+        metadata.SwizzleEnabled() || metadata.IndexStride() || metadata.AddTid()) {
+        return false;
+    }
+    auto* cache = g_render_ctx->GetTextureCache();
+    if (!cache->QueryRegion(metadata.Base48(), BufferDescriptorSize(metadata)).metadata_bytes) {
+        return false;
+    }
+    std::vector<uint32_t> words;
+    if (!cache->ReadHtileZRangeSnapshot(g_render_ctx->GetGraphicCtx(), metadata.Base48(),
+            BufferDescriptorSize(metadata), pitch.Base48(), x, y, &words)) {
+        return false;
+    }
+    prepared->index = 1;
+    prepared->words = std::move(words);
+    return true;
+}
+
 void RenderDispatchDirect(uint64_t submit_id, CommandBuffer* buffer, HW::Context* ctx,
                           HW::Shader* sh_ctx, uint32_t thread_group_x, uint32_t thread_group_y,
                           uint32_t thread_group_z, uint32_t mode) {
@@ -585,6 +632,10 @@ void RenderDispatchDirect(uint64_t submit_id, CommandBuffer* buffer, HW::Context
 		return;
 	}
 
+    ShaderBufferDataOverride htile_input;
+    const bool has_htile_input = PrepareHtileZRangeRead(
+        input_info, thread_group_x, thread_group_y, thread_group_z, &htile_input);
+
 	for (;;) {
 		const auto recording_generation = buffer->GetRecordingGeneration();
 		auto       vk_buffer            = buffer->Handle();
@@ -596,7 +647,8 @@ void RenderDispatchDirect(uint64_t submit_id, CommandBuffer* buffer, HW::Context
 		ClearBounceCopies();
 		BindDescriptors(submit_id, buffer, vk::PipelineBindPoint::eCompute,
 		                pipeline->pipeline_layout, input_info.stage,
-		                vk::ShaderStageFlagBits::eCompute, DescriptorCache::Stage::Compute);
+		                vk::ShaderStageFlagBits::eCompute, DescriptorCache::Stage::Compute,
+                        nullptr, has_htile_input ? &htile_input : nullptr);
 		if (buffer->GetRecordingGeneration() != recording_generation) {
 			continue;
 		}

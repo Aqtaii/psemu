@@ -133,6 +133,10 @@ public:
 	[[nodiscard]] bool       IsMetaRange(uint64_t vaddr, uint64_t size);
 	[[nodiscard]] bool       IsMetaClearRange(uint64_t vaddr, uint64_t size);
 	[[nodiscard]] bool       ClearMetaRange(uint64_t vaddr, uint64_t size);
+	// Read-only utility snapshot. No guest backing or owner/tracker transition.
+	[[nodiscard]] bool ReadHtileZRangeSnapshot(GraphicContext* ctx, uint64_t address,
+	    uint64_t view_bytes, uint64_t pitch_address, uint32_t group_x, uint32_t group_y,
+	    std::vector<uint32_t>* out);
 	[[nodiscard]] bool       IsMetaCleared(uint64_t vaddr, uint32_t slice);
 	[[nodiscard]] bool       ClearMeta(uint64_t vaddr);
 	[[nodiscard]] bool       TouchMeta(uint64_t vaddr, uint32_t slice, bool is_clear);

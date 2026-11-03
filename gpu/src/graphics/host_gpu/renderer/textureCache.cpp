@@ -1,4 +1,5 @@
 #include "graphics/host_gpu/renderer/textureCache.h"
+#include "graphics/host_gpu/renderer/htileZRange.h"
 
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -3630,6 +3631,131 @@ void TextureCache::SynchronizeDepthImageToBufferLocked(CachedImage& cached, uint
 	m_buffer_cache.PublishImageBacking(write_address, write_size);
 	cached.gpu_modified    = false;
 	cached.buffer_modified = true;
+}
+
+bool TextureCache::ReadHtileZRangeSnapshot(
+    GraphicContext* ctx, uint64_t address, uint64_t view_bytes, uint64_t pitch_address,
+    uint32_t group_x, uint32_t group_y, std::vector<uint32_t>* out) {
+    if (!ctx || !out || !address || !pitch_address || !group_x || !group_y ||
+        view_bytes == 0 || view_bytes > MaxHtileZRangeSnapshotBytes ||
+        view_bytes % 4 || address >= TRACKER_ADDRESS_SIZE ||
+        view_bytes > TRACKER_ADDRESS_SIZE - address || pitch_address >= TRACKER_ADDRESS_SIZE ||
+        4 > TRACKER_ADDRESS_SIZE - pitch_address || pitch_address % 4) {
+        return false;
+    }
+    const auto reject = [](const char* reason) {
+        static std::atomic_uint logs {0};
+        if (logs.fetch_add(1, std::memory_order_relaxed) < 16) {
+            printf("[HTILE-ZRANGE-REJECT] reason=%s\n", reason);
+            fflush(stdout);
+        }
+        return false;
+    };
+    // This is called once before the dispatch's recording-generation retry loop.
+    GraphicsRunSynchronizeCommandProcessors();
+    Transfer::WaitForGraphicsIdle(ctx);
+    std::lock_guard transaction(m_resource_mutex);
+    FaultSafeTextureLock lock(this, m_lock);
+    const auto meta = m_surface_metas.find(address);
+    if (meta == m_surface_metas.end() || meta->second.layers != 1 ||
+        !meta->second.gpu_modified ||
+        !m_metadata_tracker.IsRegionGpuModified(address, meta->second.size) ||
+        m_metadata_tracker.IsRegionCpuModified(address, meta->second.size)) {
+        return reject("metadata-owner-state");
+    }
+    for (const auto& [other_address, other]: m_surface_metas) {
+        if (other_address != address &&
+            ImagePageRangesOverlap(address, meta->second.size, other_address, other.size)) {
+            return reject("overlapping-metadata");
+        }
+    }
+    CachedImage* owner = nullptr;
+    for (const auto& cached: m_images) {
+        if (cached->dcc.address &&
+            ImagePageRangesOverlap(address, meta->second.size,
+                                   cached->dcc.address, cached->dcc.layout.total_bytes)) {
+            return reject("overlapping-dcc");
+        }
+        if (cached->kind == CachedImage::Kind::DepthTarget &&
+            cached->depth.htile_address == address) {
+            if (owner) {
+                return reject("ambiguous-depth-owner");
+            }
+            owner = cached.get();
+        }
+    }
+    if (!owner || owner->ctx != ctx || !owner->gpu_modified || owner->buffer_modified ||
+        !owner->image || owner->depth.htile_size != meta->second.size ||
+        owner->depth.layers != 1 || owner->depth.bytes_per_element != 4 ||
+        owner->depth.guest_format != Prospero::GpuEnumValue(Prospero::BufferFormat::k32Float) ||
+        owner->depth.tile_mode != Prospero::GpuEnumValue(Prospero::TileMode::kDepth) ||
+        owner->depth.stencil_htile_compressed ||
+        (owner->depth.format != vk::Format::eD32Sfloat &&
+         owner->depth.format != vk::Format::eD32SfloatS8Uint) ||
+        owner->image->format != owner->depth.format ||
+        owner->image->extent.width != owner->depth.width ||
+        owner->image->extent.height != owner->depth.height ||
+        owner->image->layers != 1 || owner->image->mip_levels != 1 ||
+        owner->image->layout == vk::ImageLayout::eUndefined ||
+        owner->image->layout == vk::ImageLayout::ePreinitialized ||
+        HasOtherImagePageOwnerLocked(*owner)) {
+        return reject("native-depth-owner-state");
+    }
+    for (uint32_t plane = 0; plane < owner->RangeCount(); ++plane) {
+        if (m_memory_tracker.IsRegionCpuModified(owner->Address(plane), owner->Size(plane)) ||
+            m_buffer_cache.IsRegionGpuModified(owner->Address(plane), owner->Size(plane)) ||
+            m_buffer_cache.IsCachedRegionCpuModified(owner->Address(plane), owner->Size(plane))) {
+            return reject("dirty-depth-or-stencil");
+        }
+    }
+    if (!m_memory_tracker.IsRegionGpuModified(owner->depth.address, owner->depth.size) ||
+        HasMetaOverlapLocked(pitch_address, 4) ||
+        m_buffer_cache.IsRegionGpuModified(pitch_address, 4)) {
+        return reject("dirty-depth-or-pitch-buffer");
+    }
+    for (const auto& cached: m_images) {
+        if (cached->gpu_modified && cached->OverlapsRange(pitch_address, 4, false)) {
+            return reject("gpu-current-pitch-image");
+        }
+    }
+    uint32_t pitch_word = 0;
+    if (!LibKernel::Memory::TryReadBacking(pitch_address, &pitch_word, sizeof(pitch_word))) {
+        return reject("pitch-read-failed");
+    }
+    HtileZRangeLayout layout;
+    if (!MakeHtileZRangeLayout(owner->depth.width, owner->depth.height, pitch_word >> 10,
+                              meta->second.size, view_bytes, &layout) ||
+        uint64_t(group_x) * 8 != ((uint64_t(layout.tiles_x) + 7) & ~7ull) ||
+        uint64_t(group_y) * 8 != ((uint64_t(layout.tiles_y) + 7) & ~7ull)) {
+        printf("[HTILE-ZRANGE-SHAPE-REJECT] depth=%ux%u metadata=0x%" PRIx64
+               " view=0x%" PRIx64 " pitch_word=0x%x groups=%u,%u\n",
+               owner->depth.width, owner->depth.height, meta->second.size, view_bytes,
+               pitch_word, group_x, group_y);
+        fflush(stdout);
+        return reject("shape-mismatch");
+    }
+    const uint64_t bytes = uint64_t(layout.width) * layout.height * sizeof(float);
+    if (bytes > 64ull * 1024ull * 1024ull) {
+        return reject("readback-limit");
+    }
+    std::vector<float> depth(static_cast<size_t>(bytes / sizeof(float)));
+    const auto regions = Transfer::MakeLayeredImageBufferCopies(
+        1, bytes, layout.width, layout.width, layout.height, vk::ImageAspectFlagBits::eDepth);
+    Transfer::DownloadImage(ctx, depth.data(), bytes, regions, owner->image, owner->image->layout);
+    if (!BuildHtileZRangeSnapshot(depth, layout, out)) {
+        return reject("invalid-depth-samples");
+    }
+    static std::atomic_uint logs {0};
+    if (logs.fetch_add(1, std::memory_order_relaxed) < 16) {
+        printf("[HTILE-ZRANGE-SNAPSHOT] metadata=0x%016" PRIx64 "+0x%" PRIx64
+               " view=0x%" PRIx64 " depth=0x%016" PRIx64 " extent=%ux%u"
+               " native_format=%u pitch_blocks=%u tiles=%u transient=1 guest_backing_changed=0\n",
+               address, meta->second.size, view_bytes, owner->depth.address, layout.width,
+               layout.height, unsigned(owner->image->format), layout.pitch_blocks,
+               layout.tiles_x * layout.tiles_y);
+        fflush(stdout);
+    }
+    return true;
 }
 
 bool TextureCache::PublishImageForBufferRead(GraphicContext* ctx, uint64_t address, uint64_t size) {

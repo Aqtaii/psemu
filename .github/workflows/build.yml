@@ -143,6 +143,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_htile_clear_routing.ps1
 
+      - name: Test native HTile Z-range snapshot and ownership
+        shell: pwsh
+        run: ./tools/scripts/test_htile_zrange.ps1
+
       - name: Test partial-layer HTile clear ownership
         shell: pwsh
         run: ./tools/scripts/test_metadata_slice_clear.ps1

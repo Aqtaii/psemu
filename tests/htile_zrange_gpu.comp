@@ -1,0 +1,15 @@
+#version 450
+layout(local_size_x=8,local_size_y=8,local_size_z=1) in;
+layout(set=0,binding=0,std430) readonly buffer Words {uint words[];} buffers[2];
+layout(set=0,binding=1,rg32f) uniform writeonly image2D images[1];
+void main() {
+    uvec2 p=gl_GlobalInvocationID.xy;
+    uint pitch= buffers[0].words[0] >> 10;
+    uint low=((p.x<<1)&0x10u)|((p.x<<2)&0x44u)|((p.x<<8)&0x4300u)|
+             ((p.x<<7)&0x1400u)|((p.x<<9)&0x800u)|((p.y<<2)&0x28u)|((p.y<<3)&0x80u);
+    uint high=((p.x>>7)+pitch*(p.y>>6))<<15;
+    uint index=(high+(low^((p.y<<8)&0x2f00u)))>>2;
+    uint word=buffers[1].words[index];
+    vec2 z=vec2((word>>4)&0x3fffu,word>>18)*uintBitsToFloat(0x38800200u);
+    imageStore(images[0],ivec2(p),vec4(z,0,0));
+}

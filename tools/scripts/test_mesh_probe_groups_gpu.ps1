@@ -36,6 +36,16 @@ try {
   & .\mesh_gpu_smoke.exe .\native_mesh_point_output_probe.spv .\mesh_fragment.spv point-output-batch
   if($LASTEXITCODE -ne 0){throw "Independent batch record GPU test failed at vertex$first"}
  }
+ $env:PSEMU_ASTRO_MESH_PROBE_GROUPS='128'
+ foreach($first in @('0','32')) {
+  $env:PSEMU_ASTRO_MESH_PROBE_FIRST_VERTEX=$first
+  & .\native_mesh_emitter_test.exe
+  if($LASTEXITCODE -ne 0){throw '128-group sweep emission failed'}
+  & "$env:VULKAN_SDK\Bin\spirv-val.exe" --target-env vulkan1.2 .\native_mesh_point_output_probe.spv
+  if($LASTEXITCODE -ne 0){throw '128-group sweep SPIR-V validation failed'}
+  & .\mesh_gpu_smoke.exe .\native_mesh_point_output_probe.spv .\mesh_fragment.spv point-output-sweep
+  if($LASTEXITCODE -ne 0){throw "128-group sweep failed at selected vertex$first"}
+ }
  $env:PSEMU_ASTRO_MESH_PROBE_GROUPS='1'
  $env:PSEMU_ASTRO_MESH_PROBE_FIRST_VERTEX='0'
  foreach($count in @('0','0x00010003','0xffffffff')) {
@@ -47,7 +57,7 @@ try {
   & .\mesh_gpu_smoke.exe .\native_mesh_point_output_probe.spv .\mesh_fragment.spv point-output-probe
   if($LASTEXITCODE -ne 0){throw "Count predicate capture failed: $count"}
  }
- Write-Output 'PASS: eight single-group cases, two independent four-record batches, three exact count predicates; guards/fault header retained'
+ Write-Output 'PASS: eight single-group cases, two independent four-record batches, two 128-record sweeps, three exact count predicates; guards/fault header retained'
 
 } finally {
  foreach($name in $names) {[Environment]::SetEnvironmentVariable($name,$saved[$name],'Process')}
