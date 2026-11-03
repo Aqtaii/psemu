@@ -1,6 +1,6 @@
 # Astro Bot ilerleme planı
 
-## Current verified checkpoint - 3 November 2026, 11:28 Istanbul
+## Current verified checkpoint - 3 November 2026, 11:54 Istanbul
 
 Normal ef56e5c (10:39:37--11:28:37, owned PID17632, exit321) uses the new
 native-depth HTile bridge successfully. The actual record is:
@@ -40,8 +40,19 @@ invocations now pass the public Vulkan runner (four framebuffer cases).
 Actual B128 decoder/IR PC/address/component metadata and all existing ES/GS
 resource regressions pass. Separate astro-lds-address-output builds.
 
-The LDS source is not yet verified in a native boot. Combine it with the
-guarded sampled-stencil view support for the next normal run. Root Sarah
+The LDS sourcebb21653 is committed/pushed and not yet verified in a native
+boot. Guarded sampled-stencil view support is implemented and locally built.
+The exact initialized S8 range is selected under resource-then-texture locks;
+dirty CPU/buffer owners and ambiguity retain rejection. A nativeD32S8 view
+uses only eStencil with unsigned RRRR mapping, rather than depth reinterpretation.
+Descriptor/native-view guards (29 negatives), cache ownership/range/dirty/caller
+lock tests and2073600 spatial Vulkan stencil/depth samples all pass with active
+validation0 issues. Existing layered-depth descriptors and depth/storage tests
+also pass. The combined normal candidate started11:54:12 (owned PID14832,
+observer2704), groups1, first_vertex0, same late gate, no FAST_TEST/skip.
+D:/Tools/psemu-build/astro-stencil-sampled-output/loader.exe SHA256:
+4C27EDDD380E1DAC7C8518DC312BA4A857520E1720A44B5209F7D601F999ECAA.
+Native coordinate repair, stencil binding acceptance and final window are pending. Root Sarah
 fullscreen binary and user launch scripts remain unchanged. Recognizable
 final-window Astro output is NOT achieved. See later dated records for
 controlled HTile details and historical milestones.
@@ -579,3 +590,21 @@ address by original PC and virtual bank; single-word LDS and GDS paths retain
 their existing behavior. Vulkan control cases and exact decoder/IR regression
 are summarized in the current checkpoint. Local candidate builds; native
 coordinate repair is pending the sampled-stencil gate.
+
+### 2026-11-03: Explicit S8 sampling from the owned depth/stencil target
+
+The captured raw5 R8_UINT view refers to the initialized stencil allocation,
+not native depth floats. The cache now returns explicit plane identity only
+after exact range/unique owner/initialization/dirty-state checks and retains
+the owner to the fence. Native binding accepts only the observed single-layer,
+single-mip D32S8, unsigned2D read-only, R8UInt guest and RRRR case. The view
+retains nativeD32S8 format and selects eStencil; the normal depth validator
+and its1920-pitch rule are not relaxed to accept the distinct2048 S8 pitch.
+
+Pinned Jetsku reference f9e19582f0deac0d1226a7ce3faae30a9ab408ab, renderer/
+pipeline/descriptors.cpp1015 follows an explicit stencil association to its
+depth owner. Local APIs differ, so the ownership-aware view path is implemented
+locally. Vulkan's resource creation rules specify an unsigned sampler for a
+stencil-only aspect: https://docs.vulkan.org/spec/latest/chapters/resources.html .
+All source contents, layout and tracking flags survive the controlled read.
+Normal run acceptance is pending; no recognizable final-window frame claimed.

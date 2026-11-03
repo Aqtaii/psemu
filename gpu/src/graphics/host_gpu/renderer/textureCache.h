@@ -98,6 +98,8 @@ public:
 	                          vk::Format view_format, uint32_t swizzle, uint32_t base_level,
 	                          uint32_t level_count, vk::ImageViewType type, uint32_t base_layer,
 	                          uint32_t layer_count);
+    [[nodiscard]] vk::ImageView GetStencilTargetSampledView(
+        GraphicContext* ctx, DepthStencilVulkanImage* image, uint32_t swizzle);
 	[[nodiscard]] vk::ImageView GetSampledColorView(GraphicContext* ctx, VulkanImage* image,
 	                                                vk::Format view_format, uint32_t swizzle,
 	                                                uint32_t base_level, uint32_t level_count,
@@ -115,7 +117,8 @@ public:
 	                                                         uint32_t                   base_level);
 	[[nodiscard]] DepthStencilVulkanImage*
 	FindDepthTargetByRange(CommandBuffer* command, uint64_t vaddr, uint64_t size,
-	                       bool allow_containing_sampled = false);
+                           bool allow_containing_sampled = false,
+                           bool* sampled_stencil = nullptr);
 	[[nodiscard]] RegionInfo QueryRegion(uint64_t vaddr, uint64_t size);
 	// Failure-only snapshot; never changes metadata ownership or physical bytes.
 	void LogBufferMetadataOverlap(uint64_t vaddr, uint64_t size);

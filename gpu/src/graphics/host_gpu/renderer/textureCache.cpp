@@ -4022,13 +4022,16 @@ bool TextureCache::InvalidateMemoryFromGPU(uint64_t vaddr, uint64_t size,
 
 DepthStencilVulkanImage* TextureCache::FindDepthTargetByRange(CommandBuffer* command,
                                                               uint64_t vaddr, uint64_t size,
-                                                              bool allow_containing_sampled) {
+                                                              bool allow_containing_sampled,
+                                                              bool* sampled_stencil) {
 	if (command == nullptr || vaddr == 0 || size == 0 || vaddr >= TRACKER_ADDRESS_SIZE ||
 	    size > TRACKER_ADDRESS_SIZE - vaddr) {
 		EXIT("TextureCache: invalid depth-target range query, addr=0x%016" PRIx64
 		     " size=0x%016" PRIx64 "\n",
 		     vaddr, size);
 	}
+    std::unique_lock transaction(m_resource_mutex, std::defer_lock);
+    if (!m_resource_mutex.IsOwnedByCurrentThread()) transaction.lock();
 	FaultSafeTextureLock lock(this, m_lock);
 	CachedImage*         found = nullptr;
 	for (auto* cached: FindImagesInRegionLocked(vaddr, size, false)) {
@@ -4055,6 +4058,12 @@ DepthStencilVulkanImage* TextureCache::FindDepthTargetByRange(CommandBuffer* com
 			     " size=0x%016" PRIx64 "\n",
 			     vaddr, size);
 		}
+        if (stencil_range && (cached->buffer_modified ||
+            m_memory_tracker.IsRegionCpuModified(vaddr, size) ||
+            m_buffer_cache.IsRegionGpuModified(vaddr, size) ||
+            m_buffer_cache.IsCachedRegionCpuModified(vaddr, size))) {
+            EXIT("TextureCache: sampled stencil range has newer non-image bytes\n");
+        }
 		found = cached;
 	}
 	if (found == nullptr) {
@@ -4065,6 +4074,10 @@ DepthStencilVulkanImage* TextureCache::FindDepthTargetByRange(CommandBuffer* com
 	if (owner == m_images.end()) {
 		EXIT("TextureCache: page-table depth target has no cache owner\n");
 	}
+    if (sampled_stencil) {
+        *sampled_stencil = vaddr == found->depth.stencil_address &&
+                           size == found->depth.stencil_size;
+    }
 	command->RetainResourceUntilFence(*owner);
 	return static_cast<DepthStencilVulkanImage*>(found->image);
 }

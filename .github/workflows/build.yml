@@ -299,6 +299,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_depth_sampled_array.ps1
 
+      - name: Test owned native stencil sampled views
+        shell: pwsh
+        run: ./tools/scripts/test_stencil_sampled.ps1
+
       - name: Test interpolation parameter decoder and SPIR-V
         shell: pwsh
         run: ./tools/scripts/test_interpolation_parameters.ps1

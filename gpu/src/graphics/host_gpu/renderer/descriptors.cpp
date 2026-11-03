@@ -549,6 +549,29 @@ static void ValidateDepthTargetBinding(const ShaderRecompiler::IR::ImageResource
 	     descriptor.fields[4], descriptor.fields[5], descriptor.fields[6], descriptor.fields[7]);
 }
 
+bool IsSupportedStencilTargetBinding(
+    const ShaderRecompiler::IR::ImageResource& resource,
+    const ShaderTextureResource& descriptor, const VulkanImage& image, vk::Format view_format) {
+    using namespace ShaderRecompiler;
+    return resource.kind == IR::ResourceKind::ImageUint &&
+           resource.dimension == Decoder::ImageDimension::Dim2D &&
+           resource.mip_mode == IR::ImageMipMode::None && resource.read &&
+           !resource.written && !resource.atomic && !resource.depth_compare &&
+           image.type == VulkanImageType::DepthStencil &&
+           image.format == vk::Format::eD32SfloatS8Uint && image.layers == 1 &&
+           image.mip_levels == 1 && view_format == vk::Format::eR8Uint &&
+           descriptor.Format() == Prospero::GpuEnumValue(Prospero::BufferFormat::k8UInt) &&
+           descriptor.DstSelXYZW() == DstSel(4, 4, 4, 4) &&
+           descriptor.Type() == Prospero::GpuEnumValue(Prospero::ImageType::kColor2D) &&
+           descriptor.TileMode() == Prospero::GpuEnumValue(Prospero::TileMode::kDepth) &&
+           uint32_t(descriptor.Width5()) + 1 == image.extent.width &&
+           uint32_t(descriptor.Height5()) + 1 == image.extent.height &&
+           descriptor.Depth() == 0 && descriptor.BaseArray5() == 0 &&
+           descriptor.BaseLevel() == 0 && descriptor.LastLevel() == 0 &&
+           descriptor.MaxMip() == 0 && descriptor.MinLod() == 0 &&
+           IsSupportedDepthTextureEncoding(descriptor);
+}
+
 static bool IsValidTextureMipView(const ShaderTextureResource& descriptor) {
 	if (descriptor.BaseLevel() > descriptor.LastLevel()) return false;
 	uint32_t dimension = std::max(static_cast<uint32_t>(descriptor.Width5()) + 1u,
@@ -855,12 +878,13 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 	VulkanImage*  image      = nullptr;
 	int           view       = VulkanImage::VIEW_DEFAULT;
 	vk::ImageView image_view = nullptr;
+    bool sampled_stencil = false;
 	const bool check_depth = static_cast<Prospero::TileMode>(tile) == Prospero::TileMode::kDepth ||
 	                         descriptor.MsaaDepth();
 	if (image == nullptr) {
 		if (check_depth) {
 			image = g_render_ctx->GetTextureCache()->FindDepthTargetByRange(command_buffer, address,
-			                                                                size.size, true);
+			                                                                size.size, true, &sampled_stencil);
 		} else {
 			image = g_render_ctx->GetTextureCache()->FindRenderTargetByRange(command_buffer,
 			                                                                 address, size.size);
@@ -903,8 +927,21 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 				}
 			}
 		}
-		if (image != nullptr) {
-			if (check_depth) {
+        if (image != nullptr) {
+            if (sampled_stencil) {
+                if (storage || !IsSupportedStencilTargetBinding(resource, descriptor, *image, view_format)) {
+                    EXIT("unsupported sampled stencil resource/descriptor, address=0x%016" PRIx64 "\n", address);
+                }
+                image_view = g_render_ctx->GetTextureCache()->GetStencilTargetSampledView(
+                    g_render_ctx->GetGraphicCtx(), static_cast<DepthStencilVulkanImage*>(image), swizzle);
+                static std::atomic_uint stencil_logs {0};
+                if (stencil_logs.fetch_add(1, std::memory_order_relaxed) < 16) {
+                    printf("[STENCIL-SAMPLED] address=0x%016" PRIx64 "+0x%" PRIx64
+                           " extent=%ux%u guest_pitch=%u depth_pitch=%u native_format=%u aspect=S8 uint=1\n",
+                           address, size.size, width, height, pitch, image->guest_pitch, unsigned(image->format));
+                    fflush(stdout);
+                }
+            } else if (check_depth) {
 				const bool uint_reinterpret =
 				    IsSupportedSampledDepthUintResource(resource) &&
 				    IsSupportedDepthTargetDescriptor(descriptor, *image) &&

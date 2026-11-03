@@ -292,6 +292,17 @@ vk::ImageView TextureCache::GetDepthTargetSampledView(GraphicContext*          c
 	                     level_count, base_layer, layer_count, swizzle});
 }
 
+vk::ImageView TextureCache::GetStencilTargetSampledView(
+    GraphicContext* ctx, DepthStencilVulkanImage* image, uint32_t swizzle) {
+    if (!ctx || !image || !image->image || image->format != vk::Format::eD32SfloatS8Uint ||
+        image->layers != 1 || image->mip_levels != 1 || swizzle != DstSel(4, 4, 4, 4)) {
+        EXIT("TextureCache: unsupported sampled stencil view\n");
+    }
+    // The native combined format is retained; only the unsigned S8 aspect is sampled.
+    return GetImageView(ctx, image, {image->format, vk::ImageViewType::e2D,
+        vk::ImageAspectFlagBits::eStencil, 0, 1, 0, 1, swizzle});
+}
+
 vk::ImageView TextureCache::GetSampledColorView(GraphicContext* ctx, VulkanImage* image,
                                                 vk::Format view_format, uint32_t swizzle,
                                                 uint32_t base_level, uint32_t level_count,
