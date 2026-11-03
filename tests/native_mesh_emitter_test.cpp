@@ -1235,6 +1235,11 @@ int main(int argc,char** argv){
    IR::Instruction i;i.op=op;i.dst=dst;i.pc=pc;
    for(const auto& operand:src)i.src[i.src_count++]=operand;gate.push_back(i);
   };
+  if(std::getenv("PSEMU_TEST_MESH_CHECKPOINTS")) {
+   for(uint32_t i=0;i<32;++i)
+    add_gate(IR::Opcode::MoveU32,Reg(IR::RegisterFile::Scalar,32+i),{Imm(0x80000000u+i)},0xc0);
+   add_gate(IR::Opcode::MoveU32,vector(0),{Imm(0x7fc12345)},0xc4);
+  }
   add_gate(IR::Opcode::CompareMaskGtU32,Reg(IR::RegisterFile::Exec,0),{Imm(31),vector(5)},0xe0);
   add_gate(IR::Opcode::CompareEqU32,mask,{vector(5),Imm(30)},0xe4);
   add_gate(IR::Opcode::SelectMaskU32,vector(8),{mask,Imm(0),Imm(0x3f800000)},0xf8);

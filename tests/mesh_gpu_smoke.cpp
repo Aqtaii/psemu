@@ -380,6 +380,39 @@ int main(int argc,char** argv){try{
   std::printf("[MESH-INPUT-GPU] exact_value_record_pc=%u untouched_outside_dispatch=%u game_frame=0\n",
    unsigned(gate_valid),unsigned(probe.lanes[255].gate_seen==0));
   valid=valid && gate_valid;
+  if(std::getenv("PSEMU_TEST_MESH_CHECKPOINTS")) {
+   if(!ici.enabledLayerCount || !messenger)throw std::runtime_error("Register checkpoints require active validation");
+   bool exact=true;
+   for(uint32_t slot=0;slot<MeshOutputProbe::TracePoints;++slot) {
+    const auto& point=MeshProbeTracePoints()[slot];
+    const auto& checkpoint=probe.trace[0][slot];
+    exact=exact && checkpoint.seen==1 && checkpoint.pc==point.pc &&
+     checkpoint.scalar_valid==UINT32_MAX && checkpoint.vector_base==point.vector_base &&
+     checkpoint.exec[0]==(slot==0 ? UINT32_MAX : 0x7fffffffu);
+    for(uint32_t i=0;i<32;++i)exact=exact && checkpoint.scalar[i]==0x80000000u+i;
+    if(slot==2) {
+     exact=exact && checkpoint.vector_valid==0 && checkpoint.vector==std::array<uint32_t,32>{};
+    } else {
+     exact=exact && (checkpoint.vector_valid&((1u<<0)|(1u<<5)|(1u<<8)|(1u<<9)))==
+      ((1u<<0)|(1u<<5)|(1u<<8)|(1u<<9)) && checkpoint.vector[0]==0x7fc12345u &&
+      checkpoint.vector[5]==0;
+     if(slot==1)exact=exact && checkpoint.vector[8]==0x3f800000u && checkpoint.vector[9]==7;
+    }
+   }
+   const bool merged=point_push;
+   const auto& upper=probe.trace[1][0];
+   exact=exact && upper.seen==unsigned(merged);
+   if(merged)exact=exact && upper.vector[0]==0x7fc12345u && upper.vector[5]==32 &&
+    upper.exec==std::array<uint32_t,2>{UINT32_MAX,UINT32_MAX};
+   for(uint32_t slot=1;slot<MeshOutputProbe::TracePoints;++slot)
+    exact=exact && probe.trace[1][slot].seen==0;
+   for(uint32_t wave=2;wave<MeshOutputProbe::TraceCapacity;++wave)
+    for(const auto& checkpoint:probe.trace[wave])
+     exact=exact && checkpoint.seen==0;
+   std::printf("[MESH-CHECKPOINT-GPU] raw_nan_payload=preserved scalar_bank=exact virtual_banks=%u inactive_lanes=untouched absent_registers=marked exact=%u game_frame=0\n",
+    merged ? 2u : 1u,unsigned(exact));
+   valid=valid && exact;
+  }
   std::printf("[MESH-OUTPUT-GPU] vertices=%u primitives=%u exact_positions_indices=%u fault_header_preserved=%u game_frame=0\n",probe.vertices,probe.primitives,unsigned(valid),unsigned(probe.fault==std::array<uint32_t,4>{}));
   } else {
    const MeshOutputProbe untouched{};

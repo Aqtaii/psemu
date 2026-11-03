@@ -2,6 +2,7 @@
 #include <array>
 #include <bit>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 namespace Libs::Graphics::ShaderRecompiler {
@@ -52,10 +53,39 @@ inline bool MeshOutputProbeIncludesDraw(uint32_t points,uint32_t instances,
         vertices_per_group!=0 && offset<points &&
         offset%vertices_per_group==0;
 }
+// Four explicit PC checkpoints, disabled unless a nonzero PC is configured.
+// One lane per guest wave is enough to distinguish shared matrix inputs from
+// virtual-bank values without tracing every arithmetic instruction.
+struct MeshProbeTracePoint { uint32_t pc=0, vector_base=0; };
+inline const std::array<MeshProbeTracePoint,4>& MeshProbeTracePoints() {
+ static const auto points=[] {
+  std::array<MeshProbeTracePoint,4> result{};
+  for(uint32_t i=0;i<result.size();++i) {
+   char name[64];
+   std::snprintf(name,sizeof(name),"PSEMU_ASTRO_MESH_TRACE_PC_%u",i);
+   const char* value=std::getenv(name);
+   if(!value || !value[0])continue;
+   char* end=nullptr;const auto pc=std::strtoull(value,&end,0);
+   if(!end || *end || pc==0 || pc>UINT32_MAX)continue;
+   std::snprintf(name,sizeof(name),"PSEMU_ASTRO_MESH_TRACE_VBASE_%u",i);
+   value=std::getenv(name);uint32_t base=0;
+   if(value && value[0]) {
+    const auto parsed=std::strtoull(value,&end,0);
+    if(!end || *end || parsed>224)continue;
+    base=static_cast<uint32_t>(parsed);
+   }
+   result[i]={static_cast<uint32_t>(pc),base};
+  }
+  return result;
+ }();
+ return points;
+}
 // First four words retain GuestAddressFaultRecord. Trailing words are diagnostic only.
 struct MeshOutputProbe {
  static constexpr uint32_t Magic=0x4d505242, Capacity=256, HeaderWords=10, LaneWords=17;
- static constexpr uint32_t WordCount=HeaderWords+Capacity*LaneWords;
+ static constexpr uint32_t TraceCapacity=8, TracePoints=4, TraceWords=71;
+ static constexpr uint32_t TraceBaseWords=HeaderWords+Capacity*LaneWords;
+ static constexpr uint32_t WordCount=TraceBaseWords+TraceCapacity*TracePoints*TraceWords;
  std::array<uint32_t,4> fault{};
  uint32_t magic=0, allocation=0, vertices=0, primitives=0;
  uint32_t first_vertex=0, instance=0;
@@ -63,8 +93,16 @@ struct MeshOutputProbe {
   uint32_t gate_value=0,gate_record=0,gate_seen=0,gate_pc=0;
   std::array<uint32_t,4> gate_descriptor{};std::array<uint32_t,3> gate_xyz{};};
  std::array<Lane,Capacity> lanes{};
+ struct Trace {
+  uint32_t seen=0,pc=0;
+  std::array<uint32_t,2> exec{};
+  uint32_t scalar_valid=0,vector_valid=0,vector_base=0;
+  std::array<uint32_t,32> scalar{},vector{};
+ };
+ std::array<std::array<Trace,TracePoints>,TraceCapacity> trace{};
 };
 static_assert(sizeof(MeshOutputProbe::Lane)==68);
+static_assert(sizeof(MeshOutputProbe::Trace)==MeshOutputProbe::TraceWords*4);
 static_assert(sizeof(MeshOutputProbe)==MeshOutputProbe::WordCount*4);
 inline bool MeshProbePosition(const MeshOutputProbe& probe,uint32_t index,
                               std::array<float,4>* result) {

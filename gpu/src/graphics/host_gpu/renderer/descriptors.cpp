@@ -1220,6 +1220,18 @@ static BufferView NativeGuestAddressFault(CommandBuffer* command, bool mesh_prob
            " group=%u shader=0x%016" PRIx64 " blocks=%zu ir_instructions=%zu gs_root=0x%016" PRIx64 " source=completed-fence\n",
      probe.magic,probe.allocation,probe.vertices,probe.primitives,probe.instance,
      probe.first_vertex,group,shader_hash,blocks,ir_instructions,gs_root);
+    for(uint32_t wave=0;wave<probe.trace.size();++wave) {
+     for(const auto& checkpoint:probe.trace[wave]) {
+      if(checkpoint.seen!=1)continue;
+      printf("[MESH-REGISTER-CHECKPOINT] lane=%u pc=0x%x exec=%08x:%08x scalar_valid=%08x vector_valid=%08x vbase=%u source=completed-fence\n",
+       wave*32,checkpoint.pc,checkpoint.exec[1],checkpoint.exec[0],checkpoint.scalar_valid,checkpoint.vector_valid,checkpoint.vector_base);
+      printf("[MESH-REGISTER-SCALAR] lane=%u pc=0x%x base=32 raw=",wave*32,checkpoint.pc);
+      for(const auto value:checkpoint.scalar)printf(" %08x",value);
+      printf("\n[MESH-REGISTER-VECTOR] lane=%u pc=0x%x base=%u raw=",wave*32,checkpoint.pc,checkpoint.vector_base);
+      for(const auto value:checkpoint.vector)printf(" %08x",value);
+      printf("\n");
+     }
+    }
     uint32_t reached=0;
     for(uint32_t i=0;i<ShaderRecompiler::MeshOutputProbe::Capacity;++i) {
      const auto& lane=probe.lanes[i];

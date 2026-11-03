@@ -299,6 +299,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_depth_sampled_array.ps1
 
+      - name: Validate bounded Mesh register checkpoint SPIR-V
+        shell: pwsh
+        run: ./tools/scripts/test_mesh_register_checkpoints_gpu.ps1 -ValidateOnly
+
       - name: Test owned native stencil sampled views
         shell: pwsh
         run: ./tools/scripts/test_stencil_sampled.ps1

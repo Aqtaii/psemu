@@ -1,61 +1,48 @@
 # Astro Bot ilerleme planı
 
-## Current verified checkpoint - 3 November 2026, 11:54 Istanbul
+## Current verified checkpoint - 3 November 2026, 15:06 Istanbul
 
-Normal ef56e5c (10:39:37--11:28:37, owned PID17632, exit321) uses the new
-native-depth HTile bridge successfully. The actual record is:
-metadata0x1bd38c70000+0x30000, view0xc0000, depth0x1bd38180000,
-1920x1080 nativeD32S8, pitch_blocks2,32400 actual8x8 Z ranges.
-The bounded DEPTH-RESUMMARIZE marker also appears. The former metadata read
-guard is passed; this does not independently prove every subsequent dispatch
-completed. CI41598825171 / job125792453578 is fully successful.
+Normal aa205f2 (owned PID14832, started11:54) passed both real-game guards:
+nine native-depth HTile Z-range snapshots and sixteen exact initialized S8
+sampled bindings were observed. HTile/lds/stencil CI runs41598825171,
+41605085286 and41607786203 are fully successful. The window remained responsive
+but its0.5FPS/66draws title stayed unchanged, stderr stopped at12:35:38 and
+timestamped file logs stopped atT2512.94. Audio alone continued. A read-only
+sample placed the hot graphics worker inside BufferCache::ObtainBuffer's
+tracker upload path; external faults waited for that worker. This is evidence
+of a graphics stall, not proof of a resource-lock deadlock. The exact upload
+range still needs a repeated context/stack sample if it recurs.
 
-The next fatal is a sampled stencil-plane view, not the prior HTile read:
-guest k8UInt(raw5), R8Uint view13, ImageUint resource9, Dim2D read-only,
-swizzle0x924(RRRR), descriptor1920x1080/pitch2048, nativeD32S8 pitch1920,
-stencil address0x1bd389f0000+0x280000. The current depth-only descriptor/view
-validation rejects it. Add an explicitly owned initialized stencil aspect;
-do not reinterpret depth floats or upload stale guest bytes.
+Real full2467-instruction Mesh output includes12vertices/6primitives, and later
+4vertices/2primitives. After the wide LDS address repair all four captured
+position components are NaN. The former zero trailing words were an independent
+address-overlap defect, but upstream nonfinite position production remains.
+The last completed present-source capture is black. No recognizable final-window
+Astro frame is confirmed.
 
-The128-group diagnostic now found real non-dummy Mesh output:12 vertices,
-6 primitives, packed count0x0006000c, indices(0,1,2). Recorded positions are
-(NaN,0,0,0). Thus not all draws are empty. Empty40/50-group sweeps were also
-recorded, but the103-group draw was not observed before expensive diagnostics
-were disabled11:25 to finish the normal run. Zero counts can be legitimate
-inactive effects; never force culling/allocation success.
+A bounded opt-in register probe now records four explicitly selected PCs, one
+lane per guest wave, with raw s32..63, a selectable32-VGPR window, EXEC and valid
+register masks. It uses only the existing completed-fence diagnostic SSBO and
+does not modify register values, guest memory, allocation counts or culling.
+Unconfigured checkpoints emit no additional shader instructions.
 
-A concrete shader translation bug is fixed locally: LowerDsRead expands one
-B64/B96/B128 into multiple same-PC IR loads, but a destination can replace its
-own address after component0. The original Astro position load is
-DS_READ_B128 v[0:3],v0,offset304 at originalGS PC34ac. The emitter now captures
-the original address independently for both virtual banks and reuses it
-through all components. It never substitutes finite coordinates for NaNs.
+Local ArcB580 GPU controls pass native32/merged64 capture, exact raw NaN payload,
+shared scalar and separate virtual vector banks, sparse EXEC, absent-register
+masks, untouched nonselected instances/groups, unchanged positions/indices and
+fault header. Four framebuffer cases each1024/1024 pixels; active validation0.
+The actual full2467/164block Astro ES/GS replay emits631179 words with all four
+transform checkpoints and passes spirv-val Vulkan1.2; replay inputs are synthetic,
+so this is shader translation validation, not a native game-frame result.
 
-Corrected controlled GPU tests prove the address dependency: old-address/
-no-overlap1024/1024 pixels, old-address/overlap0/1024, fixed1024/1024; active
-validation0 issues. Initial sparse test initialization was itself predicated
-and was corrected before this controlled comparison. B64/B96/B128, every
-address/destination overlap, sparse EXEC, repeated PC and32/64/128 physical
-invocations now pass the public Vulkan runner (four framebuffer cases).
-Actual B128 decoder/IR PC/address/component metadata and all existing ES/GS
-resource regressions pass. Separate astro-lds-address-output builds.
-
-The LDS sourcebb21653 is committed/pushed and not yet verified in a native
-boot. Guarded sampled-stencil view support is implemented and locally built.
-The exact initialized S8 range is selected under resource-then-texture locks;
-dirty CPU/buffer owners and ambiguity retain rejection. A nativeD32S8 view
-uses only eStencil with unsigned RRRR mapping, rather than depth reinterpretation.
-Descriptor/native-view guards (29 negatives), cache ownership/range/dirty/caller
-lock tests and2073600 spatial Vulkan stencil/depth samples all pass with active
-validation0 issues. Existing layered-depth descriptors and depth/storage tests
-also pass. The combined normal candidate started11:54:12 (owned PID14832,
-observer2704), groups1, first_vertex0, same late gate, no FAST_TEST/skip.
-D:/Tools/psemu-build/astro-stencil-sampled-output/loader.exe SHA256:
-4C27EDDD380E1DAC7C8518DC312BA4A857520E1720A44B5209F7D601F999ECAA.
-Native coordinate repair, stencil binding acceptance and final window are pending. Root Sarah
-fullscreen binary and user launch scripts remain unchanged. Recognizable
-final-window Astro output is NOT achieved. See later dated records for
-controlled HTile details and historical milestones.
+New owned PID8608 / observer20488 started15:06:37 from the separate
+astro-register-checkpoint-output candidate (SHA25662C129BD689F73952747E4EF9F5140F8ECBBBC6DCE8486BD663888806FEFDF3B).
+The old owned run was closed for this measured replacement after exhausting
+its eight real Mesh records. The new normal full boot measures fused PCs27d4,2890,2980,2a20:
+before camera-matrix reciprocal, first transform multiply-add, first position
+output multiply-add, and after position construction. Last checkpoint reads
+v95..126; the others v0..31. All capture s32..63, including matrix and root words.
+This separates invalid matrix/resource inputs from invalid local geometry.
+Root Sarah fullscreen binary and user launchers remain unchanged.
 
 FAST_TEST remains removed. No early EOF, intro skip or fake game time is used.
 

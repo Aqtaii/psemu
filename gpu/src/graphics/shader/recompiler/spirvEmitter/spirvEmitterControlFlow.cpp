@@ -691,7 +691,65 @@ uint32_t EmitMeshProbeCaptureBool(EmitterState* state) {
  return selected;
 }
 
+// Diagnostic stores are in the existing completed-fence probe SSBO only.
+// Read raw registers before the selected instruction and do not change EXEC,
+// shared data, guest memory, or the instruction result.
+void EmitMeshRegisterCheckpoint(EmitterState* state,const IR::Instruction& inst) {
+ if(state->stage!=ShaderType::Mesh || !state->program->bindings.mesh_output_probe ||
+    state->guest_address_fault_variable==0)return;
+ const auto& points=MeshProbeTracePoints();
+ for(uint32_t slot=0;slot<points.size();++slot) {
+  const auto& point=points[slot];
+  if(point.pc==0 || point.pc!=inst.pc)continue;
+  // Wide lowered instructions share a PC. Capture the initial register bank once.
+  if(inst.memory.component_count>1 && inst.memory.component_index!=0)continue;
+  EmitGuardedByExec(state,[&] {
+   auto& b=state->builder;
+   const auto index=EmitMeshGuestLocalInvocationIndex(state);
+   const auto wave=EmitBinaryU32(state,OpShiftRightLogical,index,ConstantU32(state,5));
+   const auto lane=EmitBinaryU32(state,OpBitwiseAnd,index,ConstantU32(state,31));
+   const auto bounded=b.AllocateId(),first=b.AllocateId(),wave_ok=b.AllocateId(),selected=b.AllocateId();
+   b.AddFunction({OpULessThan,state->bool_type,bounded,wave,ConstantU32(state,MeshOutputProbe::TraceCapacity)});
+   b.AddFunction({OpIEqual,state->bool_type,first,lane,ConstantU32(state,0)});
+   b.AddFunction({OpLogicalAnd,state->bool_type,wave_ok,bounded,first});
+   b.AddFunction({OpLogicalAnd,state->bool_type,selected,wave_ok,EmitMeshProbeCaptureBool(state)});
+   const auto yes=b.AllocateId(),end=b.AllocateId();
+   b.AddFunction({OpSelectionMerge,end,SelectionControlNone});
+   b.AddFunction({OpBranchConditional,selected,yes,end});
+   b.AddFunction({OpLabel,yes});
+   const auto trace_index=EmitAddU32(state,EmitBinaryU32(state,OpIMul,wave,
+    ConstantU32(state,MeshOutputProbe::TracePoints)),ConstantU32(state,slot));
+   const auto base=EmitAddU32(state,EmitMeshProbeRecordWordOffset(state),
+    EmitAddU32(state,ConstantU32(state,MeshOutputProbe::TraceBaseWords),
+     EmitBinaryU32(state,OpIMul,trace_index,ConstantU32(state,MeshOutputProbe::TraceWords))));
+   std::array<uint32_t,MeshOutputProbe::TraceWords> values{};
+   values[0]=ConstantU32(state,1);values[1]=ConstantU32(state,inst.pc);
+   values[2]=EmitRegisterLoad(state,{IR::RegisterFile::Exec,0});
+   values[3]=EmitRegisterLoad(state,{IR::RegisterFile::Exec,1});
+   uint32_t scalar_valid=0,vector_valid=0;
+   values[6]=ConstantU32(state,point.vector_base);
+   for(uint32_t i=0;i<32;++i) {
+    const IR::Register scalar{IR::RegisterFile::Scalar,32+i},vector{IR::RegisterFile::Vector,point.vector_base+i};
+    const bool has_scalar=PointerForRegister(*state,scalar)!=0,has_vector=PointerForRegister(*state,vector)!=0;
+    if(has_scalar)scalar_valid|=uint32_t(1)<<i;
+    if(has_vector)vector_valid|=uint32_t(1)<<i;
+    values[7+i]=has_scalar ? EmitRegisterLoad(state,scalar) : ConstantU32(state,0);
+    values[39+i]=has_vector ? EmitRegisterLoad(state,vector) : ConstantU32(state,0);
+   }
+   values[4]=ConstantU32(state,scalar_valid);values[5]=ConstantU32(state,vector_valid);
+   for(uint32_t i=0;i<values.size();++i) {
+    const auto ptr=b.AllocateId();
+    b.AddFunction({OpAccessChain,state->ptr_storage_buffer_uint,ptr,state->guest_address_fault_variable,
+     ConstantU32(state,0),EmitAddU32(state,base,ConstantU32(state,i))});
+    b.AddFunction({OpStore,ptr,values[i]});
+   }
+   b.AddFunction({OpBranch,end});b.AddFunction({OpLabel,end});
+  });
+ }
+}
+
 void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
+ EmitMeshRegisterCheckpoint(state,inst);
  // Bounded opt-in capture of the actual Astro empty-input gate, before CMPX changes EXEC.
  // Capture either the old input predicate or the full GS packed output-count test.
  const bool input_gate = inst.pc==0x104 && inst.op==IR::Opcode::CompareMaskLtF32 &&
