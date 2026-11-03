@@ -710,6 +710,28 @@ std::pair<VulkanBuffer*, uint64_t> BufferCache::ObtainBuffer(CommandBuffer*  com
 	ValidateGpuAccess(vaddr, size, is_read, is_written);
 	const auto      begin = AlignDown(vaddr);
 	const auto      end   = AlignUp(vaddr + size);
+	// A CPU-current stream snapshot never joins or uses an existing cache owner.
+	// Resolve it before a foreign-owner merge drain: that drain resets recording,
+	// while a stream return leaves the foreign partial owner intact. Doing the
+	// drain first makes descriptor preparation retry the same read forever.
+	auto try_cpu_stream = [&](const auto& texture_region) -> std::pair<VulkanBuffer*, uint64_t> {
+		if (!force_resident && is_read && !is_written && size <= CACHING_PAGE_SIZE &&
+		    !m_memory_tracker.IsRegionGpuModified(vaddr, size) &&
+		    m_memory_tracker.IsRegionCpuModified(vaddr, size) && !texture_region.gpu_image_bytes &&
+		    !texture_region.gpu_metadata_bytes) {
+			std::array<uint8_t, CACHING_PAGE_SIZE> guest_data;
+			if (Libs::LibKernel::Memory::TryReadBacking(vaddr, guest_data.data(), size)) {
+				VulkanBuffer* stream_buffer = nullptr;
+				vk::DeviceSize stream_offset = 0, stream_range = 0;
+				const auto alignment = std::max<uint64_t>(ctx->StorageMinAlignment(), 16);
+				if (UploadHostData(command, ctx, guest_data.data(), size, alignment,
+				                   &stream_buffer, &stream_offset, &stream_range)) {
+					return {stream_buffer, stream_offset};
+				}
+			}
+		}
+		return {};
+	};
 	// Snapshot foreign producers before acquiring the resource transaction. Draining
 	// resets recordings, so callers must use the existing descriptor preparation retry.
 	std::vector<std::pair<std::shared_ptr<VulkanBuffer>, uint64_t>> drained_owners;
@@ -718,7 +740,11 @@ std::pair<VulkanBuffer*, uint64_t> BufferCache::ObtainBuffer(CommandBuffer*  com
 		std::lock_guard transaction(m_resource_mutex);
 		// A native image may own writes still recorded on a producer command buffer.
 		// Inspect texture ownership before the buffer lock to preserve cache lock order.
-		image_access_drain = (is_written || is_read) && m_texture_cache->QueryRegion(vaddr, size).gpu_image_bytes;
+		const auto initial_texture_region = m_texture_cache->QueryRegion(vaddr, size);
+		if (const auto stream = try_cpu_stream(initial_texture_region); stream.first) {
+			return stream;
+		}
+		image_access_drain = (is_written || is_read) && initial_texture_region.gpu_image_bytes;
 		FaultSafeCacheLock lock(this, m_mutex);
 		auto owner = m_buffers.upper_bound(vaddr);
 		bool contained = false;
@@ -766,26 +792,8 @@ std::pair<VulkanBuffer*, uint64_t> BufferCache::ObtainBuffer(CommandBuffer*  com
           (void)m_texture_cache->PublishImageForBufferRead(ctx, vaddr, size);
         }
         const auto texture_region = m_texture_cache->QueryRegion(vaddr, size);
-        // Use the stream-buffer fast path before image/buffer alias handling.
-        // Clean image and metadata views may coexist with a small CPU-current
-        // read; Kyty's separate image trackers require GPU-dirty ownership
-        // guards here. Read physical backing so host page protection is
-        // irrelevant.
-        if (!force_resident && is_read && !is_written && size <= CACHING_PAGE_SIZE &&
-	    !m_memory_tracker.IsRegionGpuModified(vaddr, size) &&
-	    m_memory_tracker.IsRegionCpuModified(vaddr, size) && !texture_region.gpu_image_bytes &&
-	    !texture_region.gpu_metadata_bytes) {
-		std::array<uint8_t, CACHING_PAGE_SIZE> guest_data;
-		if (Libs::LibKernel::Memory::TryReadBacking(vaddr, guest_data.data(), size)) {
-			VulkanBuffer*  stream_buffer    = nullptr;
-			vk::DeviceSize stream_offset    = 0;
-			vk::DeviceSize stream_range     = 0;
-			const auto     stream_alignment = std::max<uint64_t>(ctx->StorageMinAlignment(), 16);
-			if (UploadHostData(command, ctx, guest_data.data(), size, stream_alignment,
-			                   &stream_buffer, &stream_offset, &stream_range)) {
-				return {stream_buffer, stream_offset};
-			}
-		}
+	if (const auto stream = try_cpu_stream(texture_region); stream.first) {
+		return stream;
 	}
 	const auto texture_pages = begin == vaddr && end - begin == size
 	                               ? texture_region

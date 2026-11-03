@@ -299,6 +299,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_depth_sampled_array.ps1
 
+      - name: Test CPU stream reads before foreign buffer drains
+        shell: pwsh
+        run: ./tools/scripts/test_buffer_stream_retry.ps1
+
       - name: Test production buffer binding retry transactions
         shell: pwsh
         run: ./tools/scripts/test_buffer_binding_retry.ps1

@@ -1,61 +1,78 @@
 # Astro Bot ilerleme planı
 
-## Current verified checkpoint - 3 November 2026, 16:01 Istanbul
+## Current verified checkpoint - 3 November 2026, 16:54 Istanbul
 
-Normal79d48e3 (owned PID8608, started15:06:37) produced all four requested
-completed-fence register checkpoints in eight real full Mesh records. The
-camera matrix s40..55 is entirely finite: s50=-1.0000667572021484, with the
-expected perspective matrix. Local geometry v1,v8,v13,v14,v25,v28,v29 is
-already NaN before fusedPC27d4/original2780, before camera-matrix reciprocal
-and projection. All final positions remain NaN. This narrows the sampled
-shader problem to upstream local geometry; it is not a bad camera matrix.
-The empty1/1 fallback has zero matrix registers because its math path was
-inactive and is not evidence of failed matrix reads.
+Source34b7a28 normal boot9256 reached title_controller_ship atT1627.05 and
+executed the full2467-instruction Mesh program. The same-recording buffer-owner
+epoch fix is active. It repairs the demonstrated retired-buffer lost-write gap,
+but has not repaired the observed invalid geometry or produced recognizable
+final-window content. New-owner retries alone do not prove that an actual
+retirement caused a particular black frame.
 
-The current run again produced recognizable opening-video content in the
-completed intermediate Vulkan attachment (native_video_target_17937085317642626.bmp,
-3840x2160, visual check). Direct Computer Use inspection of the actual game
-window around15:31 still showed only the dark diagonal pattern. Final-window
-Astro content remains unachieved. The diagnostic gate was closed15:43:47 after
-all eight real records, removing extra probes without skipping game logic.
-Late file logs then stopped after T2519.79/storage-array expansion while audio
-continued. Repeated read-only thread samples place the graphics worker in
-command-processor synchronization/WaitForGraphicsIdle, rather than proving a
-single stuck bitmap instruction or a resource-lock deadlock.
+Eight real completed-fence records produced12/6 or4/2 allocations. At fused234,
+all eight sampled position/age inputs are finite (the first six positions are
+zero; the last two are nonzero). By fused2724/original26d0, before dimension
+scaling and projection, seven complete raw checkpoints show NaN in the local
+orientation basis v29,v33,v34,v37,v38,v41,v42,v44,v46. The eighth raw vector
+line was interleaved with audio output and is rejected rather than interpreted.
+Every sampled final position remains NaN. The actual projection matrix captured
+at fused27d4 is finite in all eight records. These are observations of one
+sampled shader/group, not proof that every draw fails for this reason.
 
-Reference freshness matters: local f9e1958 is7October, while the current Jetsku
-default head744705ee1df4b0acb1af382ff5c32ca4a20aa5f7 is24October. Its
-renderDraw.cpp4085+ and pipeline/descriptors.cpp2343+ document and fix writes
-lost when a later buffer lookup joins and retires a previously bound owner.
-Our source has that same gap: command recording generation changes are checked,
-but same-recording owner replacement is not. Earlier bindings can write a
-retained but retired buffer while later readers use its replacement.
+The diagnostic gate was closed after all eight real records. The unchanged
+normal candidate continues, with fresh resource logs throughT2474/fd9683.
+Audio continues separately; that alone never establishes graphics progress.
+Its completed native opening-video target native_video_target_17937120576141866.bmp
+shows recognizable Astro montage content3840x2160, still an intermediate
+attachment rather than final presentation. The last direct window inspection
+was dark. Computer Use was stopped by the user's Escape; no further UI control
+has been attempted.
 
-The fix adds an atomic owner-registry epoch, advanced after insertion/merge
-and unmapping. Graphics retries all vertex, VS/Mesh, PS and index preparation;
-Compute retries all bindings before dispatch. New owners also invalidate a
-previously prepared physical-address table. Existing command-reset retries,
-retention and GPU/CPU ownership rules remain. Bounded late retry logs retain
-shader/code identities and the actual repeatedly drained ranges.
+Current primary Jetsku reference is744705ee1df4b0acb1af382ff5c32ca4a20aa5f7
+(24October); old localf9e1958 is7October. Its KYTY_REBIND_AFTER_JOIN fix informed
+our whole draw/compute preparation retry. Local controlled CPU and real Vulkan
+transactions reproduce the old lost write and verify exact fixed live-owner
+words, allocation bytes and guards. Active Vulkan validation reports0 issues.
+CI41641183875 exposed an unconditional Vulkan DLL dependency in the CPU fixture.
+a4d76df delays that import; local CPU/Vulkan cases pass, PE inspection confirms
+DelayImport, and complete CI41642841403 now succeeds.
 
-An extracted-production-loop transaction fixture reproduces the old lost write
-on real Vulkan and on an ordered CPU command backend. The fixed loops preserve
-32 exact output words in the live owner after within-stage, cross-stage,
-repeated and late-index joins; vertex/index bindings refresh too. Mesh
-preparation and existing recording-reset controls pass. All allocated bytes,
-padding and exterior guards match, with active Vulkan validation0. This verifies
-preparation and native writes with synthetic resources, not full cache/guest
-integration or a game frame. The separate native buffer-binding-epoch candidate
-builds; actual Astro epoch retries and visible output are the next check.
+AtT2569.94, file/scene progress stopped on repeated foreign-owner drains for
+0x1d6b2863f78+0xc0, crossing a16KB cache boundary. Fragment8d5b48ad,
+instruction hash446e217b735d37a4, repeatedly abandons descriptor preparation;
+the new bounded logs show over1million recording resets. This is a concrete
+retry livelock, not evidence from audio or a single sampled instruction.
 
-Next normal full boot uses earlier fused PCs234,2724,27d4,2a20 and VGPR windows
-0,24,32,95 to inspect the original record, local orientation before scaling,
-orientation/matrix inputs and final positions. No first-active-lane probe change
-was needed: lane0 reached every selected real checkpoint in this run.
-CI41633318967 for79d48e3 succeeded completely. Root Sarah fullscreen binary and
-the user's two launchers remain unchanged.
+The existing small CPU-current stream path ran after the merge drain. It
+returns a separate snapshot without merging the foreign partial owner, so
+the next recording repeats the same drain. The fix attempts that identical
+guarded stream path under the resource transaction before inspecting foreign
+merge owners. GPU-current bytes/images/metadata, writable or forced-resident
+requests, and failed reads/uploads retain the normal drain/cache path.
+The post-image-publication stream attempt remains. No pending GPU producer
+is skipped for any range that fails the existing CPU-current guards.
 
-CI41641183875 stopped before the new CPU fixture printed any case output. The fixture linked Vulkan as an unconditional DLL dependency even in CPU mode, although the runner only installs SDK tools and may have no Vulkan runtime. The fixture now delay-loads vulkan-1.dll: CPU mode performs no Vulkan calls; GPU mode retains the same real Vulkan backend and active validation. Production emulator and current normal run are unchanged. Local CPU/Vulkan cases pass with zero active validation issues, and PE inspection confirms Vulkan is a delay import. A fresh CI run will verify the runner diagnosis.
+A controlled fixture extracts the actual production preparation prefix and
+range/queue helpers. Removing only the early stream attempt reproduces12/12
+abandoned recordings with the unchanged foreign owner. The fixed prefix
+finishes the same192-byte cross-page snapshot in one round with no drain.
+Thirteen cases check exact copied bytes/exterior guards, unchanged foreign
+owner and tracker state, forced residency/GPU ownership negatives and
+post-image-publication fallback. The remaining resident-cache path is modeled;
+this is CPU transaction evidence, not full native cache/guest or GPU validation.
+The separate stream-drain candidate builds. All13 prefix cases and existing12 CPU plus12 Vulkan binding transactions pass, with active Vulkan validation0. The new four-PC full2467-instruction selector emits631231 words and passes Vulkan1.2 SPIR-V validation. Actual Astro passage and visible output remain pending the next normal run.
+
+Checkpoint metadata and both32-word banks are now formatted as one bounded
+stdio write, avoiding the observed per-word audio interleaving. No guest values,
+shader instructions, positions, allocation counts or rendering state change.
+If the normal run still has no visible output, the next existing diagnostic
+selector brackets original1470/147c/14a0/14f4 (fused14c4/14d0/14f4/1548),
+capturing the first direction norm, its reciprocal-square-root input, the
+second norm and the resulting orientation basis. A zero norm is only a
+hypothesis until those actual GPU values are observed. No speculative math
+workaround, forced finite coordinates or artificial movie-to-window copy is used.
+
+Root Sarah fullscreen binary and the user's two launchers remain unchanged.
 
 FAST_TEST remains removed. No early EOF, intro skip or fake game time is used.
 
