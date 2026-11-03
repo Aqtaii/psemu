@@ -1,4 +1,5 @@
 #include "graphics/host_gpu/renderer/bufferCache.h"
+#include "graphics/host_gpu/renderer/readbackWorkerWait.h"
 #include "graphics/host_gpu/renderer/dmaBytes.h"
 #include "graphics/host_gpu/renderer/gdsBuffer.h"
 #include "graphics/host_gpu/renderer/renderContext.h"
@@ -405,11 +406,7 @@ struct BufferCache::ReadbackWorker {
 
 	void Run() noexcept {
 		while (true) {
-			auto current = state.load(std::memory_order_acquire);
-			while (current == State::Uninitialized || current == State::Idle) {
-				state.wait(current, std::memory_order_acquire);
-				current = state.load(std::memory_order_acquire);
-			}
+			auto current = WaitForReadbackWork(state, State::Uninitialized, State::Idle, State::Claimed);
 			if (current == State::Stopping) {
 				command.reset();
 				if (mapped != nullptr) {

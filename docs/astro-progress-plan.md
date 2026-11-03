@@ -1,6 +1,47 @@
 # Astro Bot ilerleme planı
 
-## Current verified checkpoint - 3 November 2026, 16:54 Istanbul
+## Current verified checkpoint - 3 November 2026, 21:12 Istanbul
+
+Normal17944 passed the prior fragment-preparation stall in this trial: no
+446e217b735d37a4 retry storm, further resource loads throughT2652/fd9948,
+and completed flip selections1792/1793 rather than the old1536/1537 plateau.
+Its latest saved final presentation source, frame00008 at present1304, is
+still black. At20:57:54 it exited321 with a new exact failure:
+BufferCache readback worker received state3 (Claimed), source line465.
+
+Both buffer and image workers waited only for idle states, then treated the
+requester's intermediate Claimed state as unsupported. The writer claims the
+slot before filling payload and release-storing Requested/InitRequested; the
+worker must keep waiting during that interval. A shared production wait helper
+now includes Claimed in each worker's exact pending-state list. Unexpected-state
+validation, payload release/acquire ordering, ownership, copy/fence work and
+fault-transaction serialization remain. See C++ draft atomics.wait:
+https://eel.is/c++draft/atomics.wait .
+
+The regression compiles actual state enums and wait-call arguments extracted
+from both production workers against that helper. Old controls deterministically
+return the unsupported claim (buffer3, image1). Fixed cases hold claims, force
+early wakes before payload publication, verify complete payload/canaries after
+publication, initialize and stop correctly, and still return unexpected states
+to caller validation. Two stress cases verify20000 exact payload handoffs.
+These are host-protocol tests, not a native GPU/guest readback result. The separate candidate builds, and the existing real PageManager/shared-backing protection regression also passes. Native confirmation of this next fix remains pending.
+
+User-directed earlier checkpoints are now verified in normal17944 (a028c35,
+started20:09:11). All eight real records reached original02ac,0398,0a8c,13d4
+(fused0300,03ec,0ae0,1428). The selected life/color values at02ac/0398 are
+finite; v14/v15/v16 are already NaN at0a8c in every record. Raw s63 is04020201,
+mode high byte4. The actual view matrix s40..55 at13d4 is entirely finite.
+This confirms that original1470 normalization is downstream of the first
+observed bad inputs. The current search region is0398..0a8c, including the
+0500 overlapping raw vector load and the optional local-position transform
+ending with06c4/06cc/06d4 writes. No specific producer has yet been proved wrong.
+
+The new early selection passes full2467/164-block SPIR-V validation629767 words.
+Complete CI41649290703 for a028c35 succeeds. The preceding23120 run exited
+with control-C/close status0xc000013a atT211 before title; it does not validate
+the stream-drain fix. Current17944 continues beyondT2009 with its diagnostic
+gate closed after eight records. Passage of the late192-byte retry loop and
+recognizable final-window content remain unverified. Earlier evidence follows.
 
 Source34b7a28 normal boot9256 reached title_controller_ship atT1627.05 and
 executed the full2467-instruction Mesh program. The same-recording buffer-owner
@@ -65,12 +106,15 @@ The separate stream-drain candidate builds. All13 prefix cases and existing12 CP
 Checkpoint metadata and both32-word banks are now formatted as one bounded
 stdio write, avoiding the observed per-word audio interleaving. No guest values,
 shader instructions, positions, allocation counts or rendering state change.
-If the normal run still has no visible output, the next existing diagnostic
-selector brackets original1470/147c/14a0/14f4 (fused14c4/14d0/14f4/1548),
-capturing the first direction norm, its reciprocal-square-root input, the
-second norm and the resulting orientation basis. A zero norm is only a
-hypothesis until those actual GPU values are observed. No speculative math
-workaround, forced finite coordinates or artificial movie-to-window copy is used.
+The earlier1470..14f4 norm-only selector was superseded by the measured earlier
+selection above. The next existing selector uses original04f8/0518/0540/0720
+(fused054c/056c/0594/0774; VGPR bases0/0/96/0). It observes the record index
+before the overlapping0500 vector load, the loaded v14..17 after it, the
+local-transform parameters v100..103/v117..120 when that branch executes, and
+the position after EXEC is restored. Selecting04f8 avoids a pre-load trace
+being overwritten by the later lowered components sharing PC0500. Selecting
+0720 guarantees active EXEC after0714, including records that skip the local
+transform. No speculative math workaround or forced finite coordinates is used.
 
 Root Sarah fullscreen binary and the user's two launchers remain unchanged.
 

@@ -1,4 +1,5 @@
 #include "graphics/host_gpu/renderer/textureCache.h"
+#include "graphics/host_gpu/renderer/readbackWorkerWait.h"
 #include "graphics/host_gpu/renderer/htileZRange.h"
 
 #include "common/assert.h"
@@ -644,11 +645,7 @@ struct TextureCache::ReadbackWorker {
 
 	void Run() noexcept {
 		while (true) {
-			auto current = state.load(std::memory_order_acquire);
-			while (current == State::Idle) {
-				state.wait(current, std::memory_order_acquire);
-				current = state.load(std::memory_order_acquire);
-			}
+			auto current = WaitForReadbackWork(state, State::Idle, State::Claimed);
 			if (current == State::Stopping) {
 				state.store(State::Stopped, std::memory_order_release);
 				state.notify_all();
