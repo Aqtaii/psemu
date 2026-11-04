@@ -485,6 +485,19 @@ static bool DrawHasValidVertexShader(const HW::Shader* sh_ctx) {
 	return ShaderAddressValid(vs.es_regs.data_addr) || ShaderAddressValid(vs.gs_regs.data_addr);
 }
 
+// Routing observation also includes draws rejected before descriptor/image probes.
+static void ProbeSceneDrawRoute(uint64_t submit,const HW::Context& ctx,
+ const HW::UserConfig& ucfg,const HW::Shader& shader,uint32_t indices,const char* phase) {
+ static const bool enabled=[] {const auto* x=std::getenv("PSEMU_ASTRO_SCENE_PROBE");return x && std::strcmp(x,"1")==0;}();
+ if(!enabled || !AstroFrameProbeGateOpen())return;
+ static std::atomic_uint count{0};if(count.fetch_add(1)>=8192)return;
+ printf("[SCENE-DRAW-ROUTE] submit=%llu phase=%s indices=%u ps=0x%llx es=0x%llx gs=0x%llx target0=0x%llx target_mask=0x%x color_mode=%u stages=0x%x prim=%u\n",
+  (unsigned long long)submit,phase,indices,(unsigned long long)shader.GetPs().ps_regs.data_addr,
+  (unsigned long long)shader.GetVs().es_regs.data_addr,(unsigned long long)shader.GetVs().gs_regs.data_addr,
+  (unsigned long long)ctx.GetRenderTarget(0).base.addr,ctx.GetRenderTargetMask(),
+  unsigned(ctx.GetColorControl().mode),ctx.GetShaderStages(),unsigned(ucfg.GetPrimType()));
+}
+
 static bool PixelShaderHasDepthOrCoverageSideEffects(const HW::ShaderRegisters& sh_regs) {
 	const auto& db = sh_regs.db_shader_control;
 	return sh_regs.shader_z_format != 0 || db.shader_kill_enable || db.shader_z_export_enable ||
@@ -1260,6 +1273,7 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 	EXIT_IF(sh_ctx == nullptr);
 	EXIT_IF(draw.name == nullptr);
 	EXIT_IF(state == nullptr);
+ ProbeSceneDrawRoute(submit_id,*ctx,*ucfg,*sh_ctx,draw.index_count,"prepared");
  if(const auto remaining=TakeVideoGraphDraw()) {
   printf("[VIDEO-GRAPH-DRAW] remaining=%u vs=0x%016" PRIx64 " ps=0x%016" PRIx64 " indices=%u instances=%u colors=%u\n",
          remaining,state->vs_input_info.stage.program->shader_hash,
@@ -1525,20 +1539,25 @@ void RenderDrawIndex(uint64_t submit_id, CommandBuffer* buffer, HW::Context* ctx
   }
  }
 	Common::LockGuard lock(g_render_ctx->GetMutex());
+	ProbeSceneDrawRoute(submit_id,*ctx,*ucfg,*sh_ctx,index_count,"enter");
 
 	if (index_count == 0) {
+		ProbeSceneDrawRoute(submit_id,*ctx,*ucfg,*sh_ctx,index_count,"zero-indices");
 		return;
 	}
 
 	if (ConsumeMetadataColorOperation(*ctx)) {
+		ProbeSceneDrawRoute(submit_id,*ctx,*ucfg,*sh_ctx,index_count,"metadata-operation");
 		return;
 	}
 
 	if (!DrawHasValidVertexShader(sh_ctx)) {
+		ProbeSceneDrawRoute(submit_id,*ctx,*ucfg,*sh_ctx,index_count,"invalid-vertex-shader");
 		return;
 	}
 
 	if (ShouldSkipGeShader(ctx, ucfg, sh_ctx)) {
+  ProbeSceneDrawRoute(submit_id,*ctx,*ucfg,*sh_ctx,index_count,"unsupported-ge");
   if(ShaderRecompiler::MeshOutputProbeEnabled()) {
    static std::atomic_uint indexed_probe_logs{0};
    if(indexed_probe_logs.fetch_add(1)<8)
@@ -1682,6 +1701,7 @@ void RenderDrawIndex(uint64_t submit_id, CommandBuffer* buffer, HW::Context* ctx
 	DrawRenderState state {};
 	if (!PrepareDrawRenderState(submit_id, buffer, ctx, ucfg, sh_ctx, draw,
 	                            render_target_slice_offset, false, true, &state)) {
+		ProbeSceneDrawRoute(submit_id,*ctx,*ucfg,*sh_ctx,index_count,"target-preparation-rejected");
 		return;
 	}
 
@@ -1732,21 +1752,26 @@ void RenderDrawIndexAuto(uint64_t submit_id, CommandBuffer* buffer, HW::Context*
 	                     index_count, flags, first_vertex, instance_count, first_instance);
 
 	Common::LockGuard lock(g_render_ctx->GetMutex());
+	ProbeSceneDrawRoute(submit_id,*ctx,*ucfg,*sh_ctx,index_count,"enter");
 
 	if (index_count == 0) {
+		ProbeSceneDrawRoute(submit_id,*ctx,*ucfg,*sh_ctx,index_count,"zero-indices");
 		return;
 	}
 
 	if (ConsumeMetadataColorOperation(*ctx)) {
+		ProbeSceneDrawRoute(submit_id,*ctx,*ucfg,*sh_ctx,index_count,"metadata-operation");
 		return;
 	}
 
 	if (!DrawHasValidVertexShader(sh_ctx)) {
+		ProbeSceneDrawRoute(submit_id,*ctx,*ucfg,*sh_ctx,index_count,"invalid-vertex-shader");
 		return;
 	}
 
 	const bool merged_mesh=IsAstroMeshDraw(ctx,ucfg,sh_ctx);
 	if (!merged_mesh && ShouldSkipGeShader(ctx, ucfg, sh_ctx)) {
+  ProbeSceneDrawRoute(submit_id,*ctx,*ucfg,*sh_ctx,index_count,"unsupported-ge");
 		return;
 	}
 
@@ -1792,6 +1817,7 @@ void RenderDrawIndexAuto(uint64_t submit_id, CommandBuffer* buffer, HW::Context*
 
 	if (!PrepareDrawRenderState(submit_id, buffer, ctx, ucfg, sh_ctx, draw,
 	                            render_target_slice_offset, true, false, &state)) {
+		ProbeSceneDrawRoute(submit_id,*ctx,*ucfg,*sh_ctx,index_count,"target-preparation-rejected");
 		return;
 	}
 
@@ -1799,6 +1825,7 @@ void RenderDrawIndexAuto(uint64_t submit_id, CommandBuffer* buffer, HW::Context*
 	const bool            use_ngg_rectlist_draw = Config::NggRectlistDrawEnabled();
 
 	if (!GetDrawTopology(ucfg, true, use_ngg_rectlist_draw, &topology)) {
+		ProbeSceneDrawRoute(submit_id,*ctx,*ucfg,*sh_ctx,index_count,"no-topology");
 		return;
 	}
 	const bool draw_prim7_as_ngg =
