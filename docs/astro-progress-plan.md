@@ -53,6 +53,25 @@ final-present capture remain enabled. FAST_TEST remains absent. CI41809605315
 completed successfully. Sarah root loader SHA F5DDE8C9073563A2C1B26BD761DAD2691B007675F6A1A774FF60D5F8F9AB5533
 and the two user launchers remain unchanged by this work.
 
+### Same-run late Mesh verification at 13:27 Istanbul
+
+The full normal run remains alive at flip 1793. Seventy active written snapshots
+across five sampled ordinals 1472..1728 are all finite, with unit quaternions.
+To avoid another 40-minute boot, only three identified emulator diagnostic
+uint32 counters were rearmed after checking the exact EXE SHA, PE timestamp,
+matching MAP and loaded MEM_IMAGE addresses. Guest state and shader outputs
+were not modified. This is recorded in the private same-prefix rearm JSON.
+
+The late capture adds 192 finite clip-position records (64 triangles), after
+the active transform data was populated. All 64 sampled triangles still have
+zero projected area; newly completed Mesh coverage queries again report zero
+samples. Thus the collapsed sampled geometry is not confined to the initial
+empty-frame snapshot. This does not prove every draw has the same problem.
+Final present frame 00008 is still black; the first real game image was NOT
+obtained. Report: tools/data/astro_20261104_normalization_fix_normal_fix_result.json.
+The exhausted Mesh/coverage gate was closed again after this late capture;
+producer input/output and automatic final-present capture remain enabled.
+
 ## Current verified checkpoint - 4 November 2026, offline normalization
 
 User-directed offline analysis: no new full game run. The actual decoded/lowered
