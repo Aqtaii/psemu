@@ -16,6 +16,7 @@
 #include "graphics/host_gpu/renderer/descriptorCache.h"
 #include "graphics/host_gpu/renderer/descriptors.h"
 #include "graphics/host_gpu/renderer/computeBufferProbe.h"
+#include "graphics/host_gpu/renderer/sceneFrameProbe.h"
 #include "graphics/host_gpu/vma.h"
 #include "graphics/host_gpu/renderer/framebufferCache.h"
 #include "graphics/host_gpu/renderer/imageInfo.h"
@@ -732,12 +733,14 @@ void RenderDispatchDirect(uint64_t submit_id, CommandBuffer* buffer, HW::Context
 		vk_buffer.bindPipeline(vk::PipelineBindPoint::eCompute, pipeline->pipeline);
 
 		std::vector<BufferView> bound_buffers;
+        const bool scene_probe=SceneFrameProbe(submit_id);
+        std::vector<VulkanImage*> scene_images;
 		ClearBounceCopies();
 		BindDescriptors(submit_id, buffer, vk::PipelineBindPoint::eCompute,
 		                pipeline->pipeline_layout, input_info.stage,
 		                vk::ShaderStageFlagBits::eCompute, DescriptorCache::Stage::Compute,
                         nullptr, has_htile_input ? &htile_input : nullptr,
-                        capture_producer ? &bound_buffers : nullptr);
+                        capture_producer ? &bound_buffers : nullptr,scene_probe ? &scene_images : nullptr);
 		if (buffer->GetRecordingGeneration() != recording_generation) {
 			continue;
 		}
@@ -757,7 +760,19 @@ void RenderDispatchDirect(uint64_t submit_id, CommandBuffer* buffer, HW::Context
 		FlushBounceCopies(vk_buffer, false);
         if (capture_producer)
             CaptureAstroProducerBuffers(buffer,input_info.stage,bound_buffers,submit_id,producer_ordinal,false);
+
+        // Scene-frame observer begin
+        if(scene_probe)for(uint32_t i=0;i<scene_images.size();++i)if(program.info.images[i].read)
+         ProbeSceneImage(buffer,scene_images[i],submit_id,program.shader_hash,
+          DecodeNativeDescriptor<ShaderTextureResource>(input_info.stage.resources->images[i]).Base40(),i,"cs-input",false);
+        // Scene-frame observer end
 		vk_buffer.dispatch(thread_group_x, thread_group_y, thread_group_z);
+        // Scene-frame observer begin
+        if(scene_probe)for(uint32_t i=0;i<scene_images.size();++i)if(program.info.images[i].written)
+         ProbeSceneImage(buffer,scene_images[i],submit_id,program.shader_hash,
+          DecodeNativeDescriptor<ShaderTextureResource>(input_info.stage.resources->images[i]).Base40(),i,"cs-output",true);
+        // Scene-frame observer end
+
         if (capture_producer)
             CaptureAstroProducerBuffers(buffer,input_info.stage,bound_buffers,submit_id,producer_ordinal,true);
 		FlushBounceCopies(vk_buffer, true);

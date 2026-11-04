@@ -1,5 +1,6 @@
 #include "compute_probe_device.inc"
 #include "graphics/host_gpu/renderer/computeBufferProbe.h"
+#include "graphics/host_gpu/renderer/storageBufferBounce.h"
 #include <limits>
 using namespace Libs::Graphics;
 struct ProbeDispatch {
@@ -71,11 +72,26 @@ static void InputGpu(const char* shader,uint32_t slot,uint32_t stride,uint32_t r
     device.Submit();
     std::printf("PASS full producer input GPU copy slot=%u index=%u bytes=%u raw_NaN_and_all_guards_exact=1 sync_validation=1\n",slot,index,stride);
 }
+static void BounceGpu(const char* shader) {
+ Device device(true,shader,true);
+ auto source=device.Make(512,0x00),destination=device.Make(256,0xcd);
+ // The GPU producer writes 32 words; the separately retained CPU shadow stays zero.
+ std::array<uint32_t,31> stale_shadow{};
+ device.Write({source,256});
+ RecordGpuOwnedBufferBounce(device.command,source->buffer,260,destination->buffer,256,124,ProbeDispatch{});
+ std::memcpy(destination->expected.data()+256,source->expected.data()+260,124);
+ device.Barrier(VK_ACCESS_MEMORY_WRITE_BIT,VK_ACCESS_HOST_READ_BIT);
+ device.Submit();
+ CHECK(std::memcmp(destination->map+256,stale_shadow.data(),124)!=0);
+ for(uint32_t i=0;i<31;++i) {uint32_t v;std::memcpy(&v,destination->map+256+i*4,4);CHECK(v==0x71100001u+i);}
+ std::puts("PASS GPU-owned unaligned SSBO bounce: current compute writes exact, stale zero CPU shadow ignored, all guards exact, synchronization validation0");
+}
 int main(int argc,char**argv) {
     try{
         CHECK(argc==3);Bounds();
         if(std::string(argv[1])=="--gpu") {
             for(uint32_t index:{0u,12158u,12222u})Gpu(argv[2],index);
+            BounceGpu(argv[2]);
             InputGpu(argv[2],4,432,2048,0x7fe);InputGpu(argv[2],3,276,16384,0x3a00);
         } else CHECK(std::string(argv[1])=="--cpu");
         CHECK(validation_issues==0);

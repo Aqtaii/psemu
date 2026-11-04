@@ -16,6 +16,8 @@ $marker=([string][char]9)+'for (;;) {'
 $start=$compute.IndexOf($marker,$compute.IndexOf('ShaderBufferDataOverride htile_input;'))
 $end=CloseBrace $compute ($compute.IndexOf('{',$start))
 $compute=$compute.Substring($start,$end-$start)
+# Pixel observations are outside this buffer-owner transaction fixture.
+$compute=[regex]::Replace($compute,'(?s)// Scene-frame observer begin.*?// Scene-frame observer end','')
 $draw=Get-Content -LiteralPath "$root\gpu\src\graphics\host_gpu\renderer\renderDraw.cpp" -Raw
 $start=$draw.IndexOf($marker,$draw.IndexOf('RenderDepthInfo pipeline_depth'))
 $end=$draw.IndexOf('FlushBounceCopies(state->vk_buffer, false);',$start)

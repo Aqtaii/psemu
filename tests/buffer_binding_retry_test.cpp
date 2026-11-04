@@ -194,6 +194,8 @@ struct Scenario{
 template<class... T>Pipeline* PipelineCache::CreateComputePipeline(T&&...){++active->pass;return &pipeline;}
 template<class... T>Pipeline* PipelineCache::CreateGraphicsPipeline(T&&...){++active->pass;return &pipeline;}
 void Handle::dispatch(uint32_t,uint32_t,uint32_t){active->device.Write(active->bound);}
+struct VulkanImage {};
+static bool SceneFrameProbe(uint64_t){return false;}
 template<class... T>static void CaptureAstroProducerBuffers(T&&...){CHECK(false);}
 static void ClearBounceCopies(){}
 template<class... T>static void FlushBounceCopies(T&&...){}
@@ -207,7 +209,7 @@ template<class... T>static void BindDrawVertexBuffers(T&&...){active->vertex=act
 template<class... T>static void BindDrawIndexBuffer(T&&...){active->index=active->current;active->Maybe("index");}
 static void BindDescriptors(uint64_t,CommandBuffer*,vk::PipelineBindPoint,int,const Runtime&,
  vk::ShaderStageFlagBits,DescriptorCache::Stage stage,const ShaderRecompiler::IR::MeshPointGroupPayload* =nullptr,
- const ShaderBufferDataOverride* =nullptr,std::vector<BufferView>* =nullptr){
+ const ShaderBufferDataOverride* =nullptr,std::vector<BufferView>* =nullptr,std::vector<VulkanImage*>* =nullptr){
  if(stage==DescriptorCache::Stage::Pixel){active->Maybe("pixel");return;}
  active->bound=active->current;active->Maybe(stage==DescriptorCache::Stage::Compute?"compute":"vertex");
 }

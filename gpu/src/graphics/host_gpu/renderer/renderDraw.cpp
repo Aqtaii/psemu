@@ -1,6 +1,7 @@
 #include "graphics/shader/recompiler/meshOutputProbe.h"
 #include "graphics/host_gpu/renderer/renderDraw.h"
 #include "graphics/host_gpu/renderer/videoGraphProbe.h"
+#include "graphics/host_gpu/renderer/sceneFrameProbe.h"
 #include "graphics/host_gpu/renderer/singlePointIndex.h"
 
 #include "common/assert.h"
@@ -1331,6 +1332,9 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 		    *ctx, state->color_info, state->color_count, state->depth_info);
 		SetDynamicParams(state->vk_buffer, dynamic_params);
 
+		const bool scene_probe=SceneFrameProbe(submit_id);
+        std::vector<BufferView> scene_buffers;
+        std::vector<VulkanImage*> scene_vs_images,scene_ps_images;
 		ClearBounceCopies();
 		// EXIT_NOT_IMPLEMENTED(vs_input_info.buffers_num > 1);
 		BindDrawVertexBuffers(submit_id, buffer, draw, state->vk_buffer, state->vs_input_info);
@@ -1346,7 +1350,8 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 		                pipeline->pipeline_layout, state->vs_input_info.stage,
    state->merged_mesh ? vk::ShaderStageFlagBits::eMeshEXT : vk::ShaderStageFlagBits::eVertex,
    state->merged_mesh ? DescriptorCache::Stage::Mesh : DescriptorCache::Stage::Vertex,
-   state->merged_mesh ? &point : nullptr);
+   state->merged_mesh ? &point : nullptr, nullptr,
+   scene_probe ? &scene_buffers : nullptr, scene_probe ? &scene_vs_images : nullptr);
 		if (buffer->GetRecordingGeneration() != recording_generation) {
 			continue;
 		}
@@ -1358,7 +1363,8 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 			}
 			BindDescriptors(submit_id, buffer, vk::PipelineBindPoint::eGraphics,
 			                pipeline->pipeline_layout, state->ps_input_info.stage,
-			                vk::ShaderStageFlagBits::eFragment, DescriptorCache::Stage::Pixel);
+			                vk::ShaderStageFlagBits::eFragment, DescriptorCache::Stage::Pixel,
+                        nullptr,nullptr,nullptr,scene_probe ? &scene_ps_images : nullptr);
 		}
 		if (buffer->GetRecordingGeneration() != recording_generation) {
 			continue;
@@ -1383,6 +1389,17 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 		}
 
 		FlushBounceCopies(state->vk_buffer, false);
+        if(scene_probe) {
+         if(state->merged_mesh)ProbeSceneTransform(buffer,state->vs_input_info.stage,scene_buffers,submit_id,state->gs_root);
+         const auto inputs=[&](const ShaderStageRuntime& stage,const std::vector<VulkanImage*>& images,const char* phase) {
+          for(uint32_t i=0;i<images.size();++i)if(stage.program->info.images[i].read)
+           ProbeSceneImage(buffer,images[i],submit_id,stage.program->shader_hash,
+            DecodeNativeDescriptor<ShaderTextureResource>(stage.resources->images[i]).Base40(),i,phase,false);
+         };
+         inputs(state->vs_input_info.stage,scene_vs_images,"vs-input");
+         if(state->ps_active)inputs(state->ps_input_info.stage,scene_ps_images,"ps-input");
+        }
+
         static const bool video_draw_enabled=[] {
             const auto* value=std::getenv("PSEMU_ASTRO_VIDEO_BINDING_PROBE");
             return value && std::strcmp(value,"1")==0;
@@ -1447,6 +1464,11 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 		if (coverage_probe) state->vk_buffer.endQuery(*coverage_probe, 0);
 		buffer->EndRenderPass();
         ProbeVideoTargetPixels(buffer,*state);
+        if(scene_probe)for(uint32_t i=0;i<state->color_count;++i)
+         ProbeSceneImage(buffer,state->color_info[i].vulkan_buffer,submit_id,
+          state->ps_active?state->ps_input_info.stage.program->shader_hash:0,
+          state->color_info[i].base_addr,i,"draw-output",true);
+
 		FlushBounceCopies(state->vk_buffer, true);
 		vk::PipelineStageFlags shader_write_stages = {};
 		if (HasShaderBufferWrites(state->vs_input_info.stage)) {

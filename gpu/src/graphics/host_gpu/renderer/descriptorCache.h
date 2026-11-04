@@ -110,7 +110,8 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
                      const ShaderStageRuntime& runtime, vk::ShaderStageFlags vk_stage,
                      DescriptorCache::Stage stage, const ShaderRecompiler::IR::MeshPointGroupPayload* point=nullptr,
                      const ShaderBufferDataOverride* data_override=nullptr,
-                     std::vector<BufferView>* bound_buffers=nullptr);
+                     std::vector<BufferView>* bound_buffers=nullptr,
+                     std::vector<VulkanImage*>* bound_images=nullptr);
 
 } // namespace Libs::Graphics
 

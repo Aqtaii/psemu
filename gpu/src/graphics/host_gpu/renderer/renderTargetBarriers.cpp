@@ -72,7 +72,8 @@ void GraphicsRenderTextureBarrier(vk::CommandBuffer vk_buffer, VulkanImage* imag
 	    vk::PipelineStageFlagBits::eColorAttachmentOutput |
 	        vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eTransfer |
 	        vk::PipelineStageFlagBits::eFragmentShader,
-	    vk::PipelineStageFlagBits::eVertexShader | vk::PipelineStageFlagBits::eFragmentShader |
+	    // AllGraphics includes Mesh reads without requiring the extension on non-Mesh devices.
+	    vk::PipelineStageFlagBits::eAllGraphics |
 	        vk::PipelineStageFlagBits::eComputeShader,
 	    vk::DependencyFlags {}, 0, nullptr, 0, nullptr, 1, &image_memory_barrier);
 
@@ -190,7 +191,8 @@ void GraphicsRenderDepthStencilBarrier(vk::CommandBuffer vk_buffer, VulkanImage*
 		vk_buffer.pipelineBarrier(
 		    vk::PipelineStageFlagBits::eAllGraphics | vk::PipelineStageFlagBits::eComputeShader |
 		        vk::PipelineStageFlagBits::eTransfer,
-		    vk::PipelineStageFlagBits::eVertexShader | vk::PipelineStageFlagBits::eFragmentShader |
+		    // AllGraphics includes Mesh reads without requiring the extension on non-Mesh devices.
+	    vk::PipelineStageFlagBits::eAllGraphics |
 		        vk::PipelineStageFlagBits::eComputeShader,
 		    vk::DependencyFlags {}, 0, nullptr, 0, nullptr, 1, &image_memory_barrier);
 

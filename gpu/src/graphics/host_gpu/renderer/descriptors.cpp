@@ -29,6 +29,7 @@
 #include "graphics/host_gpu/renderer/renderContext.h"
 #include "graphics/host_gpu/renderer/renderTargetBarriers.h"
 #include "graphics/host_gpu/renderer/shaderResourceBarrier.h"
+#include "graphics/host_gpu/renderer/storageBufferBounce.h"
 #include "graphics/host_gpu/transfer.h"
 #include "graphics/host_gpu/vma.h"
 #include "graphics/host_gpu/vulkanCommon.h"
@@ -76,58 +77,8 @@ void FlushBounceCopies(vk::CommandBuffer vk_cmd, bool is_post) {
     for (const auto& copy : g_bounce_copies) {
         if (!copy.bounce_buffer || !copy.original_buffer) continue;
         if (!is_post) {
-            vk::BufferMemoryBarrier pre[2] = {};
-            pre[0].buffer = copy.original_buffer;
-            pre[0].offset = copy.original_offset;
-            pre[0].size = copy.size;
-            pre[0].srcAccessMask = vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eMemoryRead;
-            pre[0].dstAccessMask = vk::AccessFlagBits::eTransferRead;
-            
-            pre[1].buffer = copy.bounce_buffer;
-            pre[1].offset = copy.bounce_offset;
-            pre[1].size = copy.size;
-            pre[1].srcAccessMask = vk::AccessFlagBits::eMemoryWrite | vk::AccessFlagBits::eMemoryRead;
-            pre[1].dstAccessMask = vk::AccessFlagBits::eTransferWrite;
-            
-            vk_cmd.pipelineBarrier(vk::PipelineStageFlagBits::eAllCommands, vk::PipelineStageFlagBits::eTransfer, vk::DependencyFlagBits::eByRegion, 0, nullptr, 2, pre, 0, nullptr);
-            
-            if (copy.cpu_address != 0 && copy.size > 0 && copy.size <= 65536 && (copy.bounce_offset % 4 == 0)) {
-                // Senkron kopyalama: CPU verisini komut tamponuna gom
-                // Boyut 4'un kati olmali, aksi halde padding yap
-                uint64_t update_size = (copy.size + 3) & ~3ull;
-                if (update_size <= 65536) {
-                    uint8_t temp[65536];
-                    if (Libs::LibKernel::Memory::TryReadBacking(copy.cpu_address, temp, copy.size)) {
-                        vk_cmd.updateBuffer(copy.bounce_buffer, copy.bounce_offset, update_size, temp);
-                    } else {
-                        vk::BufferCopy region;
-                        region.srcOffset = copy.original_offset;
-                        region.dstOffset = copy.bounce_offset;
-                        region.size = copy.size;
-                        vk_cmd.copyBuffer(copy.original_buffer, copy.bounce_buffer, 1, &region);
-                    }
-                } else {
-                    vk::BufferCopy region;
-                    region.srcOffset = copy.original_offset;
-                    region.dstOffset = copy.bounce_offset;
-                    region.size = copy.size;
-                    vk_cmd.copyBuffer(copy.original_buffer, copy.bounce_buffer, 1, &region);
-                }
-            } else {
-                vk::BufferCopy region;
-                region.srcOffset = copy.original_offset;
-                region.dstOffset = copy.bounce_offset;
-                region.size = copy.size;
-                vk_cmd.copyBuffer(copy.original_buffer, copy.bounce_buffer, 1, &region);
-            }
-            
-            vk::BufferMemoryBarrier post = {};
-            post.buffer = copy.bounce_buffer;
-            post.offset = copy.bounce_offset;
-            post.size = copy.size;
-            post.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-            post.dstAccessMask = vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite;
-            vk_cmd.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, vk::PipelineStageFlagBits::eAllCommands, vk::DependencyFlagBits::eByRegion, 0, nullptr, 1, &post, 0, nullptr);
+            RecordGpuOwnedBufferBounce(vk_cmd,copy.original_buffer,copy.original_offset,
+                copy.bounce_buffer,copy.bounce_offset,copy.size,VULKAN_HPP_DEFAULT_DISPATCHER);
         } else {
             if (copy.is_written) {
                 vk::BufferCopy region;
@@ -1310,7 +1261,7 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
                      const ShaderStageRuntime& runtime, vk::ShaderStageFlags vk_stage,
                      DescriptorCache::Stage stage, const ShaderRecompiler::IR::MeshPointGroupPayload* point,
                      const ShaderBufferDataOverride* data_override,
-                     std::vector<BufferView>* bound_buffers) {
+                     std::vector<BufferView>* bound_buffers, std::vector<VulkanImage*>* bound_images) {
 	KYTY_PROFILER_FUNCTION();
 	EXIT_IF(buffer == nullptr || !runtime);
 	const auto& program  = *runtime.program;
@@ -1639,6 +1590,7 @@ void BindDescriptors(uint64_t submit_id, CommandBuffer* buffer,
     // Return only the views actually bound by this completed preparation pass.
     // Callers must still validate recording generation and buffer-owner epoch.
     if (bound_buffers) *bound_buffers = descriptors.buffers;
+    if (bound_images) {bound_images->clear();for(const auto& image:descriptors.images)bound_images->push_back(image.image);}
 }
 
 } // namespace Libs::Graphics

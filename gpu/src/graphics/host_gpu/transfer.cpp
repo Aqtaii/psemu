@@ -307,9 +307,7 @@ public:
 			    vk::AccessFlagBits::eVertexAttributeRead | vk::AccessFlagBits::eIndexRead |
 			        vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite,
 			    vk::PipelineStageFlagBits::eTransfer,
-			    vk::PipelineStageFlagBits::eVertexInput | vk::PipelineStageFlagBits::eVertexShader |
-			        vk::PipelineStageFlagBits::eFragmentShader |
-			        vk::PipelineStageFlagBits::eComputeShader);
+			    vk::PipelineStageFlagBits::eAllGraphics | vk::PipelineStageFlagBits::eComputeShader);
 		});
 	}
 
