@@ -2011,10 +2011,24 @@ static void AstroSetFloat(EmitterState* state,uint32_t reg,uint32_t value) {
  state->builder.AddFunction({OpBitcast,state->uint_type,bits,value});EmitStoreU32(state,AstroV(reg),bits);
 }
 static void AstroFinitePosition(EmitterState* state,uint32_t base,bool scale) {
- for(uint32_t c=0;c<(scale?4u:3u);++c) {
+ if(scale) {
+  // A nonfinite parent is an invalid transform, even when its scale is finite zero.
+  // Replace the whole tuple with identity; healthy zero-scale transforms remain intact.
+  std::array<uint32_t,4> values{};
+  uint32_t valid=0;
+  for(uint32_t c=0;c<4;++c) {
+   values[c]=EmitFloatLoad(state,AstroV(base+c));
+   const auto finite=AstroFinite(state,values[c]);
+   if(c==0)valid=finite;
+   else {const auto both=state->builder.AllocateId();state->builder.AddFunction({OpLogicalAnd,state->bool_type,both,valid,finite});valid=both;}
+  }
+  for(uint32_t c=0;c<4;++c)
+   AstroSetFloat(state,base+c,EmitFSelectValue(state,valid,values[c],ConstantF32(state,c==3?0x3f800000u:0)));
+  return;
+ }
+ for(uint32_t c=0;c<3;++c) {
   const auto value=EmitFloatLoad(state,AstroV(base+c));
-  AstroSetFloat(state,base+c,EmitFSelectValue(state,AstroFinite(state,value),value,
-      ConstantF32(state,c==3?0x3f800000u:0)));
+  AstroSetFloat(state,base+c,EmitFSelectValue(state,AstroFinite(state,value),value,ConstantF32(state,0)));
  }
 }
 static void AstroQuaternionOrIdentity(EmitterState* state,uint32_t base) {
