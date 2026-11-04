@@ -1,5 +1,58 @@
 # Astro Bot ilerleme planı
 
+## Current verified checkpoint - 4 November 2026, normalization fix running
+
+Commit 2b0f143 adds a shader-identity-scoped compatibility fix for transform
+25ea92806a8f33d1 and original/fused GS b42edebba57f9e3a/1cd649e2963a321e.
+Invalid inverse-square-root inputs return finite zero; the transform uses its
+existing direction fallback and identity quaternion for degenerate inputs.
+Parent position/quaternion inputs are sanitized in registers. The exact GS also
+guards nonfinite multiplication results. This is a targeted workaround, not a
+global change to architectural floating-point semantics.
+
+All 12 controlled dynamic-SSBO Vulkan instruction-slice scenarios now produce
+finite positions and unit quaternions; exact initializer copies and source/guard
+bytes pass, synchronization validation reports zero issues, and all generated
+modules pass Vulkan 1.2 SPIR-V validation. Full 432/276-byte input-record GPU copy
+and bounds tests pass separately. These fixtures do not establish a real game frame.
+
+Normal native run PID 19976 started at 12:41:51 Istanbul using the separately
+built loader SHA256 0D4E2892C48F4F0CF8EAE054CDD114B7BBF8C808DB38F2ED5705E80ADB47AB76.
+FAST_TEST is absent. Prefix: tools/data/astro_20261104_normalization_fix_normal.
+Slot 4 record 0x7fe (432 bytes), slot 3 record 0x3a00 (276 bytes), and eight
+transform outputs are sampled without stopping the game. Mesh output/coverage
+capture opens when the real 2467-instruction program compiles. No final game
+image has been confirmed yet. The previous offline checkpoint below is historical.
+
+
+### Normal-run result through 13:20 Istanbul
+
+At producer ordinals 1472/1536/1600, seven active selected records per shader
+are finite in all 42 written snapshots across transform and particle stages;
+all captured active quaternions have squared norm 1. Parent slot 4 record 0x7fe
+now contains finite position (0.432396,-0.0114496,0.041993), scale 0.3 and identity
+quaternion. Slot 3 record 0x3a00 contains flags 7, class 3, curve handle 0.
+All full input snapshots were taken in this same uninterrupted normal run.
+
+The actual 2467-instruction Mesh program compiled and submitted. Its bounded
+first eight non-dummy captures contain 84 valid finite clip positions with
+nonzero W, but all 28 captured projected triangles have zero area. Completed
+coverage queries recorded no Mesh samples. These early captures exhausted the
+budget: they do not establish the geometry of every later frame. The final
+present capture images/run_20261104_124348/frame_00008.bmp is visually black.
+
+The current diagnostic video target native_video_target_17937862749883468.bmp
+visually contains the opening movie. This is diagnostic_target=1, not a final
+present image or successful non-NaN game geometry. First real game image remains
+UNCONFIRMED. The normalization fix is validated; the remaining raster/presentation
+problem is not solved by those arithmetic guards alone.
+
+At 13:20, the exhausted Mesh/coverage gate was closed to select the normal
+uninstrumented pipeline without restarting PID 19976. Producer input/output and
+final-present capture remain enabled. FAST_TEST remains absent. CI41809605315
+completed successfully. Sarah root loader SHA F5DDE8C9073563A2C1B26BD761DAD2691B007675F6A1A774FF60D5F8F9AB5533
+and the two user launchers remain unchanged by this work.
+
 ## Current verified checkpoint - 4 November 2026, offline normalization
 
 User-directed offline analysis: no new full game run. The actual decoded/lowered
