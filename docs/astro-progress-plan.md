@@ -1,5 +1,34 @@
 # Astro Bot ilerleme planı
 
+## Current verified checkpoint - 4 November 2026, offline normalization
+
+User-directed offline analysis: no new full game run. The actual decoded/lowered
+25ea92806a8f33d1 instruction slices pass12 controlled Vulkan cases and Vulkan1.2
+SPIR-V validation, with synchronization validation0issues. Dynamic SSBO inputs
+avoid constant folding of0*Inf.
+
+Equal finite endpoints at02a0..0370 produce RSQ(+0)=+Inf, then NaN at02dc;
+both ordered guards are false. +Y/-Y/+X controls are finite. Zero interpolated
+quaternion at059c..05e0 also produces NaNs; identity quaternion is valid.
+With finite parent/translation inputs, only the zero-direction case (or both
+zero cases) reproduces NaN XYZ plus finite0scale and NaN quaternion through
+0754, with exact previous-value copying. Zero quaternion alone leaves XYZ
+finite. Already-NaN parent inputs can reproduce NaNs too: actual zero inputs
+are not proved by the output snapshot.
+
+Actual parent/texel/mode inputs were not captured in the existing JSON.
+Required evidence:432-byte parent record v5=7fe at offsets0/64, alignment
+flag(v47 bit100), curve handle(offset176), UV/raw sample results04d8/04e0/05c0,
+and actual float-mode bits. RSQ(+0)=+Inf is AMD-specified; no global semantic
+patch was made. Raw report: tools/data/astro_20261104_zero_normalization_report.json.
+Private test/result: D:/Tools/psemu-build/astro-zero-normalization/.
+
+Do not date initialization as36frames ago from0x24: offset56 is modified by
+particle producer v9 increment/wrap paths and is not a verified frame count.
+The0738copy is selected by transient sentinel27bc86ab at072c.
+Prior19204 exited0xc000013a (close/control-C status) on3Nov22:57; no visible
+final game frame was confirmed. CI41703257880 for53ba741 completed successfully.
+
 ## Current verified checkpoint - 3 November 2026, 22:02 Istanbul
 
 First recognizable Astro content in the final game window remains unconfirmed.
