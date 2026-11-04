@@ -15,11 +15,20 @@
 #include <fmt/format.h>
 
 namespace Libs::Graphics {
+inline uint64_t SceneProbeSubmissionSpan() {
+ static const uint64_t span=[] {
+  const auto* text=std::getenv("PSEMU_ASTRO_SCENE_SUBMITS");
+  if(!text || !text[0])return uint64_t{2};
+  char* end=nullptr;const auto value=std::strtoul(text,&end,10);
+  return end && !*end && value>=2 && value<=64?uint64_t{value}:uint64_t{2};
+ }();
+ return span;
+}
 inline bool SceneFrameProbe(uint64_t submit) {
  static const bool enabled=[] {const auto* x=std::getenv("PSEMU_ASTRO_SCENE_PROBE");return x && std::strcmp(x,"1")==0;}();
  if(!enabled || !AstroFrameProbeGateOpen())return false;
  static SceneProbeSubmitWindow window;
- return window.Include(submit);
+ return window.Include(submit,SceneProbeSubmissionSpan());
 }
 // Observe the exact successfully bound view, including any alignment bounce.
 // Copies run before drawing, after all preparation/owner-epoch checks.
@@ -58,11 +67,47 @@ inline void ProbeSceneTransform(CommandBuffer* command,const ShaderStageRuntime&
   VulkanUnmapMemory(ctx,&staging->memory);
  });
 }
+// Capture the final compositor's exact bound constants, including exposure/fade controls.
+inline void ProbeScenePresentConstants(CommandBuffer* command,const ShaderStageRuntime& stage,
+ const std::vector<BufferView>& views,uint64_t submit) {
+ if(!SceneFrameProbe(submit) || stage.program->shader_hash!=0x4fe15464u)return;
+ static std::atomic_uint count{0};if(count.fetch_add(1)>=8)return;
+ struct Copy {uint32_t slot;uint64_t source,destination,size,guest,allocation;};
+ std::vector<Copy> copies;
+ for(uint32_t i=0;i<std::min<size_t>(views.size(),16);++i) {
+  const auto& v=views[i];if(!v.buffer || i>=stage.resources->buffers.size())continue;
+  const auto bytes=ScenePresentConstantProbeBytes(v.offset,v.range,v.buffer->buffer_size);
+  if(!bytes)continue;
+  const auto d=DecodeNativeDescriptor<ShaderBufferResource>(stage.resources->buffers[i]);
+  copies.push_back({i,v.offset,copies.size()*256ull,bytes,d.Base48(),v.buffer->memory.unique_id});
+ }
+ if(copies.empty())return;
+ auto* ctx=g_render_ctx->GetGraphicCtx();
+ auto staging=std::shared_ptr<VulkanBuffer>(new VulkanBuffer,[ctx](auto* x){VulkanDeleteBuffer(ctx,x);delete x;});
+ staging->usage=vk::BufferUsageFlagBits::eTransferDst;
+ staging->memory.property=vk::MemoryPropertyFlagBits::eHostVisible|vk::MemoryPropertyFlagBits::eHostCoherent;
+ VulkanCreateBuffer(ctx,copies.size()*256,staging.get());
+ std::vector<AstroProducerBufferCopy> commands;
+ for(auto c:copies)commands.push_back({views[c.slot].buffer->buffer,c.source,c.destination,c.size});
+ RecordAstroProducerBufferCopies(command->Handle(),staging->buffer,copies.size()*256,commands,VULKAN_HPP_DEFAULT_DISPATCHER);
+ command->OnFenceComplete([ctx,staging,copies,submit] {
+  void* mapped=nullptr;VulkanMapMemory(ctx,&staging->memory,&mapped);
+  for(auto c:copies) {
+   auto line=fmt::format("[SCENE-PRESENT-CONSTANTS] submit={} shader=0x4fe15464 slot={} guest=0x{:x} allocation={} view_offset={} bytes={} source=completed-bound-view raw=",submit,c.slot,c.guest,c.allocation,c.source,c.size);
+   for(uint64_t i=0;i<c.size;i+=4) {
+    uint32_t word;std::memcpy(&word,static_cast<const uint8_t*>(mapped)+c.destination+i,4);
+    line+=fmt::format(" {:08x}",word);
+   }
+   line+='\n';std::fwrite(line.data(),1,line.size(),stdout);
+  }
+  VulkanUnmapMemory(ctx,&staging->memory);
+ });
+}
 inline void ProbeSceneImage(CommandBuffer* command,VulkanImage* image,uint64_t submit,
  uint64_t shader,uint64_t guest,uint32_t slot,const char* phase,bool output) {
  if(!SceneFrameProbe(submit) || !image || !image->image || !image->extent.width || !image->extent.height ||
     image->layout==vk::ImageLayout::eUndefined || image->layout==vk::ImageLayout::ePreinitialized)return;
- static std::atomic_uint count{0};if(count.fetch_add(1)>=1024)return;
+ static std::atomic_uint count{0};if(count.fetch_add(1)>=(SceneProbeSubmissionSpan()>2?8192u:1024u))return;
  uint32_t bytes=0,rgb_bytes=0;bool packed_alpha=false;bool floating=false;uint32_t bits=0,channels=0;bool depth=false;
  switch(image->format) {
  case vk::Format::eR8G8B8A8Unorm:case vk::Format::eR8G8B8A8Srgb:case vk::Format::eB8G8R8A8Unorm:case vk::Format::eB8G8R8A8Srgb:bytes=4;rgb_bytes=3;break;
@@ -82,7 +127,7 @@ inline void ProbeSceneImage(CommandBuffer* command,VulkanImage* image,uint64_t s
  default:printf("[SCENE-IMAGE] submit=%llu phase=%s shader=0x%llx slot=%u guest=0x%llx format=%u unsupported=1\n",(unsigned long long)submit,phase,(unsigned long long)shader,slot,(unsigned long long)guest,unsigned(image->format));return;
  }
  static std::atomic_uint full_count{0};
- const bool full=output && full_count.fetch_add(1)<48;
+ const bool full=output && full_count.fetch_add(1)<(SceneProbeSubmissionSpan()>2?8u:48u);
  const auto w=image->extent.width,h=image->extent.height;
  const uint64_t pixels=full?uint64_t(w)*h:1024, stride=full?bytes:(bytes+3u)&~3u, size=pixels*stride;
  if(size>128ull*1024*1024)return;

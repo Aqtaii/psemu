@@ -14,6 +14,19 @@ static void Bounds() {
     CHECK(window.Include(0));CHECK(window.Include(0));CHECK(window.Include(8749));
     CHECK(window.Include(0));CHECK(window.Include(8750));CHECK(window.Include(0));
     CHECK(!window.Include(8751));CHECK(!window.Include(0));
+    SceneProbeSubmitWindow extended;
+    CHECK(!extended.Include(8749,0));CHECK(!extended.Include(8749,65));
+    CHECK(extended.Include(0,8));
+    for(uint64_t submit=8749;submit<8757;++submit) {
+        CHECK(extended.Include(submit,8));CHECK(extended.Include(0,8));
+    }
+    CHECK(!extended.Include(8757,8));CHECK(!extended.Include(0,8));
+    CHECK(ScenePresentConstantProbeBytes(256,1024,2048)==256);
+    CHECK(ScenePresentConstantProbeBytes(256,160,416)==160);
+    CHECK(ScenePresentConstantProbeBytes(256,160,412)==156);
+    CHECK(ScenePresentConstantProbeBytes(257,160,1024)==0);
+    CHECK(ScenePresentConstantProbeBytes(512,160,256)==0);
+    CHECK(ScenePresentConstantProbeBytes(UINT64_MAX-3,256,UINT64_MAX)==0);
     uint64_t offset=0;
     constexpr uint64_t bytes=12288ull*128;
     CHECK(AstroProducerProbeOffset(256,bytes,256+bytes,128,12288,12287,&offset));

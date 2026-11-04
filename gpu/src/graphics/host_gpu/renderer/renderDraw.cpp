@@ -1333,7 +1333,7 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 		SetDynamicParams(state->vk_buffer, dynamic_params);
 
 		const bool scene_probe=SceneFrameProbe(submit_id);
-        std::vector<BufferView> scene_buffers;
+        std::vector<BufferView> scene_buffers,scene_ps_buffers;
         std::vector<VulkanImage*> scene_vs_images,scene_ps_images;
 		ClearBounceCopies();
 		// EXIT_NOT_IMPLEMENTED(vs_input_info.buffers_num > 1);
@@ -1364,7 +1364,7 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
 			BindDescriptors(submit_id, buffer, vk::PipelineBindPoint::eGraphics,
 			                pipeline->pipeline_layout, state->ps_input_info.stage,
 			                vk::ShaderStageFlagBits::eFragment, DescriptorCache::Stage::Pixel,
-                        nullptr,nullptr,nullptr,scene_probe ? &scene_ps_images : nullptr);
+                        nullptr,nullptr,scene_probe ? &scene_ps_buffers : nullptr,scene_probe ? &scene_ps_images : nullptr);
 		}
 		if (buffer->GetRecordingGeneration() != recording_generation) {
 			continue;
@@ -1397,7 +1397,10 @@ static void ExecutePreparedDraw(uint64_t submit_id, CommandBuffer* buffer, HW::C
             DecodeNativeDescriptor<ShaderTextureResource>(stage.resources->images[i]).Base40(),i,phase,false);
          };
          inputs(state->vs_input_info.stage,scene_vs_images,"vs-input");
-         if(state->ps_active)inputs(state->ps_input_info.stage,scene_ps_images,"ps-input");
+         if(state->ps_active) {
+          inputs(state->ps_input_info.stage,scene_ps_images,"ps-input");
+          ProbeScenePresentConstants(buffer,state->ps_input_info.stage,scene_ps_buffers,submit_id);
+         }
         }
 
         static const bool video_draw_enabled=[] {
