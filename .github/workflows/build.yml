@@ -303,6 +303,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_readback_worker_wait.ps1
 
+      - name: Test CPU-owned faults without blocking guest signal queues
+        shell: pwsh
+        run: ./tools/scripts/test_cpu_owned_fault.ps1
+
       - name: Test CPU stream reads before foreign buffer drains
         shell: pwsh
         run: ./tools/scripts/test_buffer_stream_retry.ps1
