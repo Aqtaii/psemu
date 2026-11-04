@@ -2031,7 +2031,7 @@ static void AstroFinitePosition(EmitterState* state,uint32_t base,bool scale) {
   AstroSetFloat(state,base+c,EmitFSelectValue(state,AstroFinite(state,value),value,ConstantF32(state,0)));
  }
 }
-static void AstroQuaternionOrIdentity(EmitterState* state,uint32_t base) {
+static uint32_t AstroQuaternionOrIdentity(EmitterState* state,uint32_t base) {
  std::array<uint32_t,4> values{};
  auto length=ConstantF32(state,0);
  for(uint32_t c=0;c<4;++c) {
@@ -2043,6 +2043,7 @@ static void AstroQuaternionOrIdentity(EmitterState* state,uint32_t base) {
  const auto valid=AstroPositiveFinite(state,length);
  for(uint32_t c=0;c<4;++c)
   AstroSetFloat(state,base+c,EmitFSelectValue(state,valid,values[c],ConstantF32(state,c==3?0x3f800000u:0)));
+ return valid;
 }
 void EmitAstroNormalizationInputs(EmitterState* state,const IR::Instruction& inst) {
  if(state->program->instruction_code_hash!=AstroTransformNormalizeHash)return;
@@ -2057,7 +2058,19 @@ void EmitAstroNormalizationInputs(EmitterState* state,const IR::Instruction& ins
   }
   AstroSetFloat(state,6,EmitFSelectValue(state,valid,length,ConstantF32(state,0x3f800000u)));
  }
- if(inst.pc==0x3a8) {AstroQuaternionOrIdentity(state,33);AstroQuaternionOrIdentity(state,37);}
+ if(inst.pc==0x3a8) {
+  const auto first=AstroQuaternionOrIdentity(state,33),second=AstroQuaternionOrIdentity(state,37);
+  const auto any=state->builder.AllocateId(),invalid=state->builder.AllocateId();
+  state->builder.AddFunction({OpLogicalOr,state->bool_type,any,first,second});
+  state->builder.AddFunction({OpLogicalNot,state->bool_type,invalid,any});
+  const auto scale=EmitFloatLoad(state,AstroV(23));
+  const auto zero=EmitFCompareValue(state,OpFOrdEqual,scale,ConstantF32(state,0));
+  const auto recover=state->builder.AllocateId();
+  state->builder.AddFunction({OpLogicalAnd,state->bool_type,recover,invalid,zero});
+  // Two invalid parent rotations plus zero scale are not a valid collapsed transform.
+  // Recover the missing identity scale before the original v14=v23 instruction.
+  AstroSetFloat(state,23,EmitFSelectValue(state,recover,ConstantF32(state,0x3f800000u),scale));
+ }
  if(inst.pc==0x5d0 && inst.op==IR::Opcode::InverseSqrtF32) {
   const auto length=EmitFloatLoad(state,AstroV(48)),valid=AstroPositiveFinite(state,length);
   // The interpolated quaternion is x/y/z/w in v37/v38/v39/v51.
