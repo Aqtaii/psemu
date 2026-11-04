@@ -53,6 +53,21 @@ bool GpuResourceManager::HandleFault(PageFaultAccess access, uint64_t fault_vadd
 		     " access=%u\n",
 		     fault_vaddr, static_cast<uint32_t>(access));
 	}
+	// A CPU-owned buffer page needs only watcher invalidation. Draining every guest queue here
+	// can deadlock when a queue waits for a CPU/compute signal which this fault prevents from
+	// being submitted. Classify and resolve under one resource transaction so a GPU writer
+	// cannot acquire the page between the ownership check and watcher completion.
+	{
+		ResourceMutex::FaultScope fault(m_resource_mutex);
+		const auto page = fault_vaddr & ~(TRACKER_PAGE_SIZE - 1);
+		if (m_page_manager.IsMapped(page, TRACKER_PAGE_SIZE)) {
+			const auto images = m_texture_cache.QueryRegion(page, TRACKER_PAGE_SIZE);
+			if (!images.image_pages && !images.metadata_pages &&
+			    !m_buffer_cache.IsRegionGpuModified(page, TRACKER_PAGE_SIZE)) {
+				return m_page_manager.HandleFault(access, fault_vaddr);
+			}
+		}
+	}
 	// Stop command-processor jobs before taking the shared cache transaction. External readback
 	// workers inherit this paused state and therefore never form resource -> submission lock
 	// inversion.

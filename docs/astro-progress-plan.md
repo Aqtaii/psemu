@@ -817,3 +817,13 @@ locally. Vulkan's resource creation rules specify an unsigned sampler for a
 stencil-only aspect: https://docs.vulkan.org/spec/latest/chapters/resources.html .
 All source contents, layout and tracking flags survive the controlled read.
 Normal run acceptance is pending; no recognizable final-window frame claimed.
+
+
+### 2026-11-04: finite geometry verified; CPU fault / queue wait deadlock candidate
+
+- Normal full boot `astro_20261104_unit_parent_normal` used source `35dce73`, loader SHA256 `1BCB6F7BF44FA8479F1C45B8E99FE614FF4353F229A080C40E7A0F582D265A7E`, PID 16164. FAST_TEST was absent.
+- Exact GPU-bound GS slot 3 record copies and PC 0x056c agree with producer output: finite emitter position, scale 1, identity quaternion. 84 valid Mesh vertices formed 28 nondegenerate projected triangles. Many captured positions remain outside the viewport; this is not a visible game frame. PC 0x0cfc was not reached, so the zero field at offset 100 is not proven to zero size in these paths.
+- Scene probe found a finite nonzero RGBA16F compute output (2432 x 1368, peak 6.2851562, no nonfinite components). The final presented source remained black. Two submission IDs do not capture every stage of a complex frame; no specific destructive color transition has been proved.
+- The run subsequently stopped producing presents. Native thread snapshots and the matching EXE/MAP show thread 14564 polling WAIT_MEM_64 at 0x1e79ce22540, mask 0xffffffff, comparison equal to 1, actual 0. Thread 10552 is in GpuResourceManager::HandleFault -> GraphicsRunSubmissionLock -> PauseSubmissions -> WaitLocked; thread 20452 cannot submit compute because the submission mutex is held. This establishes a queue/submission wait cycle; the blocked compute signal relationship still needs runtime validation.
+- Fix: resolve fully mapped, CPU-owned buffer page faults under one resource transaction without draining all guest queues. The check covers the whole tracking page and excludes every image or metadata page and every GPU-dirty buffer page. Ownership cannot change between classification and watcher completion. GPU/image/metadata/partial-page cases retain the existing ordered readback path, acquired after releasing the classification transaction.
+- Production HandleFault body regression: 11 scenarios passed, including CPU read/write while a queue awaits a CPU signal and preservation of ordered readback for GPU/image/metadata ownership. Local loader build passed in a separate output folder. Runtime validation is pending; no visible Astro frame is claimed.
