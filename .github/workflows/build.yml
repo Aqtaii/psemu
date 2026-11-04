@@ -303,6 +303,10 @@ jobs:
         shell: pwsh
         run: ./tools/scripts/test_readback_worker_wait.ps1
 
+      - name: Test WAIT_MEM submits deferred completion signals
+        shell: pwsh
+        run: ./tools/scripts/test_wait_mem_submit.ps1
+
       - name: Test CPU-owned faults without blocking guest signal queues
         shell: pwsh
         run: ./tools/scripts/test_cpu_owned_fault.ps1

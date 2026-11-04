@@ -611,10 +611,19 @@ void CommandProcessor::WaitRegMem(uint32_t func, const T* addr, T ref, T mask, u
 	const auto bits       = static_cast<unsigned>(sizeof(T) * 8u);
 
 	uint64_t spin_count = 0;
+	bool submitted_pending_work = false;
 	for (;;) {
-		const auto value = *addr;
+		const auto value = *static_cast<const volatile T*>(addr);
 		if (TestWaitRegMemValue(value, ref, mask, func)) {
 			break;
+		}
+		if (!submitted_pending_work) {
+			// End-of-pipe labels become CPU-visible only after their recorded GPU work
+			// completes. Submit that work before polling; waiting for the batch-end
+			// flush would prevent this very wait from ever observing its own signal.
+			BufferFlush();
+			submitted_pending_work = true;
+			continue;
 		}
 		if ((++spin_count % 100000u) == 0) {
 			LOGF("\t wait_reg_mem%u still waiting: addr = 0x%016" PRIx64 ", value = 0x%0*" PRIx64
