@@ -749,6 +749,7 @@ void EmitMeshRegisterCheckpoint(EmitterState* state,const IR::Instruction& inst)
 }
 
 void EmitInstruction(EmitterState* state, const IR::Instruction& inst) {
+ EmitAstroNormalizationInputs(state,inst);
  EmitMeshRegisterCheckpoint(state,inst);
  // Bounded opt-in capture of the actual Astro empty-input gate, before CMPX changes EXEC.
  // Capture either the old input predicate or the full GS packed output-count test.

@@ -1387,6 +1387,7 @@ void EmitRcpF32(EmitterState* state, const IR::Instruction& inst);
 
 uint32_t EmitTrigCycleF32(EmitterState* state, uint32_t src, bool preserve_signed_zero);
 
+void EmitAstroNormalizationInputs(EmitterState* state, const IR::Instruction& inst);
 void EmitFloatExtInst(EmitterState* state, const IR::Instruction& inst, uint32_t ext_inst,
                       bool scale_by_two_pi = false, bool flush_denorm = false);
 

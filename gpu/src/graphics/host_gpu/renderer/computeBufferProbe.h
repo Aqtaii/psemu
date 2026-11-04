@@ -25,9 +25,22 @@ inline bool AstroProducerProbeOffset(uint64_t view_offset, uint64_t view_bytes,
     *result = view_offset + relative;
     return true;
 }
+// Full parent/constant records requested for this exact transform producer.
+inline bool AstroProducerInputProbeOffset(uint64_t view_offset,uint64_t view_bytes,
+ uint64_t allocation_bytes,uint32_t stride,uint32_t records,uint32_t slot,uint32_t index,
+ uint64_t* result) {
+ const bool parent=slot==4 && stride==432 && index==0x7fe;
+ const bool constants=slot==3 && stride==276 && index==0x3a00;
+ if(!result || (!parent && !constants) || index>=records || view_offset%4 ||
+    view_offset>allocation_bytes || view_bytes>allocation_bytes-view_offset)return false;
+ const uint64_t relative=uint64_t(index)*stride;
+ if(relative>view_bytes || stride>view_bytes-relative)return false;
+ *result=view_offset+relative;return true;
+}
 struct AstroProducerBufferCopy {
     VkBuffer source;
     VkDeviceSize source_offset, destination_offset;
+    VkDeviceSize bytes=128;
 };
 // Shared with the Vulkan regression: exact commands used by the opt-in capture.
 template<class Dispatch>
@@ -39,7 +52,7 @@ inline void RecordAstroProducerBufferCopies(VkCommandBuffer command, VkBuffer st
     dispatch.vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,
         0,1,&readable,0,nullptr,0,nullptr);
     for (const auto& copy : copies) {
-        const VkBufferCopy region{copy.source_offset,copy.destination_offset,128};
+        const VkBufferCopy region{copy.source_offset,copy.destination_offset,copy.bytes};
         dispatch.vkCmdCopyBuffer(command,copy.source,staging,1,&region);
     }
     VkMemoryBarrier resume{VK_STRUCTURE_TYPE_MEMORY_BARRIER};

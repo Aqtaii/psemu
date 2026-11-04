@@ -1,3 +1,4 @@
+#include "graphics/shader/recompiler/astroNormalizationFix.h"
 #include "graphics/shader/recompiler/spirvEmitter/spirvEmitterInternal.h"
 
 namespace Libs::Graphics::ShaderRecompiler::Spirv::Emitter {
@@ -1165,13 +1166,18 @@ void EmitPackU8F32(EmitterState* state, const IR::Instruction& inst) {
 	EmitStoreU32(state, inst.dst, EmitOrU32(state, cleared, shifted));
 }
 
+static uint32_t AstroFinite(EmitterState* state,uint32_t value);
 void EmitBinaryF32(EmitterState* state, const IR::Instruction& inst, uint32_t opcode) {
 	const auto lhs = EmitFloatLoad(state, inst.src[0]);
 	const auto rhs = EmitFloatLoad(state, inst.src[1]);
 	const auto f32 = state->builder.AllocateId();
 	const auto u32 = state->builder.AllocateId();
 	state->builder.AddFunction({opcode, state->float_type, f32, lhs, rhs});
-	const auto result = ApplyResultModifiersF32(state, f32, inst.dst);
+	auto result = ApplyResultModifiersF32(state, f32, inst.dst);
+ if(opcode==OpFMul && (state->program->instruction_code_hash==AstroGsNormalizeHash ||
+    state->program->instruction_code_hash==AstroFusedGsNormalizeHash))
+  result=EmitFSelectValue(state,AstroFinite(state,result),result,ConstantF32(state,0));
+
 	state->builder.AddFunction({OpBitcast, state->uint_type, u32, result});
 	EmitStoreU32(state, inst.dst, u32);
 }
@@ -1981,6 +1987,74 @@ uint32_t EmitTrigCycleF32(EmitterState* state, uint32_t src, bool preserve_signe
 	return ret;
 }
 
+// Narrow compatibility policy for the captured Astro producer and paired GS.
+// Do not change the architectural RSQ behavior of unrelated programs.
+static uint32_t AstroFinite(EmitterState* state,uint32_t value) {
+ const auto bits=state->builder.AllocateId();
+ state->builder.AddFunction({OpBitcast,state->uint_type,bits,value});
+ const auto exponent=EmitBinaryU32(state,OpBitwiseAnd,bits,ConstantU32(state,0x7f800000u));
+ const auto finite=state->builder.AllocateId();
+ state->builder.AddFunction({OpINotEqual,state->bool_type,finite,exponent,ConstantU32(state,0x7f800000u)});
+ return finite;
+}
+static uint32_t AstroPositiveFinite(EmitterState* state,uint32_t value) {
+ const auto positive=EmitFCompareValue(state,OpFOrdGreaterThan,value,ConstantF32(state,0));
+ const auto yes=state->builder.AllocateId();
+ state->builder.AddFunction({OpLogicalAnd,state->bool_type,yes,positive,AstroFinite(state,value)});
+ return yes;
+}
+static IR::Operand AstroV(uint32_t reg) {
+ IR::Operand value;value.kind=IR::OperandKind::Register;value.reg={IR::RegisterFile::Vector,reg};return value;
+}
+static void AstroSetFloat(EmitterState* state,uint32_t reg,uint32_t value) {
+ const auto bits=state->builder.AllocateId();
+ state->builder.AddFunction({OpBitcast,state->uint_type,bits,value});EmitStoreU32(state,AstroV(reg),bits);
+}
+static void AstroFinitePosition(EmitterState* state,uint32_t base,bool scale) {
+ for(uint32_t c=0;c<(scale?4u:3u);++c) {
+  const auto value=EmitFloatLoad(state,AstroV(base+c));
+  AstroSetFloat(state,base+c,EmitFSelectValue(state,AstroFinite(state,value),value,
+      ConstantF32(state,c==3?0x3f800000u:0)));
+ }
+}
+static void AstroQuaternionOrIdentity(EmitterState* state,uint32_t base) {
+ std::array<uint32_t,4> values{};
+ auto length=ConstantF32(state,0);
+ for(uint32_t c=0;c<4;++c) {
+  values[c]=EmitFloatLoad(state,AstroV(base+c));
+  const auto sq=state->builder.AllocateId(),sum=state->builder.AllocateId();
+  state->builder.AddFunction({OpFMul,state->float_type,sq,values[c],values[c]});
+  state->builder.AddFunction({OpFAdd,state->float_type,sum,length,sq});length=sum;
+ }
+ const auto valid=AstroPositiveFinite(state,length);
+ for(uint32_t c=0;c<4;++c)
+  AstroSetFloat(state,base+c,EmitFSelectValue(state,valid,values[c],ConstantF32(state,c==3?0x3f800000u:0)));
+}
+void EmitAstroNormalizationInputs(EmitterState* state,const IR::Instruction& inst) {
+ if(state->program->instruction_code_hash!=AstroTransformNormalizeHash)return;
+ if(inst.pc==0x264) {AstroFinitePosition(state,26,true);AstroFinitePosition(state,30,true);}
+ if(inst.pc==0x2a0) {AstroFinitePosition(state,26,false);AstroFinitePosition(state,30,false);}
+ if(inst.pc==0x2d8 && inst.op==IR::Opcode::InverseSqrtF32) {
+  const auto length=EmitFloatLoad(state,AstroV(6)),valid=AstroPositiveFinite(state,length);
+  // A degenerate direction follows the existing +Y fallback: identity rotation.
+  for(const auto reg:{8u,7u,14u}) {
+   const auto value=EmitFloatLoad(state,AstroV(reg));
+   AstroSetFloat(state,reg,EmitFSelectValue(state,valid,value,ConstantF32(state,reg==7?0x3f800000u:0)));
+  }
+  AstroSetFloat(state,6,EmitFSelectValue(state,valid,length,ConstantF32(state,0x3f800000u)));
+ }
+ if(inst.pc==0x3a8) {AstroQuaternionOrIdentity(state,33);AstroQuaternionOrIdentity(state,37);}
+ if(inst.pc==0x5d0 && inst.op==IR::Opcode::InverseSqrtF32) {
+  const auto length=EmitFloatLoad(state,AstroV(48)),valid=AstroPositiveFinite(state,length);
+  // The interpolated quaternion is x/y/z/w in v37/v38/v39/v51.
+  for(const auto reg:{37u,38u,39u,51u}) {
+   const auto value=EmitFloatLoad(state,AstroV(reg));
+   AstroSetFloat(state,reg,EmitFSelectValue(state,valid,value,ConstantF32(state,reg==51?0x3f800000u:0)));
+  }
+  AstroSetFloat(state,48,EmitFSelectValue(state,valid,length,ConstantF32(state,0x3f800000u)));
+ }
+ if(inst.pc==0x5e4)AstroFinitePosition(state,33,true);
+}
 void EmitFloatExtInst(EmitterState* state, const IR::Instruction& inst, uint32_t ext_inst,
                       bool scale_by_two_pi, bool flush_denorm) {
 	auto src = EmitFloatLoad(state, inst.src[0]);
@@ -1994,11 +2068,15 @@ void EmitFloatExtInst(EmitterState* state, const IR::Instruction& inst, uint32_t
 		    {OpFMul, state->float_type, scaled, src, ConstantF32(state, 0x40c90fdbu)});
 		src = scaled;
 	}
+	const bool astro_rsq=ext_inst==GlslInverseSqrt && AstroNormalizationShader(state->program->instruction_code_hash);
+	uint32_t valid=0;
+	if(astro_rsq) {valid=AstroPositiveFinite(state,src);src=EmitFSelectValue(state,valid,src,ConstantF32(state,0x3f800000u));}
 	const auto f32 = state->builder.AllocateId();
 	const auto u32 = state->builder.AllocateId();
 	state->builder.AddFunction(
 	    {OpExtInst, state->float_type, f32, state->glsl_std450, ext_inst, src});
-	const auto result = ApplyResultModifiersF32(state, f32, inst.dst);
+	const auto safe=astro_rsq ? EmitFSelectValue(state,valid,f32,ConstantF32(state,0)) : f32;
+	const auto result = ApplyResultModifiersF32(state, safe, inst.dst);
 	state->builder.AddFunction({OpBitcast, state->uint_type, u32, result});
 	EmitStoreU32(state, inst.dst, u32);
 }

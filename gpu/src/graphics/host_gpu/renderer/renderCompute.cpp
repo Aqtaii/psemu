@@ -57,10 +57,11 @@ static void CaptureAstroProducerBuffers(CommandBuffer* command, const ShaderStag
     struct Copy {
         vk::Buffer source;
         uint64_t source_offset, destination_offset, guest;
-        uint32_t slot, record;
-        bool read, written;
+        uint32_t slot, record, bytes;
+        bool read, written, input;
     };
     std::vector<Copy> copies;
+    uint64_t staging_bytes=0;
     const auto& program = *runtime.program;
     const auto& resources = *runtime.resources;
     for (uint32_t slot = 0; slot < views.size(); ++slot) {
@@ -72,8 +73,20 @@ static void CaptureAstroProducerBuffers(CommandBuffer* command, const ShaderStag
             uint64_t source_offset = 0;
             if (!AstroProducerProbeOffset(view.offset, view.range, view.buffer->buffer_size,
                     descriptor.Stride(), descriptor.NumRecords(), index, &source_offset)) continue;
-            copies.push_back({view.buffer->buffer,source_offset,copies.size()*128ull,
-                descriptor.Base48(),slot,index,program.info.buffers[slot].read,program.info.buffers[slot].written});
+            copies.push_back({view.buffer->buffer,source_offset,staging_bytes,
+                descriptor.Base48(),slot,index,128,program.info.buffers[slot].read,program.info.buffers[slot].written,false});
+            staging_bytes+=128;
+        }
+        if(program.instruction_code_hash==0x25ea92806a8f33d1ull && (slot==3 || slot==4)) {
+            const uint32_t index=slot==4?0x7fe:0x3a00;
+            uint64_t source_offset=0;
+            if(AstroProducerInputProbeOffset(view.offset,view.range,view.buffer->buffer_size,
+                    descriptor.Stride(),descriptor.NumRecords(),slot,index,&source_offset)) {
+                const auto bytes=descriptor.Stride();
+                copies.push_back({view.buffer->buffer,source_offset,staging_bytes,descriptor.Base48(),
+                    slot,index,bytes,program.info.buffers[slot].read,program.info.buffers[slot].written,true});
+                staging_bytes+=bytes;
+            }
         }
     }
     if (copies.empty()) return;
@@ -84,19 +97,20 @@ static void CaptureAstroProducerBuffers(CommandBuffer* command, const ShaderStag
     staging->usage = vk::BufferUsageFlagBits::eTransferDst;
     staging->memory.property = vk::MemoryPropertyFlagBits::eHostVisible |
                                vk::MemoryPropertyFlagBits::eHostCoherent;
-    VulkanCreateBuffer(ctx,copies.size()*128,staging.get());
+    VulkanCreateBuffer(ctx,staging_bytes,staging.get());
     std::vector<AstroProducerBufferCopy> recording;
     for (const auto& copy : copies)
-        recording.push_back({copy.source,copy.source_offset,copy.destination_offset});
-    RecordAstroProducerBufferCopies(command->Handle(),staging->buffer,copies.size()*128,recording,VULKAN_HPP_DEFAULT_DISPATCHER);
+        recording.push_back({copy.source,copy.source_offset,copy.destination_offset,copy.bytes});
+    RecordAstroProducerBufferCopies(command->Handle(),staging->buffer,staging_bytes,recording,VULKAN_HPP_DEFAULT_DISPATCHER);
     const auto hash = program.instruction_code_hash;
     command->OnFenceComplete([ctx,staging,copies=std::move(copies),submit,ordinal,after,hash] {
         void* mapped=nullptr;VulkanMapMemory(ctx,&staging->memory,&mapped);
         for (const auto& copy : copies) {
-            std::array<uint32_t,32> words{};
-            std::memcpy(words.data(),static_cast<const uint8_t*>(mapped)+copy.destination_offset,128);
-            auto line=fmt::format("[ASTRO-PRODUCER-BUFFER] submit={} code=0x{:016x} ordinal={} phase={} slot={} guest=0x{:016x} record={} read={} write={} source=completed-fence raw=",
-                submit,hash,ordinal,after ? "after" : "before",copy.slot,copy.guest,copy.record,copy.read,copy.written);
+            std::vector<uint32_t> words(copy.bytes/4);
+            std::memcpy(words.data(),static_cast<const uint8_t*>(mapped)+copy.destination_offset,copy.bytes);
+            auto line=fmt::format("[{}] submit={} code=0x{:016x} ordinal={} phase={} slot={} guest=0x{:016x} record={} read={} write={} bytes={} source=completed-fence raw=",
+                copy.input?"ASTRO-PRODUCER-INPUT":"ASTRO-PRODUCER-BUFFER",submit,hash,ordinal,after ? "after" : "before",
+                copy.slot,copy.guest,copy.record,copy.read,copy.written,copy.bytes);
             for (const auto word : words) line+=fmt::format(" {:08x}",word);
             line+='\n';std::fwrite(line.data(),1,line.size(),stdout);
         }

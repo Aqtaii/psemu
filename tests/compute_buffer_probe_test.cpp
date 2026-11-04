@@ -27,6 +27,11 @@ static void Bounds() {
     uint32_t samples=0;
     for(uint32_t i=0;i<16384;++i)samples+=AstroProducerProbeOrdinal(i);
     CHECK(samples==139);
+    CHECK(AstroProducerInputProbeOffset(256,432ull*2048,256+432ull*2048,432,2048,4,0x7fe,&offset));
+    CHECK(offset==256+432ull*0x7fe);
+    CHECK(AstroProducerInputProbeOffset(256,276ull*16384,256+276ull*16384,276,16384,3,0x3a00,&offset));
+    CHECK(!AstroProducerInputProbeOffset(256,432ull*2048,256+432ull*2048,432,2048,3,0x7fe,&offset));
+    CHECK(!AstroProducerInputProbeOffset(256,432ull*2048-433,256+432ull*2048,432,2048,4,0x7fe,&offset));
     std::printf("PASS producer probe descriptor/allocation bounds, overflow, shader identity and139-dispatch budget\n");
 }
 static void Gpu(const char* shader,uint32_t index) {
@@ -51,12 +56,28 @@ static void Gpu(const char* shader,uint32_t index) {
     for(uint32_t i=0;i<32;++i){uint32_t value;std::memcpy(&value,after->map+256+i*4,4);CHECK(value==0x71100000u+i);}
     std::printf("PASS Vulkan actual production probe copy commands index=%u before_NaN_bits_exact=1 after_compute_words_exact=32 all_guards_exact=1 sync_validation=1 game_frame=0\n",index);
 }
+static void InputGpu(const char* shader,uint32_t slot,uint32_t stride,uint32_t records,uint32_t index) {
+    Device device(true,shader,true);
+    const uint64_t bytes=uint64_t(stride)*records;
+    auto source=device.Make(bytes,0xa5),destination=device.Make(1024,0xcd);
+    uint64_t offset=0;CHECK(AstroProducerInputProbeOffset(256,bytes,source->expected.size(),stride,records,slot,index,&offset));
+    for(uint32_t i=0;i<stride/4;++i) {
+        const uint32_t value=i%9==0?0x7fc12345u:0x3f000000u+i;
+        std::memcpy(source->map+offset+i*4,&value,4);std::memcpy(source->expected.data()+offset+i*4,&value,4);
+    }
+    const AstroProducerBufferCopy copy{source->buffer,offset,256,stride};
+    RecordAstroProducerBufferCopies(device.command,destination->buffer,destination->expected.size(),std::span(&copy,1),ProbeDispatch{});
+    std::memcpy(destination->expected.data()+256,source->expected.data()+offset,stride);
+    device.Submit();
+    std::printf("PASS full producer input GPU copy slot=%u index=%u bytes=%u raw_NaN_and_all_guards_exact=1 sync_validation=1\n",slot,index,stride);
+}
 int main(int argc,char**argv) {
     try{
         CHECK(argc==3);Bounds();
-        if(std::string(argv[1])=="--gpu")
+        if(std::string(argv[1])=="--gpu") {
             for(uint32_t index:{0u,12158u,12222u})Gpu(argv[2],index);
-        else CHECK(std::string(argv[1])=="--cpu");
+            InputGpu(argv[2],4,432,2048,0x7fe);InputGpu(argv[2],3,276,16384,0x3a00);
+        } else CHECK(std::string(argv[1])=="--cpu");
         CHECK(validation_issues==0);
         std::printf("PASS producer buffer probe validation_issues=%u\n",validation_issues.load());
     }catch(const std::exception& e){std::fprintf(stderr,"FAIL %s\n",e.what());return 1;}
