@@ -1,6 +1,7 @@
 #include "compute_probe_device.inc"
 #include "graphics/host_gpu/renderer/computeBufferProbe.h"
 #include "graphics/host_gpu/renderer/storageBufferBounce.h"
+#include "graphics/host_gpu/renderer/sceneProbeWindow.h"
 #include <limits>
 using namespace Libs::Graphics;
 struct ProbeDispatch {
@@ -9,6 +10,10 @@ struct ProbeDispatch {
 };
 
 static void Bounds() {
+    SceneProbeSubmitWindow window;
+    CHECK(window.Include(0));CHECK(window.Include(0));CHECK(window.Include(8749));
+    CHECK(window.Include(0));CHECK(window.Include(8750));CHECK(window.Include(0));
+    CHECK(!window.Include(8751));CHECK(!window.Include(0));
     uint64_t offset=0;
     constexpr uint64_t bytes=12288ull*128;
     CHECK(AstroProducerProbeOffset(256,bytes,256+bytes,128,12288,12287,&offset));

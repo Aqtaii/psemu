@@ -7,6 +7,7 @@
 #include "graphics/host_gpu/renderer/computeBufferProbe.h"
 #include "graphics/host_gpu/renderer/descriptors.h"
 #include "graphics/shader/recompiler/ResourceMaterialization.h"
+#include "graphics/host_gpu/renderer/sceneProbeWindow.h"
 #include <atomic>
 #include <bit>
 #include <cmath>
@@ -17,9 +18,8 @@ namespace Libs::Graphics {
 inline bool SceneFrameProbe(uint64_t submit) {
  static const bool enabled=[] {const auto* x=std::getenv("PSEMU_ASTRO_SCENE_PROBE");return x && std::strcmp(x,"1")==0;}();
  if(!enabled || !AstroFrameProbeGateOpen())return false;
- static std::atomic_uint64_t first{UINT64_MAX};
- auto expected=UINT64_MAX;first.compare_exchange_strong(expected,submit);
- const auto begin=first.load();return submit>=begin && submit-begin<2;
+ static SceneProbeSubmitWindow window;
+ return window.Include(submit);
 }
 // Observe the exact successfully bound view, including any alignment bounce.
 // Copies run before drawing, after all preparation/owner-epoch checks.
