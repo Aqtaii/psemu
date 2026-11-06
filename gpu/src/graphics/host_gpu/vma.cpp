@@ -109,7 +109,7 @@ void VulkanLogMemoryBudget(GraphicContext* ctx) {
 	VmaBudget   budgets[VK_MAX_MEMORY_HEAPS] {};
 	vmaGetHeapBudgets(ctx->allocator, budgets);
 	for (uint32_t i = 0; i < properties.memoryHeapCount; i++) {
-		LOGF("VMA heap %u: usage=%" PRIu64 ", budget=%" PRIu64 ", allocation=%" PRIu64
+		std::printf("[VMA-BUDGET] heap %u: usage=%" PRIu64 ", budget=%" PRIu64 ", allocation=%" PRIu64
 		     ", blocks=%" PRIu64 "\n",
 		     i, static_cast<uint64_t>(budgets[i].usage), static_cast<uint64_t>(budgets[i].budget),
 		     static_cast<uint64_t>(budgets[i].statistics.allocationBytes),
@@ -143,6 +143,10 @@ void VulkanCreateBuffer(GraphicContext* ctx, uint64_t size, VulkanBuffer* buffer
 	    &alloc_info, &native_buffer, &buffer->memory.allocation, &buffer->memory.allocation_info));
 	buffer->buffer                  = native_buffer;
 	if (result != vk::Result::eSuccess) {
+		std::fprintf(stderr,"[VMA-ERROR] buffer allocation failed: result=%d size=%llu usage=0x%x property=0x%x\n",
+		             static_cast<int>(result),static_cast<unsigned long long>(size),
+		             static_cast<uint32_t>(buffer->usage),static_cast<uint32_t>(buffer->memory.property));
+		std::fflush(stderr);
 		VulkanLogMemoryBudget(ctx);
 	}
 	EXIT_NOT_IMPLEMENTED(result != vk::Result::eSuccess);

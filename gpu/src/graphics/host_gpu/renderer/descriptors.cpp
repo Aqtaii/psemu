@@ -855,7 +855,7 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 					// Guest bellekte gercekten piksel var mi? (Sifir ise kaynak
 					// veri yok/henuz yazilmamis -> gorunmez cizim.)
 					uint32_t nz = 0, sampled = 0;
-					{
+					if (image == nullptr && tile == 0 && !check_depth) {
 						const uint32_t* px = reinterpret_cast<const uint32_t*>(address);
 						MEMORY_BASIC_INFORMATION mbi{};
 						if (VirtualQuery(px, &mbi, sizeof(mbi)) != 0 && mbi.State == MEM_COMMIT) {
@@ -1075,6 +1075,7 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 		}
 	}
 	EXIT_NOT_IMPLEMENTED(image == nullptr);
+
 	if (NeedsStaticSampledArrayView(resource.dimension ==
 	                                    ShaderRecompiler::Decoder::ImageDimension::Dim2DArray,
 	                                image_view != nullptr)) {

@@ -198,7 +198,26 @@ void PsemuCaptureFrame(GraphicContext* ctx, const VulkanImage* image) {
 		cmd.Begin();
 		auto vk = cmd.Handle();
 
-		// image su an eTransferSrcOptimal; dogrudan buffer'a kopyala.
+		// image su an eTransferSrcOptimal; transfer write'larinin gorunur oldugundan emin ol.
+		vk::ImageMemoryBarrier src_barrier {};
+		src_barrier.sType                           = vk::StructureType::eImageMemoryBarrier;
+		src_barrier.pNext                           = nullptr;
+		src_barrier.srcAccessMask                   = vk::AccessFlagBits::eTransferWrite;
+		src_barrier.dstAccessMask                   = vk::AccessFlagBits::eTransferRead;
+		src_barrier.oldLayout                       = vk::ImageLayout::eTransferSrcOptimal;
+		src_barrier.newLayout                       = vk::ImageLayout::eTransferSrcOptimal;
+		src_barrier.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+		src_barrier.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+		src_barrier.image                           = image->image;
+		src_barrier.subresourceRange.aspectMask     = vk::ImageAspectFlagBits::eColor;
+		src_barrier.subresourceRange.baseMipLevel   = 0;
+		src_barrier.subresourceRange.levelCount     = 1;
+		src_barrier.subresourceRange.baseArrayLayer = 0;
+		src_barrier.subresourceRange.layerCount     = 1;
+		vk.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+		                   vk::PipelineStageFlagBits::eTransfer,
+		                   vk::DependencyFlags {}, 0, nullptr, 0, nullptr, 1, &src_barrier);
+
 		vk::BufferImageCopy region{};
 		region.bufferOffset                    = 0;
 		region.bufferRowLength                 = 0; // sikisik
@@ -228,6 +247,8 @@ void PsemuCaptureFrame(GraphicContext* ctx, const VulkanImage* image) {
 		static uint8_t s_last_sig[256];
 		static bool    s_have_last = false;
 		uint8_t sig[256];
+		uint8_t peak_luma = 0;
+		uint32_t nonzero_count = 0;
 		{
 			int k = 0;
 			for (int gy = 0; gy < 16; gy++) {
@@ -236,7 +257,10 @@ void PsemuCaptureFrame(GraphicContext* ctx, const VulkanImage* image) {
 					const uint32_t sy = (static_cast<uint32_t>(gy) * 2u + 1u) * h / 32u;
 					const uint8_t* q = px + (static_cast<size_t>(sy) * w + sx) * 4u;
 					const auto rgb=CapturePixelBgr(q,source_format);
-					sig[k++] = static_cast<uint8_t>((rgb[0] + rgb[1] + rgb[2]) / 3u); // luma
+					const auto luma = static_cast<uint8_t>((rgb[0] + rgb[1] + rgb[2]) / 3u);
+					sig[k++] = luma;
+					if (luma > peak_luma) peak_luma = luma;
+					if (luma > 0) nonzero_count++;
 				}
 			}
 		}
@@ -247,7 +271,7 @@ void PsemuCaptureFrame(GraphicContext* ctx, const VulkanImage* image) {
 				diff += static_cast<uint32_t>(d < 0 ? -d : d);
 			}
 		}
-		const bool scene_changed = p < 8 || !s_have_last || diff >= 1200; // ~ort 5/nokta * 256
+		const bool scene_changed = p < 8 || !s_have_last || diff >= 1200;
 		if (scene_changed) {
 			std::memcpy(s_last_sig, sig, sizeof(sig));
 			s_have_last = true;
@@ -256,8 +280,13 @@ void PsemuCaptureFrame(GraphicContext* ctx, const VulkanImage* image) {
 			std::snprintf(fname, sizeof(fname), "\\frame_%05llu.bmp",
 			              static_cast<unsigned long long>(seq));
 			WriteBmpDownscaled(EnsureRunDir() + fname, px, w, h, source_format);
-			std::fprintf(stderr, "[SHOT] SAHNE kare: %s%s (%ux%u, present#%llu, diff=%u, format=%u)\n",
-			             g_run_dir.c_str(), fname, w, h, static_cast<unsigned long long>(p), diff, unsigned(image->format));
+			std::fprintf(stderr, "[SHOT] SAHNE kare: %s%s (%ux%u, present#%llu, diff=%u, peak=%u, nonzero=%u/256, format=%u)\n",
+			             g_run_dir.c_str(), fname, w, h, static_cast<unsigned long long>(p), diff, unsigned(peak_luma), nonzero_count, unsigned(image->format));
+			std::fflush(stderr);
+		} else if ((p % 20ull) == 0) {
+			std::fprintf(stderr, "[SHOT] present#%llu diff=%u peak=%u nonzero=%u/256 format=%u (atlandi)\n",
+			             static_cast<unsigned long long>(p), diff, unsigned(peak_luma), nonzero_count, unsigned(image->format));
+			std::fflush(stderr);
 		}
 		VulkanUnmapMemory(ctx, &readback.memory);
 	}

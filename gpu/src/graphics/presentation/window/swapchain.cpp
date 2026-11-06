@@ -452,7 +452,7 @@ extern "C" void PsemuMetricAddPresent(uint64_t ticks);
 
 void WindowPresentFrame(PreparedFrame* frame) {
 	KYTY_PROFILER_FUNCTION();
-	{ static int s_pf = 0; if (s_pf < 5) { s_pf++;
+	{ static int s_pf = 0; s_pf++; if (s_pf <= 20 || (s_pf % 30 == 0)) {
 	  std::printf("[PRESENT-MARK] WindowPresentFrame #%d frame=%p\n", s_pf, static_cast<void*>(frame));
 	  std::fflush(stdout); } }
 

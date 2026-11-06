@@ -866,6 +866,25 @@ void BlitToSwapchain(CommandBuffer* buffer, VulkanImage* src_image,
 	SetImageLayout(vk_buffer, &swapchain_image, 0, 1, vk::ImageAspectFlagBits::eColor,
 	               vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
 
+	vk::ImageMemoryBarrier src_barrier {};
+	src_barrier.sType                           = vk::StructureType::eImageMemoryBarrier;
+	src_barrier.pNext                           = nullptr;
+	src_barrier.srcAccessMask                   = vk::AccessFlagBits::eTransferWrite;
+	src_barrier.dstAccessMask                   = vk::AccessFlagBits::eTransferRead;
+	src_barrier.oldLayout                       = vk::ImageLayout::eTransferSrcOptimal;
+	src_barrier.newLayout                       = vk::ImageLayout::eTransferSrcOptimal;
+	src_barrier.srcQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+	src_barrier.dstQueueFamilyIndex             = VK_QUEUE_FAMILY_IGNORED;
+	src_barrier.image                           = src_image->image;
+	src_barrier.subresourceRange.aspectMask     = vk::ImageAspectFlagBits::eColor;
+	src_barrier.subresourceRange.baseMipLevel   = 0;
+	src_barrier.subresourceRange.levelCount     = 1;
+	src_barrier.subresourceRange.baseArrayLayer = 0;
+	src_barrier.subresourceRange.layerCount     = 1;
+	vk_buffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+	                          vk::PipelineStageFlagBits::eTransfer,
+	                          vk::DependencyFlags {}, 0, nullptr, 0, nullptr, 1, &src_barrier);
+
 	vk::ImageBlit region {};
 	region.srcSubresource.aspectMask     = vk::ImageAspectFlagBits::eColor;
 	region.srcSubresource.mipLevel       = 0;
@@ -1025,6 +1044,7 @@ void UploadImage(GraphicContext* ctx, VulkanImage* image, const void* src_data, 
     if(src_data && regions.size()==1 && regions[0].offset<=size)
         LogVideoUploadSource(image,static_cast<const uint8_t*>(src_data)+regions[0].offset,
                              size-regions[0].offset,regions[0].pitch);
+
 	GetStagingBuffer(StagingBufferType::Texture)
 	    ->UploadToImage(ctx, image, src_data, size, regions, dst_layout);
 }

@@ -80,12 +80,14 @@ static LONG WINAPI ExceptionFilter(PEXCEPTION_POINTERS exception) {
 	} else if (exception_record->ExceptionCode == EXCEPTION_ILLEGAL_INSTRUCTION) {
 		info.type = ExceptionType::IllegalInstruction;
 	} else {
-		printf("Unhandled win exception: code=0x%08" PRIx32 ", addr=0x%016" PRIx64
+		std::fprintf(stderr, "Unhandled win exception: code=0x%08" PRIx32 ", addr=0x%016" PRIx64
 		       ", rip=0x%016" PRIx64 ", rsp=0x%016" PRIx64 ", rbp=0x%016" PRIx64 "\n",
 		       static_cast<uint32_t>(exception_record->ExceptionCode),
 		       reinterpret_cast<uint64_t>(exception_record->ExceptionAddress),
 		       exception->ContextRecord->Rip, exception->ContextRecord->Rsp,
 		       exception->ContextRecord->Rbp);
+		std::fflush(stderr);
+		std::fflush(stdout);
 		return EXCEPTION_CONTINUE_SEARCH;
 	}
 
