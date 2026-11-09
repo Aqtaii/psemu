@@ -840,44 +840,6 @@ NativeTexture(uint64_t submit_id, CommandBuffer* command_buffer,
 			image = g_render_ctx->GetTextureCache()->FindRenderTargetByRange(command_buffer,
 			                                                                 address, size.size);
 		}
-		// psemu tani: sampled texture bir RENDER TARGET alias'i olarak bulundu mu?
-		// Bulunmazsa guest bellekten yuklenir; GPU ile cizilmis bir yuzey icin bu
-		// SIYAH verir. Menude ortadaki tum icerik siyah -> GameMaker'in
-		// application surface'i (offscreen RT) boyle okunuyor olabilir.
-		{
-			static uint64_t seen_a[64] = {0}; static std::atomic<int> seen_c{0};
-			int n = seen_c.load(); bool is_new = true;
-			for (int i = 0; i < n && i < 64; i++) if (seen_a[i] == address) { is_new = false; break; }
-			if (is_new) {
-				int idx = seen_c.fetch_add(1);
-				if (idx < 64) {
-					seen_a[idx] = address;
-					// Guest bellekte gercekten piksel var mi? (Sifir ise kaynak
-					// veri yok/henuz yazilmamis -> gorunmez cizim.)
-					uint32_t nz = 0, sampled = 0;
-					if (image == nullptr && tile == 0 && !check_depth) {
-						const uint32_t* px = reinterpret_cast<const uint32_t*>(address);
-						MEMORY_BASIC_INFORMATION mbi{};
-						if (VirtualQuery(px, &mbi, sizeof(mbi)) != 0 && mbi.State == MEM_COMMIT) {
-							uint32_t lim = 4096; // ilk 16KB
-							for (uint32_t i = 0; i < lim; i++) { sampled++; if (px[i] != 0) nz++; }
-						}
-					}
-					std::fprintf(stderr, "[RT?] addr=0x%llx %ux%u tile=%u rt_alias=%s guest_px_nonzero=%u/%u\n",
-					             static_cast<unsigned long long>(address), width, height,
-					             static_cast<uint32_t>(tile),
-					             image != nullptr ? "BULUNDU(RT)" : "YOK->guest-upload",
-					             nz, sampled);
-					// Guest-upload edilen KUCUK texture'lari (sprite-font atlas'i
-					// dahil) diske dok: glyph var mi yok mu gozle gorulsun.
-					if (image == nullptr && tile == 0 && width <= 2048 && height <= 2048) {
-						extern void PsemuDumpGuestTexture(uint64_t, uint32_t, uint32_t);
-						PsemuDumpGuestTexture(address, width, height);
-					}
-					std::fflush(stderr);
-				}
-			}
-		}
         if (image != nullptr) {
             if (sampled_stencil) {
                 if (storage || !IsSupportedStencilTargetBinding(resource, descriptor, *image, view_format)) {
