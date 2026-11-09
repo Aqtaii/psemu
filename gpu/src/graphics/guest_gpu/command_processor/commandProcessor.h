@@ -9,6 +9,7 @@
 
 #include <array>
 #include <cstdint>
+#include <vector>
 
 namespace Libs::Graphics {
 
@@ -119,6 +120,8 @@ public:
 	KYTY_CLASS_NO_COPY(CommandProcessor);
 
 	void Reset();
+	void PushGraphicsState(bool clear);
+	void PopGraphicsState();
 
 	void BufferInit();
 	void BufferFlush();
@@ -231,6 +234,12 @@ public:
 	void                   SetSubmitId(uint64_t submit_id) { m_submit_id = submit_id; }
 
 private:
+	struct SavedGraphicsState {
+		HW::Context         context;
+		HW::VertexShaderInfo vertex_shader;
+		HW::PixelShaderInfo  pixel_shader;
+	};
+
 	struct Counter {
 		Common::Mutex   mutex;
 		Common::CondVar cond_var;
@@ -254,6 +263,7 @@ private:
 	HW::Context      m_ctx;
 	HW::UserConfig   m_ucfg;
 	HW::Shader       m_sh_ctx;
+	std::vector<SavedGraphicsState> m_saved_graphics_states;
 	HW::UserSgprType m_user_data_marker                 = HW::UserSgprType::Unknown;
 	uint32_t         m_index_type_and_size              = 0;
 	uint32_t         m_index_buffer_size                = 0;

@@ -2424,7 +2424,12 @@ KYTY_CP_OP_PARSER(CpOpClearState) {
 	EXIT_NOT_IMPLEMENTED(cmd_id != 0xc0001200);
 	EXIT_NOT_IMPLEMENTED((buffer[0] & ~0xfu) != 0);
 
-	cp->Reset();
+	switch (static_cast<Pm4::ClearStateCommand>(buffer[0])) {
+		case Pm4::ClearStateCommand::Push: cp->PushGraphicsState(false); break;
+		case Pm4::ClearStateCommand::Pop: cp->PopGraphicsState(); break;
+		case Pm4::ClearStateCommand::PushClear: cp->PushGraphicsState(true); break;
+		default: cp->Reset(); break;
+	}
 
 	return 1;
 }

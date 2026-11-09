@@ -999,6 +999,11 @@ public:
 
 	void Reset() { *this = Shader(); }
 
+	void SetGraphicsState(const VertexShaderInfo& vs, const PixelShaderInfo& ps) {
+		m_vs = vs;
+		m_ps = ps;
+	}
+
 	void SetEsShaderBase(uint64_t addr) { m_vs.es_regs.data_addr = addr; }
 	void SetEsShaderResource1Raw(uint32_t value) { m_vs.es_regs.resource1_raw = value; }
 	void SetLsShaderBase(uint64_t addr) { m_vs.ls_regs.data_addr = addr; }

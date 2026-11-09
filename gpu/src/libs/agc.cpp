@@ -1399,7 +1399,6 @@ int KYTY_SYSV_ABI GraphicsSuspendPoint() {
 uint32_t* KYTY_SYSV_ABI GraphicsUnknownQj7QZpgr9Uw(CommandBuffer* buf, uint32_t mode,
                                                    uint32_t value) {
 	PRINT_NAME();
-	// ResetContextState?
 	LOGF("\t mode  = 0x%08" PRIx32 "\n"
 	     "\t value = 0x%08" PRIx32 "\n",
 	     mode, value);
@@ -1410,13 +1409,21 @@ uint32_t* KYTY_SYSV_ABI GraphicsUnknownQj7QZpgr9Uw(CommandBuffer* buf, uint32_t 
 
 	buf->DbgDump();
 
-	auto* cmd = buf->AllocateDW(1);
-
+	// The AGC helper brackets internal graphics draws with push-clear and pop.
+	// Use the real CLEAR_STATE packet rather than losing the operation as padding.
+	const bool state_operation = mode >= static_cast<uint32_t>(Pm4::ClearStateCommand::Push) &&
+	                             mode <= static_cast<uint32_t>(Pm4::ClearStateCommand::PushClear);
+	auto* cmd = buf->AllocateDW(state_operation ? 2u : 1u);
 	if (cmd == nullptr) {
 		return nullptr;
 	}
 
-	cmd[0] = 0x80000000u;
+	if (state_operation) {
+		cmd[0] = KYTY_PM4(2, Pm4::IT_CLEAR_STATE, 0u);
+		cmd[1] = mode;
+	} else {
+		cmd[0] = 0x80000000u;
+	}
 
 	return cmd;
 }

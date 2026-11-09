@@ -72,6 +72,13 @@ constexpr uint32_t IT_DISPATCH_DRAW             = 0x8D;
 constexpr uint32_t IT_GET_LOD_STATS             = 0x8E;
 constexpr uint32_t IT_SET_CONTEXT_REG_INDIRECT  = 0x9F;
 
+// CLEAR_STATE command field in the second dword.
+enum class ClearStateCommand : uint32_t {
+	Push      = 1,
+	Pop       = 2,
+	PushClear = 3,
+};
+
 /* Custom codes. Implemented via IT_NOP */
 
 constexpr uint32_t R_ZERO           = 0x00;

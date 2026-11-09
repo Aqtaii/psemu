@@ -456,6 +456,7 @@ void CommandProcessor::Reset() {
 	m_sh_ctx.Reset();
 	m_ucfg.Reset();
 	m_ctx.Reset();
+	m_saved_graphics_states.clear();
 	m_index_type_and_size              = 0;
 	m_index_buffer_size                = 0;
 	m_user_data_marker                 = HW::UserSgprType::Unknown;
@@ -463,6 +464,27 @@ void CommandProcessor::Reset() {
 	m_dispatch_indirect_args_base_addr = 0;
 
 	std::memset(m_const_ram, 0, sizeof(m_const_ram));
+}
+
+void CommandProcessor::PushGraphicsState(bool clear) {
+	m_saved_graphics_states.push_back({m_ctx, m_sh_ctx.GetVs(), m_sh_ctx.GetPs()});
+	if (clear) {
+		// Clear graphics registers without resetting queue or compute state.
+		m_ctx.Reset();
+		m_sh_ctx.SetGraphicsState({}, {});
+	}
+}
+
+void CommandProcessor::PopGraphicsState() {
+	if (m_saved_graphics_states.empty()) {
+		LOGF("CLEAR_STATE: pop without a saved graphics state\n");
+		return;
+	}
+
+	const auto& saved = m_saved_graphics_states.back();
+	m_ctx = saved.context;
+	m_sh_ctx.SetGraphicsState(saved.vertex_shader, saved.pixel_shader);
+	m_saved_graphics_states.pop_back();
 }
 
 void CommandProcessor::BufferInit() {
