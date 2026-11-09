@@ -985,6 +985,21 @@ int main() {
  Require(!CanRetireBufferOwnedRenderTarget(old_target,false,true,true,true,bad_target));
  bad_target=new_target;bad_target.address=old_target.address+old_target.size;
  Require(!CanRetireBufferOwnedRenderTarget(old_target,false,true,true,true,bad_target));
+ RenderTargetInfo sampled_prefix_target{};
+ sampled_prefix_target.address=0x290d9a80000ull;sampled_prefix_target.size=0x3fc0000;
+ ImageInfo sampled_prefix{};
+ sampled_prefix.address=sampled_prefix_target.address;sampled_prefix.size=0x10000;
+ Require(IsBufferOwnedSampledTargetPrefix(sampled_prefix_target,false,true,false,true,sampled_prefix));
+ Require(!IsBufferOwnedSampledTargetPrefix(sampled_prefix_target,true,true,false,true,sampled_prefix));
+ Require(!IsBufferOwnedSampledTargetPrefix(sampled_prefix_target,false,true,true,true,sampled_prefix));
+ Require(!IsBufferOwnedSampledTargetPrefix(sampled_prefix_target,false,true,false,false,sampled_prefix));
+ Require(!IsBufferOwnedSampledTargetPrefix(sampled_prefix_target,false,false,false,true,sampled_prefix));
+ auto wrong_prefix=sampled_prefix;wrong_prefix.address+=TRACKER_PAGE_SIZE;
+ Require(!IsBufferOwnedSampledTargetPrefix(sampled_prefix_target,false,true,false,true,wrong_prefix));
+ wrong_prefix=sampled_prefix;wrong_prefix.size++;
+ Require(!IsBufferOwnedSampledTargetPrefix(sampled_prefix_target,false,true,false,true,wrong_prefix));
+ wrong_prefix=sampled_prefix;wrong_prefix.size=sampled_prefix_target.size;
+ Require(!IsBufferOwnedSampledTargetPrefix(sampled_prefix_target,false,true,false,true,wrong_prefix));
  // Full reconstructed image publication spans multiple buffer fragments but not external bytes.
  for(bool competing_gpu:{false,true}) for(bool competing_cpu:{false,true}) {
   BufferCache cache;

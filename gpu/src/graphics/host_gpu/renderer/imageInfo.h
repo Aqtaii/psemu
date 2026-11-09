@@ -1488,6 +1488,18 @@ CanRetireBufferOwnedRenderTarget(const RenderTargetInfo& cached, bool gpu_modifi
 	       ImageRangeOverlaps(cached.address, cached.size, requested.address, requested.size);
 }
 
+// A smaller sampled view can reuse the start of a retired render target after
+// ownership was transferred to its backing. Both ranges must cover whole pages.
+[[nodiscard]] inline bool
+IsBufferOwnedSampledTargetPrefix(const RenderTargetInfo& target, bool gpu_modified,
+                               bool buffer_modified, bool tracker_gpu_modified,
+                               bool same_context, const ImageInfo& sampled) {
+	return !gpu_modified && buffer_modified && !tracker_gpu_modified && same_context &&
+	       target.address != 0 && sampled.address == target.address && sampled.size != 0 &&
+	       sampled.size < target.size && target.size <= UINT64_MAX - target.address &&
+	       ((target.address | target.size | sampled.size) & (TRACKER_PAGE_SIZE - 1)) == 0;
+}
+
 [[nodiscard]] inline DepthOverlap ClassifyDepthTargetOverlap(const DepthTargetInfo& cached,
                                                              bool cached_gpu_modified,
                                                              bool cached_buffer_modified,

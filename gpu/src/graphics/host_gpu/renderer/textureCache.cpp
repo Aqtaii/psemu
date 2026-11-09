@@ -1003,11 +1003,26 @@ void TextureCache::MarkSampledAliasesCpuDirtyLocked(uint64_t vaddr, uint64_t siz
 	}
 }
 
-void TextureCache::RetireSampledTargetAliases(GraphicContext* ctx, const ImageInfo& requested) {
+bool TextureCache::RetireSampledTargetAliases(GraphicContext* ctx, const ImageInfo& requested,
+                                              bool coherent_buffer_source) {
 	std::vector<CachedImage*> retire;
-	bool                      wait_idle = false;
+	std::vector<CachedImage*> buffer_owned;
+	bool wait_idle = false;
+	bool pending_buffer_source = false;
 	for (auto* cached: FindImagesInRegionLocked(requested.address, requested.size, true)) {
 		if (cached->kind != CachedImage::Kind::RenderTarget) {
+			continue;
+		}
+		if (cached->buffer_modified && IsBufferOwnedSampledTargetPrefix(
+		        cached->target, cached->gpu_modified, cached->buffer_modified,
+		        m_memory_tracker.IsRegionGpuModified(cached->Address(), cached->Size()),
+		        cached->ctx == ctx, requested)) {
+			if (coherent_buffer_source) {
+				retire.push_back(cached);
+				buffer_owned.push_back(cached);
+			} else {
+				pending_buffer_source = true;
+			}
 			continue;
 		}
 		switch (ClassifySampledRenderTargetOverlap(requested, cached->target,
@@ -1071,7 +1086,7 @@ void TextureCache::RetireSampledTargetAliases(GraphicContext* ctx, const ImageIn
 		retire.push_back(cached);
 	}
 	if (retire.empty()) {
-		return;
+		return pending_buffer_source;
 	}
 	RequireRetirementIsolation(retire, "sampled target", requested.address, requested.size);
 	if (wait_idle) {
@@ -1126,7 +1141,20 @@ void TextureCache::RetireSampledTargetAliases(GraphicContext* ctx, const ImageIn
 		m_metadata_tracker.UntrackMemory(metadata->first, metadata->second.size);
 		m_surface_metas.erase(metadata);
 	}
+	// A stale native view is no longer needed once the sampled bytes are current.
+	// The buffer cache still owns writes outside the sampled prefix.
+	for (auto* cached: buffer_owned) {
+		cached->buffer_modified = false;
+	}
 	RetireImages(retire);
+	if (!buffer_owned.empty()) {
+		static std::atomic_uint logs {0};
+		if (logs.fetch_add(1, std::memory_order_relaxed) < 8) {
+			printf("[RT-SAMPLED-BUFFER-PREFIX] addr=0x%016" PRIx64 " bytes=0x%" PRIx64
+			       " retired=%zu\n", requested.address, requested.size, buffer_owned.size());
+		}
+	}
+	return pending_buffer_source;
 }
 
 void TextureCache::ResolveStorageImageOverlaps(CommandBuffer* command, GraphicContext* ctx,
@@ -1359,9 +1387,10 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
     if(needs_array_drain)GraphicsRunSynchronizeCommandProcessors();
     const auto recording_generation=command->GetRecordingGeneration();
 	std::lock_guard transaction(m_resource_mutex);
+	bool pending_buffer_source = false;
 	{
 		FaultSafeTextureLock lock(this, m_lock);
-		RetireSampledTargetAliases(ctx, info);
+		pending_buffer_source = RetireSampledTargetAliases(ctx, info, false);
         if(command->GetRecordingGeneration()!=recording_generation)return nullptr;
         bool reconstruct_storage=false;
         for(const auto& cached:m_images) {
@@ -1408,6 +1437,10 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
 		}
 	}
 	FaultSafeTextureLock lock(this, m_lock);
+	if (pending_buffer_source) {
+		EXIT_IF(!IsCoherentGuestImageSource(source, info.address, info.size));
+		RetireSampledTargetAliases(ctx, info, true);
+	}
 	if (HasMetaOverlapLocked(info.address, info.size) != metadata_read) {
 		EXIT("TextureCache: sampled-image metadata classification mismatch, addr=0x%016" PRIx64
 		     " size=0x%016" PRIx64 " requested=%d\n",

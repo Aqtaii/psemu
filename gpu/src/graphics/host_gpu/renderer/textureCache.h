@@ -168,7 +168,8 @@ private:
 	[[nodiscard]] CachedImage*  FindGpuReadbackPageCandidateLocked(uint64_t vaddr, uint64_t size);
 	void                        RequireNoMetaOverlapLocked(uint64_t vaddr, uint64_t size) const;
 	void                        MarkSampledAliasesCpuDirtyLocked(uint64_t vaddr, uint64_t size);
-	void RetireSampledTargetAliases(GraphicContext* ctx, const ImageInfo& requested);
+	bool RetireSampledTargetAliases(GraphicContext* ctx, const ImageInfo& requested,
+	                                bool coherent_buffer_source);
 	void ResolveStorageImageOverlaps(CommandBuffer* command, GraphicContext* ctx,
 	                                 const ImageInfo& requested, bool coherent_requested_backing);
 	void RetireStorageDepthAliasLocked(GraphicContext* ctx, const ImageInfo& requested);
