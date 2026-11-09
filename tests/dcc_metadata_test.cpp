@@ -106,5 +106,21 @@ int main() {
  keys.back()=0xff;
  CHECK(ReadDccSlices(binding.address,binding.layout,true,key_reader,&snapshot));
  CHECK(snapshot[0].kind==DccSliceKind::Unsupported);
+ // The half-resolution blend uses source alpha as the destination factor.
+ DccLayout half;
+ CHECK(ComputeDccLayout(960,540,1,8,1,&half));
+ CHECK(half.total_bytes==0x6000);
+ std::vector<uint8_t> half_keys(half.total_bytes,0x40);
+ auto half_clear=InspectDccSlice(half_keys,half.total_bytes,true);
+ CHECK(IsDccAlphaOneClear(half_clear));
+ const float previous_scene_color=0.375f;
+ CHECK(half_clear.color[0]+previous_scene_color*half_clear.color[3]==previous_scene_color);
+ CHECK(!IsDccAlphaOneClear(InspectDccSlice(half_keys,half.total_bytes,false)));
+ half_keys.back()=0xff;
+ CHECK(!IsDccAlphaOneClear(InspectDccSlice(half_keys,half.total_bytes,true)));
+ std::fill(half_keys.begin(),half_keys.end(),0);
+ CHECK(!IsDccAlphaOneClear(InspectDccSlice(half_keys,half.total_bytes,true)));
+ std::fill(half_keys.begin(),half_keys.end(),0xff);
+ CHECK(!IsDccAlphaOneClear(InspectDccSlice(half_keys,half.total_bytes,true)));
  std::puts("PASS: DCC footprints, range limits, complete-slice clears and expanded/mixed metadata");
 }

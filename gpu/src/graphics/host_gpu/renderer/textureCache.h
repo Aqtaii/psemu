@@ -61,7 +61,8 @@ public:
 	FindStorageTexture(CommandBuffer* command, GraphicContext* ctx, const ImageInfo& info,
 	                   const DccBinding* dcc = nullptr);
 	[[nodiscard]] RenderTextureVulkanImage*
-	FindRenderTarget(CommandBuffer* command, GraphicContext* ctx, const RenderTargetInfo& info);
+	FindRenderTarget(CommandBuffer* command, GraphicContext* ctx, const RenderTargetInfo& info,
+	                 const DccBinding* dcc = nullptr);
 	[[nodiscard]] DepthStencilVulkanImage*
 	FindDepthTarget(CommandBuffer* command, GraphicContext* ctx, const DepthTargetInfo& info);
 	[[nodiscard]] std::vector<VideoOutVulkanImage*>

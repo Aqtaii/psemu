@@ -1891,7 +1891,8 @@ StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   com
 
 RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*          command,
                                                          GraphicContext*         ctx,
-                                                         const RenderTargetInfo& info) {
+                                                         const RenderTargetInfo& info,
+                                                         const DccBinding* dcc) {
 	const bool standard64 = IsSupportedStandard64RenderTarget(info);
 	if (info.address == 0 || info.size == 0 || info.address >= TRACKER_ADDRESS_SIZE ||
 	    info.size > TRACKER_ADDRESS_SIZE - info.address || info.format == vk::Format::eUndefined ||
@@ -1946,7 +1947,15 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 		     " elements=0x%016" PRIx64 " bpe=%u\n",
 		     info.size, elements, info.bytes_per_element);
 	}
-	bool needs_storage_drain = false;
+	const bool inspect_dcc =
+	    dcc != nullptr && dcc->alpha_msb && info.format == vk::Format::eR16G16B16A16Sfloat &&
+	    info.levels == 1 && info.layers == 1 &&
+	    info.tile_mode == Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) &&
+	    ValidRgba16fDccBinding(*dcc, info.width, info.height) &&
+	    !ImagePageRangesOverlap(info.address, info.size, dcc->address, dcc->layout.total_bytes);
+	// The metadata fill can still be recording on the graphics command processor.
+	bool needs_storage_drain =
+	    inspect_dcc && m_buffer_cache.IsRegionGpuModified(dcc->address, dcc->layout.total_bytes);
 	{
 		std::lock_guard transaction(m_resource_mutex);
 		FaultSafeTextureLock lock(this, m_lock);
@@ -1989,7 +1998,27 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 		// queues before taking cache locks, then revalidate ownership below.
 		GraphicsRunSynchronizeCommandProcessors();
 	}
-	std::lock_guard       transaction(m_resource_mutex);
+	std::lock_guard transaction(m_resource_mutex);
+	bool alpha_one_clear = false;
+	if (inspect_dcc) {
+		const auto region = QueryRegion(dcc->address, dcc->layout.total_bytes);
+		if (!region.image_pages && !region.gpu_metadata_bytes) {
+			const bool has_buffer =
+			    m_buffer_cache.HasPageOverlap(dcc->address, dcc->layout.total_bytes);
+			const auto source = has_buffer
+			    ? m_buffer_cache.ObtainBufferForImage(dcc->address, dcc->layout.total_bytes)
+			    : BufferImageCopySource {nullptr, 0, dcc->address, dcc->layout.total_bytes, true};
+			// Publication below requires one containing buffer or no buffer overlap.
+			if ((!has_buffer || source.buffer != nullptr) &&
+			    IsCoherentGuestImageSource(source, dcc->address, dcc->layout.total_bytes)) {
+				std::vector<DccSlice> slices;
+				alpha_one_clear =
+				    ReadDccSlices(dcc->address, dcc->layout, true,
+				                  LibKernel::Memory::TryReadBacking, &slices) &&
+				    slices.size() == 1 && IsDccAlphaOneClear(slices.front());
+			}
+		}
+	}
 	BufferImageCopySource target_source {nullptr, 0, info.address, info.size, true};
 	const bool target_buffer_overlap = m_buffer_cache.HasPageOverlap(info.address, info.size);
 	if (target_buffer_overlap) {
@@ -2000,6 +2029,34 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 	}
 	FaultSafeTextureLock lock(this, m_lock);
 	RequireNoMetaOverlapLocked(info.address, info.size);
+	const auto apply_dcc_clear = [&](CachedImage& cached) {
+		if (!alpha_one_clear || !Equal(info, cached.target)) {
+			return;
+		}
+		auto* image = cached.image;
+		m_memory_tracker.ForEachUploadRange(
+		    info.address, info.size, true, [](uint64_t, uint64_t) noexcept {},
+		    [&]() noexcept {
+			    const auto vk_buffer = command->Handle();
+			    GraphicsRenderColorImageBarrier(vk_buffer, image, vk::ImageLayout::eTransferDstOptimal);
+			    const vk::ClearColorValue clear {std::array<float, 4>{0.f, 0.f, 0.f, 1.f}};
+			    const vk::ImageSubresourceRange range {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1};
+			    vk_buffer.clearColorImage(image->image, image->layout, &clear, 1, &range);
+			    GraphicsRenderColorImageBarrier(vk_buffer, image, RENDER_COLOR_IMAGE_LAYOUT);
+		    });
+		cached.gpu_modified = true;
+		cached.buffer_modified = false;
+		// Consume the clear once. Further draws must preserve the expanded native pixels.
+		m_buffer_cache.PublishImageBacking(dcc->address, dcc->layout.total_bytes);
+		const std::vector<uint8_t> expanded(dcc->layout.total_bytes, uint8_t {0xff});
+		LibKernel::Memory::WriteBacking(dcc->address, expanded.data(), expanded.size());
+		static std::atomic_uint logs {0};
+		if (logs.fetch_add(1, std::memory_order_relaxed) < 16) {
+			printf("[RT-DCC-ALPHA-CLEAR] color=0x%016" PRIx64 " metadata=0x%016" PRIx64
+			       " extent=%ux%u bytes=%u alpha=1 consumed=1\n",
+			       info.address, dcc->address, info.width, info.height, dcc->layout.total_bytes);
+		}
+	};
 	std::shared_ptr<CachedImage> match;
 	for (auto& cached: m_images) {
 		if (cached->kind != CachedImage::Kind::RenderTarget || cached->ctx != ctx ||
@@ -2030,6 +2087,7 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 			    });
 			match->buffer_modified = false;
 		}
+		apply_dcc_clear(*match);
 		command->RetainResourceUntilFence(match);
 		return static_cast<RenderTextureVulkanImage*>(match->image);
 	}
@@ -2336,6 +2394,7 @@ RenderTextureVulkanImage* TextureCache::FindRenderTarget(CommandBuffer*         
 		    });
 	}
 	cached->gpu_modified = preserve_native;
+	apply_dcc_clear(*cached);
 	auto* published=static_cast<RenderTextureVulkanImage*>(PublishImage(command,std::move(cached)));
 	for (const auto& old:buffer_owned_tiled_retired) {
 		static std::atomic_uint tiled_retire_logs{0};

@@ -81,6 +81,11 @@ inline DccSlice InspectDccSlice(std::span<const uint8_t> bytes,uint32_t expected
  if(!alpha_msb) {color[0]=alpha;color[3]=rgb;}
  return {DccSliceKind::Clear,color};
 }
+// The alpha-one clear is the constant encode used by the half-resolution
+// particle layer. Zero-filled backing is not evidence of this clear.
+inline bool IsDccAlphaOneClear(const DccSlice& slice) {
+ return slice.kind==DccSliceKind::Clear && slice.color==std::array<float,4>{0.f,0.f,0.f,1.f};
+}
 template<class Reader>
 bool ReadDccSlices(uint64_t address,const DccLayout& layout,bool alpha_msb,
                    Reader&& reader,std::vector<DccSlice>* output) {

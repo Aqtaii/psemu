@@ -263,9 +263,24 @@ void ResolveRenderColorTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 		target.tile_mode         = rt.attrib3.tile_mode;
 		target.levels            = levels;
 		target.layers            = view.image_layers;
-		auto* texture_cache      = g_render_ctx->GetTextureCache();
-		auto* buffer_vulkan =
-		    texture_cache->FindRenderTarget(buffer, g_render_ctx->GetGraphicCtx(), target);
+		auto* texture_cache = g_render_ctx->GetTextureCache();
+		DccBinding dcc {};
+		const bool constant_dcc =
+		    rt.info.dcc_compression_enable && rt.dcc.data_write_on_dcc_clear_to_reg &&
+		    rt.attrib3.dcc_pipe_aligned && rt.attrib.num_samples == 0 &&
+		    rt.attrib.num_fragments == 0 && !rt.info.fmask_compression_enable &&
+		    !rt.info.cmask_fast_clear_enable && rt.cmask.addr == 0 && rt.fmask.addr == 0 &&
+		    rt.info.channel_order == Prospero::GpuEnumValue(Prospero::ChannelOrder::kStandard) &&
+		    target.format == vk::Format::eR16G16B16A16Sfloat &&
+		    target.tile_mode == Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget) &&
+		    target.levels == 1 && target.layers == 1 && view.base_layer == 0 &&
+		    rt.view.current_mip_level == 0;
+		if (constant_dcc && rt.dcc_addr.addr != 0 &&
+		    ComputeDccLayout(width, height, 1, bytes_per_element, levels, &dcc.layout)) {
+			dcc.address = rt.dcc_addr.addr;
+		}
+		auto* buffer_vulkan = texture_cache->FindRenderTarget(
+		    buffer, g_render_ctx->GetGraphicCtx(), target, dcc.address != 0 ? &dcc : nullptr);
 		r->type          = RenderColorType::RenderTexture;
 		r->base_addr     = rt.base.addr;
 		r->vulkan_buffer = buffer_vulkan;
