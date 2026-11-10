@@ -1066,7 +1066,7 @@ bool BufferCache::PrepareAddressSnapshot(CommandBuffer* command, GraphicContext*
  };
  // ObtainBuffer owns ResourceMutex itself; never nest it beneath snapshot locks.
  GuestAddressRange blocked {};
- bool cpu_dirty=false, gpu_image=false, gpu_metadata=false;
+ bool registry_changed=false, gpu_image=false, gpu_metadata=false;
  for(unsigned attempt=0;attempt<4;++attempt) {
   BufferAddressSnapshot before;
   if(!CaptureAddressSnapshot(ctx,&before) || !filter(&before)) return false;
@@ -1075,7 +1075,6 @@ bool BufferCache::PrepareAddressSnapshot(CommandBuffer* command, GraphicContext*
    const auto alias=m_texture_cache->QueryRegion(range.guest_base,range.size);
    if(alias.gpu_image_bytes || alias.gpu_metadata_bytes) {
     blocked=range;
-    cpu_dirty=false;
     gpu_image=alias.gpu_image_bytes;
     gpu_metadata=alias.gpu_metadata_bytes;
     current=false;
@@ -1085,16 +1084,26 @@ bool BufferCache::PrepareAddressSnapshot(CommandBuffer* command, GraphicContext*
                                    false,true,false,true);
    if(command->GetRecordingGeneration()!=generation) return false;
    if(!resident.first || !resident.first->device_address) return false;
+   if(resident.first->device_address + resident.second != range.device_base) {
+    registry_changed=true;
+    current=false;
+    break;
+   }
   }
   if(!current) continue;
   BufferAddressSnapshot prepared;
   if(!CaptureAddressSnapshot(ctx,&prepared) || !filter(&prepared)) return false;
+  if(prepared.ranges != before.ranges) {
+   registry_changed=true;
+   continue;
+  }
+  // Each matching resident range was uploaded by ObtainBuffer. Later CPU
+  // writes stay tracked for the next access, as for ordinary buffer reads.
   for(const auto& range: prepared.ranges) {
    const auto alias=m_texture_cache->QueryRegion(range.guest_base,range.size);
-   cpu_dirty=IsRegionCpuModified(range.guest_base,range.size);
    gpu_image=alias.gpu_image_bytes;
    gpu_metadata=alias.gpu_metadata_bytes;
-   if(cpu_dirty || gpu_image || gpu_metadata) {
+   if(gpu_image || gpu_metadata) {
     blocked=range;
     current=false;
     break;
@@ -1113,8 +1122,8 @@ bool BufferCache::PrepareAddressSnapshot(CommandBuffer* command, GraphicContext*
   return true;
  }
  std::fprintf(stderr,"[GPU-ADDRESS-SNAPSHOT] unstable range=0x%016" PRIx64 "+0x%016" PRIx64
-              " cpu_dirty=%u gpu_image=%u gpu_metadata=%u\n",blocked.guest_base,blocked.size,
-              unsigned(cpu_dirty),unsigned(gpu_image),unsigned(gpu_metadata));
+              " registry_changed=%u gpu_image=%u gpu_metadata=%u\n",blocked.guest_base,blocked.size,
+              unsigned(registry_changed),unsigned(gpu_image),unsigned(gpu_metadata));
  return false;
 }
 
