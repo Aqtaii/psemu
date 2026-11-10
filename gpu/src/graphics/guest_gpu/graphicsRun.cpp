@@ -348,28 +348,33 @@ int Gpu::GetFrameNum() {
 }
 
 void Gpu::WaitLocked() {
-	GraphicsRing*     gfx_ring = nullptr;
-	CommandProcessor* gfx_cp   = nullptr;
-	ComputeRing*      compute_rings[64] {};
-	CommandProcessor* compute_cps[8] {};
-
-	gfx_ring = m_gfx_ring;
-	gfx_cp   = m_gfx_cp;
-	std::copy(std::begin(m_compute_ring), std::end(m_compute_ring), std::begin(compute_rings));
-	std::copy(std::begin(m_compute_cp), std::end(m_compute_cp), std::begin(compute_cps));
-
-	if (gfx_ring != nullptr) {
-		gfx_ring->WaitForIdle();
-	}
-	if (gfx_cp != nullptr) {
-		gfx_cp->BufferWait();
-	}
-	for (auto& cr: compute_rings) {
-		if (cr != nullptr) {
-			cr->WaitForIdle();
+	// An unfinished queue can wait for a label from a later submission. Let
+	// submissions proceed while the queues drain, then recheck them all while
+	// holding the admission lock before waiting for fences and touching memory.
+	const auto wait_for_ring = [this](auto* ring) {
+		g_gpu_mutex_owned = false;
+		m_mutex.Unlock();
+		ring->WaitForIdle();
+		m_mutex.Lock();
+		g_gpu_mutex_owned = true;
+	};
+	for (;;) {
+		if (m_gfx_ring != nullptr && !m_gfx_ring->IsIdle()) {
+			wait_for_ring(m_gfx_ring);
+			continue;
 		}
+		const auto busy = std::find_if(std::begin(m_compute_ring), std::end(m_compute_ring),
+		                               [](auto* ring) { return ring != nullptr && !ring->IsIdle(); });
+		if (busy == std::end(m_compute_ring)) {
+			break;
+		}
+		wait_for_ring(*busy);
 	}
-	for (auto& cp: compute_cps) {
+
+	if (m_gfx_cp != nullptr) {
+		m_gfx_cp->BufferWait();
+	}
+	for (auto* cp: m_compute_cp) {
 		if (cp != nullptr) {
 			cp->BufferWait();
 		}
@@ -824,7 +829,7 @@ GraphicsRing::CmdBatch GraphicsRing::GetCmdBatch() {
 
 	while (m_cmd_batches.empty()) {
 		m_idle = true;
-		m_idle_cond_var.Signal();
+		m_idle_cond_var.SignalAll();
 
 		m_cond_var.Wait(&m_mutex);
 	}
@@ -910,7 +915,7 @@ void ComputeRing::ThreadRun(void* data) {
 	for (;;) {
 		while (ring->m_direct_batches.empty()) {
 			ring->m_idle = true;
-			ring->m_idle_cond_var.Signal();
+			ring->m_idle_cond_var.SignalAll();
 			ring->m_cond_var.Wait(&ring->m_mutex);
 		}
 
@@ -1977,9 +1982,10 @@ GraphicsRunSubmissionLock::GraphicsRunSubmissionLock() {
 	if (g_gpu == nullptr || g_current_run_cp != nullptr || g_submission_pause_depth == UINT32_MAX) {
 		EXIT("cannot acquire GPU submission lock in the current state\n");
 	}
-	if (g_submission_pause_depth++ == 0) {
+	if (g_submission_pause_depth == 0) {
 		g_gpu->PauseSubmissions();
 	}
+	++g_submission_pause_depth;
 }
 
 GraphicsRunSubmissionLock::~GraphicsRunSubmissionLock() {
