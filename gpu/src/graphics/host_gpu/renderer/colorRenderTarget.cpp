@@ -265,7 +265,10 @@ void ResolveRenderColorTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 		target.layers            = view.image_layers;
 		auto* texture_cache = g_render_ctx->GetTextureCache();
 		DccBinding dcc {};
+		// Scope the clear to the observed half-resolution particle target until
+		// other render-target DCC layouts and transitions are verified.
 		const bool constant_dcc =
+		    width == 960 && height == 540 && rt.dcc.independent_128b_blocks &&
 		    rt.info.dcc_compression_enable && rt.dcc.data_write_on_dcc_clear_to_reg &&
 		    rt.attrib3.dcc_pipe_aligned && rt.attrib.num_samples == 0 &&
 		    rt.attrib.num_fragments == 0 && !rt.info.fmask_compression_enable &&

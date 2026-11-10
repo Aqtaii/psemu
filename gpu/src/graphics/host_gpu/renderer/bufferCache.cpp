@@ -1065,24 +1065,40 @@ bool BufferCache::PrepareAddressSnapshot(CommandBuffer* command, GraphicContext*
   return true;
  };
  // ObtainBuffer owns ResourceMutex itself; never nest it beneath snapshot locks.
+ GuestAddressRange blocked {};
+ bool cpu_dirty=false, gpu_image=false, gpu_metadata=false;
  for(unsigned attempt=0;attempt<4;++attempt) {
   BufferAddressSnapshot before;
   if(!CaptureAddressSnapshot(ctx,&before) || !filter(&before)) return false;
+  bool current=true;
   for(const auto& range: before.ranges) {
    const auto alias=m_texture_cache->QueryRegion(range.guest_base,range.size);
-   if(alias.gpu_image_bytes || alias.gpu_metadata_bytes) return false;
+   if(alias.gpu_image_bytes || alias.gpu_metadata_bytes) {
+    blocked=range;
+    cpu_dirty=false;
+    gpu_image=alias.gpu_image_bytes;
+    gpu_metadata=alias.gpu_metadata_bytes;
+    current=false;
+    break;
+   }
    const auto resident=ObtainBuffer(command,ctx,range.guest_base,range.size,
                                    false,true,false,true);
    if(command->GetRecordingGeneration()!=generation) return false;
    if(!resident.first || !resident.first->device_address) return false;
   }
+  if(!current) continue;
   BufferAddressSnapshot prepared;
   if(!CaptureAddressSnapshot(ctx,&prepared) || !filter(&prepared)) return false;
-  bool current=true;
   for(const auto& range: prepared.ranges) {
    const auto alias=m_texture_cache->QueryRegion(range.guest_base,range.size);
-   if(IsRegionCpuModified(range.guest_base,range.size) ||
-      alias.gpu_image_bytes || alias.gpu_metadata_bytes) {current=false;break;}
+   cpu_dirty=IsRegionCpuModified(range.guest_base,range.size);
+   gpu_image=alias.gpu_image_bytes;
+   gpu_metadata=alias.gpu_metadata_bytes;
+   if(cpu_dirty || gpu_image || gpu_metadata) {
+    blocked=range;
+    current=false;
+    break;
+   }
   }
   if(!current) continue;
   // GPU-dirty cached buffers are already the authoritative backing, unlike
@@ -1096,6 +1112,9 @@ bool BufferCache::PrepareAddressSnapshot(CommandBuffer* command, GraphicContext*
   *output=std::move(prepared);
   return true;
  }
+ std::fprintf(stderr,"[GPU-ADDRESS-SNAPSHOT] unstable range=0x%016" PRIx64 "+0x%016" PRIx64
+              " cpu_dirty=%u gpu_image=%u gpu_metadata=%u\n",blocked.guest_base,blocked.size,
+              unsigned(cpu_dirty),unsigned(gpu_image),unsigned(gpu_metadata));
  return false;
 }
 
