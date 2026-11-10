@@ -98,7 +98,7 @@ ImageRangeOverlap ClassifyImageRangeOverlap(uint64_t left, uint64_t left_size, u
 
 } // namespace
 
-struct TextureCache::CachedImage {
+struct TextureCache::CachedImage: std::enable_shared_from_this<CachedImage> {
 	enum class Kind {
 		Texture,
 		StorageTexture,
@@ -1374,7 +1374,7 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
     if(IsLinearRgba16ArrayBacking(info) && info.depth==2) {
         std::lock_guard transaction(m_resource_mutex);
         FaultSafeTextureLock lock(this,m_lock);
-        for(const auto& cached:m_images) {
+        for (auto* cached: FindImagesInRegionLocked(info.address, info.size, true)) {
             if(cached->kind==CachedImage::Kind::StorageTexture &&
                CanExpandLinearRgba16Array(cached->info,cached->gpu_modified,cached->buffer_modified,
                 m_memory_tracker.IsRegionGpuModified(cached->Address(),cached->Size()),
@@ -1393,7 +1393,7 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
 		pending_buffer_source = RetireSampledTargetAliases(ctx, info, false);
         if(command->GetRecordingGeneration()!=recording_generation)return nullptr;
         bool reconstruct_storage=false;
-        for(const auto& cached:m_images) {
+        for (auto* cached: FindImagesInRegionLocked(info.address, info.size, true)) {
          if(cached->kind!=CachedImage::Kind::StorageTexture)continue;
          const auto overlap=ClassifyStorageSampledOverlap(info,cached->info,TextureGetFormat(info.format),
           cached->image->format,cached->gpu_modified,cached->info.IsCpuDirty(),cached->ctx==ctx);
@@ -1446,9 +1446,10 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
 		     " size=0x%016" PRIx64 " requested=%d\n",
 		     info.address, info.size, metadata_read);
 	}
+	const auto candidates = FindImagesInRegionLocked(info.address, info.size, true);
 	std::shared_ptr<CachedImage> storage_match;
 	const auto                   requested_view_format = TextureGetFormat(info.format);
-	for (auto& cached: m_images) {
+	for (auto* cached: candidates) {
 		if (cached->kind != CachedImage::Kind::StorageTexture) {
 			continue;
 		}
@@ -1463,7 +1464,7 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
 					     "addr=0x%016" PRIx64 " size=0x%016" PRIx64 "\n",
 					     info.address, info.size);
 				}
-				storage_match = cached;
+				storage_match = cached->shared_from_this();
 				break;
 			case StorageSampledOverlap::Unsupported:
 				EXIT("TextureCache: unsupported sampled/storage image alias, "
@@ -1504,7 +1505,7 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
 		MarkSampledAliasesCpuDirtyLocked(info.address, info.size);
 	}
 	std::shared_ptr<CachedImage> match;
-	for (auto& cached: m_images) {
+	for (auto* cached: candidates) {
 		if (cached->kind != CachedImage::Kind::Texture || !Equal(info, cached->info)) {
 			continue;
 		}
@@ -1514,7 +1515,7 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
 			     info.address, info.size, match != nullptr, cached->gpu_modified,
 			     cached->ctx == ctx);
 		}
-		match = cached;
+		match = cached->shared_from_this();
 	}
 	if (match != nullptr) {
 		if (match->info.IsMaybeCpuDirty() && !match->info.IsDefinitelyCpuDirty()) {
@@ -1554,7 +1555,7 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
 		command->RetainResourceUntilFence(match);
 		return match->image;
 	}
-	for (const auto& cached: m_images) {
+	for (const auto* cached: candidates) {
 		if (cached->kind != CachedImage::Kind::Texture) {
 			if (!cached->OverlapsRange(info.address, info.size, true)) {
 				continue;

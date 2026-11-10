@@ -310,8 +310,17 @@ private:
 
 	[[nodiscard]] bool HasTrackingMembership(const Registration*                      registration,
 	                                         const typename TrackingTable::PageRange& range) const {
-		for (size_t page = range.first; page < range.last_exclusive; ++page) {
-			const auto* owners = m_tracking_pages.Find(page);
+		for (const auto& span: registration->ranges) {
+			typename TrackingTable::PageRange pages {};
+			if (!TrackingTable::TryGetPageRange(span.address, span.size, pages)) {
+				continue;
+			}
+			const auto first_shared_page = std::max(pages.first, range.first);
+			if (first_shared_page >= std::min(pages.last_exclusive, range.last_exclusive)) {
+				continue;
+			}
+			// Registration inserts this owner into every page of the span.
+			const auto* owners = m_tracking_pages.Find(first_shared_page);
 			if (owners != nullptr &&
 			    std::find(owners->begin(), owners->end(), registration) != owners->end()) {
 				return true;
