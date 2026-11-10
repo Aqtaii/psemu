@@ -28,7 +28,7 @@ static std::atomic<uint32_t> g_render_color_log_count = 0;
 void ResolveRenderColorTarget(uint64_t submit_id, CommandBuffer* buffer, const HW::Context& hw,
                               RenderColorInfo* r, uint32_t render_target_slice_offset,
                               uint32_t render_target_slot, bool ignore_target_mask,
-                              bool reuse_existing_render_texture) {
+                              bool reuse_existing_render_texture, uint64_t pixel_shader_checksum) {
 	KYTY_PROFILER_FUNCTION();
 
 	EXIT_IF(r == nullptr);
@@ -265,10 +265,14 @@ void ResolveRenderColorTarget(uint64_t submit_id, CommandBuffer* buffer, const H
 		target.layers            = view.image_layers;
 		auto* texture_cache = g_render_ctx->GetTextureCache();
 		DccBinding dcc {};
-		// Scope the clear to the observed half-resolution particle target until
-		// other render-target DCC layouts and transitions are verified.
+		// The title HUD consumes the same alpha-one clear key as the particle
+		// layer. Restrict the 4K path to the captured HUD draw and color slot.
+		constexpr uint64_t astro_hud_pixel_shader = 0x9c9bf070;
+		const bool particle_target = width == 960 && height == 540;
+		const bool title_hud_target = width == 3840 && height == 2160 && rt_slot == 0 &&
+		                              pixel_shader_checksum == astro_hud_pixel_shader;
 		const bool constant_dcc =
-		    width == 960 && height == 540 && rt.dcc.independent_128b_blocks &&
+		    (particle_target || title_hud_target) && rt.dcc.independent_128b_blocks &&
 		    rt.info.dcc_compression_enable && rt.dcc.data_write_on_dcc_clear_to_reg &&
 		    rt.attrib3.dcc_pipe_aligned && rt.attrib.num_samples == 0 &&
 		    rt.attrib.num_fragments == 0 && !rt.info.fmask_compression_enable &&

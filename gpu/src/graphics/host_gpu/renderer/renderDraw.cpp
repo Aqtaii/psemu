@@ -766,7 +766,8 @@ static bool PrepareDrawRenderState(uint64_t submit_id, CommandBuffer* buffer, HW
 		                  ctx->GetRenderTarget(slot).base.addr != 0)) {
 			ResolveRenderColorTarget(submit_id, buffer, *ctx,
 			                         &state->color_info[state->color_count],
-			                         render_target_slice_offset, slot);
+			                         render_target_slice_offset, slot, false, false,
+			                         sh_ctx->GetPs().ps_regs.chksum);
 			if (state->color_info[state->color_count].vulkan_buffer != nullptr) {
 				MarkRenderTargetGpuWritten(state->color_info[state->color_count]);
 				state->color_count++;

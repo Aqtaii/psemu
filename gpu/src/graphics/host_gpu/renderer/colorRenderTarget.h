@@ -42,7 +42,8 @@ void ResolveRenderColorTarget(uint64_t submit_id, CommandBuffer* buffer, const H
                               RenderColorInfo* r, uint32_t render_target_slice_offset = 0,
                               uint32_t render_target_slot            = UINT32_MAX,
                               bool     ignore_target_mask            = false,
-                              bool     reuse_existing_render_texture = false);
+                              bool     reuse_existing_render_texture = false,
+                              uint64_t pixel_shader_checksum           = 0);
 void MarkRenderTargetGpuWritten(const RenderColorInfo& target);
 
 } // namespace Libs::Graphics

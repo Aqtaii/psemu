@@ -122,5 +122,18 @@ int main() {
  CHECK(!IsDccAlphaOneClear(InspectDccSlice(half_keys,half.total_bytes,true)));
  std::fill(half_keys.begin(),half_keys.end(),0xff);
  CHECK(!IsDccAlphaOneClear(InspectDccSlice(half_keys,half.total_bytes,true)));
+ // The 4K HUD clear uses the same alpha key across the entire 0x48000-byte plane.
+ DccLayout hud;
+ CHECK(ComputeDccLayout(3840,2160,1,8,1,&hud));
+ CHECK(hud.total_bytes==0x48000);
+ std::vector<uint8_t> hud_keys(hud.total_bytes,0x40);
+ const auto hud_clear=InspectDccSlice(hud_keys,hud.total_bytes,true);
+ CHECK(IsDccAlphaOneClear(hud_clear));
+ // With fade weight one, the compositor computes overlay + scene * overlay alpha.
+ CHECK(hud_clear.color[0]+previous_scene_color*hud_clear.color[3]==previous_scene_color);
+ std::fill(hud_keys.begin(),hud_keys.end(),0);
+ const auto missing_hud_clear=InspectDccSlice(hud_keys,hud.total_bytes,true);
+ CHECK(!IsDccAlphaOneClear(missing_hud_clear));
+ CHECK(missing_hud_clear.color[0]+previous_scene_color*missing_hud_clear.color[3]==0.f);
  std::puts("PASS: DCC footprints, range limits, complete-slice clears and expanded/mixed metadata");
 }
