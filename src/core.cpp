@@ -4674,24 +4674,25 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 ctx->Rsp += 8;
                 return EXCEPTION_CONTINUE_EXECUTION;
             }
-            if (readable_name == "PadReadState" || readable_name == "scePadReadState" ||
-                readable_name == "PadRead" || readable_name == "scePadRead") {
+            const bool pad_read_state =
+                readable_name == "PadReadState" || readable_name == "scePadReadState";
+            if (pad_read_state || readable_name == "PadRead" || readable_name == "scePadRead") {
                 const int guest_handle = static_cast<int>(ctx->Rdi);
-                void*     data         = reinterpret_cast<void*>(ctx->Rsi);
-                int       rc           = 0;
-                // Kyty yalnizca handle==1'i kabul eder. Oyun elinde gecerli bir
-                // tutamac olmadan da okumaya calisiyor; emulator olarak bunu
-                // reddetmek yerine tek sanal kumandaya yonlendiriyoruz - aksi
-                // halde girdi hicbir zaman ulasmiyor.
-                const int handle = 1;
-                if (data != nullptr && SafeWritable(data, sizeof(Libs::Controller::PadData))) {
-                    rc = Libs::Controller::PadReadState(
-                        handle, reinterpret_cast<Libs::Controller::PadData*>(data));
+                auto* data = reinterpret_cast<Libs::Controller::PadData*>(ctx->Rsi);
+                const int count = pad_read_state ? 1 : static_cast<int>(ctx->Rdx);
+                constexpr int pad_error_invalid_arg = -2137915391; // 0x80920001
+                int rc = pad_error_invalid_arg;
+                // The fast path routes guest handles to the single virtual controller.
+                constexpr int handle = 1;
+                if (data != nullptr && count >= 1 && count <= 64 &&
+                    SafeWritable(data, sizeof(*data) * static_cast<size_t>(count))) {
+                    // PadRead returns the number of samples, while PadReadState returns a status.
+                    rc = pad_read_state ? Libs::Controller::PadReadState(handle, data)
+                                        : Libs::Controller::PadRead(handle, data, count);
                 }
-                (void)guest_handle;
                 static std::atomic<uint64_t> s_pad_reads{0};
                 const uint64_t pr  = s_pad_reads.fetch_add(1) + 1;
-                const uint32_t btn = (data != nullptr) ? *reinterpret_cast<uint32_t*>(data) : 0u;
+                const uint32_t btn = (rc >= 0) ? data->buttons : 0u;
                 // Buton BASILI oldugu her okumayi yaz. Eskiden yalnizca her
                 // 600. okuma yazdiriliyordu (~saniyede bir); bir tus vurusu
                 // ~100 ms surdugu icin basimlar neredeyse hep kaciriliyor ve
@@ -4700,7 +4701,7 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 const bool log_press = (btn != 0) && (s_btn_logs.fetch_add(1) < 40);
                 if (pr <= 3 || (pr % 600ull) == 0 || log_press) {
                     printf("[PAD] okuma=%llu misafir_handle=%d data=%p rc=%d butonlar=0x%08x\n",
-                           static_cast<unsigned long long>(pr), guest_handle, data, rc, btn);
+                           static_cast<unsigned long long>(pr), guest_handle, static_cast<void*>(data), rc, btn);
                     fflush(stdout);
                 }
                 ctx->Rax = static_cast<uint64_t>(static_cast<int64_t>(rc));
