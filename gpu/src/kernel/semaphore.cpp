@@ -49,11 +49,17 @@ private:
 	enum class Status { Set, Deleted };
 
 	struct WaitingThread {
-		int    id         = 0;
-		int    priority   = 700;
-		int    need_count = 0;
-		Result result     = Result::TimedOut;
-		bool   ready      = false;
+		void Complete(Result value) {
+			result = value;
+			ready = true;
+			changed.Signal();
+		}
+
+		Common::CondVar changed;
+		int             priority   = 700;
+		int             need_count = 0;
+		Result          result     = Result::TimedOut;
+		bool            ready      = false;
 	};
 
 	void AddWaiter(WaitingThread* waiter);
@@ -61,7 +67,6 @@ private:
 	void WakeWaiters();
 
 	Common::Mutex               m_mutex;
-	Common::CondVar             m_cond_var;
 	std::string                 m_name;
 	Status                      m_status = Status::Set;
 	std::vector<WaitingThread*> m_waiting_threads;
@@ -84,12 +89,9 @@ KernelSemaPrivate::~KernelSemaPrivate() {
 
 	for (auto* waiter: m_waiting_threads) {
 		if (!waiter->ready) {
-			waiter->result = Result::Deleted;
-			waiter->ready  = true;
+			waiter->Complete(Result::Deleted);
 		}
 	}
-
-	m_cond_var.SignalAll();
 
 	while (!m_waiting_threads.empty()) {
 		m_mutex.Unlock();
@@ -119,12 +121,9 @@ KernelSemaPrivate::Result KernelSemaPrivate::Cancel(int set_count, int* num_wait
 
 	for (auto* waiter: m_waiting_threads) {
 		if (!waiter->ready) {
-			waiter->result = Result::Canceled;
-			waiter->ready  = true;
+			waiter->Complete(Result::Canceled);
 		}
 	}
-
-	m_cond_var.SignalAll();
 
 	return Result::Ok;
 }
@@ -143,8 +142,6 @@ KernelSemaPrivate::Result KernelSemaPrivate::Signal(int signal_count) {
 	m_count += signal_count;
 
 	WakeWaiters();
-
-	m_cond_var.SignalAll();
 
 	return Result::Ok;
 }
@@ -173,8 +170,7 @@ void KernelSemaPrivate::WakeWaiters() {
 	for (auto* waiter: m_waiting_threads) {
 		if (!waiter->ready && waiter->need_count <= m_count) {
 			m_count -= waiter->need_count;
-			waiter->result = Result::Ok;
-			waiter->ready  = true;
+			waiter->Complete(Result::Ok);
 		}
 	}
 }
@@ -201,8 +197,6 @@ KernelSemaPrivate::Result KernelSemaPrivate::Wait(int need_count, uint32_t* ptr_
 	Common::Timer t;
 	t.Start();
 
-	int id = Common::Thread::GetThreadIdUnique();
-
 	if (m_count >= need_count) {
 		m_count -= need_count;
 		if (ptr_micros != nullptr) {
@@ -216,7 +210,6 @@ KernelSemaPrivate::Result KernelSemaPrivate::Wait(int need_count, uint32_t* ptr_
 	}
 
 	WaitingThread waiter {};
-	waiter.id         = id;
 	waiter.priority   = (m_fifo_order ? 0 : Libs::LibKernel::PthreadGetCurrentPriorityForKernel());
 	waiter.need_count = need_count;
 	AddWaiter(&waiter);
@@ -229,9 +222,9 @@ KernelSemaPrivate::Result KernelSemaPrivate::Wait(int need_count, uint32_t* ptr_
 		}
 
 		if (infinitely) {
-			m_cond_var.WaitFor(&m_mutex, SIGNAL_APC_POLL_MICROS);
+			waiter.changed.WaitFor(&m_mutex, SIGNAL_APC_POLL_MICROS);
 		} else {
-			m_cond_var.WaitFor(&m_mutex, micros - elapsed);
+			waiter.changed.WaitFor(&m_mutex, micros - elapsed);
 		}
 
 		m_mutex.Unlock();
