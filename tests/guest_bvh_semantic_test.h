@@ -66,6 +66,7 @@ struct BvhRecorder {
       else if(op==37)set(Bits(std::fmin(fa,Float(a(6)))));
       else if(op==40)set(Bits(std::fmax(fa,Float(a(6)))));
       else if(op==38)set(std::min(uint32_t(a(5)),uint32_t(a(6))));
+      else if(op==GLSLstd450FindUMsb)set(uint32_t(std::bit_width(uint32_t(a(5))))-1);
       else if(op==62)v[x[2]]={Bits(Half(uint32_t(a(5))&65535)),Bits(Half(uint32_t(a(5))>>16)),0,0};
       else throw std::runtime_error("unexpected BVH GLSL instruction");break;}
     case 80:{V result{};for(size_t i=3;i<x.size();++i)result[i-3]=a(i);v[x[2]]=result;break;}
@@ -76,6 +77,7 @@ struct BvhRecorder {
     case 61:if(x.size()!=6 || x[4]!=2 || x[5]!=4)throw std::runtime_error("unaligned BVH read");
       set(memory.at(a(3)));++reads;break;
     case 128:set(x[1]==100003?a(3)+a(4):uint32_t(a(3)+a(4)));break;
+    case 130:set(x[1]==100003?a(3)-a(4):uint32_t(a(3)-a(4)));break;
     case 132:set(x[1]==100003?a(3)*a(4):uint32_t(a(3)*a(4)));break;
     case 127:set(Bits(-f(3)));break;
     case 129:set(Bits(f(3)+f(4)));break;
@@ -176,7 +178,35 @@ inline void TestGuestBvhSemantics() {
   put(4+child*3+pair,std::array<uint32_t,3>{0x3c003c00,0x40003c00,0x40004000}[pair]);
  auto halves=code.Run(args,memory,lookup,reads,faults);
  if(halves!=V{10,11,12,13})throw std::runtime_error("half boxes mismatch");
- std::puts("PASS: production BVH triangle hit/miss, invalid and NaN rays, full/half boxes, sorting, discontiguous backing and missing blocks");
+ // Type 6 stores implicit child pointers and outward-rounded shared-exponent bounds.
+ std::array<uint32_t,16> shared{};
+ const auto pack=[&](uint32_t offset,uint32_t count,uint32_t value) {
+  for(uint32_t bit=0;bit<count;++bit)
+   shared[(offset+bit)/32]|=((value>>bit)&1u)<<((offset+bit)%32);
+ };
+ pack(0,29,0x100);
+ for(uint32_t axis=0;axis<3;++axis)pack(56+axis*8,8,127);
+ const std::array types{5u,2u,4u,6u};
+ for(uint32_t child=0;child<4;++child) {
+  pack(29+child*3,3,types[child]);
+  pack(41+child*2,2,child==3?3u:0u);
+  for(uint32_t axis=0;axis<3;++axis) {
+   pack(80+18*(6*child+axis),18,0x10000u-child*0x3000u);
+   pack(80+18*(6*child+axis+3),18,0x1ffffu);
+  }
+ }
+ for(uint32_t word=0;word<16;++word)put(word,shared[word]);
+ args[1][0]=6;
+ args[0][1]&=~0x80000000u;
+ if(code.Run(args,memory,no_second,reads,faults)!=V{0x805,0x812,0x834,UINT32_MAX})
+  throw std::runtime_error("shared-exponent boxes decoded the wrong child pointers");
+ args[0][1]|=0x80000000u;
+ if(code.Run(args,memory,no_second,reads,faults)!=V{0x834,0x812,0x805,UINT32_MAX})
+  throw std::runtime_error("shared-exponent boxes sorted the wrong child pointers");
+ args[3]={BvhRecorder::Bits(3),BvhRecorder::Bits(3),BvhRecorder::Bits(3),0};
+ if(code.Run(args,memory,no_second,reads,faults)!=V{UINT32_MAX,UINT32_MAX,UINT32_MAX,UINT32_MAX})
+  throw std::runtime_error("shared-exponent boxes returned a false hit");
+ std::puts("PASS: production BVH triangles, full/half/shared-exponent boxes, hit/miss, sorting and guarded backing");
 }
 
 inline void TestGuestScalarBufferSemantics() {

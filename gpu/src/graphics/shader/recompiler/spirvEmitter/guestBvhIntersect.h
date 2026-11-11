@@ -272,17 +272,127 @@ std::array<uint32_t, 6> Box(Context<B>& s, uint32_t first, uint32_t second,
 	return result;
 }
 
+struct BoxSet {
+	std::array<std::array<uint32_t, 6>, 4> bounds;
+	std::array<uint32_t, 4> children;
+};
+
 template<class B>
-uint32_t Boxes(Context<B>& s, uint32_t first, uint32_t second, uint32_t half,
+uint32_t SharedExponentBound(Context<B>& s, uint32_t field, uint32_t exponent, bool minimum) {
+	const auto u = TypeU32(s), b = TypeBool(s);
+	const auto zero = ConstantU32(s, 0), one = ConstantU32(s, 1);
+	const auto sign = Binary(s, spv::OpShiftRightLogical, u, field, ConstantU32(s, 17));
+	const auto magnitude = Binary(s, spv::OpBitwiseAnd, u, field, ConstantU32(s, 0x1ffff));
+	const auto away = Binary(s, minimum ? spv::OpINotEqual : spv::OpIEqual, b, sign, zero);
+	// FindUMsb returns -1 for zero, yielding a shift of up to 17 for that case.
+	const auto msb = EmitGlsl<GLSLstd450FindUMsb, ValueType::U32>(s, magnitude);
+	const auto leading = Binary(s, spv::OpISub, u, ConstantU32(s, 16), msb);
+	const auto down = EmitGlsl<GLSLstd450UMin, ValueType::U32>(s, leading, exponent);
+	const auto scaled_exponent = Binary(s, spv::OpISub, u, exponent, down);
+	const auto shift = Binary(s, spv::OpIAdd, u, ConstantU32(s, 7), down);
+	const auto pad = Binary(s, spv::OpISub, u,
+	    Binary(s, spv::OpShiftLeftLogical, u, one, shift), one);
+	const auto round = Binary(s, spv::OpLogicalAnd, b, away,
+	    Binary(s, spv::OpINotEqual, b, scaled_exponent, ConstantU32(s, 0xff)));
+	const auto shifted = Binary(s, spv::OpShiftLeftLogical, u, magnitude, shift);
+	const auto max_mantissa = ConstantU32(s, 0x7fffff);
+	const auto mantissa = Binary(s, spv::OpBitwiseAnd, u,
+	    Binary(s, spv::OpBitwiseOr, u, shifted, Select(s, u, round, pad, zero)), max_mantissa);
+	const auto is_zero = Binary(s, spv::OpIEqual, b, magnitude, zero);
+	const auto result_mantissa = Select(s, u, is_zero,
+	    Select(s, u, away, max_mantissa, zero), mantissa);
+	const auto result_exponent = Select(s, u, is_zero,
+	    Select(s, u, away, scaled_exponent, zero), scaled_exponent);
+	const auto sign_bits = Binary(s, spv::OpShiftLeftLogical, u, sign, ConstantU32(s, 31));
+	const auto exponent_bits = Binary(s, spv::OpShiftLeftLogical, u, result_exponent, ConstantU32(s, 23));
+	return Unary(s, spv::OpBitcast, TypeF32(s), Binary(s, spv::OpBitwiseOr, u,
+	    Binary(s, spv::OpBitwiseOr, u, sign_bits, exponent_bits), result_mantissa));
+}
+
+template<class B>
+BoxSet DecodeSharedExponentBoxes(Context<B>& s, uint32_t first) {
+	// PS5 type 6 layout from Jetsku/KytyPS5 f9e19582, GPL-2.0.
+	// The 64-byte node packs child types, occupancy, three exponents and signed bounds.
+	const auto u = TypeU32(s), b = TypeBool(s);
+	std::array<uint32_t, 16> words;
+	for (uint32_t i = 0; i < words.size(); ++i)
+		words[i] = NodeWord(s, first, ConstantU32(s, i));
+	const auto field = [&](uint32_t offset, uint32_t count) {
+		const auto word = offset / 32, shift = offset % 32;
+		auto bits = Binary(s, spv::OpShiftRightLogical, u, words[word], ConstantU32(s, shift));
+		if (shift + count > 32)
+			bits = Binary(s, spv::OpBitwiseOr, u, bits, Binary(s, spv::OpShiftLeftLogical, u,
+			    words[word + 1], ConstantU32(s, 32 - shift)));
+		return Binary(s, spv::OpBitwiseAnd, u, bits, ConstantU32(s, (1u << count) - 1u));
+	};
+	const auto equal = [&](uint32_t lhs, uint32_t rhs) {
+		return Binary(s, spv::OpIEqual, b, lhs, ConstantU32(s, rhs));
+	};
+	std::array<uint32_t, 3> exponents;
+	for (uint32_t axis = 0; axis < 3; ++axis)
+		exponents[axis] = field(56 + axis * 8, 8);
+	BoxSet boxes;
+	auto running = field(0, 29);
+	for (uint32_t child = 0; child < 4; ++child) {
+		const auto type = field(29 + child * 3, 3);
+		const auto empty = equal(field(41 + child * 2, 2), 3);
+		const auto pointer = Binary(s, spv::OpBitwiseOr, u, type,
+		    Binary(s, spv::OpShiftLeftLogical, u, running, ConstantU32(s, 3)));
+		boxes.children[child] = Select(s, u, empty, ConstantU32(s, ~0u), pointer);
+		const auto two_units = Binary(s, spv::OpLogicalOr, b, equal(type, 3),
+		    Binary(s, spv::OpLogicalOr, b, equal(type, 5), equal(type, 6)));
+		const auto units = Select(s, u, equal(type, 2), ConstantU32(s, 4),
+		    Select(s, u, two_units, ConstantU32(s, 2), ConstantU32(s, 1)));
+		running = Binary(s, spv::OpIAdd, u, running, units);
+		for (uint32_t component = 0; component < 6; ++component) {
+			const auto bound = field(80 + 18 * (6 * child + component), 18);
+			boxes.bounds[child][component] =
+			    SharedExponentBound(s, bound, exponents[component % 3], component < 3);
+		}
+	}
+	return boxes;
+}
+
+template<class B>
+uint32_t Boxes(Context<B>& s, uint32_t first, uint32_t second, uint32_t half, uint32_t shared_exp,
                uint32_t grow, uint32_t sort, uint32_t extent, const Vec3& origin, const Vec3& inverse) {
 	const auto f = TypeF32(s), u = TypeU32(s), b = TypeBool(s);
+	const auto packed_label = s.builder.AllocateId(), normal_label = s.builder.AllocateId();
+	const auto merge = s.builder.AllocateId();
+	AddFunction(s, spv::OpSelectionMerge, merge, 0);
+	AddFunction(s, spv::OpBranchConditional, shared_exp, packed_label, normal_label);
+	EmitLabel(s, packed_label);
+	const auto packed = DecodeSharedExponentBoxes(s, first);
+	AddFunction(s, spv::OpBranch, merge);
+	EmitLabel(s, normal_label);
+	BoxSet normal;
+	for (uint32_t child = 0; child < 4; ++child) {
+		normal.bounds[child] = Box(s, first, second, half, child);
+		normal.children[child] = NodeWord(s, first, ConstantU32(s, child));
+	}
+	const auto normal_exit = s.current_label;
+	AddFunction(s, spv::OpBranch, merge);
+	EmitLabel(s, merge);
+
+	BoxSet boxes;
+	for (uint32_t child = 0; child < 4; ++child) {
+		boxes.children[child] = s.builder.AllocateId();
+		AddFunction(s, spv::OpPhi, u, boxes.children[child], packed.children[child], packed_label,
+		            normal.children[child], normal_exit);
+		for (uint32_t component = 0; component < 6; ++component) {
+			const auto value = s.builder.AllocateId();
+			AddFunction(s, spv::OpPhi, f, value, packed.bounds[child][component], packed_label,
+			            normal.bounds[child][component], normal_exit);
+			boxes.bounds[child][component] = value;
+		}
+	}
 	const auto zero = ConstantF32Value(s, 0.0f);
 	std::array<uint32_t, 4> depths, indices;
 	Vec3 forward;
 	for (uint32_t axis = 0; axis < 3; ++axis)
 		forward[axis] = Binary(s, spv::OpFOrdGreaterThanEqual, b, inverse[axis], zero);
 	for (uint32_t child = 0; child < 4; ++child) {
-		const auto box = Box(s, first, second, half, child);
+		const auto& box = boxes.bounds[child];
 		Vec3 near, far;
 		for (uint32_t axis = 0; axis < 3; ++axis) {
 			const auto lo = Binary(s, spv::OpFMul, f,
@@ -307,10 +417,12 @@ uint32_t Boxes(Context<B>& s, uint32_t first, uint32_t second, uint32_t half,
 		    Binary(s, spv::OpFOrdLessThan, b, entry, extent));
 		hit = Binary(s, spv::OpLogicalAnd, b, hit,
 		    Binary(s, spv::OpFOrdLessThanEqual, b, entry, grown));
+		const auto valid_child = Binary(s, spv::OpINotEqual, b, boxes.children[child], ConstantU32(s, ~0u));
+		hit = Binary(s, spv::OpLogicalAnd, b, hit, valid_child);
 		depths[child] = Unary(s, spv::OpBitcast, u, Select(s, f, hit,
 		    Select(s, f, Binary(s, spv::OpFOrdGreaterThan, b, entry, zero), entry, zero),
 		    ConstantF32(s, 0x7f800000)));
-		indices[child] = Select(s, u, hit, NodeWord(s, first, ConstantU32(s, child)), ConstantU32(s, ~0u));
+		indices[child] = Select(s, u, hit, boxes.children[child], ConstantU32(s, ~0u));
 	}
 	// A select network keeps the original child order when sorting is disabled.
 	constexpr std::array<std::pair<uint32_t, uint32_t>, 5> network {{{0,1}, {2,3}, {0,2}, {1,3}, {1,2}}};
@@ -368,6 +480,7 @@ void DefineBvhIntersect(Context<B>& s) {
 	const auto triangle = Binary(s, spv::OpULessThan, b, kind, ConstantU32(s, 4));
 	const auto full = Binary(s, spv::OpIEqual, b, kind, ConstantU32(s, 5));
 	const auto half = Binary(s, spv::OpIEqual, b, kind, ConstantU32(s, 4));
+	const auto shared_exp = Binary(s, spv::OpIEqual, b, kind, ConstantU32(s, 6));
 	const auto bary = Binary(s, spv::OpINotEqual, b, and_bits(words[3], 0x01000000), ConstantU32(s, 0));
 	const auto sort = Binary(s, spv::OpINotEqual, b, and_bits(words[1], 0x80000000), ConstantU32(s, 0));
 	const auto grow = and_bits(shr(words[1], 23), 0xff);
@@ -385,7 +498,7 @@ void DefineBvhIntersect(Context<B>& s) {
 	const auto require = [&](uint32_t condition) {
 		valid = Binary(s, spv::OpLogicalAnd, b, valid, condition);
 	};
-	require(Binary(s, spv::OpULessThanEqual, b, kind, ConstantU32(s, 5)));
+	require(Binary(s, spv::OpULessThanEqual, b, kind, ConstantU32(s, 6)));
 	require(Binary(s, spv::OpULessThanEqual, b, last_index,
 	               PackU64(s, words[2], and_bits(words[3], 0x3ff))));
 	require(Binary(s, spv::OpULessThan, b, last_address, ConstantU64(s, uint64_t {1} << 48)));
@@ -422,7 +535,7 @@ void DefineBvhIntersect(Context<B>& s) {
 			const auto tri_exit = s.current_label;
 			AddFunction(s,spv::OpBranch, merge);
 			EmitLabel(s, box_label);
-			const auto box_value = Boxes(s, first, second, half, grow, sort, extent, origin, inverse);
+			const auto box_value = Boxes(s, first, second, half, shared_exp, grow, sort, extent, origin, inverse);
 			const auto box_exit = s.current_label;
 			AddFunction(s,spv::OpBranch, merge);
 			EmitLabel(s, merge);
