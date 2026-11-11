@@ -1231,9 +1231,14 @@ bool BufferCache::IsCachedRegionCpuModified(uint64_t vaddr, uint64_t size) {
  if (vaddr == 0 || size == 0 || size > UINT64_MAX - vaddr) {
   EXIT("BufferCache: invalid cached CPU ownership query\n");
  }
- for (const auto& [address, cached]: m_buffers) {
-  const auto begin = std::max(vaddr, address);
-  const auto end = std::min(vaddr + size, address + cached->size);
+ // Native owners are disjoint. Only the preceding owner can start
+ // outside the query and still intersect it.
+ auto owner = m_buffers.upper_bound(vaddr);
+ if (owner != m_buffers.begin()) --owner;
+ const auto limit = vaddr + size;
+ for (; owner != m_buffers.end() && owner->first < limit; ++owner) {
+  const auto begin = std::max(vaddr, owner->first);
+  const auto end = std::min(limit, owner->first + owner->second->size);
   if (begin < end && m_memory_tracker.IsRegionCpuModified(begin, end - begin)) return true;
  }
  return false;
@@ -1580,12 +1585,14 @@ bool BufferCache::HasPageOverlap(uint64_t vaddr, uint64_t size) {
 		     vaddr, size);
 	}
 	FaultSafeCacheLock lock(this, m_mutex);
-	for (const auto& [address, cached]: m_buffers) {
-		if (PageOverlaps(vaddr, size, address, cached->size)) {
-			return true;
-		}
+	const auto first_page = vaddr & ~(TRACKER_PAGE_SIZE - 1);
+	const auto next = m_buffers.lower_bound(first_page);
+	if (next != m_buffers.end() && PageOverlaps(vaddr, size, next->first, next->second->size)) {
+		return true;
 	}
-	return false;
+	if (next == m_buffers.begin()) return false;
+	const auto previous = std::prev(next);
+	return PageOverlaps(vaddr, size, previous->first, previous->second->size);
 }
 
 bool BufferCache::IsRegionGpuModified(uint64_t vaddr, uint64_t size) {
