@@ -1232,20 +1232,41 @@ static void ConvertRenderTargetTyped(uint32_t width, uint32_t height, uint32_t p
 				    (static_cast<uint64_t>(block_row) * p->blocks_per_row + block_column) *
 				    p->elements_per_block;
 
+				if (block_base >= p->count) {
+					continue;
+				}
+				// The XOR swizzle stays within the 64 KiB block. Only a clipped
+				// final block needs per-element tiled bounds checks.
+				const uint64_t tile_count = p->count - block_base;
+				const bool full_tile = tile_count >= p->elements_per_block;
 				for (uint32_t y = 0; y < copy_height; y++) {
 					const uint64_t linear_row =
 					    static_cast<uint64_t>(block_y + y) * p->pitch + block_x;
-					for (uint32_t x = 0; x < copy_width; x++) {
-						const uint64_t linear_index = linear_row + x;
-						const uint64_t tiled_index =
-						    block_base + (p->x_elements[x] ^ p->y_elements[y] ^ block_y_element);
-						if (linear_index < p->count && tiled_index < p->count) {
+					if (linear_row >= p->count) {
+						break;
+					}
+					const uint32_t row_width = static_cast<uint32_t>(
+					    std::min<uint64_t>(copy_width, p->count - linear_row));
+					const uint32_t y_element = p->y_elements[y] ^ block_y_element;
+					auto copy_row = [&]<bool clipped>() {
+						for (uint32_t x = 0; x < row_width; x++) {
+							const uint32_t tile_offset = p->x_elements[x] ^ y_element;
+							if constexpr (clipped) {
+								if (tile_offset >= tile_count) {
+									continue;
+								}
+							}
 							if constexpr (tiled_to_linear) {
-								p->dst[linear_index] = p->src[tiled_index];
+								p->dst[linear_row + x] = p->src[block_base + tile_offset];
 							} else {
-								p->dst[tiled_index] = p->src[linear_index];
+								p->dst[block_base + tile_offset] = p->src[linear_row + x];
 							}
 						}
+					};
+					if (full_tile) {
+						copy_row.template operator()<false>();
+					} else {
+						copy_row.template operator()<true>();
 					}
 				}
 			}
