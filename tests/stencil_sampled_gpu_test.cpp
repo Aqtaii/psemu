@@ -115,8 +115,9 @@ int main(int argc,char** argv){try{
     VK_IMAGE_USAGE_SAMPLED_BIT|VK_IMAGE_USAGE_TRANSFER_SRC_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT);
   auto depth_in=v.MakeBuffer(n*4,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
   auto stencil_in=v.MakeBuffer(n,VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-  auto depth_out=v.MakeBuffer(n*4,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
-  auto stencil_out=v.MakeBuffer(n,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+  constexpr uint32_t depth_pitch=w+32,stencil_pitch=w+64;
+  constexpr size_t depth_offset=256,stencil_offset=depth_offset+size_t(depth_pitch)*h*4+128;
+  auto planes=v.MakeBuffer(stencil_offset-256+size_t(stencil_pitch)*h,VK_BUFFER_USAGE_TRANSFER_DST_BIT);
   auto result=v.MakeBuffer(n*20,VK_BUFFER_USAGE_STORAGE_BUFFER_BIT);
   auto* depth=reinterpret_cast<float*>(depth_in.map+256);
   for(uint32_t y=0;y<h;++y)for(uint32_t x=0;x<w;++x){
@@ -173,8 +174,12 @@ int main(int argc,char** argv){try{
   vkCmdBindDescriptorSets(v.command,VK_PIPELINE_BIND_POINT_COMPUTE,v.layout,0,1,&set,0,nullptr);vkCmdDispatch(v.command,w/8,h/8,1);
   v.Transition(image,both,VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
     VK_ACCESS_SHADER_READ_BIT,VK_ACCESS_TRANSFER_READ_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
-  vkCmdCopyImageToBuffer(v.command,image.handle,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,depth_out.handle,1,&dcopy);
-  vkCmdCopyImageToBuffer(v.command,image.handle,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,stencil_out.handle,1,&scopy);
+  VkBufferImageCopy plane_copies[]={dcopy,scopy};
+  plane_copies[0].bufferOffset=depth_offset;
+  plane_copies[0].bufferRowLength=depth_pitch;
+  plane_copies[1].bufferOffset=stencil_offset;
+  plane_copies[1].bufferRowLength=stencil_pitch;
+  vkCmdCopyImageToBuffer(v.command,image.handle,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,planes.handle,2,plane_copies);
   v.Transition(image,both,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_DEPTH_STENCIL_READ_ONLY_OPTIMAL,
     VK_ACCESS_TRANSFER_READ_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
   VkMemoryBarrier host{VK_STRUCTURE_TYPE_MEMORY_BARRIER};host.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT|VK_ACCESS_TRANSFER_WRITE_BIT;host.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
@@ -184,11 +189,18 @@ int main(int argc,char** argv){try{
    for(size_t c=0;c<4;++c)CHECK(words[i*5+c]==stencil_in.map[256+i]);
    CHECK(words[i*5+4]==std::bit_cast<uint32_t>(depth[i]));
   }
-  CHECK(!std::memcmp(depth_in.map+256,depth_out.map+256,n*4));
-  CHECK(!std::memcmp(stencil_in.map+256,stencil_out.map+256,n));
+  for(uint32_t y=0;y<h;++y){
+   const size_t depth_row=depth_offset+size_t(y)*depth_pitch*4;
+   const size_t stencil_row=stencil_offset+size_t(y)*stencil_pitch;
+   CHECK(!std::memcmp(depth+size_t(y)*w,planes.map+depth_row,w*4));
+   CHECK(!std::memcmp(stencil_in.map+256+size_t(y)*w,planes.map+stencil_row,w));
+   for(uint32_t i=w*4;i<depth_pitch*4;++i)CHECK(planes.map[depth_row+i]==0xa5);
+   for(uint32_t i=w;i<stencil_pitch;++i)CHECK(planes.map[stencil_row+i]==0xa5);
+  }
+  for(size_t i=stencil_offset-128;i<stencil_offset;++i)CHECK(planes.map[i]==0xa5);
   for(const auto& b:v.buffers)Guards(b);
   vkDestroySampler(v.device,sampler,nullptr);
-  std::printf("PASS S8 native sampled view: 2073600 spatial uint texels, RRRR swizzle, simultaneous depth sampling, immutable D32/S8 planes, exterior guards device=%s\n",v.props.deviceName);
+  std::printf("PASS S8 native sampled view: 2073600 spatial uint texels, RRRR swizzle, simultaneous depth sampling, batched D32/S8 readback, row padding and exterior guards device=%s\n",v.props.deviceName);
  }
  CHECK(validation_issues.load()==0);puts("PASS active Vulkan validation: 0 warnings/errors");return 0;
 }catch(const std::exception&e){std::fprintf(stderr,"FAIL stencil sampled Vulkan: %s\n",e.what());return 1;}}

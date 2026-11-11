@@ -29,6 +29,7 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -3688,23 +3689,34 @@ void TextureCache::ReconstructDepthStencilForBufferLocked(CachedImage& cached,
 			}
 		}
 	}
+	const uint32_t stencil_format = Prospero::GpuEnumValue(Prospero::BufferFormat::k8UInt);
+	const uint32_t stencil_pitch =
+	    TileGetTexturePitch(stencil_format, info.width, 1, info.tile_mode);
+	EXIT_IF(info.size > UINT32_MAX || info.size % 4 != 0);
+	const std::array<ImageBufferCopy, 2> regions {{
+	    {.offset = 0, .pitch = info.pitch, .width = info.width, .height = info.height,
+	     .aspect = vk::ImageAspectFlagBits::eDepth},
+	    {.offset = static_cast<uint32_t>(info.size), .pitch = stencil_pitch,
+	     .width = info.width, .height = info.height, .aspect = vk::ImageAspectFlagBits::eStencil},
+	}};
+	const uint64_t readback_size = info.size + info.stencil_size;
+	auto linear = std::make_unique_for_overwrite<uint8_t[]>(readback_size);
 	Transfer::WaitForGraphicsIdle(cached.ctx);
+	// The two aspects have disjoint staging ranges and share one transfer and fence.
+	Transfer::DownloadImage(cached.ctx, linear.get(), readback_size, regions, cached.image,
+	                        cached.image->layout);
 	std::array<std::vector<uint8_t>, 2> backing;
-	for (uint32_t plane = 0; plane < 2; plane++) {
+	for (uint32_t plane = 0; plane < backing.size(); plane++) {
 		const uint64_t plane_address = plane == 0 ? info.address : info.stencil_address;
 		const uint64_t plane_size = plane == 0 ? info.size : info.stencil_size;
-		const uint32_t format = plane == 0 ? info.guest_format : Prospero::GpuEnumValue(Prospero::BufferFormat::k8UInt);
-		const uint32_t pitch = TileGetTexturePitch(format, info.width, 1, info.tile_mode);
-		const auto aspect = plane == 0 ? vk::ImageAspectFlagBits::eDepth : vk::ImageAspectFlagBits::eStencil;
-		std::vector<uint8_t> linear(plane_size, 0);
-		const auto regions = Transfer::MakeLayeredImageBufferCopies(1, plane_size, pitch, info.width, info.height, aspect);
-		Transfer::DownloadImage(cached.ctx, linear.data(), plane_size, regions, cached.image, cached.image->layout);
+		const uint32_t format = plane == 0 ? info.guest_format : stencil_format;
 		backing[plane].resize(plane_size);
 		if (!LibKernel::Memory::TryReadBacking(plane_address, backing[plane].data(), plane_size)) {
 			EXIT("TextureCache: cannot preserve depth/stencil backing padding\n");
 		}
-		TileConvertLinearToTiledDepthPreservePadding(backing[plane].data(), linear.data(), format,
-		                                           info.width, info.height, pitch, plane_size);
+		TileConvertLinearToTiledDepthPreservePadding(
+		    backing[plane].data(), linear.get() + regions[plane].offset, format,
+		    info.width, info.height, regions[plane].pitch, plane_size);
 	}
 	m_buffer_cache.ReconstructImageBackingPair(info.address, info.size, info.stencil_address,
 	    info.stencil_size, [&] {
