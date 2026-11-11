@@ -406,7 +406,12 @@ private:
 			m_buffer.usage           = usage;
 			m_buffer.memory.property = vk::MemoryPropertyFlagBits::eHostVisible |
 			                           vk::MemoryPropertyFlagBits::eHostCoherent;
-			VulkanCreateBuffer(ctx, size, &m_buffer);
+			// Downloaded images are copied from mapped staging memory by the CPU.
+			const vk::MemoryPropertyFlags preferred_memory =
+			    usage == vk::BufferUsageFlagBits::eTransferDst
+			        ? vk::MemoryPropertyFlagBits::eHostCached
+			        : vk::MemoryPropertyFlags {};
+			VulkanCreateBuffer(ctx, size, &m_buffer, preferred_memory);
 			m_capacity = size;
 
 			VulkanMapMemory(ctx, &m_buffer.memory, &m_mapped_data);

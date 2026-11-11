@@ -117,7 +117,8 @@ void VulkanLogMemoryBudget(GraphicContext* ctx) {
 	}
 }
 
-void VulkanCreateBuffer(GraphicContext* ctx, uint64_t size, VulkanBuffer* buffer) {
+void VulkanCreateBuffer(GraphicContext* ctx, uint64_t size, VulkanBuffer* buffer,
+                        vk::MemoryPropertyFlags preferred_memory) {
 	KYTY_PROFILER_FUNCTION();
 	EXIT_IF(ctx == nullptr || ctx->allocator == nullptr || buffer == nullptr ||
 	        buffer->buffer != nullptr || buffer->memory.allocation != nullptr || size == 0);
@@ -136,6 +137,7 @@ void VulkanCreateBuffer(GraphicContext* ctx, uint64_t size, VulkanBuffer* buffer
 	VmaAllocationCreateInfo alloc_info {};
 	alloc_info.requiredFlags =
 	    static_cast<vk::MemoryPropertyFlags::MaskType>(buffer->memory.property);
+	alloc_info.preferredFlags = static_cast<vk::MemoryPropertyFlags::MaskType>(preferred_memory);
 
 	vk::Buffer::CType native_buffer = VK_NULL_HANDLE;
 	const auto        result        = static_cast<vk::Result>(vmaCreateBuffer(

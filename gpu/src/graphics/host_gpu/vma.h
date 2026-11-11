@@ -17,7 +17,8 @@ uint64_t VulkanNextMemoryUniqueId();
 void     VulkanTrackAllocation(const VulkanMemory* memory);
 void     VulkanUntrackAllocation(const VulkanMemory* memory);
 void     VulkanLogMemoryBudget(GraphicContext* ctx);
-void     VulkanCreateBuffer(GraphicContext* ctx, uint64_t size, VulkanBuffer* buffer);
+void     VulkanCreateBuffer(GraphicContext* ctx, uint64_t size, VulkanBuffer* buffer,
+                            vk::MemoryPropertyFlags preferred_memory = {});
 void     VulkanDeleteBuffer(GraphicContext* ctx, VulkanBuffer* buffer);
 bool     VulkanCreateImage(GraphicContext* ctx, const vk::ImageCreateInfo& image_info,
                            VulkanImage* image);
