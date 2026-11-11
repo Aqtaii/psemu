@@ -2095,7 +2095,12 @@ void EmitFloatExtInst(EmitterState* state, const IR::Instruction& inst, uint32_t
 		    {OpFMul, state->float_type, scaled, src, ConstantF32(state, 0x40c90fdbu)});
 		src = scaled;
 	}
-	const bool astro_rsq=ext_inst==GlslInverseSqrt && AstroNormalizationShader(state->program->instruction_code_hash);
+	const auto shader_hash = state->program->instruction_code_hash;
+	// The normal downsample encodes a cleared G-buffer normal as (0.5, 0.5).
+	// Its rsq feeds three multiplies, which would otherwise compute 0 * infinity.
+	const bool astro_rsq = ext_inst == GlslInverseSqrt &&
+	    (AstroNormalizationShader(shader_hash) ||
+	     (shader_hash == AstroResizeNormalHash && inst.pc == 0x000000b0u));
 	uint32_t valid=0;
 	if(astro_rsq) {valid=AstroPositiveFinite(state,src);src=EmitFSelectValue(state,valid,src,ConstantF32(state,0x3f800000u));}
 	const auto f32 = state->builder.AllocateId();
