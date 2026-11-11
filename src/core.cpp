@@ -1,4 +1,5 @@
 #include "core.h"
+#include "mspaceArena.h"
 #include "native_atomic_guard.h"
 #include "guest_stub_memory.h"
 #include "guest_file_stat.h"
@@ -610,15 +611,20 @@ static size_t LookupAllocSize(void* p) {
     return (it == g_alloc_sizes.end()) ? 0 : it->second;
 }
 
-// Only exact, live host allocations may enter the Windows aligned heap.
+static bool MspaceReuseEnabled();
+static bool FreeMappedMspaceAllocation(void* p);
+
+// Exact, live host allocations use the Windows aligned heap.
 // Mspace bump allocations have size records too, but are guest-owned.
 static bool FreeHostAllocation(void* p) {
     if (!p) return false;
+    bool host_owned;
     {
         std::lock_guard<std::mutex> lock(g_alloc_size_mutex);
-        if (g_host_allocations.erase(p) == 0) return false;
-        g_alloc_sizes.erase(p);
+        host_owned = g_host_allocations.erase(p) != 0;
+        if (host_owned) g_alloc_sizes.erase(p);
     }
+    if (!host_owned) return MspaceReuseEnabled() && FreeMappedMspaceAllocation(p);
     _aligned_free(p);
     return true;
 }
@@ -731,24 +737,41 @@ struct MspaceInfo {
     uint64_t base = 0;   // sceLibcMspaceCreate'e verilen bellek
     uint64_t cap  = 0;   // kapasite
     uint64_t used = 0;   // bump ofseti
+    std::unique_ptr<MspaceArena> reusable;
 };
 static std::mutex g_mspace_mtx;
 static std::map<uint64_t, MspaceInfo> g_mspace;
 
+static bool MspaceReuseEnabled() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("PSEMU_MSPACE_REUSE");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    return enabled;
+}
+
 static void MspaceRemember(uint64_t handle, uint64_t base, uint64_t cap) {
     std::lock_guard<std::mutex> lock(g_mspace_mtx);
-    // AYNI TABAN iki kez kaydedilirse ikincisini bolgesiz birak. Astro Bot
-    // ayni bellek uzerine ic ice mspace kuruyor (olculdu: base=0x...340000
-    // hem cap=0xb800000 hem cap=0x200000 ile). Ikisine de ayni bolgeden
-    // dagitsaydik birbirlerinin uzerine yazarlardi; bu durumda ikincisi
-    // guvenli host yigin yoluna duser.
-    for (const auto& kv : g_mspace) {
-        if (kv.second.base == base && base != 0) {
+    const bool reuse = MspaceReuseEnabled();
+    if (reuse && cap > UINT64_MAX - base) {
+        g_mspace[handle] = MspaceInfo{0, cap, 0};
+        return;
+    }
+    // Two arenas must never hand out the same guest bytes. Astro creates
+    // nested handles on the same backing. Keep those handles on the host heap.
+    for (const auto& [other_handle, other] : g_mspace) {
+        const bool same_base = base != 0 && other.base == base;
+        const bool overlaps = reuse && base != 0 && cap != 0 && other.reusable &&
+                              base < other.base + other.cap && other.base < base + cap;
+        if (same_base || overlaps) {
             g_mspace[handle] = MspaceInfo{0, cap, 0};
             return;
         }
     }
     g_mspace[handle] = MspaceInfo{base, cap, 0};
+    if (reuse && base != 0 && cap != 0) {
+        g_mspace[handle].reusable = std::make_unique<MspaceArena>(base, cap);
+    }
 }
 
 static uint64_t MspaceCapacity(uint64_t handle) {
@@ -760,10 +783,27 @@ static uint64_t MspaceCapacity(uint64_t handle) {
                                                         : (256ull * 1024 * 1024);
 }
 
-static uint64_t MspaceUsed(uint64_t handle) {
+static std::pair<uint64_t, uint64_t> MspaceUsage(uint64_t handle) {
     std::lock_guard<std::mutex> lock(g_mspace_mtx);
-    auto it = g_mspace.find(handle);
-    return (it != g_mspace.end()) ? it->second.used : 0;
+    const auto it = g_mspace.find(handle);
+    if (it == g_mspace.end()) return {};
+    const auto& arena = it->second;
+    if (arena.reusable) return {arena.reusable->Peak(), arena.reusable->Used()};
+    return {arena.used, arena.used};
+}
+
+static bool FreeMappedMspaceAllocation(void* p) {
+    const auto address = reinterpret_cast<uint64_t>(p);
+    std::lock_guard<std::mutex> lock(g_mspace_mtx);
+    for (auto& [handle, info] : g_mspace) {
+        if (info.reusable && info.reusable->Release(address)) {
+            // Clear the size record before the arena lock permits reuse of the address.
+            std::lock_guard<std::mutex> sizes(g_alloc_size_mutex);
+            g_alloc_sizes.erase(p);
+            return true;
+        }
+    }
+    return false;
 }
 
 // Tutamac GERCEK bir bellek bolgesi uzerine kurulduysa tahsisi O BOLGENIN
@@ -778,6 +818,9 @@ static void* MspaceBumpAlloc(uint64_t handle, size_t n, size_t align) {
         return nullptr;
     }
     MspaceInfo& m = it->second;
+    if (m.reusable) {
+        return reinterpret_cast<void*>(m.reusable->Allocate(n, align));
+    }
     uint64_t p = (m.base + m.used + align - 1) & ~(uint64_t)(align - 1);
     uint64_t end = p + n;
     if (end > m.base + m.cap) return nullptr; // havuz doldu
@@ -4277,9 +4320,9 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                         *reinterpret_cast<uint32_t*>(st + 4) = 0;  // reserved
                         *reinterpret_cast<uint64_t*>(st + 8)  = cap; // maxSystemSize
                         *reinterpret_cast<uint64_t*>(st + 16) = cap; // currentSystemSize
-                        const uint64_t used = MspaceUsed(ctx->Rdi);
-                        *reinterpret_cast<uint64_t*>(st + 24) = used; // maxInuseSize
-                        *reinterpret_cast<uint64_t*>(st + 32) = used; // currentInuseSize
+                        const auto [peak, used] = MspaceUsage(ctx->Rdi);
+                        *reinterpret_cast<uint64_t*>(st + 24) = peak;
+                        *reinterpret_cast<uint64_t*>(st + 32) = used;
                     }
                     rv = 0;
                 } else if (readable_name == "sceLibcMspaceDestroy") {
@@ -4314,11 +4357,17 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                     // Tutamac GERCEK bir bolge uzerine kurulduysa (GPU Onion
                     // havuzu gibi) tahsisi ORADAN yap: oyun bu isaretcileri
                     // GPU'ya veriyor ve havuz araliginda olmalarini bekliyor.
-                    // Realloc'ta eski veriyi tasimak gerektigi icin bump
-                    // yolunu yalnizca yeni tahsislerde kullaniyoruz.
-                    if (old_p == nullptr) {
+                    // The reusable arena can replace a live allocation and reclaim
+                    // the old range after copying. Legacy bump allocation stays malloc-only.
+                    if (old_p == nullptr || MspaceReuseEnabled()) {
                         if (void* gp = MspaceBumpAlloc(ctx->Rdi, n ? n : 16, align)) {
                             memset(gp, 0, n ? n : 16);
+                            if (old_p != nullptr) {
+                                const size_t previous_size = LookupAllocSize(old_p);
+                                const size_t copy_size = (std::min)(previous_size, n);
+                                if (copy_size != 0) std::memcpy(gp, old_p, copy_size);
+                                FreeHostAllocation(old_p);
+                            }
                             RegisterAllocSize(gp, n, false);
                             rv = reinterpret_cast<uint64_t>(gp);
                             goto mspace_done;
