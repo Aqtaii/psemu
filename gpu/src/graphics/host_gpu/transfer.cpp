@@ -578,17 +578,13 @@ static void SetImageLayout(vk::CommandBuffer buffer, VulkanImage* dst_image, uin
 		default: break;
 	}
 
-	auto src_stages = static_cast<vk::PipelineStageFlags>(
-	    vk::PipelineStageFlagBits::eTopOfPipe | vk::PipelineStageFlagBits::eTransfer |
-	    vk::PipelineStageFlagBits::eColorAttachmentOutput |
-	    vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eEarlyFragmentTests |
-	    vk::PipelineStageFlagBits::eLateFragmentTests | vk::PipelineStageFlagBits::eHost);
-	auto dest_stages = static_cast<vk::PipelineStageFlags>(
-	    vk::PipelineStageFlagBits::eTransfer | vk::PipelineStageFlagBits::eVertexShader |
-	    vk::PipelineStageFlagBits::eFragmentShader | vk::PipelineStageFlagBits::eComputeShader |
-	    vk::PipelineStageFlagBits::eColorAttachmentOutput |
-	    vk::PipelineStageFlagBits::eEarlyFragmentTests |
-	    vk::PipelineStageFlagBits::eLateFragmentTests);
+	const auto src_stages = vk::PipelineStageFlagBits::eTopOfPipe |
+	                        vk::PipelineStageFlagBits::eTransfer |
+	                        vk::PipelineStageFlagBits::eAllGraphics |
+	                        vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eHost;
+	const auto dest_stages = vk::PipelineStageFlagBits::eTransfer |
+	                         vk::PipelineStageFlagBits::eAllGraphics |
+	                         vk::PipelineStageFlagBits::eComputeShader;
 
 	buffer.pipelineBarrier(src_stages, dest_stages, vk::DependencyFlags {}, 0, nullptr, 0, nullptr,
 	                       1, &image_memory_barrier);
@@ -1047,6 +1043,14 @@ void UploadImage(GraphicContext* ctx, VulkanImage* image, const void* src_data, 
 
 	GetStagingBuffer(StagingBufferType::Texture)
 	    ->UploadToImage(ctx, image, src_data, size, regions, dst_layout);
+}
+
+void RecordImageUpload(CommandBuffer* command, VulkanBuffer* src_buffer, VulkanImage* dst_image,
+                       const BufferImageCopy& region, vk::ImageLayout dst_layout) {
+	const auto regions = std::span<const BufferImageCopy>(&region, 1);
+	RecordBufferToImageCopy(*command, *src_buffer, *dst_image, ConvertBufferImageCopies(regions),
+	                        GetTransferAspects(*dst_image, region.aspect), dst_image->layout,
+	                        dst_layout);
 }
 
 void CopyImageImmediate(GraphicContext* ctx, std::span<const ImageImageCopy> regions,

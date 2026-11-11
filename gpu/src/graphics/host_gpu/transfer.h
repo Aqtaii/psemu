@@ -99,6 +99,8 @@ void UploadImage(GraphicContext* ctx, DepthStencilVulkanImage* dst_image, const 
                  uint64_t size, uint32_t src_pitch, vk::ImageAspectFlags aspect);
 void UploadImage(GraphicContext* ctx, VulkanImage* dst_image, const void* src_data, uint64_t size,
                  std::span<const BufferImageCopy> regions, vk::ImageLayout dst_layout);
+void RecordImageUpload(CommandBuffer* command, VulkanBuffer* src_buffer, VulkanImage* dst_image,
+                       const BufferImageCopy& region, vk::ImageLayout dst_layout);
 void CopyImageImmediate(GraphicContext* ctx, std::span<const ImageImageCopy> regions,
                         VulkanImage* dst_image, vk::ImageLayout dst_layout);
 void DownloadImage(GraphicContext* ctx, void* dst_data, uint64_t size, uint32_t dst_pitch,

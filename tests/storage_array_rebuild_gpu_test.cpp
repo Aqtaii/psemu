@@ -11,7 +11,9 @@
 #define CHECK(x) do{if(!(x))throw std::runtime_error(#x);}while(0)
 #define VKOK(x) CHECK((x)==VK_SUCCESS)
 int main(int argc,char** argv){try{
- CHECK(argc==2);std::ifstream file(argv[1],std::ios::binary|std::ios::ate);CHECK(file);
+ CHECK(argc==2 || (argc==3 && std::strcmp(argv[2],"gpu-snapshot")==0));
+ const bool gpu_snapshot=argc==3;
+ std::ifstream file(argv[1],std::ios::binary|std::ios::ate);CHECK(file);
  const auto shader_bytes=size_t(file.tellg());CHECK(shader_bytes && shader_bytes%4==0);
  std::vector<uint32_t> code(shader_bytes/4);file.seekg(0);file.read(reinterpret_cast<char*>(code.data()),shader_bytes);CHECK(file);
  VkApplicationInfo app{VK_STRUCTURE_TYPE_APPLICATION_INFO};app.apiVersion=VK_API_VERSION_1_2;
@@ -44,14 +46,35 @@ int main(int argc,char** argv){try{
  auto begin=[&]{VkCommandBufferBeginInfo info{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};VKOK(vkBeginCommandBuffer(command,&info));};
  auto submit=[&]{VKOK(vkEndCommandBuffer(command));VkSubmitInfo info{VK_STRUCTURE_TYPE_SUBMIT_INFO};info.commandBufferCount=1;info.pCommandBuffers=&command;VKOK(vkQueueSubmit(queue,1,&info,VK_NULL_HANDLE));VKOK(vkQueueWaitIdle(queue));};
  auto image_barrier=[&](VkImage image,uint32_t layers,VkImageLayout before,VkImageLayout after,VkAccessFlags source,VkAccessFlags target,VkPipelineStageFlags source_stage,VkPipelineStageFlags target_stage){VkImageMemoryBarrier b{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};b.oldLayout=before;b.newLayout=after;b.srcAccessMask=source;b.dstAccessMask=target;b.srcQueueFamilyIndex=b.dstQueueFamilyIndex=VK_QUEUE_FAMILY_IGNORED;b.image=image;b.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,layers};vkCmdPipelineBarrier(command,source_stage,target_stage,0,0,nullptr,0,nullptr,1,&b);};
- begin();image_barrier(old_image.handle,1,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,0,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
- VkClearColorValue clear{};clear.float32[0]=0.25f;clear.float32[1]=0.5f;clear.float32[2]=clear.float32[3]=1.f;const VkImageSubresourceRange one_layer{VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};vkCmdClearColorImage(command,old_image.handle,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,&clear,1,&one_layer);
- image_barrier(old_image.handle,1,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_TRANSFER_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
- VkBufferImageCopy prefix{};prefix.bufferRowLength=width;prefix.bufferImageHeight=height;prefix.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};prefix.imageExtent={width,height,1};vkCmdCopyImageToBuffer(command,old_image.handle,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,input.handle,1,&prefix);
- VkMemoryBarrier host{VK_STRUCTURE_TYPE_MEMORY_BARRIER};host.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;host.dstAccessMask=VK_ACCESS_HOST_READ_BIT;vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&host,0,nullptr,0,nullptr);submit();
- for(size_t i=0;i<slice/4;++i)CHECK(input.words[i]==(i%2?0x3c003c00u:0x38003400u));
- for(size_t i=slice/4;i<payload/4;++i)CHECK(input.words[i]==0x3c003a00u);
- for(size_t i=payload/4;i<bytes/4;++i)CHECK(input.words[i]==0xdeadbeefu);
+ const VkImageSubresourceRange one_layer{VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,1};
+ auto produce_prefix=[&] {
+  image_barrier(old_image.handle,1,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                0,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
+  VkClearColorValue clear{};
+  clear.float32[0]=0.25f;
+  clear.float32[1]=0.5f;
+  clear.float32[2]=clear.float32[3]=1.f;
+  vkCmdClearColorImage(command,old_image.handle,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,&clear,1,&one_layer);
+  image_barrier(old_image.handle,1,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_TRANSFER_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
+ };
+ VkBufferImageCopy prefix{};
+ prefix.bufferRowLength=width;
+ prefix.bufferImageHeight=height;
+ prefix.imageSubresource={VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};
+ prefix.imageExtent={width,height,1};
+ VkMemoryBarrier host{VK_STRUCTURE_TYPE_MEMORY_BARRIER};
+ host.dstAccessMask=VK_ACCESS_HOST_READ_BIT;
+ if (!gpu_snapshot) {
+  begin();
+  produce_prefix();
+  vkCmdCopyImageToBuffer(command,old_image.handle,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,input.handle,1,&prefix);
+  host.srcAccessMask=VK_ACCESS_TRANSFER_WRITE_BIT;
+  vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_HOST_BIT,
+                       0,1,&host,0,nullptr,0,nullptr);
+  submit();
+  for(size_t i=0;i<slice/4;++i)CHECK(input.words[i]==(i%2?0x3c003c00u:0x38003400u));
+ }
  VkImageViewCreateInfo vci{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};vci.image=expanded.handle;vci.viewType=VK_IMAGE_VIEW_TYPE_2D_ARRAY;vci.format=VK_FORMAT_R16G16B16A16_SFLOAT;vci.subresourceRange={VK_IMAGE_ASPECT_COLOR_BIT,0,1,0,2};VkImageView view;VKOK(vkCreateImageView(device,&vci,nullptr,&view));
  VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};sci.magFilter=sci.minFilter=VK_FILTER_NEAREST;sci.mipmapMode=VK_SAMPLER_MIPMAP_MODE_NEAREST;sci.addressModeU=sci.addressModeV=sci.addressModeW=VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;VkSampler sampler;VKOK(vkCreateSampler(device,&sci,nullptr,&sampler));
  VkDescriptorSetLayoutBinding bindings[]={{0,VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr},{1,VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,1,VK_SHADER_STAGE_COMPUTE_BIT,nullptr}};VkDescriptorSetLayoutCreateInfo slci{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};slci.bindingCount=2;slci.pBindings=bindings;VkDescriptorSetLayout set_layout;VKOK(vkCreateDescriptorSetLayout(device,&slci,nullptr,&set_layout));
@@ -60,13 +83,38 @@ int main(int argc,char** argv){try{
  VkPipelineLayoutCreateInfo plci{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};plci.setLayoutCount=1;plci.pSetLayouts=&set_layout;VkPipelineLayout pipeline_layout;VKOK(vkCreatePipelineLayout(device,&plci,nullptr,&pipeline_layout));VkShaderModuleCreateInfo smci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};smci.codeSize=shader_bytes;smci.pCode=code.data();VkShaderModule shader;VKOK(vkCreateShaderModule(device,&smci,nullptr,&shader));VkComputePipelineCreateInfo cpci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};cpci.stage={VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,nullptr,0,VK_SHADER_STAGE_COMPUTE_BIT,shader,"main",nullptr};cpci.layout=pipeline_layout;VkPipeline pipeline;VKOK(vkCreateComputePipelines(device,VK_NULL_HANDLE,1,&cpci,nullptr,&pipeline));
  VKOK(vkResetCommandPool(device,pool,0));begin();image_barrier(expanded.handle,2,VK_IMAGE_LAYOUT_UNDEFINED,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,0,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
  VkMemoryBarrier upload{VK_STRUCTURE_TYPE_MEMORY_BARRIER};upload.srcAccessMask=VK_ACCESS_HOST_WRITE_BIT|VK_ACCESS_TRANSFER_WRITE_BIT;upload.dstAccessMask=VK_ACCESS_TRANSFER_READ_BIT;vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_HOST_BIT|VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,0,1,&upload,0,nullptr,0,nullptr);
- std::array<VkBufferImageCopy,2> copies{prefix,prefix};copies[1].bufferOffset=slice;copies[1].imageSubresource.baseArrayLayer=1;vkCmdCopyBufferToImage(command,input.handle,expanded.handle,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,2,copies.data());
+ auto tail=prefix;
+ tail.bufferOffset=slice;
+ tail.imageSubresource.baseArrayLayer=1;
+ if (gpu_snapshot) {
+  produce_prefix();
+  vkCmdCopyBufferToImage(command,input.handle,expanded.handle,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&tail);
+  VkImageCopy gpu_prefix{};
+  gpu_prefix.srcSubresource=prefix.imageSubresource;
+  gpu_prefix.dstSubresource=prefix.imageSubresource;
+  gpu_prefix.extent=prefix.imageExtent;
+  vkCmdCopyImage(command,old_image.handle,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                 expanded.handle,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,1,&gpu_prefix);
+  image_barrier(old_image.handle,1,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                VK_ACCESS_TRANSFER_READ_BIT,VK_ACCESS_TRANSFER_WRITE_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT);
+  const VkClearColorValue poison{};
+  vkCmdClearColorImage(command,old_image.handle,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,&poison,1,&one_layer);
+ } else {
+  const std::array<VkBufferImageCopy,2> copies{prefix,tail};
+  vkCmdCopyBufferToImage(command,input.handle,expanded.handle,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,2,copies.data());
+ }
  image_barrier(expanded.handle,2,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,VK_ACCESS_TRANSFER_WRITE_BIT,VK_ACCESS_SHADER_READ_BIT,VK_PIPELINE_STAGE_TRANSFER_BIT,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT);
  vkCmdBindPipeline(command,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline);vkCmdBindDescriptorSets(command,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline_layout,0,1,&set,0,nullptr);vkCmdDispatch(command,(width+7)/8,(height+7)/8,2);
  host.srcAccessMask=VK_ACCESS_SHADER_WRITE_BIT;host.dstAccessMask=VK_ACCESS_HOST_READ_BIT;vkCmdPipelineBarrier(command,VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,VK_PIPELINE_STAGE_HOST_BIT,0,1,&host,0,nullptr,0,nullptr);submit();
  for(size_t i=0;i<payload/4;++i)CHECK(output.words[i]==(i<slice/4?(i%2?0x3c003c00u:0x38003400u):0x3c003a00u));
+ if (gpu_snapshot) {
+  for(size_t i=0;i<slice/4;++i)CHECK(input.words[i]==0x30003000u);
+ }
+ for(size_t i=slice/4;i<payload/4;++i)CHECK(input.words[i]==0x3c003a00u);
  for(size_t i=payload/4;i<bytes/4;++i)CHECK(output.words[i]==0xdeadbeefu && input.words[i]==0xdeadbeefu);
- std::printf("[STORAGE-ARRAY-REBUILD-GPU] device=%s RGBA16F10240x320 layers1to2 gpu_prefix=%llu cpu_tail=%llu sampled_all_texels=1 guards_preserved=1 fixture_shader=GLSL Astro=not-executed\n",properties.deviceName,(unsigned long long)slice,(unsigned long long)slice);
+ std::printf("[STORAGE-ARRAY-REBUILD-GPU] device=%s mode=%s RGBA16F10240x320 layers1to2 gpu_prefix=%llu cpu_tail=%llu sampled_all_texels=1 guards_preserved=1\n",
+             properties.deviceName,gpu_snapshot?"gpu-snapshot":"backing-round-trip",
+             (unsigned long long)slice,(unsigned long long)slice);
  vkDestroyPipeline(device,pipeline,nullptr);vkDestroyShaderModule(device,shader,nullptr);vkDestroyPipelineLayout(device,pipeline_layout,nullptr);vkDestroyDescriptorPool(device,descriptor_pool,nullptr);vkDestroyDescriptorSetLayout(device,set_layout,nullptr);vkDestroySampler(device,sampler,nullptr);vkDestroyImageView(device,view,nullptr);vkDestroyCommandPool(device,pool,nullptr);
  for(auto image:{old_image,expanded}){vkDestroyImage(device,image.handle,nullptr);vkFreeMemory(device,image.memory,nullptr);}for(auto b:{input,output}){vkUnmapMemory(device,b.memory);vkDestroyBuffer(device,b.handle,nullptr);vkFreeMemory(device,b.memory,nullptr);}vkDestroyDevice(device,nullptr);vkDestroyInstance(instance,nullptr);return 0;
  }catch(const std::exception& e){std::fprintf(stderr,"[STORAGE-ARRAY-REBUILD-GPU] FAIL %s\n",e.what());return 1;}}

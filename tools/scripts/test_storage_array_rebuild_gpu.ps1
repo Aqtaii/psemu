@@ -10,8 +10,12 @@ try{
  if($LASTEXITCODE){throw 'Array rebuild SPIR-V validation failed'}
  & clang-cl /nologo /std:c++20 /O2 /EHsc /MD "/I$env:VULKAN_SDK\Include" "$root\tests\storage_array_rebuild_gpu_test.cpp" /Fe:storage_array_rebuild_gpu_test.exe /link "/LIBPATH:$env:VULKAN_SDK\Lib" vulkan-1.lib
  if($LASTEXITCODE){throw 'Array rebuild GPU fixture compilation failed'}
- $gpuLog=& .\storage_array_rebuild_gpu_test.exe storage_array_rebuild_gpu.spv 2>&1
- $gpuExit=$LASTEXITCODE
- $gpuLog|Write-Output
- if($gpuExit -ne 0 -or ($gpuLog|Select-String 'Validation Error|VUID-|Validation Warning')){throw 'Array rebuild GPU regression or validation failed'}
+ foreach($mode in @('backing-round-trip','gpu-snapshot')){
+  $testArgs=@('storage_array_rebuild_gpu.spv')
+  if($mode -eq 'gpu-snapshot'){$testArgs+=$mode}
+  $gpuLog=& .\storage_array_rebuild_gpu_test.exe @testArgs 2>&1
+  $gpuExit=$LASTEXITCODE
+  $gpuLog|Write-Output
+  if($gpuExit -ne 0 -or ($gpuLog|Select-String 'Validation Error|VUID-|Validation Warning')){throw "Array rebuild GPU regression or validation failed ($mode)"}
+ }
 }finally{Pop-Location}

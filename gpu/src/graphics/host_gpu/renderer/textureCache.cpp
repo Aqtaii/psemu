@@ -21,6 +21,7 @@
 #include "graphics/host_gpu/renderer/renderTargetBarriers.h"
 #include "graphics/host_gpu/renderer/resourceMutex.h"
 #include "graphics/host_gpu/transfer.h"
+#include "graphics/host_gpu/vma.h"
 #include "graphics/host_gpu/vulkanCommon.h"
 #include "kernel/memory.h"
 
@@ -116,6 +117,8 @@ struct TextureCache::CachedImage: std::enable_shared_from_this<CachedImage> {
 	bool             buffer_modified     = false;
 	bool             stencil_initialized = false;
 	bool             registered          = false;
+	// Negative after a storage backing has been bound on more than one queue.
+	int              storage_queue       = -1;
 	DccBinding       dcc {};
 
 	~CachedImage() {
@@ -1374,13 +1377,76 @@ VulkanImage* TextureCache::FindTexture(CommandBuffer* command, GraphicContext* c
     if(IsLinearRgba16ArrayBacking(info) && info.depth==2) {
         std::lock_guard transaction(m_resource_mutex);
         FaultSafeTextureLock lock(this,m_lock);
-        for (auto* cached: FindImagesInRegionLocked(info.address, info.size, true)) {
-            if(cached->kind==CachedImage::Kind::StorageTexture &&
-               CanExpandLinearRgba16Array(cached->info,cached->gpu_modified,cached->buffer_modified,
-                m_memory_tracker.IsRegionGpuModified(cached->Address(),cached->Size()),
-                cached->info.IsCpuDirty() || m_memory_tracker.IsRegionCpuModified(cached->Address(),cached->Size()),
-                cached->ctx==ctx,(m_buffer_cache.IsRegionGpuModified(cached->Address(),cached->Size()) ||
-                 m_buffer_cache.IsCachedRegionCpuModified(cached->Address(),cached->Size())),info))needs_array_drain=true;
+        const auto candidates = FindImagesInRegionLocked(info.address, info.size, true);
+        for (auto* cached: candidates) {
+            if (cached->kind != CachedImage::Kind::StorageTexture ||
+                !CanExpandLinearRgba16Array(
+                    cached->info, cached->gpu_modified, cached->buffer_modified,
+                    m_memory_tracker.IsRegionGpuModified(cached->Address(), cached->Size()),
+                    cached->info.IsCpuDirty() ||
+                        m_memory_tracker.IsRegionCpuModified(cached->Address(), cached->Size()),
+                    cached->ctx == ctx,
+                    m_buffer_cache.IsRegionGpuModified(cached->Address(), cached->Size()) ||
+                        m_buffer_cache.IsCachedRegionCpuModified(cached->Address(), cached->Size()),
+                    info)) {
+                continue;
+            }
+            static const bool gpu_snapshot_enabled = [] {
+                const auto* value = std::getenv("PSEMU_ASTRO_GPU_ARRAY_SNAPSHOT");
+                return value != nullptr && std::strcmp(value, "1") == 0;
+            }();
+            const auto layer_size = cached->Size();
+            if (gpu_snapshot_enabled && candidates.size() == 1 &&
+                cached->storage_queue == command->GetQueue() &&
+                cached->image->layout == vk::ImageLayout::eGeneral &&
+                !metadata_read && !HasMetaOverlapLocked(info.address, info.size) &&
+                !m_buffer_cache.HasPageOverlap(info.address, info.size) &&
+                !m_memory_tracker.IsRegionGpuModified(info.address + layer_size, layer_size)) {
+                // Keep the live storage owner and snapshot its old contents for sampling.
+                // The same dispatch can subsequently write the original image.
+                auto upload = std::make_unique<VulkanBuffer>();
+                upload->usage = vk::BufferUsageFlagBits::eTransferSrc;
+                upload->memory.property = vk::MemoryPropertyFlagBits::eHostVisible |
+                                          vk::MemoryPropertyFlagBits::eHostCoherent;
+                VulkanCreateBuffer(ctx, layer_size, upload.get());
+                void* mapped = nullptr;
+                VulkanMapMemory(ctx, &upload->memory, &mapped);
+                const bool tail_ready = mapped != nullptr &&
+                    LibKernel::Memory::TryReadBacking(info.address + layer_size, mapped, layer_size);
+                if (mapped != nullptr) {
+                    VulkanUnmapMemory(ctx, &upload->memory);
+                }
+                if (tail_ready) {
+                    auto snapshot = std::make_shared<CachedImage>();
+                    snapshot->info = info;
+                    snapshot->ctx = ctx;
+                    vk::ComponentMapping components {};
+                    auto* image = ImageOps::CreateTexture(ctx, info, false, &components);
+                    snapshot->image = image;
+                    ImageOps::CreateTextureViews(ctx, image, info, false, components);
+
+                    const BufferImageCopy tail {.pitch = info.pitch, .width = info.width,
+                                               .height = info.height, .dst_layer = 1};
+                    Transfer::RecordImageUpload(command, upload.get(), image, tail,
+                                                vk::ImageLayout::eTransferDstOptimal);
+                    const ImageImageCopy prefix {.src_image = cached->image, .width = info.width,
+                                                 .height = info.height};
+                    Transfer::CopyImage(command, std::span<const ImageImageCopy>(&prefix, 1),
+                                        image, vk::ImageLayout::eShaderReadOnlyOptimal);
+                    command->DeleteAfterFence(upload.release());
+                    command->RetainResourceUntilFence(cached->shared_from_this());
+                    command->RetainResourceUntilFence(snapshot);
+                    static std::atomic_uint logs {0};
+                    if (logs.fetch_add(1, std::memory_order_relaxed) < 8) {
+                        printf("[STORAGE-ARRAY-GPU-SNAPSHOT] address=0x%016" PRIx64
+                               " gpu_prefix=%" PRIu64 " cpu_tail=%" PRIu64 " queue=%d\n",
+                               info.address, layer_size, layer_size, command->GetQueue());
+                    }
+                    return image;
+                }
+                VulkanDeleteBuffer(ctx, upload.get());
+            }
+            needs_array_drain = true;
         }
     }
     // The old GPU layer must be submitted before readback; take no cache locks while draining.
@@ -1783,6 +1849,9 @@ StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   com
 			match = cached;
 		}
 		if (match != nullptr) {
+			if (match->storage_queue != command->GetQueue()) {
+				match->storage_queue = -1;
+			}
 			if (dcc != nullptr && match->dcc.address != 0 && !SameDccBinding(match->dcc, *dcc)) {
 				EXIT("TextureCache: DCC metadata association changed without retirement\n");
 			}
@@ -1855,6 +1924,7 @@ StorageTextureVulkanImage* TextureCache::FindStorageTexture(CommandBuffer*   com
 		cached->kind = CachedImage::Kind::StorageTexture;
 		cached->info = info;
 		cached->ctx  = ctx;
+		cached->storage_queue = command->GetQueue();
 		if (dcc != nullptr) { cached->dcc = *dcc; }
 		vk::ComponentMapping components {};
 		cached->image = ImageOps::CreateTexture(ctx, info, true, &components);
