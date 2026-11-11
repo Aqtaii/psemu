@@ -1007,6 +1007,7 @@ std::string OpcodeToString(Opcode opcode) {
 		case Opcode::SSendmsg: return "s_sendmsg";
 		case Opcode::SSetregB32: return "s_setreg_b32";
 		case Opcode::SSleep: return "s_sleep";
+		case Opcode::SSetprio: return "s_setprio";
 		case Opcode::STtraceData: return "s_ttracedata";
 		case Opcode::SInstPrefetch: return "s_inst_prefetch";
 		case Opcode::SEndpgm: return "s_endpgm";
@@ -1111,6 +1112,7 @@ std::string InstructionToString(const Instruction& inst) {
 		case Opcode::SCbranchCdbgSys:
 		case Opcode::SWaitcnt:
 		case Opcode::SSleep:
+		case Opcode::SSetprio:
 		case Opcode::SSendmsg:
 		case Opcode::STtraceData:
 		case Opcode::SInstPrefetch:

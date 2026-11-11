@@ -1012,6 +1012,7 @@ bool LowerControlInstruction(const Decoder::Instruction& decoded, BasicBlock* bl
         }
 		case Decoder::Opcode::SSetregB32:
 		case Decoder::Opcode::SSleep:
+		case Decoder::Opcode::SSetprio: // Wave scheduling hint; Vulkan schedules its own waves.
 			return LowerControlMarker(decoded, block, Opcode::ControlNop, true, error);
 		case Decoder::Opcode::STtraceData:
 			return LowerControlMarker(decoded, block, Opcode::TtraceData, true, error);
@@ -1093,6 +1094,7 @@ bool IsControlOpcode(Decoder::Opcode opcode) {
 		case Decoder::Opcode::SSendmsg:
 		case Decoder::Opcode::SSetregB32:
 		case Decoder::Opcode::SSleep:
+		case Decoder::Opcode::SSetprio:
 		case Decoder::Opcode::STtraceData:
 		case Decoder::Opcode::SInstPrefetch: return true;
 		default: return false;

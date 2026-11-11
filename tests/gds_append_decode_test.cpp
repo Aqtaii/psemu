@@ -51,6 +51,14 @@ int main() {
  Check(trap.pc==0x1f80 && trap.word_count==1 && trap.opcode_id==0x12);
  Check(trap.opcode!=Opcode::SBranch && trap.opcode!=Opcode::SEndpgm);
 
+ // Astro's intro compute shader uses S_SETPRIO 1 at PC 0x0c.
+ const std::array<uint32_t,1> priority_code{0xbf8f0001};
+ Instruction priority;
+ std::string priority_error;
+ Check(DecodeSopp(0x0c,priority_code,0,&priority,&priority_error));
+ Check(priority.opcode==Opcode::SSetprio && priority.src_count==1 && priority.src0.value==1);
+ Check(priority.pc==0x0c && priority.word_count==1 && priority.opcode_id==0x0f);
+
  const std::array<uint32_t,1> subrev{0x54003080};
  Instruction subtract;std::string subtract_error;
  Check(DecodeVop2(0xb84,subrev,0,&subtract,&subtract_error));

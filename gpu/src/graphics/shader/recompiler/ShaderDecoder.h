@@ -543,7 +543,8 @@ enum class Opcode {
 	STtraceData,
 	SInstPrefetch,
 	SEndpgm,
-	Exp
+	Exp,
+	SSetprio
 };
 
 enum class OperandKind {
