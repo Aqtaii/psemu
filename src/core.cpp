@@ -400,6 +400,48 @@ static int64_t ReadGuestDirectory(int fd,void* buffer,int bytes,int64_t* base=nu
  if(!buffer || !SafeWritable(buffer,size_t(bytes)) || (base && !SafeWritable(base,sizeof(*base))))return -2147352562LL;
  return GuestReadDirectory(found->second,buffer,bytes,base);
 }
+static bool PrepareKernelFileRead(int fd, void* buffer, size_t bytes, std::unique_lock<std::mutex>& vfs_lock) {
+    if (bytes == 0) return true;
+    const auto address = reinterpret_cast<uintptr_t>(buffer);
+    if (address == 0 || bytes > UINTPTR_MAX - address) return false;
+    if (SafeWritable(buffer, bytes)) return true;
+
+    // GPU page watchers temporarily deny CPU writes. Resolve them through
+    // the normal coherence path before asking the OS to read into the buffer.
+    // A GPU readback may wait for guest work that also needs the VFS mutex.
+    static const size_t page_size = [] {
+        SYSTEM_INFO info{};
+        GetSystemInfo(&info);
+        return static_cast<size_t>(info.dwPageSize);
+    }();
+    const auto end = address + bytes;
+    auto current = address;
+    vfs_lock.unlock();
+    while (current < end) {
+        auto* page = reinterpret_cast<void*>(current);
+        const auto page_bytes = (std::min)(end - current, page_size - current % page_size);
+        if (!SafeWritable(page, page_bytes)) {
+            MEMORY_BASIC_INFORMATION info{};
+            if (GuestMemoryQuery::Query(page, &info, &g_vq_calls) == 0 ||
+                info.State != MEM_COMMIT || (info.Protect & PAGE_GUARD) ||
+                !PsemuHandleGpuMemoryFault(current, true) || !SafeWritable(page, page_bytes)) {
+                break;
+            }
+        }
+        current += page_bytes;
+    }
+    vfs_lock.lock();
+    if (current == end) {
+        static std::atomic<unsigned> recovered{0};
+        const auto count = recovered.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (count <= 8 || (count & (count - 1)) == 0) {
+            LOG_INFO("[KERNEL-READ-GPU-PAGES] recovered=" + std::to_string(count) + " fd=" + std::to_string(fd) +
+                     " bytes=" + std::to_string(bytes));
+        }
+    }
+    return current == end;
+}
+
 extern "C" int PsemuDirectorySelfTest(const char* path) {
  const int fd=OpenGuestDirectory(path,0x20000);if(fd<0)return 1;
  std::array<uint8_t,514> block{};int64_t base=-1;size_t total=0;bool file=false,directory=false;
@@ -6475,13 +6517,15 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 const auto offset = static_cast<int64_t>(ctx->Rcx);
                 int64_t result = GuestReadBadFd;
                 {
-                    std::lock_guard<std::mutex> lock(g_vfs_mutex);
-                    const auto file = g_kernel_files.find(fd);
-                    if (file != g_kernel_files.end()) {
-                        if (offset < 0) result = GuestReadInvalid;
-                        else if (bytes && (bytes > UINTPTR_MAX-ctx->Rsi || !SafeWritable(buffer,bytes)))
+                    std::unique_lock lock(g_vfs_mutex);
+                    if (g_kernel_files.contains(fd)) {
+                        if (offset < 0) {
+                            result = GuestReadInvalid;
+                        } else if (!PrepareKernelFileRead(fd, buffer, bytes, lock)) {
                             result = GuestReadFault;
-                        else result = GuestPositionedRead(file->second,buffer,bytes,offset);
+                        } else if (const auto file = g_kernel_files.find(fd); file != g_kernel_files.end()) {
+                            result = GuestPositionedRead(file->second, buffer, bytes, offset);
+                        }
                     }
                 }
                 if (readable_name == "pread" && result < 0) {
@@ -6499,16 +6543,18 @@ LONG WINAPI Core::SyscallExceptionFilter(EXCEPTION_POINTERS* ExceptionInfo) {
                 int fd = static_cast<int>(ctx->Rdi);
                 void* buf = reinterpret_cast<void*>(ctx->Rsi);
                 size_t nbyte = static_cast<size_t>(ctx->Rdx);
-                std::lock_guard<std::mutex> vlk(g_vfs_mutex);
-                const auto file = g_kernel_files.find(fd);
+                std::unique_lock vlk(g_vfs_mutex);
                 int64_t bytes_read = -1;
                 const auto directory=g_kernel_directories.find(fd);
                 if(directory!=g_kernel_directories.end()) {
                     bytes_read=nbyte>INT32_MAX || nbyte<512 ? -2147352554LL :
                         (!buf || !SafeWritable(buf,nbyte)) ? -2147352562LL :
                         GuestReadDirectory(directory->second,buf,int(nbyte));
-                } else if (file != g_kernel_files.end() && (nbyte == 0 || SafeWritable(buf, nbyte)))
-                    bytes_read = static_cast<int64_t>(fread(buf, 1, nbyte, file->second));
+                } else if (g_kernel_files.contains(fd) && PrepareKernelFileRead(fd, buf, nbyte, vlk)) {
+                    if (const auto file = g_kernel_files.find(fd); file != g_kernel_files.end()) {
+                        bytes_read = static_cast<int64_t>(fread(buf, 1, nbyte, file->second));
+                    }
+                }
                 ctx->Rax = static_cast<uint64_t>(bytes_read);
                 special_return_set = true;
             } else if (readable_name == "sceKernelWrite" || readable_name == "libc_write") {

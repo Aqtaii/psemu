@@ -20,6 +20,7 @@ $prefix = @"
 #include <cstring>
 #include <string>
 #include <mutex>
+#include <thread>
 #include <unordered_map>
 #include <io.h>
 #include "guest_file_stat.h"
@@ -27,6 +28,22 @@ $prefix = @"
 #include "guest_directory.h"
 std::atomic<uint64_t> g_vq_calls{0};
 static std::mutex g_vfs_mutex;
+static uintptr_t watched_write_page;
+static unsigned watched_faults;
+static bool PsemuHandleGpuMemoryFault(uint64_t address, bool write) {
+    if (!write || !watched_write_page || address < watched_write_page ||
+        address >= watched_write_page + 4096) return false;
+    bool vfs_available = false;
+    std::thread observer([&] {
+        vfs_available = g_vfs_mutex.try_lock();
+        if (vfs_available) g_vfs_mutex.unlock();
+    });
+    observer.join();
+    if (!vfs_available) return false;
+    ++watched_faults;
+    DWORD old_protection;
+    return VirtualProtect(reinterpret_cast<void*>(watched_write_page), 4096, PAGE_READWRITE, &old_protection);
+}
 static std::unordered_map<int, FILE*> g_kernel_files;
 static std::atomic<int> g_kernel_fd_counter{100};
 static std::unordered_map<int,GuestDirectorySnapshot> g_kernel_directories;
@@ -72,6 +89,24 @@ int main() {
     ctx = {}; ctx.Rdi = reader; ctx.Rsi = reinterpret_cast<uint64_t>(&guarded.stat);
     CHECK(Invoke("sceKernelFstat",ctx) == 0 && guarded.stat.size == sizeof(payload)-1);
     CHECK(guarded.canary == 0xfedcba9876543210ULL);
+    auto* guarded_pages = static_cast<char*>(VirtualAlloc(nullptr, 8192, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+    CHECK(guarded_pages != nullptr);
+    DWORD old_protection;
+    CHECK(VirtualProtect(guarded_pages + 4096, 4096, PAGE_READONLY, &old_protection));
+    watched_write_page = reinterpret_cast<uintptr_t>(guarded_pages + 4096);
+    auto* split_buffer = guarded_pages + 4092;
+    ctx = {}; ctx.Rdi = reader; ctx.Rsi = reinterpret_cast<uint64_t>(split_buffer); ctx.Rdx = sizeof(payload)-1;
+    CHECK(Invoke("sceKernelPread",ctx) == sizeof(payload)-1);
+    CHECK(watched_faults == 1 && std::memcmp(split_buffer,payload,sizeof(payload)-1) == 0);
+    CHECK(VirtualProtect(guarded_pages + 4096, 4096, PAGE_READONLY, &old_protection));
+    CHECK(Invoke("sceKernelRead",ctx) == sizeof(payload)-1);
+    CHECK(watched_faults == 2 && std::memcmp(split_buffer,payload,sizeof(payload)-1) == 0);
+    watched_write_page = 0;
+    CHECK(VirtualProtect(guarded_pages + 4096, 4096, PAGE_READONLY, &old_protection));
+    CHECK(static_cast<int64_t>(Invoke("sceKernelPread",ctx)) == GuestReadFault);
+    CHECK(watched_faults == 2);
+    CHECK(VirtualFree(guarded_pages, 0, MEM_RELEASE));
+    CHECK(_fseeki64(g_kernel_files.at(static_cast<int>(reader)), 0, SEEK_SET) == 0);
     char buffer[64]{};
     ctx = {}; ctx.Rdi = reader; ctx.Rsi = reinterpret_cast<uint64_t>(buffer); ctx.Rdx = sizeof(buffer);
     CHECK(Invoke("sceKernelRead",ctx) == sizeof(payload)-1);
